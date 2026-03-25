@@ -97,7 +97,11 @@ export async function generateTasksForAttack(
  */
 function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
   const hasGpu = agentCaps['gpu'] === true;
-  const hashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : [];
+  const rawHashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : [];
+  // Sanitize to finite integers only — NaN, Infinity, non-numeric strings are dropped
+  const hashModes = rawHashModes
+    .map((m: unknown) => Number(m))
+    .filter((n): n is number => Number.isFinite(n) && Number.isInteger(n));
 
   // GPU check: if the task requires GPU, the agent must have it.
   // If the agent has GPU, this is always satisfied. If not, exclude GPU-requiring tasks.
@@ -106,12 +110,12 @@ function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
     : sql`NOT (${tasks.requiredCapabilities}->>'gpu' = 'true')`;
 
   // Hash mode check: the task's required hashcatMode must be in the agent's hashModes array.
-  // If agent advertises no hashModes, only tasks without a hashcatMode requirement pass.
+  // If agent advertises no hashModes (or all were invalid), only tasks without a hashcatMode requirement pass.
   const hashModeCondition =
     hashModes.length > 0
       ? sql`(
           ${tasks.requiredCapabilities}->>'hashcatMode' IS NULL
-          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(ARRAY[${sql.raw(hashModes.map((m: unknown) => Number(m)).join(','))}]::int[])
+          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${hashModes}::int[])
         )`
       : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`;
 
