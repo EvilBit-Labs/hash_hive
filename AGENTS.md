@@ -250,6 +250,15 @@ Test the hot paths first: hash submission ingestion, work unit distribution, age
 
 See [GOTCHAS.md](GOTCHAS.md) for hard-won lessons organized by domain: TypeScript strict mode, Hono, Drizzle ORM, service layer patterns, and testing infrastructure (bun:test mock patterns, frontend test utilities, etc.).
 
+## Frontend design direction
+
+See [`.impeccable.md`](.impeccable.md) for the full design context. Key points:
+
+- **Dark only** — Catppuccin Macchiato palette (`#24273a` base, `#1e2030` surface, `#f5a97f` peach accent)
+- **Personality**: Precise, Powerful, Dark — purpose-built security tool, not a generic admin panel
+- **References**: Linear/Vercel (polish), Grafana/Datadog (data density), Hack The Box (security identity)
+- **Principles**: Data-forward, precision over decoration, dark-native, status at a glance, crafted not themed
+
 ## AI agent notes
 
 - `.kiro/steering/` and `.kiro/specs/` are authoritative — always align structural changes with those documents rather than inferring architecture solely from current code.
