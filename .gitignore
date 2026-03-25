@@ -43,6 +43,20 @@ temp/
 packages/frontend/test-results/
 packages/frontend/playwright-report/
 
-# Local config
-.claude.local.md
+**/*.local.*
+
+# AI coding assistants (local state, not shared)
+docs/plans/
 .plan/
+.agent/
+.agents/
+.augment/
+.claude/
+.cursor/
+.roo/
+.full-review/
+SECURITY_AUDIT.md
+todos/
+**/tessl__*
+.tessl/tiles/
+.tessl/RULES.md
