@@ -6,8 +6,8 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   LOG_PRETTY: z
     .string()
-    .transform((v) => v === 'true')
-    .default('false'),
+    .default('false')
+    .transform((v) => v === 'true'),
 
   // PostgreSQL
   DATABASE_URL: z.string().url(),

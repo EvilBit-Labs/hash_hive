@@ -1,4 +1,4 @@
-import { Worker } from 'bullmq';
+import { type ConnectionOptions, Worker } from 'bullmq';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
 import { generateTasksForAttack } from '../../services/tasks.js';
@@ -33,7 +33,8 @@ export function createTaskGeneratorWorker(
       logger.info({ campaignId, totalTasks }, 'Task generation complete');
       return { campaignId, totalTasks };
     },
-    { connection }
+    // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
+    { connection: connection as unknown as ConnectionOptions }
   );
 
   worker.on('failed', (job, err) => {

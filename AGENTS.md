@@ -127,14 +127,10 @@ The backend is a Bun + Hono + TypeScript service:
 - **Database (`src/db/`)** — Drizzle client setup and connection config
 - **Middleware (`src/middleware/`)** — auth, validation, error handling
 
-### Drizzle ORM raw SQL patterns
-
-- `db.execute(sql`...`)` with postgres-js returns array-like result — access rows as `result[0]`, not `result.rows[0]`
-- Drizzle doesn't support `FOR UPDATE SKIP LOCKED` natively — use raw `db.execute(sql`...`)` with a CTE for atomic claim patterns
-
 ### RBAC middleware
 
 Two RBAC middleware variants in `src/middleware/rbac.ts`:
+
 - `requireProjectAccess()` / `requireRole()` — reads projectId from JWT context (`currentUser.projectId`); used by most dashboard routes
 - `requireParamProjectAccess()` / `requireParamProjectRole()` — reads projectId from URL param (`c.req.param('projectId')`); used by project management routes like `GET /projects/:projectId`
 
@@ -249,53 +245,9 @@ Test the hot paths first: hash submission ingestion, work unit distribution, age
 
 - `docs/v2_rewrite_implementation_plan/*` — historical context from CipherSwarm migration
 
-## TypeScript strict mode gotchas
+## Gotchas
 
-The tsconfig.base.json enables maximum strictness. Key patterns:
-
-- **`exactOptionalPropertyTypes`**: Use `...(val ? { key: val } : {})` spread, never `key: val ?? undefined`
-- **`noUncheckedIndexedAccess`**: All `arr[i]` returns `T | undefined` — guard with null check before use
-- **`noPropertyAccessFromIndexSignature`**: Use `obj['key']` bracket notation for index signatures
-- **Biome `useLiteralKeys: "off"`**: MUST stay off — conflicts with the TS setting above
-- **`z.preprocess` + React Hook Form**: `z.preprocess` widens input type to `unknown`, breaking `zodResolver` under strict mode. Define the form type as an explicit interface (not `z.infer`) and cast: `zodResolver(schema) as unknown as Resolver<FormType>`
-
-## Hono error handling
-
-The `app.onError()` handler must check `instanceof HTTPException` before returning a generic 500:
-
-```typescript
-app.onError((err, c) => {
-  if (err instanceof HTTPException) return err.getResponse();
-  // ... generic error handling
-});
-```
-
-Without this, auth middleware 401 responses get swallowed into 500s.
-
-## Testing infrastructure
-
-- Backend contract tests validate auth (401), validation (400), and camelCase response shapes (200) without a running DB
-- Drizzle mock chains must match production code — e.g. `insert().values()` returning `{ onConflictDoNothing: mock() }`
-- BullMQ worker test mocks: if worker does `db.select()`, mock must return chainable `{ from: mock(() => chain), where: mock(() => Promise.resolve([])) }`
-- **bun:test `mock.module()`**: Mock dependencies before `await import()` of module under test — used for service tests that need DB/queue mocks
-- **bun:test shared module cache gotcha**: `mock.module` in one test file can cache a module globally, making `mock.module` for the same module ineffective in other test files. For dynamic `await import()` calls in production code, use a `_deps` override pattern: export a mutable `_deps` object from the production module and override its functions in tests (see `campaigns.ts` `_deps` and `campaign-transition.test.ts`).
-- **Route-level contract tests**: When mocking for `import { app }`, mock ALL transitive service dependencies (e.g., `tasks.js` → `events.js` + `campaigns.js`). Mock `db.execute` with snake_case rows to validate the camelCase mapping, not the service function directly.
-- **Separate test files for conflicting mocks**: If a module is already imported at top level in one test file (e.g., `resolveGenerationStrategy` in `campaigns.test.ts`), tests needing full module mocks for the same source must go in a separate test file to avoid import-order conflicts.
-- Frontend tests use `happy-dom` with manual global injection (not `@happy-dom/global-registrator`)
-- Always call `afterEach(cleanup)` in Testing Library tests — DOM persists in happy-dom
-- Test fixtures: `packages/backend/tests/fixtures.ts` — factory functions + token helpers
-- Biome overrides: `**/scripts/**` disables `noConsole` and `noExplicitAny` for CLI tools
-
-### Frontend test utilities
-
-- `tests/mocks/fetch.ts` — `mockFetch()` replaces global fetch with route-to-response mapping; call `restoreFetch()` in afterEach
-- `tests/mocks/websocket.ts` — `installMockWebSocket()` replaces global WebSocket; provides `simulateOpen/Close/Message`
-- `tests/fixtures/api-responses.ts` — factory functions: `mockLoginResponse`, `mockMeResponse`, `mockDashboardStats`
-- `tests/utils/store-reset.ts` — `resetAllStores()` resets all Zustand stores; call in afterEach
-- `tests/test-utils.tsx` — `renderWithProviders()` (single component), `renderWithRouter()` (navigation tests), `cleanupAll()` (DOM + stores)
-- **401 gotcha**: `api.ts` globally intercepts all 401 responses as "Session expired" — login tests must use 400 for invalid credentials
-- `@testing-library/user-event` is NOT installed — use `fireEvent` from `@testing-library/react`
-- **Run tests per-package**: Use `bun --filter @hashhive/frontend test` / `bun --filter @hashhive/backend test` — root `bun test` skips per-package `bunfig.toml` (happy-dom), causing `document is not defined`
+See [GOTCHAS.md](GOTCHAS.md) for hard-won lessons organized by domain: TypeScript strict mode, Hono, Drizzle ORM, service layer patterns, and testing infrastructure (bun:test mock patterns, frontend test utilities, etc.).
 
 ## AI agent notes
 

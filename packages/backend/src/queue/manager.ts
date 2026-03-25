@@ -1,4 +1,4 @@
-import { Queue } from 'bullmq';
+import { type ConnectionOptions, Queue } from 'bullmq';
 import type Redis from 'ioredis';
 import { logger } from '../config/logger.js';
 import { QUEUE_NAMES, type QueueName } from '../config/queue.js';
@@ -51,7 +51,11 @@ export class QueueManager {
     if (this.queues.size > 0) return;
 
     for (const name of Object.values(QUEUE_NAMES)) {
-      this.queues.set(name, new Queue(name, { connection: this.connection }));
+      // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
+      this.queues.set(
+        name,
+        new Queue(name, { connection: this.connection as unknown as ConnectionOptions })
+      );
     }
 
     // Schedule repeatable heartbeat monitor

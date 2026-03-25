@@ -1,5 +1,5 @@
 import { hashItems, hashLists } from '@hashhive/shared';
-import { Worker } from 'bullmq';
+import { type ConnectionOptions, Worker } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
@@ -76,7 +76,8 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
       logger.info({ hashListId, inserted }, 'Hash list parsing complete');
       return { inserted };
     },
-    { connection }
+    // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
+    { connection: connection as unknown as ConnectionOptions }
   );
 
   worker.on('failed', async (job, err) => {

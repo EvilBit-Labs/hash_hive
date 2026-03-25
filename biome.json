@@ -83,6 +83,15 @@
       }
     },
     {
+      "includes": ["**/migrations/**"],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
       "includes": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
       "linter": {
         "rules": {

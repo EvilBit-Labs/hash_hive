@@ -95,7 +95,7 @@ agentRoutes.post('/tasks/:id/report', zValidator('json', taskReportSchema), asyn
 const agentErrorSchema = z.object({
   severity: z.enum(['warning', 'error', 'fatal']),
   message: z.string().min(1),
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   taskId: z.number().int().positive().optional(),
 });
 

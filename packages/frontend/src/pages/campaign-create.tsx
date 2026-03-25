@@ -111,7 +111,8 @@ export function CampaignCreatePage() {
   }, []);
 
   const basicInfoForm = useForm<BasicInfoForm>({
-    resolver: zodResolver(basicInfoSchema),
+    // z.coerce widens input type; cast is safe since output matches BasicInfoForm
+    resolver: zodResolver(basicInfoSchema) as unknown as Resolver<BasicInfoForm>,
     defaultValues: {
       name: wizard.name,
       priority: wizard.priority,
@@ -156,11 +157,11 @@ export function CampaignCreatePage() {
 
   const onBasicInfoSubmit = basicInfoForm.handleSubmit((data) => {
     wizard.setBasicInfo({
-      name: data.name,
-      description: data.description ?? '',
-      priority: data.priority,
+      name: data['name'],
+      description: data['description'] ?? '',
+      priority: data['priority'],
     });
-    wizard.setHashListId(data.hashListId);
+    wizard.setHashListId(data['hashListId']);
     wizard.setStep(1);
   });
 

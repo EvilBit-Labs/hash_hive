@@ -1,5 +1,5 @@
 import { agents } from '@hashhive/shared';
-import { Worker } from 'bullmq';
+import { type ConnectionOptions, Worker } from 'bullmq';
 import { and, eq, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
@@ -49,7 +49,8 @@ export function createHeartbeatMonitorWorker(connection: Redis): Worker<Heartbea
 
       return { ...result, offlineAgents: staleAgents.length };
     },
-    { connection }
+    // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
+    { connection: connection as unknown as ConnectionOptions }
   );
 
   worker.on('failed', (job, err) => {

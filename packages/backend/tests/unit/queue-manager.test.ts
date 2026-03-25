@@ -5,18 +5,18 @@ import { QueueManager } from '../../src/queue/manager.js';
 
 describe('Queue config', () => {
   test('QUEUE_NAMES has priority task queue names', () => {
-    expect(QUEUE_NAMES.TASKS_HIGH).toBe('tasks:high');
-    expect(QUEUE_NAMES.TASKS_NORMAL).toBe('tasks:normal');
-    expect(QUEUE_NAMES.TASKS_LOW).toBe('tasks:low');
+    expect(QUEUE_NAMES.TASKS_HIGH).toBe('tasks-high');
+    expect(QUEUE_NAMES.TASKS_NORMAL).toBe('tasks-normal');
+    expect(QUEUE_NAMES.TASKS_LOW).toBe('tasks-low');
   });
 
   test('QUEUE_NAMES has job queue names', () => {
-    expect(QUEUE_NAMES.HASH_LIST_PARSING).toBe('jobs:hash-list-parsing');
-    expect(QUEUE_NAMES.HEARTBEAT_MONITOR).toBe('jobs:heartbeat-monitor');
+    expect(QUEUE_NAMES.HASH_LIST_PARSING).toBe('jobs-hash-list-parsing');
+    expect(QUEUE_NAMES.HEARTBEAT_MONITOR).toBe('jobs-heartbeat-monitor');
   });
 
   test('TASK_PRIORITY_QUEUES contains the three priority queues', () => {
-    expect(TASK_PRIORITY_QUEUES).toEqual(['tasks:high', 'tasks:normal', 'tasks:low']);
+    expect(TASK_PRIORITY_QUEUES).toEqual(['tasks-high', 'tasks-normal', 'tasks-low']);
   });
 });
 

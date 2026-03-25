@@ -42,7 +42,7 @@ let mockAttacks: Array<Record<string, unknown>> = [];
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mock(() => ({
-      from: mock((table: unknown) => {
+      from: mock(() => {
         // getCampaignById path: campaigns table → returns campaign row
         // listAttacks path: attacks table → returns mockAttacks
         return {
@@ -89,7 +89,9 @@ _deps.getQueueContext = () =>
     })),
   } as any);
 _deps.getQueueConfig = () =>
-  Promise.resolve({ QUEUE_NAMES: { TASK_GENERATION: 'jobs:task-generation' } } as any);
+  Promise.resolve({
+    QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
+  } as any);
 _deps.getQueueTypes = () =>
   Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any);
 
@@ -114,6 +116,19 @@ describe('transitionCampaign task generation branching', () => {
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
+  test('calls generateTasksForAttack inline when estimated tasks = 99 (boundary)', async () => {
+    // Single attack with keyspace producing exactly 99 chunks → inline strategy
+    const keyspace = String(99 * CHUNK_SIZE);
+    mockAttacks = [{ id: 15, keyspace, campaignId: 1 }];
+
+    const result = await transitionCampaign(1, 'running');
+
+    expect(result).toHaveProperty('campaign');
+    expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1);
+    expect(generateTasksForAttackSpy).toHaveBeenCalledWith(15);
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
   test('enqueues to BullMQ when estimated tasks >= 100', async () => {
     // Single attack with keyspace producing exactly 100 chunks → async strategy
     const keyspace = String(100 * CHUNK_SIZE);
@@ -123,7 +138,7 @@ describe('transitionCampaign task generation branching', () => {
 
     expect(result).toHaveProperty('campaign');
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs:task-generation');
+    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs-task-generation');
     expect(generateTasksForAttackSpy).not.toHaveBeenCalled();
   });
 });

@@ -151,7 +151,7 @@ const createAttackSchema = z.object({
   wordlistId: z.number().int().positive().optional(),
   rulelistId: z.number().int().positive().optional(),
   masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.unknown()).optional(),
+  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
   dependencies: z.array(z.number().int().positive()).optional(),
 });
 
@@ -196,7 +196,7 @@ const updateAttackSchema = z.object({
   wordlistId: z.number().int().positive().optional(),
   rulelistId: z.number().int().positive().optional(),
   masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.unknown()).optional(),
+  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
   dependencies: z.array(z.number().int().positive()).optional(),
 });
 
