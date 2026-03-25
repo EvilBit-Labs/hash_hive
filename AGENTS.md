@@ -127,6 +127,11 @@ The backend is a Bun + Hono + TypeScript service:
 - **Database (`src/db/`)** — Drizzle client setup and connection config
 - **Middleware (`src/middleware/`)** — auth, validation, error handling
 
+### Drizzle ORM raw SQL patterns
+
+- `db.execute(sql`...`)` with postgres-js returns array-like result — access rows as `result[0]`, not `result.rows[0]`
+- Drizzle doesn't support `FOR UPDATE SKIP LOCKED` natively — use raw `db.execute(sql`...`)` with a CTE for atomic claim patterns
+
 ### RBAC middleware
 
 Two RBAC middleware variants in `src/middleware/rbac.ts`:
@@ -216,6 +221,8 @@ just ci-check    # Runs: lint → format-check → type-check → build → test
 - **E2E tests**: Playwright for complete user workflows
 - **Contract tests**: Validate Agent API responses against the OpenAPI spec
 
+- **Pure function extraction**: For DB-dependent logic, extract the core algorithm as a pure function and test directly (e.g., DAG validation, threshold decisions) — avoids complex DB mocking
+
 Test the hot paths first: hash submission ingestion, work unit distribution, agent heartbeat processing.
 
 ## Design and documentation sources
@@ -267,9 +274,12 @@ Without this, auth middleware 401 responses get swallowed into 500s.
 
 ## Testing infrastructure
 
-- Backend contract tests validate auth (401) and validation (400) without a running DB
+- Backend contract tests validate auth (401), validation (400), and camelCase response shapes (200) without a running DB
 - Drizzle mock chains must match production code — e.g. `insert().values()` returning `{ onConflictDoNothing: mock() }`
 - BullMQ worker test mocks: if worker does `db.select()`, mock must return chainable `{ from: mock(() => chain), where: mock(() => Promise.resolve([])) }`
+- **bun:test `mock.module()`**: Mock dependencies before `await import()` of module under test — used for service tests that need DB/queue mocks
+- **Route-level contract tests**: When mocking for `import { app }`, mock ALL transitive service dependencies (e.g., `tasks.js` → `events.js` + `campaigns.js`). Mock `db.execute` with snake_case rows to validate the camelCase mapping, not the service function directly.
+- **Separate test files for conflicting mocks**: If a module is already imported at top level in one test file (e.g., `resolveGenerationStrategy` in `campaigns.test.ts`), tests needing full module mocks for the same source must go in a separate test file to avoid import-order conflicts.
 - Frontend tests use `happy-dom` with manual global injection (not `@happy-dom/global-registrator`)
 - Always call `afterEach(cleanup)` in Testing Library tests — DOM persists in happy-dom
 - Test fixtures: `packages/backend/tests/fixtures.ts` — factory functions + token helpers

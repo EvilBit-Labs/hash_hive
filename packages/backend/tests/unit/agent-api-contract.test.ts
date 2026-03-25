@@ -11,28 +11,99 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-// Mock the DB so requireAgentToken middleware can resolve the pre-shared token
+// Mock the DB so requireAgentToken middleware can resolve the pre-shared token.
+// Service modules (tasks, campaigns, events) are also mocked to prevent real
+// modules from entering bun's shared module cache, which would break mock
+// isolation for other test files (e.g., campaign-transition.test.ts).
 const TEST_AGENT_TOKEN = 'test-agent-preshared-token';
+
+// Snake_case row kept as a reference for building the camelCase mock below.
+// The actual snake→camelCase mapping is validated in tasks.test.ts.
+const mockSnakeCaseTaskRow = {
+  id: 42,
+  attack_id: 7,
+  campaign_id: 3,
+  agent_id: 1,
+  status: 'assigned',
+  work_range: { start: 0, end: 10000000 },
+  progress: {},
+  result_stats: {},
+  required_capabilities: {},
+  assigned_at: '2026-03-24T00:00:00.000Z',
+  started_at: null,
+  completed_at: null,
+  failure_reason: null,
+  created_at: '2026-03-24T00:00:00.000Z',
+  updated_at: '2026-03-24T00:00:00.000Z',
+};
+
+const mockAgent = {
+  id: 1,
+  projectId: 1,
+  status: 'online',
+  capabilities: {},
+};
+
 const mockSelect = mock(() => ({
   from: mock(() => ({
     where: mock(() => ({
-      limit: mock(() =>
-        Promise.resolve([
-          {
-            id: 1,
-            projectId: 1,
-            status: 'active',
-            capabilities: {},
-          },
-        ])
-      ),
+      limit: mock(() => Promise.resolve([mockAgent])),
     })),
   })),
+}));
+
+const mockExecute = mock(() => Promise.resolve([mockSnakeCaseTaskRow]));
+
+mock.module('../../src/services/agents.js', () => ({
+  processHeartbeat: mock(() => Promise.resolve({ hasHighPriorityTasks: false })),
+  logAgentError: mock(() => Promise.resolve()),
+}));
+
+// Mock events and tasks to prevent real modules from entering the shared bun
+// module cache (which leaks across test files via mock.module merge behavior).
+// campaigns.js is NOT mocked here — its mock.module overrides leak into other
+// files' real campaigns.js via ESM export merging, replacing resolveGenerationStrategy.
+mock.module('../../src/services/events.js', () => ({
+  emitCrackResult: mock(),
+  emitTaskUpdate: mock(),
+  emitCampaignStatus: mock(),
+}));
+
+// Mock tasks.js so the real module is never cached — the snake_case→camelCase
+// mapping is validated in tasks.test.ts; here we only test the route contract.
+// This also removes the need to mock campaigns.js (which tasks.js imported).
+const mockCamelCaseTask = {
+  id: mockSnakeCaseTaskRow.id,
+  attackId: mockSnakeCaseTaskRow.attack_id,
+  campaignId: mockSnakeCaseTaskRow.campaign_id,
+  agentId: mockSnakeCaseTaskRow.agent_id,
+  status: mockSnakeCaseTaskRow.status,
+  workRange: mockSnakeCaseTaskRow.work_range,
+  progress: mockSnakeCaseTaskRow.progress,
+  resultStats: mockSnakeCaseTaskRow.result_stats,
+  requiredCapabilities: mockSnakeCaseTaskRow.required_capabilities,
+  assignedAt: mockSnakeCaseTaskRow.assigned_at,
+  startedAt: mockSnakeCaseTaskRow.started_at,
+  completedAt: mockSnakeCaseTaskRow.completed_at,
+  failureReason: mockSnakeCaseTaskRow.failure_reason,
+  createdAt: mockSnakeCaseTaskRow.created_at,
+  updatedAt: mockSnakeCaseTaskRow.updated_at,
+};
+
+mock.module('../../src/services/tasks.js', () => ({
+  assignNextTask: mock(() => Promise.resolve(mockCamelCaseTask)),
+  updateTaskProgress: mock(() => Promise.resolve({ acknowledged: true })),
+  handleTaskFailure: mock(() => Promise.resolve({ retried: false })),
+  generateTasksForAttack: mock(() => Promise.resolve({ tasks: [], count: 0 })),
+  reassignStaleTasks: mock(() => Promise.resolve([])),
+  getTaskById: mock(() => Promise.resolve(null)),
+  listTasks: mock(() => Promise.resolve([])),
 }));
 
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mockSelect,
+    execute: mockExecute,
   },
   client: {},
 }));
@@ -98,6 +169,33 @@ describe('Agent API: POST /tasks/next', () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body['error']).toBeDefined();
+  });
+
+  it('returns camelCase task descriptor when task is available', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/tasks/next`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    const task = body['task'] as Record<string, unknown>;
+
+    // Task should be present
+    expect(task).not.toBeNull();
+
+    // camelCase keys should be defined
+    expect(task['attackId']).toBeDefined();
+    expect(task['campaignId']).toBeDefined();
+    expect(task['workRange']).toBeDefined();
+
+    // snake_case keys should be absent
+    expect(task['attack_id']).toBeUndefined();
+    expect(task['campaign_id']).toBeUndefined();
+    expect(task['work_range']).toBeUndefined();
   });
 });
 

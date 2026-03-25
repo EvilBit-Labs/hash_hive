@@ -3,8 +3,34 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
 
-// Threshold: if estimated task count is below this, generate inline
-const INLINE_GENERATION_THRESHOLD = 50;
+// Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
+export const INLINE_GENERATION_THRESHOLD = 100;
+const CHUNK_SIZE = 10_000_000;
+
+// Dynamic import getters — break circular dependency (campaigns ↔ tasks) while
+// remaining testable. bun:test's mock.module cannot override already-cached
+// dynamic imports across test files, so tests swap these getters instead.
+export const _deps = {
+  getTasksModule: () => import('./tasks.js'),
+  getQueueContext: () => import('../queue/context.js'),
+  getQueueConfig: () => import('../config/queue.js'),
+  getQueueTypes: () => import('../queue/types.js'),
+};
+
+/**
+ * Estimates total task count and returns the generation strategy.
+ * Exported for direct unit testing of the threshold boundary.
+ */
+export function resolveGenerationStrategy(
+  attackList: ReadonlyArray<{ keyspace: string | null }>
+): 'inline' | 'async' {
+  let estimatedTasks = 0;
+  for (const atk of attackList) {
+    const keyspace = Number.parseInt(atk.keyspace ?? '0', 10);
+    estimatedTasks += keyspace <= 0 ? 1 : Math.ceil(keyspace / CHUNK_SIZE);
+  }
+  return estimatedTasks < INLINE_GENERATION_THRESHOLD ? 'inline' : 'async';
+}
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
@@ -127,7 +153,7 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
 
   // When starting/resuming a campaign, verify queue availability before transitioning
   if (targetStatus === 'running') {
-    const { getQueueManager } = await import('../queue/context.js');
+    const { getQueueManager } = await _deps.getQueueContext();
     const qm = getQueueManager();
     if (!qm) {
       return {
@@ -184,23 +210,17 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   if (targetStatus === 'running') {
     const campaignAttacks = await listAttacks(id);
     if (campaignAttacks.length > 0) {
-      // Estimate task count: sum keyspace / chunk-size across attacks
-      const CHUNK_SIZE = 10_000_000;
-      let estimatedTasks = 0;
-      for (const atk of campaignAttacks) {
-        const keyspace = Number.parseInt(atk.keyspace ?? '0', 10);
-        estimatedTasks += keyspace <= 0 ? 1 : Math.ceil(keyspace / CHUNK_SIZE);
-      }
+      const strategy = resolveGenerationStrategy(campaignAttacks);
 
-      if (estimatedTasks <= INLINE_GENERATION_THRESHOLD) {
+      if (strategy === 'inline') {
         // Generate inline in parallel — small enough to not block the request meaningfully
-        const { generateTasksForAttack } = await import('./tasks.js');
+        const { generateTasksForAttack } = await _deps.getTasksModule();
         await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)));
       } else {
         // Enqueue to the dedicated task-generation job queue
-        const { getQueueManager } = await import('../queue/context.js');
-        const { QUEUE_NAMES } = await import('../config/queue.js');
-        const { JOB_PRIORITY } = await import('../queue/types.js');
+        const { getQueueManager } = await _deps.getQueueContext();
+        const { QUEUE_NAMES } = await _deps.getQueueConfig();
+        const { JOB_PRIORITY } = await _deps.getQueueTypes();
         const qm = getQueueManager();
         if (qm) {
           const priorityMap: Record<number, number> = {

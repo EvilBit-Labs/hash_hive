@@ -5,7 +5,14 @@ import { useUiStore } from '../../src/stores/ui';
 import { mockDashboardStats } from '../fixtures/api-responses';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { installMockWebSocket, type MockWebSocket } from '../mocks/websocket';
-import { cleanupAll, renderWithProviders, screen, waitFor } from '../test-utils';
+import {
+  cleanupAll,
+  renderWithProviders,
+  renderWithRouter,
+  screen,
+  waitFor,
+  fireEvent,
+} from '../test-utils';
 
 let fetchMock: ReturnType<typeof mockFetch>;
 let wsMock: ReturnType<typeof installMockWebSocket>;
@@ -104,5 +111,88 @@ describe('DashboardPage', () => {
         expect(screen.getByText('Live')).toBeDefined();
       });
     }
+  });
+
+  describe('card navigation', () => {
+    function renderDashboardWithRoutes() {
+      const stats = mockDashboardStats({
+        agents: { online: 3, total: 5 },
+        campaigns: { running: 2 },
+        tasks: { running: 10 },
+        cracked: { total: 42 },
+      });
+
+      fetchMock = mockFetch({
+        '/dashboard/stats': { status: 200, body: stats },
+      });
+
+      setAuthenticatedWithProject(1);
+
+      return renderWithRouter(
+        [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/agents', element: <div>Agents Page</div> },
+          { path: '/campaigns', element: <div>Campaigns Page</div> },
+          { path: '/results', element: <div>Results Page</div> },
+        ],
+        { initialRoute: '/' }
+      );
+    }
+
+    it('navigates to /agents when Agents card is clicked', async () => {
+      renderDashboardWithRoutes();
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined();
+      });
+
+      const agentsButton = screen.getByText('Agents').closest('button');
+      expect(agentsButton).toBeDefined();
+      fireEvent.click(agentsButton!);
+
+      expect(screen.getByText('Agents Page')).toBeDefined();
+    });
+
+    it('navigates to /campaigns when Campaigns card is clicked', async () => {
+      renderDashboardWithRoutes();
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined();
+      });
+
+      const campaignsButton = screen.getByText('Campaigns').closest('button');
+      expect(campaignsButton).toBeDefined();
+      fireEvent.click(campaignsButton!);
+
+      expect(screen.getByText('Campaigns Page')).toBeDefined();
+    });
+
+    it('navigates to /campaigns when Tasks card is clicked', async () => {
+      renderDashboardWithRoutes();
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined();
+      });
+
+      const tasksButton = screen.getByText('Tasks').closest('button');
+      expect(tasksButton).toBeDefined();
+      fireEvent.click(tasksButton!);
+
+      expect(screen.getByText('Campaigns Page')).toBeDefined();
+    });
+
+    it('navigates to /results when Cracked card is clicked', async () => {
+      renderDashboardWithRoutes();
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined();
+      });
+
+      const crackedButton = screen.getByText('Cracked').closest('button');
+      expect(crackedButton).toBeDefined();
+      fireEvent.click(crackedButton!);
+
+      expect(screen.getByText('Results Page')).toBeDefined();
+    });
   });
 });

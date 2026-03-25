@@ -33,24 +33,28 @@ export function DashboardPage() {
           value={stats ? `${stats.agents.online} / ${stats.agents.total}` : '--'}
           subtitle="Online"
           loading={isLoading}
+          to="/agents"
         />
         <StatCard
           title="Campaigns"
           value={stats?.campaigns.running ?? '--'}
           subtitle="Running"
           loading={isLoading}
+          to="/campaigns"
         />
         <StatCard
           title="Tasks"
           value={stats?.tasks.running ?? '--'}
           subtitle="Running"
           loading={isLoading}
+          to="/campaigns"
         />
         <StatCard
           title="Cracked"
           value={stats?.cracked.total ?? '--'}
           subtitle="Total hashes"
           loading={isLoading}
+          to="/results"
         />
       </div>
     </div>

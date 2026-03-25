@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 // Test the DAG validation logic by importing the pure cycle-detection algorithm
 // Since validateCampaignDAG hits the DB, we test the core Kahn's algorithm logic directly.
@@ -133,5 +133,79 @@ describe('DAG validation', () => {
       { id: 3, dependencies: [] },
     ]);
     expect(result.valid).toBe(true);
+  });
+});
+
+// ─── Inline vs Async task generation threshold tests ────────────────
+
+// These tests verify the 99/100 split: inline generation when estimated
+// tasks < 100, async queue enqueue when estimated tasks >= 100.
+// We import the production helper directly to test the real decision path.
+
+import {
+  INLINE_GENERATION_THRESHOLD,
+  resolveGenerationStrategy,
+} from '../../src/services/campaigns.js';
+
+const CHUNK_SIZE = 10_000_000;
+
+describe('Task generation threshold (99/100 split)', () => {
+  test('uses inline generation at 1 estimated task', () => {
+    // Single attack with no keyspace → 1 estimated task
+    expect(resolveGenerationStrategy([{ keyspace: null }])).toBe('inline');
+  });
+
+  test('uses inline generation at 99 estimated tasks', () => {
+    // 99 attacks each producing 1 task (no keyspace)
+    const attacks = Array.from({ length: 99 }, () => ({ keyspace: null }));
+    expect(resolveGenerationStrategy(attacks)).toBe('inline');
+  });
+
+  test('uses inline generation at 99 estimated tasks from keyspace', () => {
+    // Single attack with keyspace that produces exactly 99 chunks
+    // 99 * 10M = 990M keyspace
+    const keyspace = String(99 * CHUNK_SIZE);
+    expect(resolveGenerationStrategy([{ keyspace }])).toBe('inline');
+  });
+
+  test('uses async enqueue at exactly 100 estimated tasks', () => {
+    // 100 attacks each producing 1 task (no keyspace)
+    const attacks = Array.from({ length: 100 }, () => ({ keyspace: null }));
+    expect(resolveGenerationStrategy(attacks)).toBe('async');
+  });
+
+  test('uses async enqueue at exactly 100 estimated tasks from keyspace', () => {
+    // Single attack with keyspace that produces exactly 100 chunks
+    // 100 * 10M = 1B keyspace
+    const keyspace = String(100 * CHUNK_SIZE);
+    expect(resolveGenerationStrategy([{ keyspace }])).toBe('async');
+  });
+
+  test('uses async enqueue at 101 estimated tasks', () => {
+    const attacks = Array.from({ length: 101 }, () => ({ keyspace: null }));
+    expect(resolveGenerationStrategy(attacks)).toBe('async');
+  });
+
+  test('uses async enqueue for large keyspace', () => {
+    // Single attack with massive keyspace → many chunks
+    const keyspace = String(500 * CHUNK_SIZE);
+    expect(resolveGenerationStrategy([{ keyspace }])).toBe('async');
+  });
+
+  test('mixed attacks: total below threshold uses inline', () => {
+    // 5 attacks with 10 chunks each + 1 with no keyspace = 51 tasks → inline
+    const attacks = [
+      ...Array.from({ length: 5 }, () => ({ keyspace: String(10 * CHUNK_SIZE) })),
+      { keyspace: null },
+    ];
+    expect(resolveGenerationStrategy(attacks)).toBe('inline');
+  });
+
+  test('mixed attacks: total at threshold uses async', () => {
+    // 10 attacks with 10 chunks each = 100 tasks → async
+    const attacks = Array.from({ length: 10 }, () => ({
+      keyspace: String(10 * CHUNK_SIZE),
+    }));
+    expect(resolveGenerationStrategy(attacks)).toBe('async');
   });
 });

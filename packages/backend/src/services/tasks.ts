@@ -1,5 +1,5 @@
 import { agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, type SQL, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { updateCampaignProgress } from './campaigns.js';
 import { emitCrackResult, emitTaskUpdate } from './events.js';
@@ -88,45 +88,43 @@ export async function generateTasksForAttack(
 // ─── Task Assignment ────────────────────────────────────────────────
 
 /**
- * Checks whether an agent's capabilities satisfy a task's required capabilities.
- * Uses JSON containment logic: agent caps must include all required keys/values.
+ * Builds a SQL predicate that checks whether the agent's capabilities satisfy
+ * a task's required_capabilities column at the database level.
+ *
+ * Covers:
+ * - GPU requirement: task requires `gpu: true` → agent capabilities must contain `{"gpu": true}`
+ * - Hash mode compatibility: task's `hashcatMode` value must be in agent's `hashModes` array
  */
-function agentMatchesCapabilities(
-  agentCaps: Record<string, unknown>,
-  requiredCaps: Record<string, unknown>
-): boolean {
-  for (const [key, requiredValue] of Object.entries(requiredCaps)) {
-    const agentValue = agentCaps[key];
+function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
+  const hasGpu = agentCaps['gpu'] === true;
+  const hashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : [];
 
-    // Boolean requirements: agent must have the capability set to true
-    if (requiredValue === true && agentValue !== true) {
-      return false;
-    }
+  // GPU check: if the task requires GPU, the agent must have it.
+  // If the agent has GPU, this is always satisfied. If not, exclude GPU-requiring tasks.
+  const gpuCondition = hasGpu
+    ? sql`TRUE`
+    : sql`NOT (${tasks.requiredCapabilities}->>'gpu' = 'true')`;
 
-    // Non-boolean values: exact match or array containment
-    if (typeof requiredValue !== 'boolean') {
-      // hashcatMode required by task → check against agent's hashModes array
-      if (key === 'hashcatMode' && Array.isArray(agentCaps['hashModes'])) {
-        if (!agentCaps['hashModes'].includes(requiredValue)) {
-          return false;
-        }
-      } else if (Array.isArray(agentValue)) {
-        // Generic array containment: agent array must include required value
-        if (!agentValue.includes(requiredValue)) {
-          return false;
-        }
-      } else if (agentValue !== requiredValue) {
-        return false;
-      }
-    }
-  }
-  return true;
+  // Hash mode check: the task's required hashcatMode must be in the agent's hashModes array.
+  // If agent advertises no hashModes, only tasks without a hashcatMode requirement pass.
+  const hashModeCondition =
+    hashModes.length > 0
+      ? sql`(
+          ${tasks.requiredCapabilities}->>'hashcatMode' IS NULL
+          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(ARRAY[${sql.raw(hashModes.map((m: unknown) => Number(m)).join(','))}]::int[])
+        )`
+      : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`;
+
+  return sql`(${gpuCondition} AND ${hashModeCondition})`;
 }
 
 /**
  * Assigns the next available pending task to an agent.
- * Filters by project scope and capability predicate.
- * Uses SELECT ... FOR UPDATE SKIP LOCKED for safe concurrent assignment.
+ *
+ * All eligibility filters (project scope, capability match) are enforced
+ * in the SQL predicate. Uses `FOR UPDATE SKIP LOCKED` to guarantee only
+ * one claimant atomically selects and claims a task row, even under
+ * concurrent access from multiple agents.
  */
 export async function assignNextTask(agentId: number) {
   // Verify agent exists and is online
@@ -137,47 +135,57 @@ export async function assignNextTask(agentId: number) {
 
   const projectId = agent.projectId;
   const agentCaps = (agent.capabilities ?? {}) as Record<string, unknown>;
+  const capabilityPredicate = buildCapabilityPredicate(agentCaps);
 
-  // Find and claim a pending task atomically using a transaction
-  const result = await db.transaction(async (tx) => {
-    // Find pending tasks for campaigns in this agent's project
-    const pendingTasks = await tx
-      .select()
-      .from(tasks)
-      .where(and(eq(tasks.status, 'pending'), isNull(tasks.agentId)))
-      .innerJoin(
-        campaigns,
-        and(eq(tasks.campaignId, campaigns.id), eq(campaigns.projectId, projectId))
-      )
-      .orderBy(campaigns.priority, tasks.id)
-      .limit(10);
+  // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED
+  const result = await db.execute(sql`
+    WITH candidate AS (
+      SELECT ${tasks.id} AS task_id
+      FROM ${tasks}
+      INNER JOIN ${campaigns} ON ${tasks.campaignId} = ${campaigns.id}
+      WHERE ${tasks.status} = 'pending'
+        AND ${tasks.agentId} IS NULL
+        AND ${campaigns.projectId} = ${projectId}
+        AND ${capabilityPredicate}
+      ORDER BY ${campaigns.priority}, ${tasks.id}
+      LIMIT 1
+      FOR UPDATE OF ${tasks} SKIP LOCKED
+    )
+    UPDATE ${tasks}
+    SET
+      agent_id = ${agentId},
+      status = 'assigned',
+      assigned_at = NOW(),
+      updated_at = NOW()
+    FROM candidate
+    WHERE ${tasks.id} = candidate.task_id
+    RETURNING ${tasks.id}, ${tasks.attackId}, ${tasks.campaignId}, ${tasks.agentId},
+              ${tasks.status}, ${tasks.workRange}, ${tasks.progress}, ${tasks.resultStats},
+              ${tasks.requiredCapabilities}, ${tasks.assignedAt}, ${tasks.startedAt},
+              ${tasks.completedAt}, ${tasks.failureReason}, ${tasks.createdAt}, ${tasks.updatedAt}
+  `);
 
-    // Find first task whose required capabilities the agent satisfies
-    const matchingTask = pendingTasks.find((row) => {
-      const requiredCaps = (row.tasks.requiredCapabilities ?? {}) as Record<string, unknown>;
-      return agentMatchesCapabilities(agentCaps, requiredCaps);
-    });
+  const row = result[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
 
-    if (!matchingTask) {
-      return null;
-    }
-
-    // Claim the task
-    const [assigned] = await tx
-      .update(tasks)
-      .set({
-        agentId,
-        status: 'assigned',
-        assignedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(tasks.id, matchingTask.tasks.id), eq(tasks.status, 'pending')))
-      .returning();
-
-    return assigned ?? null;
-  });
-
-  return result;
+  // Map snake_case DB columns back to camelCase to preserve the public API contract
+  return {
+    id: row['id'],
+    attackId: row['attack_id'],
+    campaignId: row['campaign_id'],
+    agentId: row['agent_id'],
+    status: row['status'],
+    workRange: row['work_range'],
+    progress: row['progress'],
+    resultStats: row['result_stats'],
+    requiredCapabilities: row['required_capabilities'],
+    assignedAt: row['assigned_at'],
+    startedAt: row['started_at'],
+    completedAt: row['completed_at'],
+    failureReason: row['failure_reason'],
+    createdAt: row['created_at'],
+    updatedAt: row['updated_at'],
+  };
 }
 
 // ─── Task Progress & Results ────────────────────────────────────────
