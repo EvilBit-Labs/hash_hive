@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   integer,
   jsonb,
@@ -162,8 +163,9 @@ export const wordLists = pgTable('word_lists', {
     .references(() => projects.id),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
-  lineCount: integer('line_count'),
-  fileSize: integer('file_size'),
+  lineCount: bigint('line_count', { mode: 'number' }),
+  fileSize: bigint('file_size', { mode: 'number' }),
+  status: varchar('status', { length: 20 }).notNull().default('ready'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -175,8 +177,9 @@ export const ruleLists = pgTable('rule_lists', {
     .references(() => projects.id),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
-  lineCount: integer('line_count'),
-  fileSize: integer('file_size'),
+  lineCount: bigint('line_count', { mode: 'number' }),
+  fileSize: bigint('file_size', { mode: 'number' }),
+  status: varchar('status', { length: 20 }).notNull().default('ready'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -188,8 +191,9 @@ export const maskLists = pgTable('mask_lists', {
     .references(() => projects.id),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
-  lineCount: integer('line_count'),
-  fileSize: integer('file_size'),
+  lineCount: bigint('line_count', { mode: 'number' }),
+  fileSize: bigint('file_size', { mode: 'number' }),
+  status: varchar('status', { length: 20 }).notNull().default('ready'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

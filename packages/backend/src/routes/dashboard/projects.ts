@@ -42,11 +42,11 @@ const updateProjectSchema = z.object({
 
 const addMemberSchema = z.object({
   userId: z.number().int().positive(),
-  roles: z.array(z.enum(['admin', 'operator', 'analyst', 'agent_owner'])).min(1),
+  roles: z.array(z.enum(['admin', 'contributor', 'viewer'])).min(1),
 });
 
 const updateRolesSchema = z.object({
-  roles: z.array(z.enum(['admin', 'operator', 'analyst', 'agent_owner'])).min(1),
+  roles: z.array(z.enum(['admin', 'contributor', 'viewer'])).min(1),
 });
 
 // GET /projects — list projects for current user

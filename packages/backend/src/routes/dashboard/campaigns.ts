@@ -43,7 +43,7 @@ const createCampaignSchema = z.object({
 
 campaignRoutes.post(
   '/',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', createCampaignSchema),
   async (c) => {
     const data = c.req.valid('json');
@@ -79,7 +79,7 @@ const updateCampaignSchema = z.object({
 
 campaignRoutes.patch(
   '/:id',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', updateCampaignSchema),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -102,7 +102,7 @@ const lifecycleSchema = z.object({
 
 campaignRoutes.post(
   '/:id/lifecycle',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', lifecycleSchema),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -157,7 +157,7 @@ const createAttackSchema = z.object({
 
 campaignRoutes.post(
   '/:id/attacks',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', createAttackSchema),
   async (c) => {
     const campaignId = Number(c.req.param('id'));
@@ -202,7 +202,7 @@ const updateAttackSchema = z.object({
 
 campaignRoutes.patch(
   '/:id/attacks/:attackId',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', updateAttackSchema),
   async (c) => {
     const campaignId = Number(c.req.param('id'));
@@ -225,7 +225,7 @@ campaignRoutes.patch(
   }
 );
 
-campaignRoutes.delete('/:id/attacks/:attackId', requireRole('admin', 'operator'), async (c) => {
+campaignRoutes.delete('/:id/attacks/:attackId', requireRole('admin', 'contributor'), async (c) => {
   const campaignId = Number(c.req.param('id'));
   const attackId = Number(c.req.param('attackId'));
 

@@ -41,7 +41,7 @@ const updateAgentSchema = z.object({
 
 dashboardAgentRoutes.patch(
   '/:id',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', updateAgentSchema),
   async (c) => {
     const agentId = Number(c.req.param('id'));

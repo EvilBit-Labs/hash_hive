@@ -53,7 +53,7 @@ const createHashListSchema = z.object({
 
 resourceRoutes.post(
   '/hash-lists',
-  requireRole('admin', 'operator'),
+  requireRole('admin', 'contributor'),
   zValidator('json', createHashListSchema),
   async (c) => {
     const data = c.req.valid('json');
@@ -80,7 +80,7 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   return c.json({ hashList });
 });
 
-resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'operator'), async (c) => {
+resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
   const id = Number(c.req.param('id'));
   const hashList = await getHashListById(id);
 
@@ -99,7 +99,7 @@ resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'operator'), 
   return c.json(result);
 });
 
-resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'operator'), async (c) => {
+resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'), async (c) => {
   const id = Number(c.req.param('id'));
   const result = await importHashList(id);
 
@@ -191,7 +191,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
 
   resourceRoutes.post(
     `/${prefix}`,
-    requireRole('admin', 'operator'),
+    requireRole('admin', 'contributor'),
     zValidator('json', createSchema),
     async (c) => {
       const data = c.req.valid('json');
@@ -221,7 +221,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     return c.json({ item });
   });
 
-  resourceRoutes.post(`/${prefix}/:id/upload`, requireRole('admin', 'operator'), async (c) => {
+  resourceRoutes.post(`/${prefix}/:id/upload`, requireRole('admin', 'contributor'), async (c) => {
     const id = Number(c.req.param('id'));
     const item = await getResourceById(table, id);
 

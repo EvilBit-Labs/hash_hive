@@ -5,7 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/index.js';
 import type { AppEnv } from '../types.js';
 
-type Role = 'admin' | 'operator' | 'analyst' | 'agent_owner';
+type Role = 'admin' | 'contributor' | 'viewer';
 
 function httpError(status: 401 | 403 | 400, code: string, message: string): HTTPException {
   return new HTTPException(status, {
