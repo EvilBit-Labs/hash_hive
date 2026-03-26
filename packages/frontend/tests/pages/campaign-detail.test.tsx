@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { CampaignDetailPage } from '../../src/pages/campaign-detail';
+import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
 import { mockCampaignDetailResponse } from '../fixtures/api-responses';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
@@ -14,6 +15,19 @@ afterEach(() => {
 
 function selectProject(projectId = 1) {
   useUiStore.setState({ selectedProjectId: projectId });
+}
+
+function setAuthUser(roles: string[] = ['admin'], projectId = 1) {
+  useAuthStore.setState({
+    user: {
+      id: 1,
+      email: 'test@test.com',
+      name: 'Test User',
+      projects: [{ projectId, projectName: 'Test Project', roles }],
+    },
+    isAuthenticated: true,
+    isLoading: false,
+  });
 }
 
 describe('CampaignDetailPage', () => {
@@ -84,6 +98,7 @@ describe('CampaignDetailPage', () => {
     });
 
     selectProject();
+    setAuthUser();
     renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
       initialRoute: '/campaigns/1',
     });
@@ -103,6 +118,7 @@ describe('CampaignDetailPage', () => {
     });
 
     selectProject();
+    setAuthUser();
     renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
       initialRoute: '/campaigns/1',
     });
@@ -125,6 +141,7 @@ describe('CampaignDetailPage', () => {
     });
 
     selectProject();
+    setAuthUser();
     renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
       initialRoute: '/campaigns/1',
     });
@@ -150,6 +167,7 @@ describe('CampaignDetailPage', () => {
     });
 
     selectProject();
+    setAuthUser();
     renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
       initialRoute: '/campaigns/1',
     });

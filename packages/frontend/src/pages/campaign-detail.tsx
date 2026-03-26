@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
+import { PermissionGuard } from '../components/features/permission-guard';
 import { StatusBadge } from '../components/features/status-badge';
 import { useCampaignLifecycle } from '../hooks/use-campaigns';
 import { api } from '../lib/api';
+import { Permission } from '../lib/permissions';
 
 interface Campaign {
   id: number;
@@ -99,19 +101,21 @@ export function CampaignDetailPage() {
           <h2 className="text-xl font-semibold tracking-tight">{campaign.name}</h2>
           <StatusBadge status={campaign.status} />
         </div>
-        <div className="flex gap-2">
-          {actions.map(({ action, label, variant }) => (
-            <button
-              key={action}
-              type="button"
-              onClick={() => lifecycle.mutate(action)}
-              disabled={lifecycle.isPending}
-              className={actionButtonClass(variant)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <PermissionGuard permission={Permission.CAMPAIGN_EDIT}>
+          <div className="flex gap-2">
+            {actions.map(({ action, label, variant }) => (
+              <button
+                key={action}
+                type="button"
+                onClick={() => lifecycle.mutate(action)}
+                disabled={lifecycle.isPending}
+                className={actionButtonClass(variant)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </PermissionGuard>
       </div>
 
       {campaign.description && (

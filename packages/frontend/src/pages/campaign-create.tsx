@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type Resolver, useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router';
+import { Navigate, useNavigate } from 'react-router';
 import ReactFlow, {
   Background,
   Controls,
@@ -16,9 +16,11 @@ import { z } from 'zod';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
 import { StatusBadge } from '../components/features/status-badge';
 import { useCreateCampaign } from '../hooks/use-campaigns';
+import { usePermissions } from '../hooks/use-permissions';
 import { useHashLists, useMasklists, useRulelists, useWordlists } from '../hooks/use-resources';
 import { ApiError, api } from '../lib/api';
 import { validateDAG } from '../lib/dag-validation';
+import { Permission } from '../lib/permissions';
 import { cn } from '../lib/utils';
 import { useCampaignWizard } from '../stores/campaign-wizard';
 import { useUiStore } from '../stores/ui';
@@ -82,6 +84,7 @@ const selectClass =
   'w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40';
 
 export function CampaignCreatePage() {
+  const { can } = usePermissions();
   const { selectedProjectId } = useUiStore();
   const wizard = useCampaignWizard();
   const navigate = useNavigate();
@@ -157,6 +160,10 @@ export function CampaignCreatePage() {
     },
     [wizard]
   );
+
+  if (!can(Permission.CAMPAIGN_CREATE)) {
+    return <Navigate to="/campaigns" replace />;
+  }
 
   if (!selectedProjectId) {
     return <p className="text-sm text-muted-foreground">Select a project first.</p>;

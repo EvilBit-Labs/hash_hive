@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { CampaignsPage } from '../../src/pages/campaigns';
+import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
 import { mockCampaignsResponse } from '../fixtures/api-responses';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
@@ -14,6 +15,19 @@ afterEach(() => {
 
 function selectProject(projectId = 1) {
   useUiStore.setState({ selectedProjectId: projectId });
+}
+
+function setAuthUser(roles: string[] = ['admin'], projectId = 1) {
+  useAuthStore.setState({
+    user: {
+      id: 1,
+      email: 'test@test.com',
+      name: 'Test User',
+      projects: [{ projectId, projectName: 'Test Project', roles }],
+    },
+    isAuthenticated: true,
+    isLoading: false,
+  });
 }
 
 describe('CampaignsPage', () => {
@@ -108,6 +122,7 @@ describe('CampaignsPage', () => {
     });
 
     selectProject();
+    setAuthUser();
     renderWithProviders(<CampaignsPage />);
 
     await waitFor(() => {

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { PermissionGuard } from '../components/features/permission-guard';
 import { StatusBadge } from '../components/features/status-badge';
 import { useCampaigns } from '../hooks/use-dashboard';
+import { Permission } from '../lib/permissions';
 import { useUiStore } from '../stores/ui';
 
 export function CampaignsPage() {
@@ -35,12 +37,14 @@ export function CampaignsPage() {
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
           </select>
-          <Link
-            to="/campaigns/new"
-            className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            New Campaign
-          </Link>
+          <PermissionGuard permission={Permission.CAMPAIGN_CREATE}>
+            <Link
+              to="/campaigns/new"
+              className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              New Campaign
+            </Link>
+          </PermissionGuard>
         </div>
       </div>
 

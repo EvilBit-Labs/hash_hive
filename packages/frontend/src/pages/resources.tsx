@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PermissionGuard } from '../components/features/permission-guard';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
 import {
   useGuessHashType,
@@ -7,6 +8,7 @@ import {
   useRulelists,
   useWordlists,
 } from '../hooks/use-resources';
+import { Permission } from '../lib/permissions';
 import { cn } from '../lib/utils';
 import { useUiStore } from '../stores/ui';
 
@@ -104,9 +106,11 @@ function HashListsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <UploadButton type="hash-lists" />
-      </div>
+      <PermissionGuard permission={Permission.RESOURCE_UPLOAD}>
+        <div className="flex justify-end">
+          <UploadButton type="hash-lists" />
+        </div>
+      </PermissionGuard>
 
       {hashLists.length === 0 ? (
         <p className="text-sm text-muted-foreground">No hash lists found.</p>
@@ -164,9 +168,11 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <UploadButton type={type} />
-      </div>
+      <PermissionGuard permission={Permission.RESOURCE_UPLOAD}>
+        <div className="flex justify-end">
+          <UploadButton type={type} />
+        </div>
+      </PermissionGuard>
 
       {resources.length === 0 ? (
         <p className="text-sm text-muted-foreground">No {type} found.</p>
