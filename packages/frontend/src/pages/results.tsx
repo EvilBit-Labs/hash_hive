@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from '../components/ui/button';
+import { Button, buttonVariants } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
 import { Input } from '../components/ui/input';
 import { PageHeader } from '../components/ui/page-header';
@@ -50,11 +50,7 @@ export function ResultsPage() {
             }}
           />
           {exportUrl && (
-            <a
-              href={exportUrl}
-              download
-              className="inline-flex items-center rounded border border-surface-0 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
-            >
+            <a href={exportUrl} download className={buttonVariants('secondary', 'sm')}>
               Export CSV
             </a>
           )}

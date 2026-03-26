@@ -17,8 +17,16 @@ const SIZES = {
   default: 'px-4 py-2 text-xs',
 } as const;
 
-type ButtonVariant = keyof typeof VARIANTS;
-type ButtonSize = keyof typeof SIZES;
+export type ButtonVariant = keyof typeof VARIANTS;
+export type ButtonSize = keyof typeof SIZES;
+
+/** Returns class names for button styling — use on `<a>`, `<Link>`, or other non-button elements. */
+export function buttonVariants(
+  variant: ButtonVariant = 'primary',
+  size: ButtonSize = 'default'
+): string {
+  return cn(BASE, VARIANTS[variant], SIZES[size]);
+}
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly variant?: ButtonVariant;
@@ -29,16 +37,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export function Button({
   variant = 'primary',
   size = 'default',
+  type = 'button',
   className,
   children,
   ...props
 }: ButtonProps) {
   return (
-    <button
-      type="button"
-      className={cn(BASE, VARIANTS[variant], SIZES[size], className)}
-      {...props}
-    >
+    <button type={type} className={cn(buttonVariants(variant, size), className)} {...props}>
       {children}
     </button>
   );

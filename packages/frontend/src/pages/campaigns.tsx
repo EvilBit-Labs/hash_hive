@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { StatusBadge } from '../components/features/status-badge';
-import { BackLink } from '../components/ui/back-link';
+import { buttonVariants } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
 import { Select } from '../components/ui/select';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { TextLink } from '../components/ui/text-link';
 import { useCampaigns } from '../hooks/use-dashboard';
 import { Permission } from '../lib/permissions';
 import { useUiStore } from '../stores/ui';
@@ -43,10 +44,7 @@ export function CampaignsPage() {
             <option value="cancelled">Cancelled</option>
           </Select>
           <PermissionGuard permission={Permission.CAMPAIGN_CREATE}>
-            <Link
-              to="/campaigns/new"
-              className="inline-flex items-center justify-center rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
+            <Link to="/campaigns/new" className={buttonVariants('primary', 'sm')}>
               New Campaign
             </Link>
           </PermissionGuard>
@@ -80,7 +78,7 @@ export function CampaignsPage() {
                   {new Date(campaign.createdAt).toLocaleDateString()}
                 </Td>
                 <Td>
-                  <BackLink to={`/campaigns/${campaign.id}`}>Details</BackLink>
+                  <TextLink to={`/campaigns/${campaign.id}`}>Details</TextLink>
                 </Td>
               </TableRow>
             ))}

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { StatusBadge } from '../components/features/status-badge';
-import { BackLink } from '../components/ui/back-link';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
 import { Select } from '../components/ui/select';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { TextLink } from '../components/ui/text-link';
 import { useAgents } from '../hooks/use-dashboard';
 import { useUiStore } from '../stores/ui';
 
@@ -64,7 +64,7 @@ export function AgentsPage() {
                   {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
                 </Td>
                 <Td>
-                  <BackLink to={`/agents/${agent.id}`}>Details</BackLink>
+                  <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
                 </Td>
               </TableRow>
             ))}

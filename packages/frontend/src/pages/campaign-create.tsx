@@ -86,6 +86,12 @@ function buildEdges(attacks: readonly { dependencies: number[] }[]): Edge[] {
   );
 }
 
+function stepIndicatorStyle(index: number, currentStep: number): string {
+  if (index === currentStep) return 'bg-primary text-primary-foreground';
+  if (index < currentStep) return 'bg-surface-0 text-foreground';
+  return 'bg-surface-0/40 text-muted-foreground';
+}
+
 export function CampaignCreatePage() {
   const { can } = usePermissions();
   const { selectedProjectId } = useUiStore();
@@ -247,11 +253,7 @@ export function CampaignCreatePage() {
             }}
             className={cn(
               'rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
-              i === wizard.step
-                ? 'bg-primary text-primary-foreground'
-                : i < wizard.step
-                  ? 'bg-surface-0 text-foreground'
-                  : 'bg-surface-0/40 text-muted-foreground'
+              stepIndicatorStyle(i, wizard.step)
             )}
           >
             {i + 1}. {label}

@@ -2,11 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { StatusBadge } from '../components/features/status-badge';
-import { BackLink } from '../components/ui/back-link';
 import { Button } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { TextLink } from '../components/ui/text-link';
 import { useCampaignLifecycle } from '../hooks/use-campaigns';
 import { api } from '../lib/api';
 import { Permission } from '../lib/permissions';
@@ -77,7 +77,7 @@ export function CampaignDetailPage() {
   if (!data) {
     return (
       <div className="space-y-4">
-        <BackLink to="/campaigns">\u2190 Back to campaigns</BackLink>
+        <TextLink to="/campaigns">\u2190 Back to campaigns</TextLink>
         <EmptyState message="Campaign not found." />
       </div>
     );
@@ -88,7 +88,7 @@ export function CampaignDetailPage() {
 
   return (
     <div className="space-y-6">
-      <BackLink to="/campaigns">\u2190 Back to campaigns</BackLink>
+      <TextLink to="/campaigns">\u2190 Back to campaigns</TextLink>
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

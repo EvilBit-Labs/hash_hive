@@ -1,18 +1,18 @@
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/utils';
 
-interface BackLinkProps {
+interface TextLinkProps extends Omit<HTMLAttributes<HTMLAnchorElement>, 'children'> {
   readonly to: string;
   readonly children: ReactNode;
-  readonly className?: string;
 }
 
-export function BackLink({ to, children, className }: BackLinkProps) {
+export function TextLink({ to, children, className, ...props }: TextLinkProps) {
   return (
     <Link
       to={to}
       className={cn('text-xs font-medium text-primary hover:text-primary/80', className)}
+      {...props}
     >
       {children}
     </Link>

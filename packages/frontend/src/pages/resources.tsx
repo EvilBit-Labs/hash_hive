@@ -143,13 +143,17 @@ function HashListsTab() {
   );
 }
 
-function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklists' }) {
-  const wordlists = useWordlists();
-  const rulelists = useRulelists();
-  const masklists = useMasklists();
+function useResourcesByType(type: 'wordlists' | 'rulelists' | 'masklists') {
+  const wordlists = useWordlists({ enabled: type === 'wordlists' });
+  const rulelists = useRulelists({ enabled: type === 'rulelists' });
+  const masklists = useMasklists({ enabled: type === 'masklists' });
 
   const hookMap = { wordlists, rulelists, masklists };
-  const { data, isLoading } = hookMap[type];
+  return hookMap[type];
+}
+
+function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklists' }) {
+  const { data, isLoading } = useResourcesByType(type);
 
   if (isLoading) return <EmptyState message="Loading\u2026" />;
 

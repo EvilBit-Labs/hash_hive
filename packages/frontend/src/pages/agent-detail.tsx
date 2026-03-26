@@ -1,8 +1,8 @@
 import { useParams } from 'react-router';
 import { StatusBadge } from '../components/features/status-badge';
-import { BackLink } from '../components/ui/back-link';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
+import { TextLink } from '../components/ui/text-link';
 import { useAgent, useAgentErrors } from '../hooks/use-dashboard';
 
 export function AgentDetailPage() {
@@ -19,7 +19,7 @@ export function AgentDetailPage() {
   if (!agent) {
     return (
       <div className="space-y-4">
-        <BackLink to="/agents">\u2190 Back to agents</BackLink>
+        <TextLink to="/agents">\u2190 Back to agents</TextLink>
         <EmptyState message="Agent not found." />
       </div>
     );
@@ -27,7 +27,7 @@ export function AgentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <BackLink to="/agents">\u2190 Back to agents</BackLink>
+      <TextLink to="/agents">\u2190 Back to agents</TextLink>
 
       <div className="flex items-center gap-3">
         <PageHeader>{agent.name}</PageHeader>

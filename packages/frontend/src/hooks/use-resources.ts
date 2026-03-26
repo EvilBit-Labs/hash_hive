@@ -46,8 +46,16 @@ export function useHashLists() {
   });
 }
 
-function useResourceList(type: 'wordlists' | 'rulelists' | 'masklists') {
+interface ResourceListOptions {
+  enabled?: boolean;
+}
+
+function useResourceList(
+  type: 'wordlists' | 'rulelists' | 'masklists',
+  options?: ResourceListOptions
+) {
   const { selectedProjectId } = useUiStore();
+  const enabledOverride = options?.enabled ?? true;
 
   return useQuery({
     queryKey: [type, selectedProjectId],
@@ -55,13 +63,21 @@ function useResourceList(type: 'wordlists' | 'rulelists' | 'masklists') {
       const data = await api.get<Record<string, Resource[]>>(`/dashboard/resources/${type}`);
       return { resources: data[type] ?? [] };
     },
-    enabled: !!selectedProjectId,
+    enabled: !!selectedProjectId && enabledOverride,
   });
 }
 
-export const useWordlists = () => useResourceList('wordlists');
-export const useRulelists = () => useResourceList('rulelists');
-export const useMasklists = () => useResourceList('masklists');
+export function useWordlists(options?: ResourceListOptions) {
+  return useResourceList('wordlists', options);
+}
+
+export function useRulelists(options?: ResourceListOptions) {
+  return useResourceList('rulelists', options);
+}
+
+export function useMasklists(options?: ResourceListOptions) {
+  return useResourceList('masklists', options);
+}
 
 export function useGuessHashType() {
   return useMutation({
