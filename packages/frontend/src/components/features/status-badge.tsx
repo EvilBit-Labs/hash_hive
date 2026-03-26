@@ -1,16 +1,17 @@
 import { cn } from '../../lib/utils';
 
-const statusColors: Record<string, string> = {
-  online: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  offline: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-  busy: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-  error: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-  running: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-  completed: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-  pending: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-  failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+const STATUS_STYLES: Record<string, string> = {
+  online: 'bg-success/15 text-success border-success/20',
+  offline: 'bg-surface-1/50 text-muted-foreground border-surface-1',
+  busy: 'bg-warning/15 text-warning border-warning/20',
+  error: 'bg-destructive/15 text-destructive border-destructive/20',
+  running: 'bg-info/15 text-info border-info/20',
+  paused: 'bg-warning/15 text-warning border-warning/20',
+  completed: 'bg-success/15 text-success border-success/20',
+  cancelled: 'bg-surface-1/50 text-muted-foreground border-surface-1',
+  pending: 'bg-surface-1/50 text-muted-foreground border-surface-1',
+  failed: 'bg-destructive/15 text-destructive border-destructive/20',
+  draft: 'bg-ctp-mauve/15 text-ctp-mauve border-ctp-mauve/20',
 };
 
 interface StatusBadgeProps {
@@ -18,14 +19,22 @@ interface StatusBadgeProps {
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {
-  const colors = statusColors[status] ?? statusColors['pending'];
+  const styles = STATUS_STYLES[status] ?? STATUS_STYLES['pending'];
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-        colors
+        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize',
+        styles
       )}
     >
+      <span
+        className={cn(
+          'h-1.5 w-1.5 rounded-full',
+          status === 'running' && 'animate-pulse-gentle',
+          // Dot inherits text color via currentColor
+          'bg-current'
+        )}
+      />
       {status}
     </span>
   );

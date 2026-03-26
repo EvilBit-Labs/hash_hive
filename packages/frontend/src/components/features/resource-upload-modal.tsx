@@ -68,19 +68,19 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
-        <h3 className="mb-4 text-lg font-medium">Upload New {label}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80">
+      <div className="w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl">
+        <h3 className="mb-4 text-sm font-medium">Upload New {label}</h3>
 
         {error && (
-          <div className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div className="mb-4 rounded border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
           </div>
         )}
 
         <div className="space-y-4">
           <div>
-            <label htmlFor="resource-name" className="text-sm font-medium">
+            <label htmlFor="resource-name" className="text-xs font-medium text-muted-foreground">
               Name
             </label>
             <input
@@ -88,13 +88,13 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+              className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
               placeholder={`Enter ${label.toLowerCase()} name`}
             />
           </div>
 
           <div>
-            <label htmlFor="resource-file" className="text-sm font-medium">
+            <label htmlFor="resource-file" className="text-xs font-medium text-muted-foreground">
               File
             </label>
             <input
@@ -102,7 +102,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
               ref={fileInputRef}
               type="file"
               onChange={handleFileChange}
-              className="mt-1 w-full text-sm"
+              className="mt-1.5 w-full text-xs text-muted-foreground file:mr-3 file:rounded file:border-0 file:bg-surface-0 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
             />
           </div>
         </div>
@@ -112,7 +112,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             type="button"
             onClick={handleClose}
             disabled={isUploading}
-            className="rounded-md border px-4 py-2 text-sm hover:bg-accent disabled:opacity-50"
+            className="rounded border border-surface-0 px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground disabled:opacity-50"
           >
             Cancel
           </button>
@@ -120,9 +120,9 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             type="button"
             onClick={handleUpload}
             disabled={!file || !name.trim() || isUploading}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="rounded bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
-            {isUploading ? 'Uploading...' : 'Upload'}
+            {isUploading ? 'Uploading\u2026' : 'Upload'}
           </button>
         </div>
       </div>

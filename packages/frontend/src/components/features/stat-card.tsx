@@ -14,9 +14,11 @@ export function StatCard({ title, value, subtitle, loading, to }: StatCardProps)
 
   const content = (
     <>
-      <p className="text-sm text-muted-foreground">{title}</p>
-      <p className="mt-1 text-3xl font-bold">{loading ? '--' : value}</p>
-      <p className="text-xs text-muted-foreground">{subtitle}</p>
+      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
+      <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-foreground">
+        {loading ? '\u2014' : value}
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
     </>
   );
 
@@ -25,12 +27,12 @@ export function StatCard({ title, value, subtitle, loading, to }: StatCardProps)
       <button
         type="button"
         onClick={() => navigate(to)}
-        className="w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+        className="group w-full rounded-md border border-surface-0 bg-surface-0/40 p-4 text-left transition-all hover:border-primary/30 hover:bg-surface-0/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {content}
       </button>
     );
   }
 
-  return <div className="rounded-lg border bg-card p-4">{content}</div>;
+  return <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">{content}</div>;
 }
