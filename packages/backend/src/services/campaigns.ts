@@ -1,7 +1,8 @@
-import { attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { attacks, campaigns, tasks } from '@hashhive/shared';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
+import { getHashListStats } from './resources.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
@@ -378,23 +379,12 @@ export async function updateCampaignProgress(campaignId: number) {
     .limit(1);
 
   if (campaign?.hashListId) {
-    const [counts] = await db
-      .select({
-        total: count(),
-        cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
-      })
-      .from(hashItems)
-      .where(eq(hashItems.hashListId, campaign.hashListId));
+    const stats = await getHashListStats(campaign.hashListId);
 
-    const total = Number(counts?.total ?? 0);
-    const cracked = Number(counts?.cracked ?? 0);
-
-    if (total > 0) {
+    if (stats.total > 0) {
       hashProgress = {
-        total,
-        cracked,
-        remaining: total - cracked,
-        percentage: Math.round((cracked / total) * 10000) / 10000,
+        ...stats,
+        percentage: Math.round((stats.cracked / stats.total) * 10000) / 10000,
       };
     }
   }

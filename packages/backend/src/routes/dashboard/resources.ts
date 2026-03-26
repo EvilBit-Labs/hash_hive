@@ -1,10 +1,8 @@
-import { hashItems, maskLists, ruleLists, wordLists } from '@hashhive/shared';
+import { maskLists, ruleLists, wordLists } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
-import { count, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
-import { db } from '../../db/index.js';
 import { requireSession } from '../../middleware/auth.js';
 import { requireProjectAccess, requireRole } from '../../middleware/rbac.js';
 import { guessHashType } from '../../services/hash-analysis.js';
@@ -16,6 +14,7 @@ import {
   getChunkedUploadStatus,
   getHashItems,
   getHashListById,
+  getHashListStats,
   getResourceById,
   getResourcePresignedUrl,
   importHashList,
@@ -90,22 +89,10 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
   }
 
-  const [stats] = await db
-    .select({
-      total: count(),
-      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
-    })
-    .from(hashItems)
-    .where(eq(hashItems.hashListId, hashListId));
-
-  const total = stats?.total ?? 0;
-  const cracked = stats?.cracked ?? 0;
+  const statistics = await getHashListStats(hashListId);
 
   return c.json({
-    hashList: {
-      ...hl,
-      statistics: { total, cracked, remaining: total - cracked },
-    },
+    hashList: { ...hl, statistics },
   });
 });
 
@@ -150,10 +137,19 @@ resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) =>
   }
 
   const hashListId = Number(c.req.param('id'));
-  const status = (c.req.query('status') as 'all' | 'cracked' | 'uncracked') || undefined;
-  const q = c.req.query('q') || undefined;
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
+
+  // Validate query params — fail fast on invalid input
+  const statusRaw = c.req.query('status');
+  const VALID_STATUSES = ['all', 'cracked', 'uncracked'] as const;
+  const status =
+    statusRaw && VALID_STATUSES.includes(statusRaw as (typeof VALID_STATUSES)[number])
+      ? (statusRaw as 'all' | 'cracked' | 'uncracked')
+      : undefined;
+  const q = c.req.query('q')?.slice(0, 256) || undefined;
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 100)) : 50;
+  const offsetRaw = Number(c.req.query('offset') ?? 0);
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
 
   const result = await getHashItems(hashListId, projectId, { status, search: q, limit, offset });
 
@@ -165,8 +161,13 @@ resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) =>
 });
 
 resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c) => {
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
   const id = Number(c.req.param('id'));
-  const hashList = await getHashListById(id);
+  const hashList = await getHashListById(id, projectId);
 
   if (!hashList) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);

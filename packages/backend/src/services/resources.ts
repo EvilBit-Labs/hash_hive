@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { hashItems, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared';
-import { and, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import {
@@ -195,6 +195,30 @@ export async function getHashItems(
  */
 export function escapeLike(value: string): string {
   return value.replace(/[%_\\]/g, '\\$&');
+}
+
+// ─── Hash List Statistics ────────────────────────────────────────────
+
+/**
+ * Computes live cracked/total/remaining counts for a hash list.
+ * Uses a single COUNT + FILTER query (fast with composite index).
+ */
+export async function getHashListStats(hashListId: number): Promise<{
+  total: number;
+  cracked: number;
+  remaining: number;
+}> {
+  const [stats] = await db
+    .select({
+      total: count(),
+      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+    })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId));
+
+  const total = Number(stats?.total ?? 0);
+  const cracked = Number(stats?.cracked ?? 0);
+  return { total, cracked, remaining: total - cracked };
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────
