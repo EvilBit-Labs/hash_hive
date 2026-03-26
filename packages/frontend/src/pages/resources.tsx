@@ -7,6 +7,7 @@ import {
   useRulelists,
   useWordlists,
 } from '../hooks/use-resources';
+import { cn } from '../lib/utils';
 import { useUiStore } from '../stores/ui';
 
 type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists' | 'hash-detect';
@@ -19,9 +20,9 @@ export function ResourcesPage() {
 
   if (!selectedProjectId) {
     return (
-      <div className="space-y-6">
-        <h2 className="text-2xl font-bold">Resources</h2>
-        <p className="text-muted-foreground">Select a project to view resources.</p>
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold tracking-tight">Resources</h2>
+        <p className="text-sm text-muted-foreground">Select a project to view resources.</p>
       </div>
     );
   }
@@ -35,20 +36,21 @@ export function ResourcesPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Resources</h2>
+    <div className="space-y-5">
+      <h2 className="text-xl font-semibold tracking-tight">Resources</h2>
 
-      <div className="flex gap-1 border-b">
+      <div className="flex gap-1 border-b border-surface-0/50">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
-            className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+            className={cn(
+              'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
               activeTab === tab.id
                 ? 'border-primary text-primary'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
+            )}
           >
             {tab.label}
           </button>
@@ -79,7 +81,7 @@ function UploadButton({ type }: { type: UploadableTab }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
       >
         Upload {labels[type]}
       </button>
@@ -96,7 +98,7 @@ function UploadButton({ type }: { type: UploadableTab }) {
 function HashListsTab() {
   const { data, isLoading } = useHashLists();
 
-  if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
+  if (isLoading) return <p className="text-sm text-muted-foreground">Loading\u2026</p>;
 
   const hashLists = data?.hashLists ?? [];
 
@@ -107,25 +109,35 @@ function HashListsTab() {
       </div>
 
       {hashLists.length === 0 ? (
-        <p className="text-muted-foreground">No hash lists found.</p>
+        <p className="text-sm text-muted-foreground">No hash lists found.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <div className="overflow-x-auto rounded-md border border-surface-0">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-muted/50">
+            <thead className="border-b border-surface-0 bg-surface-0/30">
               <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Hashes</th>
-                <th className="px-4 py-3 font-medium">Cracked</th>
-                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Name
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Hashes
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Cracked
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Created
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-surface-0/50">
               {hashLists.map((hl) => (
-                <tr key={hl.id} className="border-b last:border-b-0">
-                  <td className="px-4 py-3 font-medium">{hl.name}</td>
-                  <td className="px-4 py-3">{hl.hashCount}</td>
-                  <td className="px-4 py-3">{hl.crackedCount}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                <tr key={hl.id} className="transition-colors hover:bg-surface-0/20">
+                  <td className="px-4 py-2.5 text-sm font-medium text-foreground">{hl.name}</td>
+                  <td className="px-4 py-2.5 font-mono text-xs tabular-nums">{hl.hashCount}</td>
+                  <td className="px-4 py-2.5 font-mono text-xs tabular-nums text-success">
+                    {hl.crackedCount}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
                     {new Date(hl.createdAt).toLocaleDateString()}
                   </td>
                 </tr>
@@ -146,7 +158,7 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
   const hookMap = { wordlists, rulelists, masklists };
   const { data, isLoading } = hookMap[type];
 
-  if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
+  if (isLoading) return <p className="text-sm text-muted-foreground">Loading\u2026</p>;
 
   const resources = data?.resources ?? [];
 
@@ -157,21 +169,25 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
       </div>
 
       {resources.length === 0 ? (
-        <p className="text-muted-foreground">No {type} found.</p>
+        <p className="text-sm text-muted-foreground">No {type} found.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <div className="overflow-x-auto rounded-md border border-surface-0">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-muted/50">
+            <thead className="border-b border-surface-0 bg-surface-0/30">
               <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Name
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Created
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-surface-0/50">
               {resources.map((r) => (
-                <tr key={r.id} className="border-b last:border-b-0">
-                  <td className="px-4 py-3 font-medium">{r.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                <tr key={r.id} className="transition-colors hover:bg-surface-0/20">
+                  <td className="px-4 py-2.5 text-sm font-medium text-foreground">{r.name}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
                     {new Date(r.createdAt).toLocaleDateString()}
                   </td>
                 </tr>
@@ -199,8 +215,8 @@ function HashDetectTab() {
       <div className="flex gap-2">
         <input
           type="text"
-          placeholder="Enter a hash value..."
-          className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
+          placeholder="Paste a hash value\u2026"
+          className="flex-1 rounded border border-surface-0 bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
           value={hashInput}
           onChange={(e) => setHashInput(e.target.value)}
           onKeyDown={(e) => {
@@ -211,45 +227,56 @@ function HashDetectTab() {
           type="button"
           onClick={handleDetect}
           disabled={guessType.isPending || !hashInput.trim()}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="rounded bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
-          {guessType.isPending ? 'Detecting...' : 'Detect Type'}
+          {guessType.isPending ? 'Detecting\u2026' : 'Detect Type'}
         </button>
       </div>
 
       {guessType.data && (
-        <div className="space-y-2">
-          <h3 className="font-medium">
-            Results {guessType.data.identified ? '(Identified)' : '(Candidates)'}
+        <div className="space-y-3">
+          <h3 className="text-sm font-medium">
+            Results{' '}
+            <span className="text-muted-foreground">
+              ({guessType.data.identified ? 'Identified' : 'Candidates'})
+            </span>
           </h3>
           {guessType.data.candidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">No matching hash types found.</p>
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto rounded-md border border-surface-0">
               <table className="w-full text-left text-sm">
-                <thead className="border-b bg-muted/50">
+                <thead className="border-b border-surface-0 bg-surface-0/30">
                   <tr>
-                    <th className="px-4 py-3 font-medium">Type</th>
-                    <th className="px-4 py-3 font-medium">Hashcat Mode</th>
-                    <th className="px-4 py-3 font-medium">Category</th>
-                    <th className="px-4 py-3 font-medium">Confidence</th>
+                    <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Type
+                    </th>
+                    <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Mode
+                    </th>
+                    <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Category
+                    </th>
+                    <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Confidence
+                    </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-surface-0/50">
                   {guessType.data.candidates.map((c) => (
-                    <tr key={c.hashcatMode} className="border-b last:border-b-0">
-                      <td className="px-4 py-3 font-medium">{c.name}</td>
-                      <td className="px-4 py-3">{c.hashcatMode}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{c.category}</td>
-                      <td className="px-4 py-3">
+                    <tr key={c.hashcatMode} className="transition-colors hover:bg-surface-0/20">
+                      <td className="px-4 py-2.5 text-sm font-medium text-foreground">{c.name}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs">{c.hashcatMode}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{c.category}</td>
+                      <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
-                          <div className="h-2 w-20 rounded-full bg-muted">
+                          <div className="h-1.5 w-20 rounded-full bg-surface-1">
                             <div
-                              className="h-full rounded-full bg-primary"
+                              className="h-full rounded-full bg-primary transition-all"
                               style={{ width: `${Math.round(c.confidence * 100)}%` }}
                             />
                           </div>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="font-mono text-[11px] text-muted-foreground">
                             {Math.round(c.confidence * 100)}%
                           </span>
                         </div>

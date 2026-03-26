@@ -11,20 +11,20 @@ export function CampaignsPage() {
 
   if (!selectedProjectId) {
     return (
-      <div className="space-y-6">
-        <h2 className="text-2xl font-bold">Campaigns</h2>
-        <p className="text-muted-foreground">Select a project to view campaigns.</p>
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold tracking-tight">Campaigns</h2>
+        <p className="text-sm text-muted-foreground">Select a project to view campaigns.</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Campaigns</h2>
+        <h2 className="text-xl font-semibold tracking-tight">Campaigns</h2>
         <div className="flex gap-2">
           <select
-            className="rounded-md border bg-background px-3 py-1.5 text-sm"
+            className="rounded border border-surface-0 bg-background px-3 py-1.5 text-xs text-foreground"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
@@ -37,7 +37,7 @@ export function CampaignsPage() {
           </select>
           <Link
             to="/campaigns/new"
-            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             New Campaign
           </Link>
@@ -45,36 +45,50 @@ export function CampaignsPage() {
       </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground">Loading campaigns...</p>
+        <p className="text-sm text-muted-foreground">Loading campaigns\u2026</p>
       ) : !data?.campaigns.length ? (
-        <p className="text-muted-foreground">No campaigns found.</p>
+        <p className="text-sm text-muted-foreground">No campaigns found.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <div className="overflow-x-auto rounded-md border border-surface-0">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-muted/50">
+            <thead className="border-b border-surface-0 bg-surface-0/30">
               <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Priority</th>
-                <th className="px-4 py-3 font-medium">Created</th>
-                <th className="px-4 py-3 font-medium">Actions</th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Name
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Status
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Priority
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Created
+                </th>
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-surface-0/50">
               {data.campaigns.map((campaign) => (
-                <tr key={campaign.id} className="border-b last:border-b-0">
-                  <td className="px-4 py-3 font-medium">{campaign.name}</td>
-                  <td className="px-4 py-3">
+                <tr key={campaign.id} className="transition-colors hover:bg-surface-0/20">
+                  <td className="px-4 py-2.5 text-sm font-medium text-foreground">
+                    {campaign.name}
+                  </td>
+                  <td className="px-4 py-2.5">
                     <StatusBadge status={campaign.status} />
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{campaign.priority}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                    {campaign.priority}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
                     {new Date(campaign.createdAt).toLocaleDateString()}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2.5">
                     <Link
                       to={`/campaigns/${campaign.id}`}
-                      className="text-primary underline-offset-4 hover:underline"
+                      className="text-xs font-medium text-primary hover:text-primary/80"
                     >
                       Details
                     </Link>
