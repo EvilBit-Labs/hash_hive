@@ -105,11 +105,13 @@ app.onError((err, c) => {
   const reqId = c.get('requestId');
   logger.error({ err, requestId: reqId, path: c.req.path }, 'unhandled error');
 
+  // Never leak internal details (SQL queries, stack traces) to clients — even in dev.
+  // The full error is already logged above; the client gets a safe generic message.
   return c.json(
     {
       error: {
         code: 'INTERNAL_SERVER_ERROR',
-        message: env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message,
+        message: 'An unexpected error occurred',
         timestamp: new Date().toISOString(),
         requestId: reqId,
       },

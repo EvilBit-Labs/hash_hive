@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { env } from '../../config/env.js';
+import { logger } from '../../config/logger.js';
 import { requireSession } from '../../middleware/auth.js';
 import { getUserWithProjects, login } from '../../services/auth.js';
 import type { AppEnv } from '../../types.js';
@@ -11,7 +12,17 @@ const auth = new Hono<AppEnv>();
 
 auth.post('/login', zValidator('json', loginRequestSchema), async (c) => {
   const { email, password } = c.req.valid('json');
-  const result = await login(email, password);
+
+  let result: Awaited<ReturnType<typeof login>>;
+  try {
+    result = await login(email, password);
+  } catch (err) {
+    logger.error({ err }, 'login failed due to internal error');
+    return c.json(
+      { error: { code: 'INTERNAL_SERVER_ERROR', message: 'Unable to process login request' } },
+      500
+    );
+  }
 
   if (!result) {
     return c.json(
