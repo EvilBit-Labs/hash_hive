@@ -129,10 +129,16 @@ The backend is a Bun + Hono + TypeScript service:
 
 ### RBAC middleware
 
+**Roles:** `admin`, `contributor`, `viewer` (renamed from operator/analyst/agent_owner in March 2026). Frontend uses `Permission` constants from `packages/frontend/src/lib/permissions.ts` — components reference capabilities (`Permission.CAMPAIGN_CREATE`), never role strings.
+
 Two RBAC middleware variants in `src/middleware/rbac.ts`:
 
 - `requireProjectAccess()` / `requireRole()` — reads projectId from JWT context (`currentUser.projectId`); used by most dashboard routes
 - `requireParamProjectAccess()` / `requireParamProjectRole()` — reads projectId from URL param (`c.req.param('projectId')`); used by project management routes like `GET /projects/:projectId`
+
+### Chunked upload protocol
+
+Large file uploads (>100MB) use S3 multipart via 5 endpoints under `/api/v1/dashboard/resources/upload/`. Frontend `ChunkedUploadManager` in `packages/frontend/src/lib/chunked-upload/` splits files into 64MB chunks, uploads sequentially with retry, persists state to localStorage for resumption. Backend streams each chunk to S3 without full-file buffering (128MB memory bound). Files <=100MB use existing single-request upload path.
 
 ### API surfaces
 

@@ -23,11 +23,19 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
   });
   ```
 
+- **Streaming upload routes must skip body-parsing middleware**: `c.req.raw.body` is a `ReadableStream` consumed on first read. Any middleware that calls `c.req.json()`, `c.req.parseBody()`, or `c.req.arrayBuffer()` consumes it — downstream handlers get nothing. Separate streaming endpoints into their own route group without `zValidator`.
+
+- **Never leak internal errors to clients**: The global `app.onError()` handler must NOT send `err.message` in any environment (including dev) — Drizzle errors include full SQL queries with table names and column names. Always return a generic message and log the full error server-side.
+
 ## Drizzle ORM
 
 - **`db.execute(sql`...`)` returns array-like result** — access rows as `result[0]`, not `result.rows[0]`
 - **No native `FOR UPDATE SKIP LOCKED`** — use raw `db.execute(sql`...`)` with a CTE for atomic claim patterns
 - **Never use `sql.raw()` for agent/user-supplied values** — use Drizzle's parameterized `${value}` in tagged templates. Arrays like `${[1,2,3]}::int[]` are bound safely. `sql.raw()` is only for static SQL fragments (table/column names).
+
+## Bun Runtime
+
+- **`Bun.serve()` idle timeout defaults to 10s** — large uploads on slow connections will timeout. Set `idleTimeout: 120` in the server config for upload-heavy services.
 
 ## BullMQ
 
@@ -79,3 +87,4 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
 **Gotchas:**
 
 - **401 intercept**: `api.ts` globally intercepts all 401 responses as "Session expired" — login tests must use 400 for invalid credentials
+- **PermissionGuard hides elements**: Tests asserting on guarded elements (New Campaign link, lifecycle buttons, Upload buttons) must seed the auth store with `roles: ['admin']` or `roles: ['contributor']` via `useAuthStore.setState()` — without this, PermissionGuard renders nothing
