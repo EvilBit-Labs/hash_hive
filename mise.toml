@@ -1,16 +1,17 @@
+# Many tools are set to "latest" to take advantage of idiomatic version files, which will automatically update the tool to the latest version when the version file is updated. This allows us to keep our tools up to date without having to manually update the version in this configuration file.
 [tools]
-biome             = "latest"
+biome             = "2.4.9"
 bun               = "latest"
 just              = "latest"
-markdownlint-cli2 = "latest"
-"pipx:pre-commit" = "latest"
-prettier          = "latest"
-"pipx:mdformat"   = { version = "latest", uvx_args = "--with mdformat-gfm --with mdformat-admon --with mdformat-config --with mdformat-footnote --with mdformat-simple-breaks --with mdformat-web --with mdformat-ruff --with mdformat-gfm-alerts --with mdformat-toc --with mdformat-front-matters" }
+markdownlint-cli2 = "0.22.0"
+"pipx:pre-commit" = "4.5.1"
+"pipx:mdformat"   = { version = "1.0.0", uvx_args = "--with mdformat-gfm --with mdformat-admon --with mdformat-config --with mdformat-footnote --with mdformat-simple-breaks --with mdformat-web --with mdformat-ruff --with mdformat-gfm-alerts --with mdformat-toc --with mdformat-front-matters" }
+syft              = "latest"
 
 # Many of these settings are defaults, but we are explicit in case they change in the future and to make it clear to users what is enabled.
 [settings]
 activate_aggressive                 = true
-idiomatic_version_file_enable_tools = [ "python", "go", "bun" ]
+idiomatic_version_file_enable_tools = [ "python", "npm", "bun" ]
 env_cache                           = true
 exec_auto_install                   = true
 github_attestations                 = true
