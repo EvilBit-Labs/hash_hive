@@ -12,6 +12,20 @@ import { useCampaignLifecycle } from '../hooks/use-campaigns';
 import { api } from '../lib/api';
 import { Permission } from '../lib/permissions';
 
+interface HashProgress {
+  total: number;
+  cracked: number;
+  remaining: number;
+  percentage: number;
+}
+
+interface CampaignProgress {
+  totalTasks?: number;
+  completedTasks?: number;
+  keyspaceProgress?: number;
+  hashProgress?: HashProgress;
+}
+
 interface Campaign {
   id: number;
   name: string;
@@ -20,6 +34,7 @@ interface Campaign {
   projectId: number;
   hashListId: number;
   priority: number;
+  progress: CampaignProgress | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -146,6 +161,55 @@ export function CampaignDetailPage() {
           <p className="mt-2 font-mono text-2xl font-bold tabular-nums">#{campaign.hashListId}</p>
         </div>
       </div>
+
+      {/* Hash-based progress section */}
+      {campaign.progress?.hashProgress && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-medium">Crack Progress</h3>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Cracked
+              </p>
+              <p className="mt-1 font-mono text-lg font-bold tabular-nums text-success">
+                {campaign.progress.hashProgress.cracked.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Remaining
+              </p>
+              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
+                {campaign.progress.hashProgress.remaining.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Total
+              </p>
+              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
+                {campaign.progress.hashProgress.total.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Progress
+              </p>
+              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
+                {(campaign.progress.hashProgress.percentage * 100).toFixed(1)}%
+              </p>
+            </div>
+          </div>
+          <div className="h-2 w-full rounded-full bg-surface-1">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{
+                width: `${Math.min(campaign.progress.hashProgress.percentage * 100, 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Attacks</h3>

@@ -32,6 +32,9 @@ const CampaignDetailPage = lazy(() =>
 const ResourcesPage = lazy(() =>
   import('./pages/resources').then((m) => ({ default: m.ResourcesPage }))
 );
+const HashListDetailPage = lazy(() =>
+  import('./pages/hash-list-detail').then((m) => ({ default: m.HashListDetailPage }))
+);
 const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default: m.ResultsPage })));
 const NotFoundPage = lazy(() =>
   import('./pages/not-found').then((m) => ({ default: m.NotFoundPage }))
@@ -74,6 +77,7 @@ function App() {
                   <Route path="/agents" element={<AgentsPage />} />
                   <Route path="/agents/:id" element={<AgentDetailPage />} />
                   <Route path="/resources" element={<ResourcesPage />} />
+                  <Route path="/resources/hash-lists/:id" element={<HashListDetailPage />} />
                   <Route path="/results" element={<ResultsPage />} />
                 </Route>
               </Route>

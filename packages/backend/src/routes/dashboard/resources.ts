@@ -1,8 +1,10 @@
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared';
+import { hashItems, maskLists, ruleLists, wordLists } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
+import { count, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
+import { db } from '../../db/index.js';
 import { requireSession } from '../../middleware/auth.js';
 import { requireProjectAccess, requireRole } from '../../middleware/rbac.js';
 import { guessHashType } from '../../services/hash-analysis.js';
@@ -76,14 +78,35 @@ resourceRoutes.post(
 );
 
 resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'));
-  const hashList = await getHashListById(id);
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
 
-  if (!hashList) {
+  const hashListId = Number(c.req.param('id'));
+  const hl = await getHashListById(hashListId, projectId);
+
+  if (!hl) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
   }
 
-  return c.json({ hashList });
+  const [stats] = await db
+    .select({
+      total: count(),
+      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+    })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId));
+
+  const total = stats?.total ?? 0;
+  const cracked = stats?.cracked ?? 0;
+
+  return c.json({
+    hashList: {
+      ...hl,
+      statistics: { total, cracked, remaining: total - cracked },
+    },
+  });
 });
 
 resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
@@ -121,11 +144,23 @@ resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'
 });
 
 resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'));
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
+  const hashListId = Number(c.req.param('id'));
+  const status = (c.req.query('status') as 'all' | 'cracked' | 'uncracked') || undefined;
+  const q = c.req.query('q') || undefined;
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
   const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
 
-  const result = await getHashItems(id, { limit, offset });
+  const result = await getHashItems(hashListId, projectId, { status, search: q, limit, offset });
+
+  if (!result) {
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
+  }
+
   return c.json(result);
 });
 

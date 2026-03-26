@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  hashPassword,
-  verifyPassword,
   createToken,
+  hashPassword,
   validateToken,
+  verifyPassword,
 } from '../../src/services/auth.js';
 
 describe('password hashing', () => {

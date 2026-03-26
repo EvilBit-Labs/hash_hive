@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { hashItems, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import {
@@ -36,8 +36,16 @@ export async function listHashLists(projectId: number) {
     .orderBy(desc(hashLists.createdAt));
 }
 
-export async function getHashListById(id: number) {
-  const [hl] = await db.select().from(hashLists).where(eq(hashLists.id, id)).limit(1);
+export async function getHashListById(id: number, projectId?: number) {
+  const conditions = [eq(hashLists.id, id)];
+  if (projectId !== undefined) {
+    conditions.push(eq(hashLists.projectId, projectId));
+  }
+  const [hl] = await db
+    .select()
+    .from(hashLists)
+    .where(and(...conditions))
+    .limit(1);
   return hl ?? null;
 }
 
@@ -138,26 +146,55 @@ export async function importHashList(hashListId: number) {
 
 export async function getHashItems(
   hashListId: number,
-  opts: { limit?: number | undefined; offset?: number | undefined }
+  projectId: number,
+  opts: {
+    limit?: number | undefined;
+    offset?: number | undefined;
+    status?: 'all' | 'cracked' | 'uncracked' | undefined;
+    search?: string | undefined;
+  }
 ) {
+  // Verify hash list belongs to project (IDOR prevention)
+  const hl = await getHashListById(hashListId, projectId);
+  if (!hl) return null;
+
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
+
+  const conditions: SQL[] = [eq(hashItems.hashListId, hashListId)];
+
+  if (opts.status === 'cracked') {
+    conditions.push(isNotNull(hashItems.crackedAt));
+  } else if (opts.status === 'uncracked') {
+    conditions.push(sql`${hashItems.crackedAt} IS NULL`);
+  }
+
+  if (opts.search) {
+    const escaped = escapeLike(opts.search);
+    conditions.push(sql`${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\'`);
+  }
+
+  const whereClause = and(...conditions);
 
   const [items, countResult] = await Promise.all([
     db
       .select()
       .from(hashItems)
-      .where(eq(hashItems.hashListId, hashListId))
+      .where(whereClause)
       .limit(limit)
       .offset(offset)
       .orderBy(hashItems.id),
-    db
-      .select({ count: sql<number>`count(*)` })
-      .from(hashItems)
-      .where(eq(hashItems.hashListId, hashListId)),
+    db.select({ count: sql<number>`count(*)` }).from(hashItems).where(whereClause),
   ]);
 
   return { items, total: Number(countResult[0]?.count ?? 0), limit, offset };
+}
+
+/**
+ * Escape LIKE/ILIKE metacharacters to prevent wildcard injection.
+ */
+export function escapeLike(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────

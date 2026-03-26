@@ -5,7 +5,12 @@ import { z } from 'zod';
 import { requireAgentToken } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat } from '../../services/agents.js';
 import { getAgentDownloadUrl } from '../../services/resources.js';
-import { assignNextTask, handleTaskFailure, updateTaskProgress } from '../../services/tasks.js';
+import {
+  assignNextTask,
+  getZapsForTask,
+  handleTaskFailure,
+  updateTaskProgress,
+} from '../../services/tasks.js';
 import type { AppEnv } from '../../types.js';
 
 const agentRoutes = new Hono<AppEnv>();
@@ -78,7 +83,11 @@ agentRoutes.post('/tasks/:id/report', zValidator('json', taskReportSchema), asyn
 
   // Handle failure with retry logic
   if (data.status === 'failed') {
-    const failResult = await handleTaskFailure(taskId, data.errors?.[0] ?? 'Unknown failure');
+    const failResult = await handleTaskFailure(
+      taskId,
+      agentId,
+      data.errors?.[0] ?? 'Unknown failure'
+    );
     return c.json({ acknowledged: true, retried: failResult.retried ?? false });
   }
 
@@ -90,6 +99,35 @@ agentRoutes.post('/tasks/:id/report', zValidator('json', taskReportSchema), asyn
   }
 
   return c.json({ acknowledged: true });
+});
+
+// ─── GET /tasks/:id/zaps — cracked hashes for a task ────────────────
+
+const zapQuerySchema = z.object({
+  since: z
+    .string()
+    .datetime()
+    .optional()
+    .transform((v) => (v ? new Date(v) : undefined)),
+  limit: z.coerce.number().int().min(1).max(10_000).default(10_000),
+});
+
+agentRoutes.get('/tasks/:id/zaps', zValidator('query', zapQuerySchema), async (c) => {
+  const { agentId, projectId } = c.get('agent');
+  const taskId = Number(c.req.param('id'));
+
+  if (Number.isNaN(taskId) || taskId <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid task ID' } }, 400);
+  }
+
+  const { since, limit } = c.req.valid('query');
+  const result = await getZapsForTask(taskId, agentId, projectId, { since, limit });
+
+  if ('error' in result) {
+    return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404);
+  }
+
+  return c.json(result);
 });
 
 // ─── POST /errors — log an agent error ──────────────────────────────

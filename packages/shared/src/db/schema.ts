@@ -153,6 +153,7 @@ export const hashItems = pgTable(
     index('hash_items_hash_list_id_idx').on(table.hashListId),
     index('hash_items_cracked_at_idx').on(table.crackedAt),
     index('hash_items_campaign_id_idx').on(table.campaignId),
+    index('hash_items_hash_list_cracked_idx').on(table.hashListId, table.crackedAt),
   ]
 );
 

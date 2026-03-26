@@ -1,5 +1,5 @@
-import { attacks, campaigns, tasks } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
 
@@ -363,6 +363,42 @@ export async function updateCampaignProgress(campaignId: number) {
 
   const overallProgress = campaignTasks.length > 0 ? totalProgress / campaignTasks.length : 0;
 
+  // Hash-based progress: look up the campaign's hash list and count cracked vs total
+  let hashProgress: {
+    total: number;
+    cracked: number;
+    remaining: number;
+    percentage: number;
+  } | null = null;
+
+  const [campaign] = await db
+    .select({ hashListId: campaigns.hashListId })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+
+  if (campaign?.hashListId) {
+    const [counts] = await db
+      .select({
+        total: count(),
+        cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+      })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, campaign.hashListId));
+
+    const total = Number(counts?.total ?? 0);
+    const cracked = Number(counts?.cracked ?? 0);
+
+    if (total > 0) {
+      hashProgress = {
+        total,
+        cracked,
+        remaining: total - cracked,
+        percentage: Math.round((cracked / total) * 10000) / 10000,
+      };
+    }
+  }
+
   await db
     .update(campaigns)
     .set({
@@ -371,6 +407,7 @@ export async function updateCampaignProgress(campaignId: number) {
         completedTasks: completedCount,
         overallProgress: Math.round(overallProgress * 10000) / 10000,
         updatedAt: new Date().toISOString(),
+        ...(hashProgress ? { hashProgress } : {}),
       },
       updatedAt: new Date(),
     })

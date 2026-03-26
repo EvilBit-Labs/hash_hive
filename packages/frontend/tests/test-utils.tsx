@@ -5,7 +5,7 @@
  * that need React Query, Router, etc.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, type RenderOptions } from '@testing-library/react';
+import { cleanup, type RenderOptions, render } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { resetAllStores } from './utils/store-reset';
@@ -101,5 +101,4 @@ export function cleanupAll() {
   resetAllStores();
 }
 
-export { render, cleanup } from '@testing-library/react';
-export { screen, within, waitFor, act, fireEvent } from '@testing-library/react';
+export { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';

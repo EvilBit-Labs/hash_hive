@@ -1,6 +1,6 @@
 import { hashItems, hashLists } from '@hashhive/shared';
 import { type ConnectionOptions, Worker } from 'bullmq';
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq, isNotNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
 import { QUEUE_NAMES } from '../../config/queue.js';
@@ -8,7 +8,7 @@ import { downloadFile } from '../../config/storage.js';
 import { db } from '../../db/index.js';
 import type { HashListParseJob } from '../types.js';
 
-const BATCH_SIZE = 1_000;
+const BATCH_SIZE = 5_000;
 const MAX_LINE_LENGTH = 10_000; // 10 KB — skip malformed/binary lines
 
 /**
@@ -129,20 +129,27 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         .select({ value: count() })
         .from(hashItems)
         .where(eq(hashItems.hashListId, hashListId));
-      const totalHashes = totalResult?.value ?? 0;
+
+      const [crackedResult] = await db
+        .select({ value: count() })
+        .from(hashItems)
+        .where(and(eq(hashItems.hashListId, hashListId), isNotNull(hashItems.crackedAt)));
+
+      const total = totalResult?.value ?? 0;
+      const cracked = crackedResult?.value ?? 0;
 
       // Mark hash list as ready with computed statistics
       await db
         .update(hashLists)
         .set({
           status: 'ready',
-          statistics: { totalHashes, skippedLines },
+          statistics: { total, cracked, remaining: total - cracked, skippedLines },
           updatedAt: new Date(),
         })
         .where(eq(hashLists.id, hashListId));
 
       logger.info(
-        { hashListId, linesProcessed, skippedLines, totalHashes },
+        { hashListId, linesProcessed, skippedLines, total, cracked },
         'Hash list parsing complete (streamed)'
       );
       return { inserted: linesProcessed, skippedLines };
