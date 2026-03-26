@@ -165,7 +165,7 @@ export const wordLists = pgTable('word_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('ready'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -179,7 +179,7 @@ export const ruleLists = pgTable('rule_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('ready'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -193,7 +193,7 @@ export const maskLists = pgTable('mask_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('ready'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

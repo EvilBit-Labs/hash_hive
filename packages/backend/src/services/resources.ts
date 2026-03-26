@@ -213,6 +213,7 @@ export async function uploadResourceFile(
         uploadedAt: new Date().toISOString(),
       },
       fileSize: file.size,
+      status: 'ready',
       updatedAt: new Date(),
     })
     .where(eq(table.id, resourceId));
