@@ -34,8 +34,51 @@ mock.module('../../src/services/campaigns.js', () => ({
   updateCampaignProgress: mock(),
 }));
 
-// Import after mocks are set up
-const { assignNextTask } = await import('../../src/services/tasks.js');
+// Import after mocks are set up.
+// agent-api-contract.test.ts mocks '../../src/services/tasks.js' which poisons
+// the shared module cache. We import from tasks.js but ALSO re-mock it here to
+// override any stale mock with one that delegates to the real implementation
+// evaluated against our db mock.
+//
+// The trick: mock.module for the same specifier called in multiple files — the
+// last one to evaluate wins. By re-mocking tasks.js here, we ensure this file's
+// factory runs (re-importing from the real source with our mocked db).
+const { assignNextTask: _realAssignNextTask } = await import('../../src/services/tasks.js');
+
+// If the import returned the real function (no poisoning), use it directly.
+// If poisoned (returns stale mock data regardless of db mock), detect and fix.
+// We test this by checking if the function ignores our db mock:
+const _testResult = await _realAssignNextTask(999);
+const isPoisoned = _testResult !== null; // Real impl returns null for non-existent agent
+
+let assignNextTask: typeof _realAssignNextTask;
+if (isPoisoned) {
+  // Module cache is poisoned — dynamically re-import from the source .ts file.
+  // This evaluates against our already-registered db/events/campaigns .js mocks
+  // because bun resolves the transitive imports to the same .js mock entries.
+  //
+  // We must also mock the .ts paths for events and campaigns since the .ts source
+  // file's internal imports may resolve to .ts paths in some bun versions.
+  mock.module('../../src/services/events.ts', () => ({
+    registerClient: mock(),
+    unregisterClient: mock(),
+    getClientCount: mock(() => 0),
+    emit: mock(),
+    emitAgentStatus: mock(),
+    emitCampaignStatus: mock(),
+    emitTaskUpdate: mock(),
+    emitCrackResult: mock(),
+  }));
+  mock.module('../../src/services/campaigns.ts', () => ({
+    updateCampaignProgress: mock(),
+  }));
+
+  const freshModule = await import('../../src/services/tasks.ts');
+  assignNextTask = freshModule.assignNextTask;
+} else {
+  assignNextTask = _realAssignNextTask;
+}
+
 const { db } = await import('../../src/db/index.js');
 
 // ─── Tests ──────────────────────────────────────────────────────────
