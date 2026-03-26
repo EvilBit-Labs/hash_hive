@@ -50,6 +50,7 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
   const [state, dispatch] = useReducer(uploadReducer, initialState);
   const abortControllerRef = useRef<AbortController | null>(null);
   const uploadIdRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
 
   const start = useCallback(
     async (file: File, resourceType: string, name: string) => {
@@ -58,6 +59,7 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
         abortControllerRef.current.abort();
       }
 
+      const gen = ++generationRef.current;
       const controller = new AbortController();
       abortControllerRef.current = controller;
       uploadIdRef.current = `${resourceType}-${name}-${file.size}`;
@@ -71,15 +73,19 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
           name,
           signal: controller.signal,
           onProgress: (progress) => {
+            if (gen !== generationRef.current) return;
             dispatch({ type: 'PROGRESS', progress });
           },
         });
 
+        if (gen !== generationRef.current) return;
         dispatch({ type: 'COMPLETE' });
         abortControllerRef.current = null;
         uploadIdRef.current = null;
         options.onComplete?.(resourceId);
       } catch (err) {
+        if (gen !== generationRef.current) return;
+
         if (err instanceof DOMException && err.name === 'AbortError') {
           dispatch({ type: 'RESET' });
           return;

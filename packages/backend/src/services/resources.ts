@@ -323,8 +323,19 @@ export async function initiateChunkedUpload(data: {
   const key = `${projectId}/${prefix}/${randomUUID()}`;
   const ct = contentType ?? 'application/octet-stream';
 
-  // Initiate S3 multipart upload
-  const s3UploadId = await createMultipartUpload(key, ct);
+  // Initiate S3 multipart upload — clean up orphan DB record on failure
+  let s3UploadId: string;
+  try {
+    s3UploadId = await createMultipartUpload(key, ct);
+  } catch (err) {
+    logger.error(
+      { err, resourceId, resourceType },
+      'S3 multipart initiation failed, removing orphan DB record'
+    );
+    await db.delete(table).where(eq(table.id, resourceId));
+    throw err;
+  }
+
   await db
     .update(table)
     .set({
@@ -351,14 +362,19 @@ export async function uploadChunkPart(
   partNumber: number,
   body: Uint8Array,
   resourceId: number,
-  resourceType: string
+  resourceType: string,
+  projectId: number
 ): Promise<{ etag: string }> {
   // Look up the S3 key from the resource's fileRef
   const isHashList = resourceType === 'hash-lists';
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType];
   if (!table) throw new Error(`Unknown resource type: ${resourceType}`);
 
-  const [row] = await db.select().from(table).where(eq(table.id, resourceId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
+    .limit(1);
   if (!row) throw new Error(`Resource ${resourceId} not found`);
 
   const fileRef = row.fileRef as { key?: string } | null;
@@ -376,13 +392,18 @@ export async function completeChunkedUpload(
   s3UploadId: string,
   parts: ReadonlyArray<{ partNumber: number; etag: string }>,
   resourceId: number,
-  resourceType: string
+  resourceType: string,
+  projectId: number
 ): Promise<{ resourceId: number }> {
   const isHashList = resourceType === 'hash-lists';
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType];
   if (!table) throw new Error(`Unknown resource type: ${resourceType}`);
 
-  const [row] = await db.select().from(table).where(eq(table.id, resourceId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
+    .limit(1);
   if (!row) throw new Error(`Resource ${resourceId} not found`);
 
   const fileRef = row.fileRef as {
@@ -425,13 +446,18 @@ export async function completeChunkedUpload(
 export async function abortChunkedUpload(
   s3UploadId: string,
   resourceId: number,
-  resourceType: string
+  resourceType: string,
+  projectId: number
 ): Promise<void> {
   const isHashList = resourceType === 'hash-lists';
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType];
   if (!table) throw new Error(`Unknown resource type: ${resourceType}`);
 
-  const [row] = await db.select().from(table).where(eq(table.id, resourceId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
+    .limit(1);
   if (!row) return;
 
   const fileRef = row.fileRef as { key?: string } | null;
@@ -452,7 +478,8 @@ export async function abortChunkedUpload(
 export async function getChunkedUploadStatus(
   s3UploadId: string,
   resourceId: number,
-  resourceType: string
+  resourceType: string,
+  projectId: number
 ): Promise<{
   status: string;
   completedParts: Array<{ partNumber: number; etag: string; size: number }>;
@@ -461,7 +488,11 @@ export async function getChunkedUploadStatus(
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType];
   if (!table) return null;
 
-  const [row] = await db.select().from(table).where(eq(table.id, resourceId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
+    .limit(1);
   if (!row) return null;
 
   const fileRef = row.fileRef as { key?: string } | null;

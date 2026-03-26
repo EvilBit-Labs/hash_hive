@@ -32,7 +32,7 @@ async function seed() {
       .values({ email: ADMIN_EMAIL, passwordHash, name: ADMIN_NAME })
       .onConflictDoUpdate({
         target: users.email,
-        set: { name: ADMIN_NAME },
+        set: { name: ADMIN_NAME, passwordHash },
       })
       .returning({ id: users.id });
 

@@ -356,8 +356,23 @@ resourceRoutes.put(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is empty' } }, 400);
     }
 
+    const { projectId } = c.get('currentUser');
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      );
+    }
+
     try {
-      const result = await uploadChunkPart(uploadId, partNumber, chunk, resourceId, resourceType);
+      const result = await uploadChunkPart(
+        uploadId,
+        partNumber,
+        chunk,
+        resourceId,
+        resourceType,
+        projectId
+      );
       return c.json(result);
     } catch (err) {
       logger.error({ err, uploadId, partNumber }, 'Failed to upload part');
@@ -389,9 +404,22 @@ resourceRoutes.post(
   async (c) => {
     const uploadId = c.req.param('uploadId');
     const { parts, resourceId, resourceType } = c.req.valid('json');
+    const { projectId } = c.get('currentUser');
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      );
+    }
 
     try {
-      const result = await completeChunkedUpload(uploadId, parts, resourceId, resourceType);
+      const result = await completeChunkedUpload(
+        uploadId,
+        parts,
+        resourceId,
+        resourceType,
+        projectId
+      );
       return c.json(result);
     } catch (err) {
       logger.error({ err, uploadId }, 'Failed to complete chunked upload');
@@ -420,7 +448,12 @@ resourceRoutes.delete('/upload/:uploadId', requireRole('admin', 'contributor'), 
     );
   }
 
-  await abortChunkedUpload(uploadId, resourceId, resourceType);
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
+  await abortChunkedUpload(uploadId, resourceId, resourceType, projectId);
   return c.json({ acknowledged: true });
 });
 
@@ -441,7 +474,12 @@ resourceRoutes.get('/upload/:uploadId/status', requireRole('admin', 'contributor
     );
   }
 
-  const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType);
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
+  const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId);
   if (!result) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Upload not found' } }, 404);
   }
