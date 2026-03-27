@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
 import { useEvents } from '../../hooks/use-events';
@@ -100,10 +101,11 @@ const navItems = [
   },
 ];
 
-export function Sidebar() {
+/** Shared sidebar content used by both desktop and mobile variants. */
+function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { pathname } = useLocation();
   const { user, logout, selectProject } = useAuthStore();
-  const { sidebarOpen, selectedProjectId, setSelectedProject } = useUiStore();
+  const { selectedProjectId, setSelectedProject } = useUiStore();
   const { connected } = useEvents();
 
   const handleProjectChange = async (value: string) => {
@@ -113,17 +115,15 @@ export function Sidebar() {
       try {
         await selectProject(projectId);
       } catch {
-        // Cookie update failed — local state is still set, next request will work
+        // Cookie update failed - local state is still set, next request will work
       }
     }
   };
 
-  if (!sidebarOpen) return null;
-
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r border-surface-0/50 bg-mantle">
+    <>
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-4">
         <img src={logoSvg} alt="" className="h-7 w-7" />
@@ -158,8 +158,9 @@ export function Sidebar() {
             <Link
               key={item.href}
               to={item.href}
+              onClick={onNavigate}
               className={cn(
-                'flex items-center gap-2.5 rounded px-2.5 py-1.5 text-[13px] font-medium transition-colors',
+                'flex items-center gap-2.5 rounded px-2.5 py-2 text-sm font-medium transition-colors',
                 active
                   ? 'bg-primary/10 text-primary'
                   : 'text-muted-foreground hover:bg-surface-0/60 hover:text-foreground'
@@ -183,13 +184,90 @@ export function Sidebar() {
           </span>
           <button
             type="button"
-            className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => logout()}
           >
             Sign out
           </button>
         </div>
       </div>
+    </>
+  );
+}
+
+/** Desktop sidebar - hidden below md breakpoint. */
+export function Sidebar() {
+  const { sidebarOpen } = useUiStore();
+
+  if (!sidebarOpen) return null;
+
+  return (
+    <aside className="hidden h-screen w-56 flex-col border-r border-surface-0/50 bg-mantle md:flex">
+      <SidebarContent />
     </aside>
+  );
+}
+
+/** Mobile sidebar - slides in as an overlay drawer below md. */
+export function MobileSidebar() {
+  const { mobileSidebarOpen, setMobileSidebar } = useUiStore();
+  const { pathname } = useLocation();
+  const prevPathname = useRef(pathname);
+
+  // Close drawer on route change
+  useEffect(() => {
+    if (pathname !== prevPathname.current) {
+      prevPathname.current = pathname;
+      setMobileSidebar(false);
+    }
+  }, [pathname, setMobileSidebar]);
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileSidebar(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [mobileSidebarOpen, setMobileSidebar]);
+
+  if (!mobileSidebarOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-40 md:hidden">
+      {/* Backdrop */}
+      <button
+        type="button"
+        aria-label="Close navigation menu"
+        className="absolute inset-0 bg-crust/80"
+        onClick={() => setMobileSidebar(false)}
+      />
+
+      {/* Drawer */}
+      <aside className="relative flex h-full w-64 flex-col bg-mantle shadow-2xl">
+        {/* Close button */}
+        <button
+          type="button"
+          aria-label="Close navigation menu"
+          className="absolute right-2 top-3 flex h-9 w-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
+          onClick={() => setMobileSidebar(false)}
+        >
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="h-4 w-4"
+            aria-hidden="true"
+          >
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
+
+        <SidebarContent onNavigate={() => setMobileSidebar(false)} />
+      </aside>
+    </div>
   );
 }

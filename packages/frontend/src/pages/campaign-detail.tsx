@@ -87,7 +87,7 @@ export function CampaignDetailPage() {
   const lifecycle = useCampaignLifecycle(campaignId);
 
   if (isLoading) {
-    return <EmptyState message="Loading campaign\u2026" />;
+    return <EmptyState message="Loading campaign..." />;
   }
 
   if (isError) {
@@ -102,7 +102,7 @@ export function CampaignDetailPage() {
   if (!data) {
     return (
       <div className="space-y-4">
-        <TextLink to="/campaigns">\u2190 Back to campaigns</TextLink>
+        <TextLink to="/campaigns">← Back to campaigns</TextLink>
         <EmptyState message="Campaign not found." />
       </div>
     );
@@ -113,33 +113,35 @@ export function CampaignDetailPage() {
 
   return (
     <div className="space-y-6">
-      <TextLink to="/campaigns">\u2190 Back to campaigns</TextLink>
+      <div className="space-y-3">
+        <TextLink to="/campaigns">← Back to campaigns</TextLink>
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <PageHeader>{campaign.name}</PageHeader>
-          <StatusBadge status={campaign.status} />
-        </div>
-        <PermissionGuard permission={Permission.CAMPAIGN_EDIT}>
-          <div className="flex gap-2">
-            {actions.map(({ action, label, variant }) => (
-              <Button
-                key={action}
-                variant={variant}
-                size="sm"
-                onClick={() => lifecycle.mutate(action)}
-                disabled={lifecycle.isPending}
-              >
-                {label}
-              </Button>
-            ))}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <PageHeader>{campaign.name}</PageHeader>
+            <StatusBadge status={campaign.status} />
           </div>
-        </PermissionGuard>
-      </div>
+          <PermissionGuard permission={Permission.CAMPAIGN_EDIT}>
+            <div className="flex gap-2">
+              {actions.map(({ action, label, variant }) => (
+                <Button
+                  key={action}
+                  variant={variant}
+                  size="sm"
+                  onClick={() => lifecycle.mutate(action)}
+                  disabled={lifecycle.isPending}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </PermissionGuard>
+        </div>
 
-      {campaign.description && (
-        <p className="text-sm text-muted-foreground">{campaign.description}</p>
-      )}
+        {campaign.description && (
+          <p className="text-sm text-muted-foreground">{campaign.description}</p>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
@@ -168,7 +170,7 @@ export function CampaignDetailPage() {
           <h3 className="text-sm font-medium">Crack Progress</h3>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Cracked
               </p>
               <p className="mt-1 font-mono text-lg font-bold tabular-nums text-success">
@@ -176,7 +178,7 @@ export function CampaignDetailPage() {
               </p>
             </div>
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Remaining
               </p>
               <p className="mt-1 font-mono text-lg font-bold tabular-nums">
@@ -184,7 +186,7 @@ export function CampaignDetailPage() {
               </p>
             </div>
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Total
               </p>
               <p className="mt-1 font-mono text-lg font-bold tabular-nums">
@@ -192,7 +194,7 @@ export function CampaignDetailPage() {
               </p>
             </div>
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Progress
               </p>
               <p className="mt-1 font-mono text-lg font-bold tabular-nums">
@@ -235,7 +237,7 @@ export function CampaignDetailPage() {
                     <StatusBadge status={attack.status} />
                   </Td>
                   <Td className="text-xs text-muted-foreground">
-                    {attack.wordlistId ? `#${attack.wordlistId}` : '\u2014'}
+                    {attack.wordlistId ? `#${attack.wordlistId}` : '-'}
                   </Td>
                   <Td className="font-mono text-xs text-muted-foreground">
                     {attack.dependencies?.length ? attack.dependencies.join(', ') : 'None'}
@@ -247,7 +249,7 @@ export function CampaignDetailPage() {
         )}
       </div>
 
-      <div className="space-y-1 text-[11px] text-muted-foreground">
+      <div className="border-t border-surface-0/50 pt-4 space-y-1 text-xs text-muted-foreground">
         <p>Created {new Date(campaign.createdAt).toLocaleString()}</p>
         {campaign.startedAt && <p>Started {new Date(campaign.startedAt).toLocaleString()}</p>}
         {campaign.completedAt && <p>Completed {new Date(campaign.completedAt).toLocaleString()}</p>}

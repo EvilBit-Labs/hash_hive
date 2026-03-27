@@ -63,7 +63,7 @@ interface AttackForm {
 
 type UploadModalType = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
 
-/** Catppuccin red — matches --ctp-red / --destructive token */
+/** Catppuccin red - matches --ctp-red / --destructive token */
 const CYCLE_EDGE_COLOR = 'hsl(351, 74%, 73%)';
 
 function buildNodes(attacks: readonly { mode: number }[]): FlowNode[] {
@@ -111,7 +111,7 @@ export function CampaignCreatePage() {
   const rulelistsQuery = useRulelists();
   const masklistsQuery = useMasklists();
 
-  // DAG validation — runs on every attacks change
+  // DAG validation - runs on every attacks change
   const dagValidation = useMemo(() => validateDAG(wizard.attacks), [wizard.attacks]);
 
   // React Flow state for Step 2
@@ -252,7 +252,7 @@ export function CampaignCreatePage() {
               if (i < wizard.step) wizard.setStep(i);
             }}
             className={cn(
-              'rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
+              'rounded-full px-3 py-1 text-xs font-medium transition-colors',
               stepIndicatorStyle(i, wizard.step)
             )}
           >
@@ -293,7 +293,7 @@ export function CampaignCreatePage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
-                Priority (1\u201310)
+                Priority (1-10)
               </label>
               <Input
                 id="priority"
@@ -310,7 +310,7 @@ export function CampaignCreatePage() {
               </label>
               <div className="mt-1.5 flex gap-2">
                 <Select id="hashListId" {...basicInfoForm.register('hashListId')}>
-                  <option value="">Select a hash list\u2026</option>
+                  <option value="">Select a hash list...</option>
                   {hashLists.map((hl) => (
                     <option key={hl.id} value={hl.id}>
                       {hl.name} ({hl.hashCount} hashes)
@@ -348,7 +348,7 @@ export function CampaignCreatePage() {
                 <h3 className="text-sm font-medium">Add Attack</h3>
                 <div className="space-y-3">
                   <div>
-                    <label htmlFor="mode" className="text-[11px] font-medium text-muted-foreground">
+                    <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
                       Hashcat Mode
                     </label>
                     <Input
@@ -381,7 +381,7 @@ export function CampaignCreatePage() {
                     <div key={field.id}>
                       <label
                         htmlFor={field.id}
-                        className="text-[11px] font-medium text-muted-foreground"
+                        className="text-xs font-medium text-muted-foreground"
                       >
                         {field.label}
                       </label>
@@ -447,7 +447,7 @@ export function CampaignCreatePage() {
                       <button
                         type="button"
                         onClick={() => wizard.removeAttack(i)}
-                        className="text-[11px] text-destructive hover:text-destructive/80"
+                        className="text-xs text-destructive hover:text-destructive/80"
                       >
                         Remove
                       </button>
@@ -460,7 +460,7 @@ export function CampaignCreatePage() {
             {/* Right column: React Flow DAG editor */}
             <div className="w-3/5 space-y-2">
               <h3 className="text-sm font-medium">Dependency Graph</h3>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Drag edges between attacks to set dependencies. Arrow from A \u2192 B means B
                 depends on A.
               </p>
@@ -556,7 +556,7 @@ export function CampaignCreatePage() {
             </dl>
           </div>
 
-          {/* DAG Preview — read-only visualization */}
+          {/* DAG Preview - read-only visualization */}
           {wizard.attacks.length > 0 && (
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -582,7 +582,7 @@ export function CampaignCreatePage() {
               Back
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Creating\u2026' : 'Create Campaign'}
+              {submitting ? 'Creating...' : 'Create Campaign'}
             </Button>
           </div>
         </div>

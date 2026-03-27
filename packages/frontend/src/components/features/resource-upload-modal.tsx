@@ -165,12 +165,12 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
                   style={{ width: `${displayProgress}%` }}
                 />
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {displayProgress}%
                 {chunkedProgress && (
                   <span>
                     {' '}
-                    — Part {chunkedProgress.currentPart} of {chunkedProgress.totalParts}
+                    - Part {chunkedProgress.currentPart} of {chunkedProgress.totalParts}
                   </span>
                 )}
               </p>
@@ -183,7 +183,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             Cancel
           </Button>
           <Button onClick={handleUpload} disabled={!file || !name.trim() || isUploading}>
-            {isUploading ? 'Uploading\u2026' : 'Upload'}
+            {isUploading ? 'Uploading...' : 'Upload'}
           </Button>
         </div>
       </div>

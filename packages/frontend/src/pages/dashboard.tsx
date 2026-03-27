@@ -10,7 +10,7 @@ export function DashboardPage() {
   const { selectedProjectId } = useUiStore();
   const { data: stats, isLoading } = useDashboardStats();
 
-  // Query invalidation is handled inside useEvents — no duplicate handler needed
+  // Query invalidation is handled inside useEvents - no duplicate handler needed
   const { connected } = useEvents();
 
   if (!selectedProjectId) {
@@ -29,7 +29,7 @@ export function DashboardPage() {
         <ConnectionIndicator connected={connected} />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div aria-live="polite" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Agents"
           value={stats ? `${stats.agents.online} / ${stats.agents.total}` : '--'}

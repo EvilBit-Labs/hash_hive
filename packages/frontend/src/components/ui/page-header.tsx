@@ -7,8 +7,8 @@ interface PageHeaderProps extends HTMLAttributes<HTMLHeadingElement> {
 
 export function PageHeader({ children, className, ...props }: PageHeaderProps) {
   return (
-    <h2 className={cn('text-xl font-semibold tracking-tight', className)} {...props}>
+    <h1 className={cn('text-xl font-semibold tracking-tight', className)} {...props}>
       {children}
-    </h2>
+    </h1>
   );
 }

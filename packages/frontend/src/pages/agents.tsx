@@ -27,6 +27,7 @@ export function AgentsPage() {
       <div className="flex items-center justify-between">
         <PageHeader>Agents</PageHeader>
         <Select
+          aria-label="Filter by agent status"
           className="w-auto px-3 py-1.5 text-xs"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -39,38 +40,40 @@ export function AgentsPage() {
         </Select>
       </div>
 
-      {isLoading ? (
-        <EmptyState message="Loading agents\u2026" />
-      ) : !data?.agents.length ? (
-        <EmptyState message="No agents found." />
-      ) : (
-        <Table>
-          <TableHead>
-            <tr>
-              <Th>Name</Th>
-              <Th>Status</Th>
-              <Th>Last Seen</Th>
-              <Th>Actions</Th>
-            </tr>
-          </TableHead>
-          <TableBody>
-            {data.agents.map((agent) => (
-              <TableRow key={agent.id}>
-                <Td className="text-sm font-medium text-foreground">{agent.name}</Td>
-                <Td>
-                  <StatusBadge status={agent.status} />
-                </Td>
-                <Td className="text-xs text-muted-foreground">
-                  {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
-                </Td>
-                <Td>
-                  <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
-                </Td>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <div aria-live="polite">
+        {isLoading ? (
+          <EmptyState message="Loading agents..." />
+        ) : !data?.agents.length ? (
+          <EmptyState message="No agents found." />
+        ) : (
+          <Table>
+            <TableHead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Status</Th>
+                <Th>Last Seen</Th>
+                <Th>Actions</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {data.agents.map((agent) => (
+                <TableRow key={agent.id}>
+                  <Td className="text-sm font-medium text-foreground">{agent.name}</Td>
+                  <Td>
+                    <StatusBadge status={agent.status} />
+                  </Td>
+                  <Td className="text-xs text-muted-foreground">
+                    {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
+                  </Td>
+                  <Td>
+                    <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
     </div>
   );
 }

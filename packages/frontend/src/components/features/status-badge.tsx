@@ -12,6 +12,7 @@ const STATUS_STYLES: Record<string, string> = {
   pending: 'bg-surface-1/50 text-muted-foreground border-surface-1',
   failed: 'bg-destructive/15 text-destructive border-destructive/20',
   draft: 'bg-ctp-mauve/15 text-ctp-mauve border-ctp-mauve/20',
+  benchmarked: 'bg-ctp-teal/15 text-ctp-teal border-ctp-teal/20',
 };
 
 interface StatusBadgeProps {
@@ -23,7 +24,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize',
+        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium capitalize',
         styles
       )}
     >

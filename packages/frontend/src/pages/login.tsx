@@ -98,7 +98,7 @@ export function LoginPage() {
           </div>
 
           <Button type="submit" disabled={isSubmitting} className="w-full">
-            {isSubmitting ? 'Authenticating\u2026' : 'Sign In'}
+            {isSubmitting ? 'Authenticating...' : 'Sign In'}
           </Button>
         </form>
       </div>

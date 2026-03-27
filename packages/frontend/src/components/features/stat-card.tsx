@@ -16,7 +16,7 @@ export function StatCard({ title, value, subtitle, loading, to }: StatCardProps)
     <>
       <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
       <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-foreground">
-        {loading ? '\u2014' : value}
+        {loading ? '-' : value}
       </p>
       <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
     </>

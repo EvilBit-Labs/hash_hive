@@ -47,11 +47,19 @@ export function ResourcesPage() {
     <div className="space-y-6">
       <PageHeader>Resources</PageHeader>
 
-      <div className="flex gap-1 border-b border-surface-0/50">
+      <div
+        role="tablist"
+        aria-label="Resource types"
+        className="flex gap-1 border-b border-surface-0/50"
+      >
         {tabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            aria-controls={`tabpanel-${tab.id}`}
+            id={`tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
               'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
@@ -65,11 +73,13 @@ export function ResourcesPage() {
         ))}
       </div>
 
-      {activeTab === 'hash-lists' && <HashListsTab />}
-      {activeTab === 'wordlists' && <ResourceListTab type="wordlists" />}
-      {activeTab === 'rulelists' && <ResourceListTab type="rulelists" />}
-      {activeTab === 'masklists' && <ResourceListTab type="masklists" />}
-      {activeTab === 'hash-detect' && <HashDetectTab />}
+      <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
+        {activeTab === 'hash-lists' && <HashListsTab />}
+        {activeTab === 'wordlists' && <ResourceListTab type="wordlists" />}
+        {activeTab === 'rulelists' && <ResourceListTab type="rulelists" />}
+        {activeTab === 'masklists' && <ResourceListTab type="masklists" />}
+        {activeTab === 'hash-detect' && <HashDetectTab />}
+      </div>
     </div>
   );
 }
@@ -102,7 +112,7 @@ function UploadButton({ type }: { type: UploadableTab }) {
 function HashListsTab() {
   const { data, isLoading } = useHashLists();
 
-  if (isLoading) return <EmptyState message="Loading\u2026" />;
+  if (isLoading) return <EmptyState message="Loading..." />;
 
   const hashLists = data?.hashLists ?? [];
 
@@ -150,7 +160,7 @@ function HashListsTab() {
                           style={{ width: `${Math.min(pct, 100)}%` }}
                         />
                       </div>
-                      <span className="font-mono text-[11px] text-muted-foreground">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {pct.toFixed(0)}%
                       </span>
                     </div>
@@ -180,7 +190,7 @@ function useResourcesByType(type: 'wordlists' | 'rulelists' | 'masklists') {
 function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklists' }) {
   const { data, isLoading } = useResourcesByType(type);
 
-  if (isLoading) return <EmptyState message="Loading\u2026" />;
+  if (isLoading) return <EmptyState message="Loading..." />;
 
   const resources = data?.resources ?? [];
 
@@ -232,7 +242,8 @@ function HashDetectTab() {
     <div className="space-y-4">
       <div className="flex gap-2">
         <Input
-          placeholder="Paste a hash value\u2026"
+          aria-label="Hash value for type detection"
+          placeholder="Paste a hash value..."
           className="font-mono text-xs"
           value={hashInput}
           onChange={(e) => setHashInput(e.target.value)}
@@ -245,7 +256,7 @@ function HashDetectTab() {
           disabled={guessType.isPending || !hashInput.trim()}
           className="shrink-0"
         >
-          {guessType.isPending ? 'Detecting\u2026' : 'Detect Type'}
+          {guessType.isPending ? 'Detecting...' : 'Detect Type'}
         </Button>
       </div>
 
@@ -283,7 +294,7 @@ function HashDetectTab() {
                             style={{ width: `${Math.round(c.confidence * 100)}%` }}
                           />
                         </div>
-                        <span className="font-mono text-[11px] text-muted-foreground">
+                        <span className="font-mono text-xs text-muted-foreground">
                           {Math.round(c.confidence * 100)}%
                         </span>
                       </div>

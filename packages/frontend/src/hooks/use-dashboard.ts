@@ -98,6 +98,27 @@ export function useAgentErrors(agentId: number) {
   });
 }
 
+interface AgentBenchmark {
+  id: number;
+  agentId: number;
+  hashcatMode: number;
+  hashType: string;
+  speedHs: number;
+  deviceName: string;
+  benchmarkedAt: string;
+}
+
+export function useAgentBenchmarks(agentId: number) {
+  const { selectedProjectId } = useUiStore();
+
+  return useQuery({
+    queryKey: ['agent-benchmarks', agentId, selectedProjectId],
+    queryFn: () =>
+      api.get<{ benchmarks: AgentBenchmark[] }>(`/dashboard/agents/${agentId}/benchmarks`),
+    enabled: agentId > 0 && !!selectedProjectId,
+  });
+}
+
 export function useCampaigns(options?: { status?: string; limit?: number; offset?: number }) {
   const { selectedProjectId } = useUiStore();
 

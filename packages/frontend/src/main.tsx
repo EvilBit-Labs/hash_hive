@@ -8,7 +8,7 @@ import { ProtectedRoute } from './components/features/protected-route';
 import './index.css';
 import { useAuthStore } from './stores/auth';
 
-// Route-level code splitting — each page is loaded on demand
+// Route-level code splitting - each page is loaded on demand
 const DashboardPage = lazy(() =>
   import('./pages/dashboard').then((m) => ({ default: m.DashboardPage }))
 );

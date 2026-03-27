@@ -15,7 +15,7 @@ export function SelectProjectPage() {
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-crust">
-        <EmptyState message="Loading\u2026" />
+        <EmptyState message="Loading..." />
       </div>
     );
   }
@@ -72,7 +72,7 @@ export function SelectProjectPage() {
                 className="w-full rounded-md border border-surface-0 bg-background px-4 py-3 text-left transition-all hover:border-primary/30 hover:bg-surface-0/40 disabled:opacity-50"
               >
                 <div className="text-sm font-medium text-foreground">{project.projectName}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                <div className="mt-0.5 text-xs text-muted-foreground">
                   {project.roles.join(', ')}
                 </div>
               </button>

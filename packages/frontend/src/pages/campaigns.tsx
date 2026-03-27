@@ -32,6 +32,7 @@ export function CampaignsPage() {
         <PageHeader>Campaigns</PageHeader>
         <div className="flex gap-2">
           <Select
+            aria-label="Filter by campaign status"
             className="w-auto px-3 py-1.5 text-xs"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -51,40 +52,42 @@ export function CampaignsPage() {
         </div>
       </div>
 
-      {isLoading ? (
-        <EmptyState message="Loading campaigns\u2026" />
-      ) : !data?.campaigns.length ? (
-        <EmptyState message="No campaigns found." />
-      ) : (
-        <Table>
-          <TableHead>
-            <tr>
-              <Th>Name</Th>
-              <Th>Status</Th>
-              <Th>Priority</Th>
-              <Th>Created</Th>
-              <Th>Actions</Th>
-            </tr>
-          </TableHead>
-          <TableBody>
-            {data.campaigns.map((campaign) => (
-              <TableRow key={campaign.id}>
-                <Td className="text-sm font-medium text-foreground">{campaign.name}</Td>
-                <Td>
-                  <StatusBadge status={campaign.status} />
-                </Td>
-                <Td className="font-mono text-xs text-muted-foreground">{campaign.priority}</Td>
-                <Td className="text-xs text-muted-foreground">
-                  {new Date(campaign.createdAt).toLocaleDateString()}
-                </Td>
-                <Td>
-                  <TextLink to={`/campaigns/${campaign.id}`}>Details</TextLink>
-                </Td>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <div aria-live="polite">
+        {isLoading ? (
+          <EmptyState message="Loading campaigns..." />
+        ) : !data?.campaigns.length ? (
+          <EmptyState message="No campaigns found." />
+        ) : (
+          <Table>
+            <TableHead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Status</Th>
+                <Th>Priority</Th>
+                <Th>Created</Th>
+                <Th>Actions</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {data.campaigns.map((campaign) => (
+                <TableRow key={campaign.id}>
+                  <Td className="text-sm font-medium text-foreground">{campaign.name}</Td>
+                  <Td>
+                    <StatusBadge status={campaign.status} />
+                  </Td>
+                  <Td className="font-mono text-xs text-muted-foreground">{campaign.priority}</Td>
+                  <Td className="text-xs text-muted-foreground">
+                    {new Date(campaign.createdAt).toLocaleDateString()}
+                  </Td>
+                  <Td>
+                    <TextLink to={`/campaigns/${campaign.id}`}>Details</TextLink>
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
     </div>
   );
 }

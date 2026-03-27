@@ -41,7 +41,8 @@ export function ResultsPage() {
         <PageHeader>Cracked Results</PageHeader>
         <div className="flex gap-2">
           <Input
-            placeholder="Search hashes or plaintexts\u2026"
+            aria-label="Search hashes or plaintexts"
+            placeholder="Search hashes or plaintexts..."
             className="w-auto px-3 py-1.5 text-xs"
             value={search}
             onChange={(e) => {
@@ -57,66 +58,68 @@ export function ResultsPage() {
         </div>
       </div>
 
-      {isLoading ? (
-        <EmptyState message="Loading results\u2026" />
-      ) : !data?.results.length ? (
-        <EmptyState message="No cracked results found." />
-      ) : (
-        <>
-          <Table>
-            <TableHead>
-              <tr>
-                <Th>Hash</Th>
-                <Th>Plaintext</Th>
-                <Th>Campaign</Th>
-                <Th>Hash List</Th>
-                <Th>Cracked At</Th>
-              </tr>
-            </TableHead>
-            <TableBody>
-              {data.results.map((r) => (
-                <TableRow key={r.id}>
-                  <Td className="max-w-[200px] truncate font-mono text-[11px] text-muted-foreground">
-                    {r.hashValue}
-                  </Td>
-                  <Td className="font-mono text-[11px] font-medium text-success">
-                    {r.plaintext ?? '\u2014'}
-                  </Td>
-                  <Td className="text-xs text-muted-foreground">{r.campaignName}</Td>
-                  <Td className="text-xs text-muted-foreground">{r.hashListName}</Td>
-                  <Td className="text-xs text-muted-foreground">
-                    {r.crackedAt ? new Date(r.crackedAt).toLocaleString() : '\u2014'}
-                  </Td>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+      <div aria-live="polite">
+        {isLoading ? (
+          <EmptyState message="Loading results..." />
+        ) : !data?.results.length ? (
+          <EmptyState message="No cracked results found." />
+        ) : (
+          <>
+            <Table>
+              <TableHead>
+                <tr>
+                  <Th>Hash</Th>
+                  <Th>Plaintext</Th>
+                  <Th>Campaign</Th>
+                  <Th>Hash List</Th>
+                  <Th>Cracked At</Th>
+                </tr>
+              </TableHead>
+              <TableBody>
+                {data.results.map((r) => (
+                  <TableRow key={r.id}>
+                    <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
+                      {r.hashValue}
+                    </Td>
+                    <Td className="font-mono text-xs font-medium text-success">
+                      {r.plaintext ?? '-'}
+                    </Td>
+                    <Td className="text-xs text-muted-foreground">{r.campaignName}</Td>
+                    <Td className="text-xs text-muted-foreground">{r.hashListName}</Td>
+                    <Td className="text-xs text-muted-foreground">
+                      {r.crackedAt ? new Date(r.crackedAt).toLocaleString() : '-'}
+                    </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
 
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">
-              {offset + 1}\u2013{Math.min(offset + limit, total)} of {total}
-            </span>
-            <div className="flex gap-1.5">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!hasPrev}
-                onClick={() => setOffset(Math.max(0, offset - limit))}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!hasNext}
-                onClick={() => setOffset(offset + limit)}
-              >
-                Next
-              </Button>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">
+                {offset + 1}-{Math.min(offset + limit, total)} of {total}
+              </span>
+              <div className="flex gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!hasPrev}
+                  onClick={() => setOffset(Math.max(0, offset - limit))}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!hasNext}
+                  onClick={() => setOffset(offset + limit)}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
