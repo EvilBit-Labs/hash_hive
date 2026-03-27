@@ -79,7 +79,7 @@ export const auth = betterAuth({
     cookiePrefix: 'hh',
   },
 
+  // In production (air-gapped Docker Compose), frontend and backend are same-origin
+  // behind a reverse proxy, so no cross-origin allowance is needed. In dev, allow localhost.
   trustedOrigins: env.NODE_ENV === 'production' ? [] : ['http://localhost:3000'],
 });
-
-export type AuthSession = typeof auth.$Infer.Session;

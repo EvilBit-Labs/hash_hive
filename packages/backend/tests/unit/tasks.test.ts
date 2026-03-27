@@ -23,7 +23,7 @@ if (isIsolated) {
       S3_ENDPOINT: 'http://localhost:9000',
       S3_ACCESS_KEY: 'test',
       S3_SECRET_KEY: 'test',
-      JWT_SECRET: 'test-secret',
+      BETTER_AUTH_SECRET: 'test-betterauth-secret-must-be-at-least-32-characters',
       NODE_ENV: 'test',
     },
   }));

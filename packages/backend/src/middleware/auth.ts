@@ -24,7 +24,7 @@ function authError(message: string): HTTPException {
  * Also cleans up legacy "session" cookies from the old JWT-based auth.
  */
 export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
-  // Clean up legacy JWT cookie if present
+  // TODO: remove legacy cookie cleanup after first production deploy cycle (2026-Q2)
   const legacyCookie = getCookie(c, 'session');
   if (legacyCookie) {
     deleteCookie(c, 'session', { path: '/' });

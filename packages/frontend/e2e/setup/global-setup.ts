@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const S3_BUCKET = 'hashhive';
 const S3_ACCESS_KEY = 'minioadmin';
 const S3_SECRET_KEY = 'minioadmin';
-const JWT_SECRET = 'e2e-test-secret-key-minimum-16-chars';
+const BETTER_AUTH_SECRET = 'e2e-test-betterauth-secret-must-be-at-least-32-characters';
 const BACKEND_CWD = resolve(__dirname, '../../../backend');
 
 function sleep(ms: number): Promise<void> {
@@ -91,7 +91,7 @@ function buildBackendEnv(databaseUrl: string, redisUrl: string, s3Endpoint: stri
     S3_ACCESS_KEY: S3_ACCESS_KEY,
     S3_SECRET_KEY: S3_SECRET_KEY,
     S3_BUCKET: S3_BUCKET,
-    JWT_SECRET: JWT_SECRET,
+    BETTER_AUTH_SECRET: BETTER_AUTH_SECRET,
   };
 }
 
