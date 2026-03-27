@@ -119,7 +119,6 @@ function startBackend(databaseUrl: string, redisUrl: string, s3Endpoint: string)
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       LOG_PRETTY: 'false',
-      JWT_EXPIRY: '24h',
     },
     stdio: 'inherit',
   });
