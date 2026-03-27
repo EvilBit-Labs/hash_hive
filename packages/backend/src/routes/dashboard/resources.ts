@@ -14,6 +14,7 @@ import {
   getChunkedUploadStatus,
   getHashItems,
   getHashListById,
+  getHashListStats,
   getResourceById,
   getResourcePresignedUrl,
   importHashList,
@@ -76,19 +77,39 @@ resourceRoutes.post(
 );
 
 resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'));
-  const hashList = await getHashListById(id);
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
 
-  if (!hashList) {
+  const hashListId = Number(c.req.param('id'));
+  const hl = await getHashListById(hashListId, projectId);
+
+  if (!hl) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
   }
 
-  return c.json({ hashList });
+  const liveStats = await getHashListStats(hashListId);
+
+  return c.json({
+    hashList: {
+      ...hl,
+      statistics: {
+        ...((hl.statistics as Record<string, unknown> | null) ?? {}),
+        ...liveStats,
+      },
+    },
+  });
 });
 
 resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
   const id = Number(c.req.param('id'));
-  const hashList = await getHashListById(id);
+  const hashList = await getHashListById(id, projectId);
 
   if (!hashList) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
@@ -101,13 +122,25 @@ resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400);
   }
 
-  const result = await uploadHashListFile(id, file);
+  const result = await uploadHashListFile(id, projectId, file);
   return c.json(result);
 });
 
 resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
   const id = Number(c.req.param('id'));
-  const result = await importHashList(id);
+
+  // Verify hash list belongs to project before importing
+  const hl = await getHashListById(id, projectId);
+  if (!hl) {
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
+  }
+
+  const result = await importHashList(id, projectId);
 
   if (!result) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
@@ -121,17 +154,43 @@ resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'
 });
 
 resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'));
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
 
-  const result = await getHashItems(id, { limit, offset });
+  const hashListId = Number(c.req.param('id'));
+
+  // Validate query params — fail fast on invalid input
+  const statusRaw = c.req.query('status');
+  const VALID_STATUSES = ['all', 'cracked', 'uncracked'] as const;
+  const status =
+    statusRaw && VALID_STATUSES.includes(statusRaw as (typeof VALID_STATUSES)[number])
+      ? (statusRaw as 'all' | 'cracked' | 'uncracked')
+      : undefined;
+  const q = c.req.query('q')?.slice(0, 256) || undefined;
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 100)) : 50;
+  const offsetRaw = Number(c.req.query('offset') ?? 0);
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
+
+  const result = await getHashItems(hashListId, projectId, { status, search: q, limit, offset });
+
+  if (!result) {
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
+  }
+
   return c.json(result);
 });
 
 resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c) => {
+  const { projectId } = c.get('currentUser');
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400);
+  }
+
   const id = Number(c.req.param('id'));
-  const hashList = await getHashListById(id);
+  const hashList = await getHashListById(id, projectId);
 
   if (!hashList) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404);
@@ -214,8 +273,15 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
   );
 
   resourceRoutes.get(`/${prefix}/:id`, requireProjectAccess(), async (c) => {
+    const { projectId } = c.get('currentUser');
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      );
+    }
     const id = Number(c.req.param('id'));
-    const item = await getResourceById(table, id);
+    const item = await getResourceById(table, id, projectId);
 
     if (!item) {
       return c.json(
@@ -228,8 +294,15 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
   });
 
   resourceRoutes.post(`/${prefix}/:id/upload`, requireRole('admin', 'contributor'), async (c) => {
+    const { projectId } = c.get('currentUser');
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      );
+    }
     const id = Number(c.req.param('id'));
-    const item = await getResourceById(table, id);
+    const item = await getResourceById(table, id, projectId);
 
     if (!item) {
       return c.json(
@@ -248,13 +321,20 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       );
     }
 
-    const result = await uploadResourceFile(table, id, prefix, file);
+    const result = await uploadResourceFile(table, id, projectId, prefix, file);
     return c.json(result);
   });
 
   resourceRoutes.get(`/${prefix}/:id/download`, requireProjectAccess(), async (c) => {
+    const { projectId } = c.get('currentUser');
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      );
+    }
     const id = Number(c.req.param('id'));
-    const item = await getResourceById(table, id);
+    const item = await getResourceById(table, id, projectId);
 
     if (!item) {
       return c.json(

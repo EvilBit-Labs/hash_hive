@@ -120,6 +120,69 @@ export function useCreateResource(type: ResourceType) {
   });
 }
 
+// ─── Hash List Detail ────────────────────────────────────────────────
+
+interface HashListDetail {
+  id: number;
+  name: string;
+  projectId: number;
+  hashTypeId: number | null;
+  status: string;
+  statistics: { total: number; cracked: number; remaining: number };
+  createdAt: string;
+}
+
+interface HashItemRow {
+  id: number;
+  hashValue: string;
+  plaintext: string | null;
+  crackedAt: string | null;
+  agentId: number | null;
+}
+
+interface HashItemsResponse {
+  items: HashItemRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export function useHashListDetail(id: number) {
+  return useQuery({
+    queryKey: ['hash-list-detail', id],
+    queryFn: () => api.get<{ hashList: HashListDetail }>(`/dashboard/resources/hash-lists/${id}`),
+    enabled: !!id,
+  });
+}
+
+export function useHashListItems(
+  id: number,
+  opts: {
+    status?: 'all' | 'cracked' | 'uncracked';
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }
+) {
+  const { selectedProjectId } = useUiStore();
+
+  return useQuery({
+    queryKey: ['hash-list-items', id, opts],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+      if (opts.search) params.set('q', opts.search);
+      if (opts.limit) params.set('limit', String(opts.limit));
+      if (opts.offset) params.set('offset', String(opts.offset));
+      const qs = params.toString();
+      return api.get<HashItemsResponse>(
+        `/dashboard/resources/hash-lists/${id}/items${qs ? `?${qs}` : ''}`
+      );
+    },
+    enabled: !!id && !!selectedProjectId,
+  });
+}
+
 export function useUploadResourceFile(type: ResourceType) {
   const queryClient = useQueryClient();
 

@@ -2,6 +2,7 @@ import { attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
+import { getHashListStats } from './resources.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
@@ -214,46 +215,77 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
 
       if (strategy === 'inline') {
         // Generate inline in parallel — small enough to not block the request meaningfully
-        const { generateTasksForAttack } = await _deps.getTasksModule();
-        await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)));
+        try {
+          const { generateTasksForAttack } = await _deps.getTasksModule();
+          await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)));
+        } catch (_err) {
+          // Roll back — inline task generation failed
+          await db
+            .update(campaigns)
+            .set({
+              status: campaign.status,
+              startedAt: campaign.startedAt,
+              completedAt: campaign.completedAt,
+              progress: campaign.progress ?? {},
+              updatedAt: new Date(),
+            })
+            .where(eq(campaigns.id, id));
+          return { error: 'Task generation failed', code: 'TASK_GENERATION_FAILED' as const };
+        }
       } else {
         // Enqueue to the dedicated task-generation job queue
         const { getQueueManager } = await _deps.getQueueContext();
         const { QUEUE_NAMES } = await _deps.getQueueConfig();
         const { JOB_PRIORITY } = await _deps.getQueueTypes();
         const qm = getQueueManager();
-        if (qm) {
-          const priorityMap: Record<number, number> = {
-            1: JOB_PRIORITY.HIGH,
-            5: JOB_PRIORITY.NORMAL,
-            10: JOB_PRIORITY.LOW,
+        if (!qm) {
+          // Roll back — queue disappeared between health check and enqueue
+          await db
+            .update(campaigns)
+            .set({
+              status: campaign.status,
+              startedAt: campaign.startedAt,
+              completedAt: campaign.completedAt,
+              progress: campaign.progress ?? {},
+              updatedAt: new Date(),
+            })
+            .where(eq(campaigns.id, id));
+          return {
+            error: 'Queue unavailable — cannot start campaign',
+            code: 'QUEUE_UNAVAILABLE' as const,
           };
-          const jobPriority = priorityMap[campaign.priority] ?? JOB_PRIORITY.NORMAL;
+        }
 
-          const enqueued = await qm.enqueue(QUEUE_NAMES.TASK_GENERATION, {
-            campaignId: id,
-            projectId: campaign.projectId,
-            attackIds: campaignAttacks.map((a) => a.id),
-            priority: jobPriority as 1 | 5 | 10,
-          });
+        const priorityMap: Record<number, number> = {
+          1: JOB_PRIORITY.HIGH,
+          5: JOB_PRIORITY.NORMAL,
+          10: JOB_PRIORITY.LOW,
+        };
+        const jobPriority = priorityMap[campaign.priority] ?? JOB_PRIORITY.NORMAL;
 
-          if (!enqueued) {
-            // Roll back the entire status transition including timestamps/progress
-            await db
-              .update(campaigns)
-              .set({
-                status: campaign.status,
-                startedAt: campaign.startedAt,
-                completedAt: campaign.completedAt,
-                progress: campaign.progress ?? {},
-                updatedAt: new Date(),
-              })
-              .where(eq(campaigns.id, id));
-            return {
-              error: 'Failed to enqueue task generation',
-              code: 'QUEUE_UNAVAILABLE' as const,
-            };
-          }
+        const enqueued = await qm.enqueue(QUEUE_NAMES.TASK_GENERATION, {
+          campaignId: id,
+          projectId: campaign.projectId,
+          attackIds: campaignAttacks.map((a) => a.id),
+          priority: jobPriority as 1 | 5 | 10,
+        });
+
+        if (!enqueued) {
+          // Roll back the entire status transition including timestamps/progress
+          await db
+            .update(campaigns)
+            .set({
+              status: campaign.status,
+              startedAt: campaign.startedAt,
+              completedAt: campaign.completedAt,
+              progress: campaign.progress ?? {},
+              updatedAt: new Date(),
+            })
+            .where(eq(campaigns.id, id));
+          return {
+            error: 'Failed to enqueue task generation',
+            code: 'QUEUE_UNAVAILABLE' as const,
+          };
         }
       }
     }
@@ -363,6 +395,31 @@ export async function updateCampaignProgress(campaignId: number) {
 
   const overallProgress = campaignTasks.length > 0 ? totalProgress / campaignTasks.length : 0;
 
+  // Hash-based progress: look up the campaign's hash list and count cracked vs total
+  let hashProgress: {
+    total: number;
+    cracked: number;
+    remaining: number;
+    percentage: number;
+  } | null = null;
+
+  const [campaign] = await db
+    .select({ hashListId: campaigns.hashListId })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+
+  if (campaign?.hashListId) {
+    const stats = await getHashListStats(campaign.hashListId);
+
+    if (stats.total > 0) {
+      hashProgress = {
+        ...stats,
+        percentage: Math.round((stats.cracked / stats.total) * 10000) / 10000,
+      };
+    }
+  }
+
   await db
     .update(campaigns)
     .set({
@@ -371,6 +428,7 @@ export async function updateCampaignProgress(campaignId: number) {
         completedTasks: completedCount,
         overallProgress: Math.round(overallProgress * 10000) / 10000,
         updatedAt: new Date().toISOString(),
+        ...(hashProgress ? { hashProgress } : {}),
       },
       updatedAt: new Date(),
     })

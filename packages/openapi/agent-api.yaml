@@ -113,6 +113,55 @@ paths:
         "401":
           $ref: "#/components/responses/AuthError"
 
+  /tasks/{taskId}/zaps:
+    get:
+      operationId: getTaskZaps
+      summary: Retrieve cracked hash values for a task
+      description: >
+        Returns hash values that have been cracked from the same hash list as the
+        given task. Agents use this to build a "zap list" so they can skip
+        already-cracked hashes during processing.
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: since
+          in: query
+          required: false
+          description: Only return hashes cracked after this ISO-8601 datetime
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of zaps to return (1-10000, default 10000)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 10000
+      responses:
+        "200":
+          description: List of cracked hash values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ZapResponse"
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "404":
+          description: Task not found or not assigned to this agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /errors:
     post:
       operationId: reportAgentError
@@ -256,6 +305,19 @@ components:
           additionalProperties: true
         taskId:
           type: integer
+
+    ZapResponse:
+      type: object
+      required: [zaps, hasMore]
+      properties:
+        zaps:
+          type: array
+          description: Cracked hash values from the task's hash list
+          items:
+            type: string
+        hasMore:
+          type: boolean
+          description: Whether more zaps are available beyond the requested limit
 
     ErrorResponse:
       type: object

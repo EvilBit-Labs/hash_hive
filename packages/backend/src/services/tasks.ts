@@ -1,5 +1,6 @@
 import { agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, desc, eq, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { updateCampaignProgress } from './campaigns.js';
 import { emitCrackResult, emitTaskUpdate } from './events.js';
@@ -209,14 +210,22 @@ export async function updateTaskProgress(
     results?: Array<{ hashValue: string; plaintext: string }> | undefined;
   }
 ) {
-  // Verify the task belongs to this agent
-  const [task] = await db
-    .select()
+  // Single JOIN: verify task ownership and resolve campaign context in one query
+  const [taskRow] = await db
+    .select({
+      taskId: tasks.id,
+      attackId: tasks.attackId,
+      campaignId: tasks.campaignId,
+      startedAt: tasks.startedAt,
+      projectId: campaigns.projectId,
+      hashListId: campaigns.hashListId,
+    })
     .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
     .limit(1);
 
-  if (!task) {
+  if (!taskRow) {
     return { error: 'Task not found or not assigned to this agent' };
   }
 
@@ -229,7 +238,7 @@ export async function updateTaskProgress(
     updates['progress'] = data.progress;
   }
 
-  if (data.status === 'running' && !task.startedAt) {
+  if (data.status === 'running' && !taskRow.startedAt) {
     updates['startedAt'] = new Date();
   }
 
@@ -237,79 +246,82 @@ export async function updateTaskProgress(
     updates['completedAt'] = new Date();
   }
 
-  const [updated] = await db.update(tasks).set(updates).where(eq(tasks.id, taskId)).returning();
+  // Update task status — re-verify ownership in the write path (TOCTOU defense)
+  const [updated] = await db
+    .update(tasks)
+    .set(updates)
+    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+    .returning();
 
-  // If results were submitted, insert them as hash items
-  if (data.results && data.results.length > 0) {
-    // Get the attack to find the hash list
-    const [attack] = await db.select().from(attacks).where(eq(attacks.id, task.attackId)).limit(1);
+  if (!updated) {
+    return { error: 'Task was reassigned during update' };
+  }
 
-    if (attack) {
-      const [campaign] = await db
-        .select()
-        .from(campaigns)
-        .where(eq(campaigns.id, attack.campaignId))
-        .limit(1);
+  // Insert cracked hash results if submitted
+  if (data.results && data.results.length > 0 && !taskRow.hashListId) {
+    logger.error(
+      { taskId, campaignId: taskRow.campaignId, resultCount: data.results.length },
+      'Cannot store crack results: campaign has no associated hash list'
+    );
+  }
 
-      if (campaign) {
-        await db
-          .insert(hashItems)
-          .values(
-            data.results.map((r) => ({
-              hashListId: campaign.hashListId,
-              hashValue: r.hashValue,
-              plaintext: r.plaintext,
-              crackedAt: new Date(),
-              campaignId: campaign.id,
-              attackId: attack.id,
-              taskId,
-              agentId,
-            }))
-          )
-          .onConflictDoUpdate({
-            target: [hashItems.hashListId, hashItems.hashValue],
-            set: {
-              plaintext: sql`EXCLUDED.plaintext`,
-              crackedAt: sql`EXCLUDED.cracked_at`,
-              campaignId: sql`EXCLUDED.campaign_id`,
-              attackId: sql`EXCLUDED.attack_id`,
-              taskId: sql`EXCLUDED.task_id`,
-              agentId: sql`EXCLUDED.agent_id`,
-            },
-          });
+  if (data.results && data.results.length > 0 && taskRow.hashListId) {
+    try {
+      await db
+        .insert(hashItems)
+        .values(
+          data.results.map((r) => ({
+            hashListId: taskRow.hashListId,
+            hashValue: r.hashValue,
+            plaintext: r.plaintext,
+            crackedAt: new Date(),
+            campaignId: taskRow.campaignId,
+            attackId: taskRow.attackId,
+            taskId,
+            agentId,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [hashItems.hashListId, hashItems.hashValue],
+          set: {
+            plaintext: sql`EXCLUDED.plaintext`,
+            crackedAt: sql`EXCLUDED.cracked_at`,
+            campaignId: sql`EXCLUDED.campaign_id`,
+            attackId: sql`EXCLUDED.attack_id`,
+            taskId: sql`EXCLUDED.task_id`,
+            agentId: sql`EXCLUDED.agent_id`,
+          },
+        });
 
-        emitCrackResult(campaign.projectId, campaign.hashListId, data.results.length);
-      }
+      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length);
+    } catch (err) {
+      logger.error(
+        { err, taskId, agentId, hashListId: taskRow.hashListId, resultCount: data.results.length },
+        'Failed to insert crack results'
+      );
+      return { error: 'Failed to store crack results' };
     }
   }
 
-  // Emit task update — derive projectId from the campaign
-  if (updated) {
-    const [campaign] = await db
-      .select({ projectId: campaigns.projectId })
-      .from(campaigns)
-      .where(eq(campaigns.id, task.campaignId))
-      .limit(1);
+  // Emit events and update campaign progress (no duplicate campaign fetch)
+  emitTaskUpdate(taskRow.projectId, taskId, data.status, data.progress);
+  await updateCampaignProgress(taskRow.campaignId);
 
-    if (campaign) {
-      emitTaskUpdate(campaign.projectId, taskId, data.status, data.progress);
-    }
-
-    // Update campaign progress cache
-    await updateCampaignProgress(task.campaignId);
-  }
-
-  return { task: updated ?? null };
+  return { task: updated };
 }
 
 // ─── Task Retry & Failure Handling ──────────────────────────────────
 
 const MAX_RETRIES = 3;
 
-export async function handleTaskFailure(taskId: number, reason: string) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+export async function handleTaskFailure(taskId: number, agentId: number, reason: string) {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+    .limit(1);
   if (!task) {
-    return { error: 'Task not found' };
+    return { error: 'Task not found or not assigned to this agent' };
   }
 
   const resultStats = (task.resultStats as Record<string, unknown>) ?? {};
@@ -335,6 +347,7 @@ export async function handleTaskFailure(taskId: number, reason: string) {
         resultStats: { ...resultStats, retryCount: retryCount + 1, lastFailure: reason },
         updatedAt: new Date(),
       })
+      .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
       .returning();
 
     if (updated && campaign) {
@@ -446,4 +459,61 @@ export async function listTasks(filters: {
     limit,
     offset,
   };
+}
+
+// ─── Zap Endpoint (cracked hashes for a task) ───────────────────────
+
+/**
+ * Returns cracked hash values for a given task, scoped to the agent's project.
+ * Used by agents to retrieve "zaps" — hashes cracked by any campaign sharing
+ * the same hash list, so agents can skip already-cracked hashes.
+ */
+export async function getZapsForTask(
+  taskId: number,
+  agentId: number,
+  projectId: number,
+  opts: { since?: Date | undefined; limit?: number | undefined } = {}
+): Promise<{ zaps: string[]; hasMore: boolean } | { error: string }> {
+  const fetchLimit = opts.limit ?? 10_000;
+
+  // Single JOIN: tasks -> campaigns to get hashListId + verify ownership + project scope
+  const [taskRow] = await db
+    .select({
+      taskId: tasks.id,
+      hashListId: campaigns.hashListId,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(eq(tasks.id, taskId), eq(tasks.agentId, agentId), eq(campaigns.projectId, projectId))
+    )
+    .limit(1);
+
+  if (!taskRow) {
+    return { error: 'Task not found or not assigned to this agent' };
+  }
+
+  if (!taskRow.hashListId) {
+    return { zaps: [], hasMore: false };
+  }
+
+  // Build conditions for cracked hash items
+  const conditions = [eq(hashItems.hashListId, taskRow.hashListId), isNotNull(hashItems.crackedAt)];
+
+  if (opts.since) {
+    conditions.push(gt(hashItems.crackedAt, opts.since));
+  }
+
+  // Fetch limit+1 to detect hasMore
+  const rows = await db
+    .select({ hashValue: hashItems.hashValue })
+    .from(hashItems)
+    .where(and(...conditions))
+    .orderBy(hashItems.crackedAt)
+    .limit(fetchLimit + 1);
+
+  const hasMore = rows.length > fetchLimit;
+  const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue);
+
+  return { zaps, hasMore };
 }

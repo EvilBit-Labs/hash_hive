@@ -1,6 +1,6 @@
+import { afterEach, describe, expect, it } from 'bun:test';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { ProtectedRoute } from '../../src/components/features/protected-route';
 import { useAuthStore } from '../../src/stores/auth';

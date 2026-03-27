@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { db } from '../../db/index.js';
 import { requireSession } from '../../middleware/auth.js';
 import { requireProjectAccess } from '../../middleware/rbac.js';
+import { escapeLike } from '../../services/resources.js';
 import type { AppEnv } from '../../types.js';
 
 const resultsRoutes = new Hono<AppEnv>();
@@ -28,8 +29,9 @@ function buildResultFilters(
     conditions.push(eq(hashItems.hashListId, hashListId));
   }
   if (search) {
+    const escaped = escapeLike(search);
     conditions.push(
-      sql`(${hashItems.hashValue} ILIKE ${`%${search}%`} OR ${hashItems.plaintext} ILIKE ${`%${search}%`})`
+      sql`(${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\' OR ${hashItems.plaintext} ILIKE ${`%${escaped}%`} ESCAPE '\\')`
     );
   }
 

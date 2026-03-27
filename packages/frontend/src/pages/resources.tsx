@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
 import { Button } from '../components/ui/button';
@@ -122,20 +123,44 @@ function HashListsTab() {
               <Th>Name</Th>
               <Th>Hashes</Th>
               <Th>Cracked</Th>
+              <Th>Progress</Th>
               <Th>Created</Th>
             </tr>
           </TableHead>
           <TableBody>
-            {hashLists.map((hl) => (
-              <TableRow key={hl.id}>
-                <Td className="text-sm font-medium text-foreground">{hl.name}</Td>
-                <Td className="font-mono text-xs tabular-nums">{hl.hashCount}</Td>
-                <Td className="font-mono text-xs tabular-nums text-success">{hl.crackedCount}</Td>
-                <Td className="text-xs text-muted-foreground">
-                  {new Date(hl.createdAt).toLocaleDateString()}
-                </Td>
-              </TableRow>
-            ))}
+            {hashLists.map((hl) => {
+              const pct = hl.hashCount > 0 ? (hl.crackedCount / hl.hashCount) * 100 : 0;
+              return (
+                <TableRow key={hl.id}>
+                  <Td className="text-sm font-medium text-foreground">
+                    <Link
+                      to={`/resources/hash-lists/${hl.id}`}
+                      className="hover:text-primary hover:underline"
+                    >
+                      {hl.name}
+                    </Link>
+                  </Td>
+                  <Td className="font-mono text-xs tabular-nums">{hl.hashCount}</Td>
+                  <Td className="font-mono text-xs tabular-nums text-success">{hl.crackedCount}</Td>
+                  <Td>
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-20 rounded-full bg-surface-1">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{ width: `${Math.min(pct, 100)}%` }}
+                        />
+                      </div>
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                  </Td>
+                  <Td className="text-xs text-muted-foreground">
+                    {new Date(hl.createdAt).toLocaleDateString()}
+                  </Td>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}

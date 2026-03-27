@@ -1,7 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test';
-import { useEvents, type EventType } from '../../src/hooks/use-events';
+import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render } from '@testing-library/react';
+import { type EventType, useEvents } from '../../src/hooks/use-events';
 import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
 import { installMockWebSocket } from '../mocks/websocket';

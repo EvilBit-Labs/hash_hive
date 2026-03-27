@@ -90,7 +90,7 @@ export async function processHeartbeat(
       .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`));
 
     for (const activeTask of activeTasks) {
-      await handleTaskFailure(activeTask.id, data.error?.message ?? 'Agent fatal error');
+      await handleTaskFailure(activeTask.id, agentId, data.error?.message ?? 'Agent fatal error');
     }
   }
 

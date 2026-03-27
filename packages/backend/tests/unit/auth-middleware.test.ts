@@ -26,8 +26,8 @@ mock.module('../../src/db/index.js', () => ({
   client: {},
 }));
 
-import { createToken } from '../../src/services/auth.js';
 import { requireAgentToken, requireSession } from '../../src/middleware/auth.js';
+import { createToken } from '../../src/services/auth.js';
 
 function createSessionApp() {
   const app = new Hono<AppEnv>();

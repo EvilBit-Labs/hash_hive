@@ -7,11 +7,11 @@ import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { installMockWebSocket, type MockWebSocket } from '../mocks/websocket';
 import {
   cleanupAll,
+  fireEvent,
   renderWithProviders,
   renderWithRouter,
   screen,
   waitFor,
-  fireEvent,
 } from '../test-utils';
 
 let fetchMock: ReturnType<typeof mockFetch>;

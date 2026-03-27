@@ -280,3 +280,7 @@ See [`.impeccable.md`](.impeccable.md) for the full design context. Key points:
 - Labels: `priority:critical/high/medium/low`, `SP:N` (fibonacci), feature area labels, `gap-analysis`
 - Every issue body ends with a `## Dependencies` section listing blockers and blocked issues
 - Sprint execution order: see dependency graph in `docs/hash_hive_gap_analysis.md`
+
+## Additional Rules
+
+@.claude/rules/agents.md

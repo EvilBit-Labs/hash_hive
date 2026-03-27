@@ -16,8 +16,10 @@ repos:
         exclude: ^(node_modules/|dist/|coverage/|\.git/|\.hook)
       - id: check-yaml
         args: [--unsafe] # Allow custom tags in YAML
+        types: [yaml]
       - id: check-json
         exclude: ^(node_modules/|dist/|coverage/|\.git/|package-lock\.json)
+        types: [json]
       - id: check-added-large-files
         args: [--maxkb=1000] # Warn on files > 1MB
       - id: check-merge-conflict
@@ -27,6 +29,7 @@ repos:
       - id: check-case-conflict
       - id: check-illegal-windows-names
       - id: check-shebang-scripts-are-executable
+        types: [shell]
       - id: check-symlinks
 
   # Local hooks for Biome and TypeScript
@@ -37,8 +40,7 @@ repos:
         name: Biome Format
         entry: bash -c 'bun run format:check'
         language: system
-        types: [file]
-        types_or: [javascript, jsx, ts, tsx, json, css]
+        types: [javascript, jsx, ts, tsx, json, css]
         pass_filenames: false
         always_run: true
 
@@ -47,8 +49,7 @@ repos:
         name: Biome Lint
         entry: bash -c 'bun run lint'
         language: system
-        types: [file]
-        types_or: [javascript, jsx, ts, tsx, json, css]
+        types: [javascript, jsx, ts, tsx, json, css]
         pass_filenames: false
         always_run: true
 
@@ -58,7 +59,6 @@ repos:
         name: TypeScript Type Check
         entry: bash -c 'bun run type-check'
         language: system
-        types: [file]
-        types_or: [javascript, jsx, ts, tsx]
+        types: [javascript, jsx, ts, tsx]
         pass_filenames: false
         always_run: true

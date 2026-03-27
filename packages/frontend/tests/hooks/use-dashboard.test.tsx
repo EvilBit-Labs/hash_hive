@@ -1,6 +1,6 @@
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { useDashboardStats } from '../../src/hooks/use-dashboard';
 import { useUiStore } from '../../src/stores/ui';
 import { mockDashboardStats } from '../fixtures/api-responses';

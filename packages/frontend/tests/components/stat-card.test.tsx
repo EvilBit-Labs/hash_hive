@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { cleanup, screen, fireEvent } from '@testing-library/react';
+import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { StatCard } from '../../src/components/features/stat-card';
 import { renderWithProviders, renderWithRouter } from '../test-utils';
 

@@ -21,6 +21,7 @@ shared/src/types/index.ts     ← Add z.infer<typeof schema> exports
 ```
 
 When adding a new table:
+
 1. Add Drizzle table definition in `schema.ts`
 2. Add `createInsertSchema(table)` + `createSelectSchema(table)` in `schemas/index.ts`
 3. Add `type Insert* = z.infer<...>` + `type Select* = z.infer<...>` in `types/index.ts`

@@ -13,6 +13,7 @@ source: local-repo-analysis
 Never enable `useLiteralKeys` in biome.json. It conflicts with TypeScript's `noPropertyAccessFromIndexSignature`.
 
 Always use bracket notation for index-signature access:
+
 ```typescript
 // With noPropertyAccessFromIndexSignature: true
 const val = body['key'];  // GOOD

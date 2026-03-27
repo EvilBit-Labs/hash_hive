@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { hashItems, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import {
@@ -36,8 +36,12 @@ export async function listHashLists(projectId: number) {
     .orderBy(desc(hashLists.createdAt));
 }
 
-export async function getHashListById(id: number) {
-  const [hl] = await db.select().from(hashLists).where(eq(hashLists.id, id)).limit(1);
+export async function getHashListById(id: number, projectId: number) {
+  const [hl] = await db
+    .select()
+    .from(hashLists)
+    .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+    .limit(1);
   return hl ?? null;
 }
 
@@ -63,9 +67,10 @@ export async function createHashList(data: {
 
 export async function uploadHashListFile(
   hashListId: number,
+  projectId: number,
   file: File
 ): Promise<{ key: string; size: number }> {
-  const hl = await getHashListById(hashListId);
+  const hl = await getHashListById(hashListId, projectId);
   if (!hl) {
     throw new Error(`Hash list ${hashListId} not found`);
   }
@@ -94,8 +99,8 @@ export async function uploadHashListFile(
   return { key, size: file.size };
 }
 
-export async function importHashList(hashListId: number) {
-  const hl = await getHashListById(hashListId);
+export async function importHashList(hashListId: number, projectId: number) {
+  const hl = await getHashListById(hashListId, projectId);
   if (!hl) {
     return null;
   }
@@ -138,26 +143,79 @@ export async function importHashList(hashListId: number) {
 
 export async function getHashItems(
   hashListId: number,
-  opts: { limit?: number | undefined; offset?: number | undefined }
+  projectId: number,
+  opts: {
+    limit?: number | undefined;
+    offset?: number | undefined;
+    status?: 'all' | 'cracked' | 'uncracked' | undefined;
+    search?: string | undefined;
+  }
 ) {
+  // Verify hash list belongs to project (IDOR prevention)
+  const hl = await getHashListById(hashListId, projectId);
+  if (!hl) return null;
+
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
+
+  const conditions: SQL[] = [eq(hashItems.hashListId, hashListId)];
+
+  if (opts.status === 'cracked') {
+    conditions.push(isNotNull(hashItems.crackedAt));
+  } else if (opts.status === 'uncracked') {
+    conditions.push(sql`${hashItems.crackedAt} IS NULL`);
+  }
+
+  if (opts.search) {
+    const escaped = escapeLike(opts.search);
+    conditions.push(sql`${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\'`);
+  }
+
+  const whereClause = and(...conditions);
 
   const [items, countResult] = await Promise.all([
     db
       .select()
       .from(hashItems)
-      .where(eq(hashItems.hashListId, hashListId))
+      .where(whereClause)
       .limit(limit)
       .offset(offset)
       .orderBy(hashItems.id),
-    db
-      .select({ count: sql<number>`count(*)` })
-      .from(hashItems)
-      .where(eq(hashItems.hashListId, hashListId)),
+    db.select({ count: sql<number>`count(*)` }).from(hashItems).where(whereClause),
   ]);
 
   return { items, total: Number(countResult[0]?.count ?? 0), limit, offset };
+}
+
+/**
+ * Escape LIKE/ILIKE metacharacters to prevent wildcard injection.
+ */
+export function escapeLike(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
+}
+
+// ─── Hash List Statistics ────────────────────────────────────────────
+
+/**
+ * Computes live cracked/total/remaining counts for a hash list.
+ * Uses a single COUNT + FILTER query (fast with composite index).
+ */
+export async function getHashListStats(hashListId: number): Promise<{
+  total: number;
+  cracked: number;
+  remaining: number;
+}> {
+  const [stats] = await db
+    .select({
+      total: count(),
+      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+    })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId));
+
+  const total = Number(stats?.total ?? 0);
+  const cracked = Number(stats?.cracked ?? 0);
+  return { total, cracked, remaining: total - cracked };
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────
@@ -172,8 +230,12 @@ export async function listResources(table: ResourceTable, projectId: number) {
     .orderBy(desc(table.createdAt));
 }
 
-export async function getResourceById(table: ResourceTable, id: number) {
-  const [row] = await db.select().from(table).where(eq(table.id, id)).limit(1);
+export async function getResourceById(table: ResourceTable, id: number, projectId: number) {
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(and(eq(table.id, id), eq(table.projectId, projectId)))
+    .limit(1);
   return row ?? null;
 }
 
@@ -188,10 +250,11 @@ export async function createResource(
 export async function uploadResourceFile(
   table: ResourceTable,
   resourceId: number,
+  projectId: number,
   prefix: string,
   file: File
 ) {
-  const resource = await getResourceById(table, resourceId);
+  const resource = await getResourceById(table, resourceId, projectId);
   if (!resource) {
     throw new Error(`Resource ${resourceId} not found in ${prefix}`);
   }
