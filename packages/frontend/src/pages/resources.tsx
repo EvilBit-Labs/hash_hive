@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type KeyboardEvent, useState } from 'react';
 import { Link } from 'react-router';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
@@ -22,6 +22,14 @@ type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists' | 'hash-detect
 
 type UploadableTab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
 
+const TABS: readonly { id: Tab; label: string }[] = [
+  { id: 'hash-lists', label: 'Hash Lists' },
+  { id: 'wordlists', label: 'Wordlists' },
+  { id: 'rulelists', label: 'Rulelists' },
+  { id: 'masklists', label: 'Masklists' },
+  { id: 'hash-detect', label: 'Hash Detect' },
+] as const;
+
 export function ResourcesPage() {
   const { selectedProjectId } = useUiStore();
   const [activeTab, setActiveTab] = useState<Tab>('hash-lists');
@@ -35,13 +43,34 @@ export function ResourcesPage() {
     );
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'hash-lists', label: 'Hash Lists' },
-    { id: 'wordlists', label: 'Wordlists' },
-    { id: 'rulelists', label: 'Rulelists' },
-    { id: 'masklists', label: 'Masklists' },
-    { id: 'hash-detect', label: 'Hash Detect' },
-  ];
+  const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const currentIndex = TABS.findIndex((t) => t.id === activeTab);
+    let nextIndex: number | null = null;
+
+    switch (e.key) {
+      case 'ArrowRight':
+        nextIndex = (currentIndex + 1) % TABS.length;
+        break;
+      case 'ArrowLeft':
+        nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = TABS.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    e.preventDefault();
+    const nextTab = TABS[nextIndex];
+    if (nextTab) {
+      setActiveTab(nextTab.id);
+      document.getElementById(`tab-${nextTab.id}`)?.focus();
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -52,7 +81,7 @@ export function ResourcesPage() {
         aria-label="Resource types"
         className="flex gap-1 border-b border-surface-0/50"
       >
-        {tabs.map((tab) => (
+        {TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
@@ -60,7 +89,9 @@ export function ResourcesPage() {
             aria-selected={activeTab === tab.id}
             aria-controls={`tabpanel-${tab.id}`}
             id={`tab-${tab.id}`}
+            tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => setActiveTab(tab.id)}
+            onKeyDown={handleTabKeyDown}
             className={cn(
               'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
               activeTab === tab.id

@@ -1,4 +1,4 @@
-import { agentHeartbeatSchema } from '@hashhive/shared';
+import { agentHeartbeatSchema, benchmarkSubmissionSchema } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -156,27 +156,6 @@ agentRoutes.post('/errors', zValidator('json', agentErrorSchema), async (c) => {
 });
 
 // ─── POST /benchmark — submit hashcat benchmark results ─────────────
-
-const benchmarkSubmissionSchema = z.object({
-  entries: z
-    .array(
-      z.object({
-        hashcatMode: z.number().int().nonnegative(),
-        hashType: z.string().min(1),
-        speedHs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-        deviceName: z.string().min(1),
-      })
-    )
-    .min(1)
-    .refine(
-      (entries) => {
-        const modes = entries.map((e) => e.hashcatMode);
-        return new Set(modes).size === modes.length;
-      },
-      { message: 'entries must not contain duplicate hashcatMode values' }
-    ),
-  crackerVersion: z.string().min(1).optional(),
-});
 
 agentRoutes.post('/benchmark', zValidator('json', benchmarkSubmissionSchema), async (c) => {
   const { agentId } = c.get('agent');

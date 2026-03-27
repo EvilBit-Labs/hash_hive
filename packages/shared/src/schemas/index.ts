@@ -140,6 +140,27 @@ export const agentStatusSchema = z.enum(['offline', 'online', 'busy', 'error', '
  * never self-report as `offline` (that state is set server-side by the
  * heartbeat timeout monitor).
  */
+export const benchmarkSubmissionSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        hashcatMode: z.number().int().nonnegative(),
+        hashType: z.string().min(1),
+        speedHs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        deviceName: z.string().min(1),
+      })
+    )
+    .min(1)
+    .refine(
+      (entries) => {
+        const modes = entries.map((e) => e.hashcatMode);
+        return new Set(modes).size === modes.length;
+      },
+      { message: 'entries must not contain duplicate hashcatMode values' }
+    ),
+  crackerVersion: z.string().min(1).optional(),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z

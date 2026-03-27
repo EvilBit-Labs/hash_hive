@@ -3,7 +3,6 @@ import { agentBenchmarks, agentErrors, agents, tasks } from '@hashhive/shared';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitAgentStatus } from './events.js';
-import { handleTaskFailure } from './tasks.js';
 
 export async function getAgentById(agentId: number) {
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -90,6 +89,7 @@ export async function processHeartbeat(
       .from(tasks)
       .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`));
 
+    const { handleTaskFailure } = await import('./tasks.js');
     for (const activeTask of activeTasks) {
       await handleTaskFailure(activeTask.id, agentId, data.error?.message ?? 'Agent fatal error');
     }

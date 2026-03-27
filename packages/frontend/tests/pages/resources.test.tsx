@@ -138,7 +138,7 @@ describe('ResourcesPage', () => {
     fireEvent.click(hashDetectTab);
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value\...')).toBeDefined();
+      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined();
     });
 
     expect(screen.getByText('Detect Type')).toBeDefined();
@@ -167,10 +167,10 @@ describe('ResourcesPage', () => {
     fireEvent.click(hashDetectTab);
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value\...')).toBeDefined();
+      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined();
     });
 
-    const input = screen.getByPlaceholderText('Paste a hash value\...') as HTMLInputElement;
+    const input = screen.getByPlaceholderText('Paste a hash value...') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '5f4dcc3b5aa765d61d8327deb882cf99' } });
 
     const detectButton = screen.getByText('Detect Type');

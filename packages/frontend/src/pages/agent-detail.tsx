@@ -11,7 +11,7 @@ export function AgentDetailPage() {
   const agentId = Number(id);
   const { data: agentData, isLoading } = useAgent(agentId);
   const { data: errorsData } = useAgentErrors(agentId);
-  const { data: benchmarksData } = useAgentBenchmarks(agentId);
+  const { data: benchmarksData, isLoading: isBenchmarksLoading } = useAgentBenchmarks(agentId);
 
   if (isLoading) {
     return <EmptyState message="Loading agent..." />;
@@ -111,7 +111,9 @@ export function AgentDetailPage() {
 
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Benchmarks</h3>
-        {benchmarksData?.benchmarks && benchmarksData.benchmarks.length > 0 ? (
+        {isBenchmarksLoading ? (
+          <EmptyState message="Loading benchmarks..." />
+        ) : benchmarksData?.benchmarks && benchmarksData.benchmarks.length > 0 ? (
           <Table>
             <TableHead>
               <TableRow>

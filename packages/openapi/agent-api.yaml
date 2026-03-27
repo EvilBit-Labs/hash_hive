@@ -214,7 +214,7 @@ components:
       properties:
         status:
           type: string
-          enum: [online, busy, error]
+          enum: [online, busy, error, benchmarked]
         capabilities:
           type: object
           properties:
