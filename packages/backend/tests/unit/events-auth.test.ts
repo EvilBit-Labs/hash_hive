@@ -37,7 +37,7 @@ mock.module('../../src/db/index.js', () => ({
   client: {},
 }));
 
-import { createToken } from '../../src/services/auth.js';
+import { createToken, validateToken } from '../../src/services/auth.js';
 
 describe('WebSocket events hybrid auth', () => {
   beforeEach(() => {
@@ -56,7 +56,7 @@ describe('WebSocket events hybrid auth', () => {
     });
 
     // Token should be valid
-    const { validateToken } = await import('../../src/services/auth.js');
+
     const payload = await validateToken(token);
     expect(payload).not.toBeNull();
     expect(payload?.userId).toBe(1);
@@ -72,7 +72,6 @@ describe('WebSocket events hybrid auth', () => {
       projectId: 10,
     });
 
-    const { validateToken } = await import('../../src/services/auth.js');
     const payload = await validateToken(token);
     expect(payload).not.toBeNull();
     expect(payload?.type).toBe('session');
@@ -85,7 +84,6 @@ describe('WebSocket events hybrid auth', () => {
       type: 'agent',
     });
 
-    const { validateToken } = await import('../../src/services/auth.js');
     const payload = await validateToken(token);
     // Agent tokens are valid JWTs but the events route checks payload.type !== 'session'
     expect(payload).not.toBeNull();
@@ -94,7 +92,6 @@ describe('WebSocket events hybrid auth', () => {
   });
 
   it('should reject invalid tokens', async () => {
-    const { validateToken } = await import('../../src/services/auth.js');
     const payload = await validateToken('invalid-token-string');
     expect(payload).toBeNull();
   });
@@ -107,7 +104,6 @@ describe('WebSocket events hybrid auth', () => {
       projectId: 42,
     });
 
-    const { validateToken } = await import('../../src/services/auth.js');
     const payload = await validateToken(token);
     expect(payload?.projectId).toBe(42);
   });
@@ -119,7 +115,6 @@ describe('WebSocket events hybrid auth', () => {
       type: 'session',
     });
 
-    const { validateToken } = await import('../../src/services/auth.js');
     const payload = await validateToken(token);
     expect(payload?.projectId).toBeUndefined();
   });
