@@ -358,12 +358,14 @@ components:
                 minimum: 0
               hashType:
                 type: string
+                minLength: 1
               speedHs:
                 type: integer
                 minimum: 0
                 description: Hashes per second
               deviceName:
                 type: string
+                minLength: 1
         crackerVersion:
           type: string
           minLength: 1

@@ -214,22 +214,20 @@ export async function submitBenchmarks(
       })
       .returning();
 
-    // Only transition to 'benchmarked' if agent is not actively working
-    const [current] = await tx
-      .select({ status: agents.status })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .limit(1);
-
-    const shouldUpdateStatus = current && current.status !== 'busy';
-
+    // Atomically transition to 'benchmarked' only if agent is not busy.
+    // The WHERE clause guards against a race where the agent became busy
+    // between transaction start and this update — if so, the row simply
+    // won't match and the status stays unchanged.
     const agentUpdates = {
       updatedAt: now,
-      ...(shouldUpdateStatus ? { status: 'benchmarked' as const } : {}),
+      status: 'benchmarked' as const,
       ...(crackerVersion !== undefined ? { crackerVersion } : {}),
     };
 
-    await tx.update(agents).set(agentUpdates).where(eq(agents.id, agentId));
+    await tx
+      .update(agents)
+      .set(agentUpdates)
+      .where(and(eq(agents.id, agentId), sql`${agents.status} != 'busy'`));
 
     return inserted;
   });

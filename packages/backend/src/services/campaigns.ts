@@ -1,5 +1,5 @@
 import { attacks, campaigns, tasks } from '@hashhive/shared';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
@@ -369,35 +369,23 @@ export async function deleteAttack(id: number) {
 // ─── Campaign Progress ─────────────────────────────────────────────
 
 export async function updateCampaignProgress(campaignId: number) {
-  // Use SQL aggregation instead of loading all tasks into memory.
-  // Two queries: (1) count by status, (2) sum keyspace progress for running tasks.
-  const statusCounts = await db
-    .select({ status: tasks.status, cnt: count() })
+  // Single aggregation query: total tasks, completed count, and clamped running progress.
+  const [agg] = await db
+    .select({
+      totalTasks: sql<number>`count(*)`,
+      completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
+      runningProgress: sql<number>`COALESCE(SUM(GREATEST(0, LEAST(COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0), 1))) FILTER (WHERE ${tasks.status} = 'running'), 0)`,
+    })
     .from(tasks)
-    .where(eq(tasks.campaignId, campaignId))
-    .groupBy(tasks.status);
+    .where(eq(tasks.campaignId, campaignId));
 
-  if (statusCounts.length === 0) return;
+  const totalTasks = agg?.totalTasks ?? 0;
+  if (totalTasks === 0) return;
 
-  const totalTasks = statusCounts.reduce((sum, r) => sum + r.cnt, 0);
-  const completedCount = statusCounts
-    .filter((r) => r.status === 'completed' || r.status === 'exhausted')
-    .reduce((sum, r) => sum + r.cnt, 0);
-  const runningCount = statusCounts.find((r) => r.status === 'running')?.cnt ?? 0;
+  const completedCount = agg?.completedCount ?? 0;
+  const runningProgress = agg?.runningProgress ?? 0;
 
-  // Sum keyspace progress for running tasks (stored in JSONB progress.keyspaceProgress)
-  let runningProgress = 0;
-  if (runningCount > 0) {
-    const [result] = await db
-      .select({
-        totalKp: sql<number>`COALESCE(SUM(LEAST(COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0), 1)), 0)`,
-      })
-      .from(tasks)
-      .where(and(eq(tasks.campaignId, campaignId), eq(tasks.status, 'running')));
-    runningProgress = result?.totalKp ?? 0;
-  }
-
-  const overallProgress = totalTasks > 0 ? (completedCount + runningProgress) / totalTasks : 0;
+  const overallProgress = (completedCount + runningProgress) / totalTasks;
 
   // Hash-based progress: look up the campaign's hash list and count cracked vs total
   let hashProgress: {

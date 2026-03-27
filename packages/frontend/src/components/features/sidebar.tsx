@@ -50,8 +50,10 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
       try {
         await selectProject(projectId);
       } catch (err: unknown) {
-        // Revert local state - server rejected the switch
-        setSelectedProject(previousProjectId);
+        // Only rollback if user hasn't switched again while this request was in flight
+        if (useUiStore.getState().selectedProjectId === projectId) {
+          setSelectedProject(previousProjectId);
+        }
         const message = err instanceof Error ? err.message : 'Unknown error';
         // biome-ignore lint/suspicious/noConsole: no frontend logger available; console.error is the only option
         console.error('Failed to switch project:', message);
@@ -73,7 +75,6 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
       {user && user.projects.length > 0 && (
         <div className="px-3 pb-3">
           <Select
-            id="project-select"
             aria-label="Select project"
             className="px-2.5 py-1.5 text-xs"
             value={selectedProjectId ?? ''}
