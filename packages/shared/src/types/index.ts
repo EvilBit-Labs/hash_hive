@@ -1,9 +1,11 @@
 import type { z } from 'zod';
 import type {
   agentHeartbeatSchema,
+  agentStatusSchema,
   createAttackRequestSchema,
   createCampaignRequestSchema,
   hashCandidateSchema,
+  insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
   insertAgentSchema,
   insertAttackSchema,
@@ -20,6 +22,7 @@ import type {
   insertUserSchema,
   insertWordListSchema,
   loginRequestSchema,
+  selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
   selectAttackSchema,
@@ -56,8 +59,13 @@ export type SelectOperatingSystem = z.infer<typeof selectOperatingSystemSchema>;
 export type InsertAgent = z.infer<typeof insertAgentSchema>;
 export type SelectAgent = z.infer<typeof selectAgentSchema>;
 
+export type AgentStatus = z.infer<typeof agentStatusSchema>;
+
 export type InsertAgentError = z.infer<typeof insertAgentErrorSchema>;
 export type SelectAgentError = z.infer<typeof selectAgentErrorSchema>;
+
+export type InsertAgentBenchmark = z.infer<typeof insertAgentBenchmarkSchema>;
+export type SelectAgentBenchmark = z.infer<typeof selectAgentBenchmarkSchema>;
 
 // ─── Resources ──────────────────────────────────────────────────────
 

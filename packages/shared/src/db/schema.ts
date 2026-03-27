@@ -73,6 +73,7 @@ export const agents = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
+    crackerVersion: varchar('cracker_version', { length: 100 }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -97,6 +98,25 @@ export const agentErrors = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('agent_errors_agent_id_idx').on(table.agentId)]
+);
+
+export const agentBenchmarks = pgTable(
+  'agent_benchmarks',
+  {
+    id: serial('id').primaryKey(),
+    agentId: integer('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    hashcatMode: integer('hashcat_mode').notNull(),
+    hashType: varchar('hash_type', { length: 255 }).notNull(),
+    speedHs: bigint('speed_hs', { mode: 'number' }).notNull(),
+    deviceName: varchar('device_name', { length: 255 }).notNull(),
+    benchmarkedAt: timestamp('benchmarked_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('agent_benchmarks_agent_id_idx').on(table.agentId),
+    uniqueIndex('agent_benchmarks_agent_id_hashcat_mode_idx').on(table.agentId, table.hashcatMode),
+  ]
 );
 
 // ─── Resources ──────────────────────────────────────────────────────
