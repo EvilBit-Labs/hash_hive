@@ -101,3 +101,4 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
 - **Unicode escapes in JSX string attributes render literally**: `message="Loading\u2026"` displays as `Loading\u2026`, not `Loading...`. JSX attribute strings are NOT JS string literals — they don't process `\uXXXX` escapes. Use the actual character or a JS expression: `message={"Loading\u2026"}`. Prefer plain ASCII (`...`, `-`) over Unicode punctuation.
 - **No fancy punctuation in UI text**: Use `...` not `…`, `-` not `—`/`–`. Plain ASCII only.
 - **No arbitrary pixel font sizes**: Use Tailwind's rem-based scale (`text-xs`, `text-sm`, etc.), never `text-[11px]` or similar — these don't respect user zoom preferences.
+- **Tailwind v4 custom colors in `border-l-*` don't generate CSS**: Classes like `border-l-ctp-teal` using custom color tokens produce no output. Use inline `style={{ borderLeftColor: 'hsl(var(--ctp-teal))' }}` with `border-l-2` class for the width.
