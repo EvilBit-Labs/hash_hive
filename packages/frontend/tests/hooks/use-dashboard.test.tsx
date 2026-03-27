@@ -32,7 +32,7 @@ function renderDashboardStatsHook() {
 }
 
 beforeEach(() => {
-  // useEvents in dashboard needs WebSocket — install mock to prevent errors
+  // useEvents in dashboard needs WebSocket - install mock to prevent errors
   wsMock = installMockWebSocket();
 });
 

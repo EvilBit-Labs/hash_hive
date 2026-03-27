@@ -31,7 +31,7 @@ describe('AgentDetailPage', () => {
       initialRoute: '/agents/1',
     });
 
-    expect(screen.getByText('Loading agent\\u2026')).toBeDefined();
+    expect(screen.getByText('Loading agent\...')).toBeDefined();
   });
 
   it('shows not found when API returns no agent', async () => {
@@ -123,7 +123,7 @@ describe('AgentDetailPage', () => {
       expect(screen.getByText('Rig Alpha')).toBeDefined();
     });
 
-    const backLink = screen.getByText('\\u2190 Back to agents');
+    const backLink = screen.getByText('Back to agents');
     expect(backLink.closest('a')?.getAttribute('href')).toBe('/agents');
   });
 });

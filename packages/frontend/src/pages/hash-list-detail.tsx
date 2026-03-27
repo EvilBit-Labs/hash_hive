@@ -48,7 +48,9 @@ export function HashListDetailPage() {
   if (isError) {
     return (
       <div className="space-y-4">
-        <TextLink to="/resources">&larr; Back to resources</TextLink>
+        <TextLink to="/resources" back>
+          Back to resources
+        </TextLink>
         <ErrorBanner
           message={error instanceof Error ? error.message : 'Failed to load hash list'}
         />
@@ -59,7 +61,9 @@ export function HashListDetailPage() {
   if (!data?.hashList) {
     return (
       <div className="space-y-4">
-        <TextLink to="/resources">&larr; Back to resources</TextLink>
+        <TextLink to="/resources" back>
+          Back to resources
+        </TextLink>
         <EmptyState message="Hash list not found." />
       </div>
     );
@@ -76,7 +80,9 @@ export function HashListDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/resources">&larr; Back to resources</TextLink>
+        <TextLink to="/resources" back>
+          Back to resources
+        </TextLink>
         <div className="flex items-center gap-3">
           <PageHeader>{hashList.name}</PageHeader>
           <StatusBadge status={hashList.status} />

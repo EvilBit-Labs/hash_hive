@@ -14,10 +14,10 @@ describe('ConnectionIndicator', () => {
     expect(dot).not.toBeNull();
   });
 
-  it('shows "Reconnecting…" when disconnected', () => {
+  it('shows "Reconnecting..." when disconnected', () => {
     renderWithProviders(<ConnectionIndicator connected={false} />);
 
-    expect(screen.getByText('Reconnecting\u2026')).toBeDefined();
+    expect(screen.getByText('Reconnecting...')).toBeDefined();
     // Check for red dot
     const dot = document.querySelector('.bg-destructive');
     expect(dot).not.toBeNull();

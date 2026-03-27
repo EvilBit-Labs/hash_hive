@@ -89,7 +89,7 @@ describe('DashboardPage', () => {
     renderWithProviders(<DashboardPage />);
 
     // All stat cards should show em dash placeholder
-    const placeholders = screen.getAllByText('\u2014');
+    const placeholders = screen.getAllByText('-');
     expect(placeholders.length).toBe(4);
   });
 

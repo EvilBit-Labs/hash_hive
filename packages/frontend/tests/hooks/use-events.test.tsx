@@ -98,7 +98,7 @@ describe('useEvents', () => {
       expect(screen.getByTestId('connected').textContent).toBe('true');
     });
 
-    // Simulate close — should trigger polling mode
+    // Simulate close - should trigger polling mode
     ws.simulateClose();
 
     await waitFor(() => {
@@ -141,13 +141,13 @@ describe('useEvents', () => {
     // No invalidation should occur immediately after entering polling mode
     expect(invalidateSpy.mock.calls.length).toBe(0);
 
-    // Advance 29s — still before the 30s polling interval
+    // Advance 29s - still before the 30s polling interval
     await act(async () => {
       jest.advanceTimersByTime(29_000);
     });
     expect(invalidateSpy.mock.calls.length).toBe(0);
 
-    // Advance the remaining 1s to hit exactly 30s — invalidation should fire
+    // Advance the remaining 1s to hit exactly 30s - invalidation should fire
     await act(async () => {
       jest.advanceTimersByTime(1_000);
     });
@@ -160,7 +160,7 @@ describe('useEvents', () => {
     expect(queryKeys.some((k: unknown[]) => k[0] === 'agents' && k[1] === projectId)).toBe(true);
     expect(queryKeys.some((k: unknown[]) => k[0] === 'campaigns' && k[1] === projectId)).toBe(true);
 
-    // Advance another 30s — second round of invalidation should fire
+    // Advance another 30s - second round of invalidation should fire
     invalidateSpy.mockClear();
     await act(async () => {
       jest.advanceTimersByTime(30_000);
@@ -248,7 +248,7 @@ describe('useEvents', () => {
   });
 
   // Verifies exponential backoff: 1s (2^0), 2s (2^1) delays between reconnect attempts.
-  // All time advancement uses fake timers — no real setTimeout waits.
+  // All time advancement uses fake timers - no real setTimeout waits.
   it('reconnects with exponential backoff after disconnect', async () => {
     jest.useFakeTimers();
     setAuthenticatedWithProject(1);
@@ -265,7 +265,7 @@ describe('useEvents', () => {
       ws1.simulateClose();
     });
 
-    // No reconnect should happen immediately — still waiting for 1s backoff
+    // No reconnect should happen immediately - still waiting for 1s backoff
     expect(wsMock.instances.length).toBe(1);
 
     // Advance past 1s reconnect delay
@@ -284,7 +284,7 @@ describe('useEvents', () => {
       ws2.simulateClose();
     });
 
-    // No reconnect should happen immediately — still waiting for 2s backoff
+    // No reconnect should happen immediately - still waiting for 2s backoff
     expect(wsMock.instances.length).toBe(2);
 
     // Advance past 2s reconnect delay (2^1 * 1000)

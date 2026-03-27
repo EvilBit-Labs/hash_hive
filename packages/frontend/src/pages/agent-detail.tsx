@@ -21,7 +21,9 @@ export function AgentDetailPage() {
   if (!agent) {
     return (
       <div className="space-y-4">
-        <TextLink to="/agents">← Back to agents</TextLink>
+        <TextLink to="/agents" back>
+          Back to agents
+        </TextLink>
         <EmptyState message="Agent not found." />
       </div>
     );
@@ -30,7 +32,9 @@ export function AgentDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/agents">← Back to agents</TextLink>
+        <TextLink to="/agents" back>
+          Back to agents
+        </TextLink>
         <div className="flex items-center gap-3">
           <PageHeader>{agent.name}</PageHeader>
           <StatusBadge status={agent.status} />

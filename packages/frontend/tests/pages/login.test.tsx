@@ -135,7 +135,7 @@ describe('LoginPage', () => {
       { initialRoute: '/login' }
     );
 
-    // Should immediately redirect — no login form visible
+    // Should immediately redirect - no login form visible
     expect(screen.queryByLabelText('Email')).toBeNull();
     expect(screen.getByText('Dashboard Home')).toBeDefined();
   });

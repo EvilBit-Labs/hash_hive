@@ -15,7 +15,7 @@ describe('StatCard', () => {
 
   it('should show placeholder when loading', () => {
     renderWithProviders(<StatCard title="Agents" value={7} subtitle="3 online" loading />);
-    expect(screen.getByText('\u2014')).toBeDefined();
+    expect(screen.getByText('-')).toBeDefined();
     expect(screen.queryByText('7')).toBeNull();
   });
 

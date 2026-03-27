@@ -1,3 +1,4 @@
+import { Crosshair, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
@@ -8,96 +9,29 @@ import { useUiStore } from '../../stores/ui';
 import { Select } from '../ui/select';
 import { ConnectionIndicator } from './connection-indicator';
 
+const ICON_CLASS = 'h-4 w-4';
+
 const navItems = [
   {
     label: 'Dashboard',
     href: '/',
-    icon: (
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <rect x="1" y="1" width="6" height="6" rx="1" />
-        <rect x="9" y="1" width="6" height="6" rx="1" />
-        <rect x="1" y="9" width="6" height="6" rx="1" />
-        <rect x="9" y="9" width="6" height="6" rx="1" />
-      </svg>
-    ),
+    icon: <LayoutDashboard className={ICON_CLASS} aria-hidden="true" />,
   },
   {
     label: 'Campaigns',
     href: '/campaigns',
-    icon: (
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <circle cx="8" cy="8" r="7" />
-        <circle cx="8" cy="8" r="4" />
-        <circle cx="8" cy="8" r="1" fill="currentColor" />
-      </svg>
-    ),
+    icon: <Crosshair className={ICON_CLASS} aria-hidden="true" />,
   },
-  {
-    label: 'Agents',
-    href: '/agents',
-    icon: (
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <rect x="2" y="3" width="12" height="10" rx="1.5" />
-        <path d="M5 7h2M9 7h2M5 10h6" />
-      </svg>
-    ),
-  },
+  { label: 'Agents', href: '/agents', icon: <Monitor className={ICON_CLASS} aria-hidden="true" /> },
   {
     label: 'Resources',
     href: '/resources',
-    icon: (
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M2 4l6-2.5L14 4v3l-6 2.5L2 7V4z" />
-        <path d="M2 7v3l6 2.5L14 10V7" />
-        <path d="M2 10v3l6 2.5L14 13V10" />
-      </svg>
-    ),
+    icon: <Package className={ICON_CLASS} aria-hidden="true" />,
   },
   {
     label: 'Results',
     href: '/results',
-    icon: (
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M8 2v4l3 2" />
-        <path d="M3.5 5A6 6 0 1012.5 5" />
-        <path d="M1 8h3M12 8h3" />
-      </svg>
-    ),
+    icon: <Trophy className={ICON_CLASS} aria-hidden="true" />,
   },
 ];
 
@@ -254,16 +188,7 @@ export function MobileSidebar() {
           className="absolute right-2 top-3 flex h-9 w-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
           onClick={() => setMobileSidebar(false)}
         >
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="h-4 w-4"
-            aria-hidden="true"
-          >
-            <path d="M4 4l8 8M12 4l-8 8" />
-          </svg>
+          <X className="h-4 w-4" aria-hidden="true" />
         </button>
 
         <SidebarContent onNavigate={() => setMobileSidebar(false)} />

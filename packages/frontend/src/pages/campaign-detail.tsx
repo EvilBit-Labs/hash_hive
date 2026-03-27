@@ -93,7 +93,9 @@ export function CampaignDetailPage() {
   if (isError) {
     return (
       <div className="space-y-4">
-        <TextLink to="/campaigns">&larr; Back to campaigns</TextLink>
+        <TextLink to="/campaigns" back>
+          Back to campaigns
+        </TextLink>
         <ErrorBanner message={error instanceof Error ? error.message : 'Failed to load campaign'} />
       </div>
     );
@@ -102,7 +104,9 @@ export function CampaignDetailPage() {
   if (!data) {
     return (
       <div className="space-y-4">
-        <TextLink to="/campaigns">← Back to campaigns</TextLink>
+        <TextLink to="/campaigns" back>
+          Back to campaigns
+        </TextLink>
         <EmptyState message="Campaign not found." />
       </div>
     );
@@ -114,7 +118,9 @@ export function CampaignDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/campaigns">← Back to campaigns</TextLink>
+        <TextLink to="/campaigns" back>
+          Back to campaigns
+        </TextLink>
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -144,19 +150,28 @@ export function CampaignDetailPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+        <div
+          style={{ borderLeftColor: 'hsl(var(--warning))' }}
+          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
+        >
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Priority
           </p>
           <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{campaign.priority}</p>
         </div>
-        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+        <div
+          style={{ borderLeftColor: 'hsl(var(--info))' }}
+          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
+        >
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Attacks
           </p>
           <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{attacks.length}</p>
         </div>
-        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+        <div
+          style={{ borderLeftColor: 'hsl(var(--ctp-lavender))' }}
+          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
+        >
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Hash List
           </p>

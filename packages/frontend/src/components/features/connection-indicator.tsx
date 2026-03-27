@@ -18,7 +18,7 @@ export function ConnectionIndicator({ connected }: ConnectionIndicatorProps) {
           )}
         />
       </span>
-      <span className={cn(connected ? 'text-success' : 'text-muted-foreground')}>
+      <span className={cn(connected ? 'text-success' : 'text-destructive')}>
         {connected ? 'Live' : 'Reconnecting...'}
       </span>
     </div>

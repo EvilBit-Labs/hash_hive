@@ -1,3 +1,4 @@
+import { Menu } from 'lucide-react';
 import { Outlet } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
 import { useUiStore } from '../../stores/ui';
@@ -20,16 +21,7 @@ export function AppLayout() {
             className="flex h-9 w-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
             onClick={() => setMobileSidebar(true)}
           >
-            <svg
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              className="h-4 w-4"
-              aria-hidden="true"
-            >
-              <path d="M2 4h12M2 8h12M2 12h12" />
-            </svg>
+            <Menu className="h-4 w-4" aria-hidden="true" />
           </button>
           <img src={logoSvg} alt="" className="h-6 w-6" />
           <span className="text-sm font-semibold tracking-tight text-foreground">HashHive</span>

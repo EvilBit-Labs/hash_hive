@@ -87,7 +87,7 @@ describe('ResultsPage', () => {
     selectProject();
     renderWithProviders(<ResultsPage />);
 
-    const searchInput = screen.getByPlaceholderText('Search hashes or plaintexts\\u2026');
+    const searchInput = screen.getByPlaceholderText('Search hashes or plaintexts\...');
     expect(searchInput).toBeDefined();
   });
 
@@ -105,7 +105,7 @@ describe('ResultsPage', () => {
     });
 
     const searchInput = screen.getByPlaceholderText(
-      'Search hashes or plaintexts\\u2026'
+      'Search hashes or plaintexts\...'
     ) as HTMLInputElement;
     fireEvent.change(searchInput, { target: { value: 'password' } });
 

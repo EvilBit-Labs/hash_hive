@@ -36,6 +36,7 @@ export function DashboardPage() {
           subtitle="Online"
           loading={isLoading}
           to="/agents"
+          accent="--ctp-teal"
         />
         <StatCard
           title="Campaigns"
@@ -43,6 +44,7 @@ export function DashboardPage() {
           subtitle="Running"
           loading={isLoading}
           to="/campaigns"
+          accent="--info"
         />
         <StatCard
           title="Tasks"
@@ -50,6 +52,7 @@ export function DashboardPage() {
           subtitle="Running"
           loading={isLoading}
           to="/campaigns"
+          accent="--ctp-lavender"
         />
         <StatCard
           title="Cracked"
@@ -57,6 +60,7 @@ export function DashboardPage() {
           subtitle="Total hashes"
           loading={isLoading}
           to="/results"
+          accent="--success"
         />
       </div>
     </div>
