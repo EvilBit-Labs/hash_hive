@@ -75,6 +75,9 @@ format-check:
 type-check:
     {{ mise_exec }} bun run type-check
 
+pre-commit:
+    {{ mise_exec }} pre-commit run --all-files
+
 # -----------------------------
 # Testing
 # -----------------------------
@@ -114,6 +117,7 @@ build-shared:
     {{ mise_exec }} bun --filter @hashhive/shared build
 
 # Clean build artifacts and dependencies
+[unix]
 clean:
     rm -rf node_modules
     rm -rf packages/backend/node_modules packages/backend/dist
@@ -192,7 +196,7 @@ db-studio:
 # Run the full CI check locally.
 # Backend tests use bun:test with mocked services — no docker-compose required.
 # Order matters: lint → format → types → build (catches Tailwind CSS generation) → test
-ci-check: lint format-check type-check build test
+ci-check: check test
 
 # Quick quality gate — run after every task (no tests, faster than ci-check)
-check: lint format-check type-check build
+check: pre-commit lint format-check type-check build
