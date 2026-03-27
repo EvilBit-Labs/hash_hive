@@ -109,6 +109,7 @@ When backend route validation changes (e.g., removing a field), update the corre
 - **Drizzle tables** in `shared/src/db/schema.ts` define the database schema and generate migrations
 - **drizzle-zod** generates Zod schemas from Drizzle tables for API validation
 - **z.infer** derives TypeScript types from Zod schemas — no manually duplicated interfaces
+- **Status enums:** Define a canonical `*StatusSchema` (e.g., `agentStatusSchema`) covering all DB-valid values, then define API-facing schemas as subsets. Heartbeat status excludes server-set states like `offline`.
 
 ### Backend architecture
 
@@ -119,6 +120,7 @@ The backend is a Bun + Hono + TypeScript service:
   - Thin handlers: parse/validate input with Zod, call Drizzle queries or service layer, return responses
 - **Services (`src/services/`)** — optional, only when route handlers become complex
   - **Circular import note:** `campaigns.ts` and `tasks.ts` have a circular dependency. Resolved via dynamic `await import('./tasks.js')` in campaigns.ts. Maintain this pattern when adding cross-service calls.
+  - **Circular import note:** `agents.ts` and `tasks.ts` also have a circular dependency (agents imports `handleTaskFailure`, tasks imports `getAgentBenchmarkForMode`). Works because both are function exports resolved after module initialization. If adding top-level evaluated imports between these files, use dynamic `await import()` instead.
   - `AuthService`: login/logout, JWT/session management
   - `AgentService`: registration, capability detection, heartbeat handling
   - `CampaignService`: campaign lifecycle, DAG validation, attack configuration
@@ -148,7 +150,9 @@ Two API surfaces on the same Hono instance, backed by the same service and data 
 
 - **Agent API (`/api/v1/agent/*`)**
   - Pre-shared token authenticated REST API for Go-based hashcat agents
-  - Defined by `openapi/agent-api.yaml` (single source of truth for contract)
+  - Defined by two OpenAPI spec files (both must be updated for new endpoints):
+    - `openapi/agent-api.yaml` — simplified OpenAPI 3.0.3, inline schemas
+    - `packages/openapi/agent-api.yaml` — detailed OpenAPI 3.1.0, `$ref`-based with full component schemas and shared responses
   - Supports batch operations: bulk inserts for hash submissions via Drizzle or raw `Bun.SQL`
   - Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/:id/report`
 - **Dashboard API (`/api/v1/dashboard/*`)**

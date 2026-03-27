@@ -14,6 +14,8 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
 
 ## Hono
 
+- **Dashboard sub-resource routes need ownership checks**: `requireProjectAccess()` only verifies the user has a valid project in their JWT — it does NOT verify the requested resource (e.g., agent) belongs to that project. Always fetch the parent resource and check `resource.projectId === currentUser.projectId` before returning sub-resource data (benchmarks, errors, etc.).
+
 - **`app.onError()` must check `instanceof HTTPException`** before returning a generic 500 — without this, auth middleware 401 responses get swallowed into 500s:
 
   ```typescript
@@ -32,6 +34,10 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
 - **`db.execute(sql`...`)` returns array-like result** — access rows as `result[0]`, not `result.rows[0]`
 - **No native `FOR UPDATE SKIP LOCKED`** — use raw `db.execute(sql`...`)` with a CTE for atomic claim patterns
 - **Never use `sql.raw()` for agent/user-supplied values** — use Drizzle's parameterized `${value}` in tagged templates. Arrays like `${[1,2,3]}::int[]` are bound safely. `sql.raw()` is only for static SQL fragments (table/column names).
+- **`onConflictDoUpdate` uses `excluded` with snake_case**: In `set:` clauses, reference the PostgreSQL `excluded` pseudo-table using snake_case DB column names (e.g., `` sql`excluded.speed_hs` ``), not Drizzle's camelCase field names (`speedHs`).
+- **`onConflictDoUpdate` + duplicate rows in VALUES**: PostgreSQL rejects a single INSERT when the VALUES list contains multiple rows targeting the same conflict key (e.g., two entries with the same `(agentId, hashcatMode)`). Deduplicate input arrays before calling `.insert().values().onConflictDoUpdate()`, or validate uniqueness at the schema level.
+- **Migration drift bundling**: `drizzle-kit generate` diffs current `schema.ts` against the last migration snapshot — if prior schema changes were never migrated, they silently bundle into the next migration. Review generated `.sql` files for unexpected ALTER statements before committing.
+- **Scoping a polluted migration**: To isolate only intended changes: (1) backup `schema.ts`, (2) temporarily revert unrelated schema changes, (3) delete the migration SQL + snapshot + journal entry, (4) run `drizzle-kit generate`, (5) restore `schema.ts` from backup.
 
 ## Bun Runtime
 
@@ -89,3 +95,9 @@ Referenced from [AGENTS.md](AGENTS.md) — read the relevant section before work
 
 - **401 intercept**: `api.ts` globally intercepts all 401 responses as "Session expired" — login tests must use 400 for invalid credentials
 - **PermissionGuard hides elements**: Tests asserting on guarded elements (New Campaign link, lifecycle buttons, Upload buttons) must seed the auth store with `roles: ['admin']` or `roles: ['contributor']` via `useAuthStore.setState()` — without this, PermissionGuard renders nothing
+
+## Frontend (JSX)
+
+- **Unicode escapes in JSX string attributes render literally**: `message="Loading\u2026"` displays as `Loading\u2026`, not `Loading...`. JSX attribute strings are NOT JS string literals — they don't process `\uXXXX` escapes. Use the actual character or a JS expression: `message={"Loading\u2026"}`. Prefer plain ASCII (`...`, `-`) over Unicode punctuation.
+- **No fancy punctuation in UI text**: Use `...` not `…`, `-` not `—`/`–`. Plain ASCII only.
+- **No arbitrary pixel font sizes**: Use Tailwind's rem-based scale (`text-xs`, `text-sm`, etc.), never `text-[11px]` or similar — these don't respect user zoom preferences.
