@@ -1,3 +1,5 @@
+import { useUiStore } from '../stores/ui';
+
 const API_BASE = '/api/v1';
 
 class ApiError extends Error {
@@ -11,19 +13,25 @@ class ApiError extends Error {
   }
 }
 
+function getProjectHeaders(): Record<string, string> {
+  const projectId = useUiStore.getState().selectedProjectId;
+  return projectId ? { 'X-Project-Id': String(projectId) } : {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...getProjectHeaders(),
       ...init?.headers,
     },
   });
 
   if (!res.ok) {
     if (res.status === 401) {
-      // Session expired — clear auth state and redirect to login
+      // Session expired -- clear auth state and redirect to login
       const { useAuthStore } = await import('../stores/auth');
       useAuthStore.getState().clearAuth();
       if (window.location.pathname !== '/login') {

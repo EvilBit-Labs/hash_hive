@@ -13,27 +13,22 @@ interface User {
   }>;
 }
 
-interface LoginResponse {
-  user: { id: number; email: string; name: string; status: string };
-  selectedProjectId?: number;
-}
-
 interface MeResponse {
-  user: User;
+  user: { id: number; email: string; name: string; status: string };
   projects: Array<{ id: number; name: string; slug: string; roles: string[] }>;
-  selectedProjectId?: number;
 }
 
 interface AuthState {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<{ selectedProjectId?: number }>;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   fetchUser: () => Promise<void>;
-  selectProject: (projectId: number) => Promise<void>;
   clearAuth: () => void;
 }
+
+const AUTH_BASE = '/api/auth';
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
@@ -43,13 +38,25 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (email: string, password: string) => {
     set({ isLoading: true });
     try {
-      const loginResult = await api.post<LoginResponse>('/dashboard/auth/login', {
-        email,
-        password,
+      // BetterAuth handles login at /api/auth/sign-in/email
+      await fetch(`${AUTH_BASE}/sign-in/email`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body?.message ?? 'Invalid email or password');
+        }
       });
+
+      // Fetch user profile from our custom /me endpoint
       const data = await api.get<MeResponse>('/dashboard/auth/me');
       const user: User = {
-        ...data.user,
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
         projects: data.projects.map((p) => ({
           projectId: p.id,
           projectName: p.name,
@@ -57,11 +64,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         })),
       };
       set({ user, isAuthenticated: true, isLoading: false });
-      return {
-        ...(loginResult.selectedProjectId
-          ? { selectedProjectId: loginResult.selectedProjectId }
-          : {}),
-      };
+
+      // Auto-select project if user has exactly one
+      if (user.projects.length === 1 && user.projects[0]) {
+        useUiStore.getState().setSelectedProject(user.projects[0].projectId);
+      }
     } catch (err) {
       set({ isLoading: false });
       throw err;
@@ -69,7 +76,11 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    await api.post('/dashboard/auth/logout');
+    // BetterAuth handles logout at /api/auth/sign-out
+    await fetch(`${AUTH_BASE}/sign-out`, {
+      method: 'POST',
+      credentials: 'include',
+    });
     useUiStore.getState().setSelectedProject(null);
     set({ user: null, isAuthenticated: false });
   },
@@ -79,15 +90,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: null, isAuthenticated: false, isLoading: false });
   },
 
-  selectProject: async (projectId: number) => {
-    await api.post('/dashboard/projects/select', { projectId });
-  },
-
   fetchUser: async () => {
     try {
       const data = await api.get<MeResponse>('/dashboard/auth/me');
       const user: User = {
-        ...data.user,
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
         projects: data.projects.map((p) => ({
           projectId: p.id,
           projectName: p.name,
@@ -95,11 +104,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         })),
       };
       set({ user, isAuthenticated: true, isLoading: false });
-
-      // Restore project selection from JWT if available
-      if (data.selectedProjectId) {
-        useUiStore.getState().setSelectedProject(data.selectedProjectId);
-      }
     } catch {
       set({ user: null, isAuthenticated: false, isLoading: false });
     }

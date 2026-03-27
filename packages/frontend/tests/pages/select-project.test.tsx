@@ -101,26 +101,6 @@ describe('SelectProjectPage', () => {
     });
   });
 
-  it('shows error on selection failure', async () => {
-    fetchMock = mockFetch({
-      '/dashboard/projects/select': {
-        status: 500,
-        body: { error: { code: 'INTERNAL_ERROR', message: 'Server error' } },
-      },
-    });
-    setAuthenticatedUser(2);
-
-    renderWithRouter([{ path: '/select-project', element: <SelectProjectPage /> }], {
-      initialRoute: '/select-project',
-    });
-
-    fireEvent.click(screen.getByText('Project 1'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Failed to select project. Please try again.')).toBeDefined();
-    });
-  });
-
   it('shows empty state when no projects', () => {
     fetchMock = mockFetch();
     setAuthenticatedUser(0);

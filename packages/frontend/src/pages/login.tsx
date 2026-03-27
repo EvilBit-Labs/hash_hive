@@ -8,13 +8,12 @@ import logoSvg from '../assets/logo.svg';
 import { Button } from '../components/ui/button';
 import { ErrorBanner } from '../components/ui/error-banner';
 import { Input } from '../components/ui/input';
-import { ApiError } from '../lib/api';
 import { useAuthStore } from '../stores/auth';
 import { useUiStore } from '../stores/ui';
 
 export function LoginPage() {
   const { login, isAuthenticated } = useAuthStore();
-  const { selectedProjectId, setSelectedProject } = useUiStore();
+  const { selectedProjectId } = useUiStore();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
@@ -33,14 +32,15 @@ export function LoginPage() {
   const onSubmit = async (data: LoginRequest) => {
     setError(null);
     try {
-      const result = await login(data.email, data.password);
-      if (result.selectedProjectId) {
-        setSelectedProject(result.selectedProjectId);
-      } else {
+      await login(data.email, data.password);
+      // Auto-select happens in the store if user has exactly one project.
+      // If user has multiple projects, navigate to project selection.
+      const currentProjectId = useUiStore.getState().selectedProjectId;
+      if (!currentProjectId) {
         navigate('/select-project');
       }
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (err instanceof Error) {
         setError(err.message);
       } else {
         setError('An unexpected error occurred');

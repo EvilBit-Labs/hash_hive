@@ -38,27 +38,13 @@ const navItems = [
 /** Shared sidebar content used by both desktop and mobile variants. */
 function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { pathname } = useLocation();
-  const { user, logout, selectProject } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const { selectedProjectId, setSelectedProject } = useUiStore();
   const { connected } = useEvents();
 
-  const handleProjectChange = async (value: string) => {
+  const handleProjectChange = (value: string) => {
     const projectId = value ? Number(value) : null;
-    const previousProjectId = selectedProjectId;
     setSelectedProject(projectId);
-    if (projectId) {
-      try {
-        await selectProject(projectId);
-      } catch (err: unknown) {
-        // Only rollback if user hasn't switched again while this request was in flight
-        if (useUiStore.getState().selectedProjectId === projectId) {
-          setSelectedProject(previousProjectId);
-        }
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        // biome-ignore lint/suspicious/noConsole: no frontend logger available; console.error is the only option
-        console.error('Failed to switch project:', message);
-      }
-    }
   };
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));

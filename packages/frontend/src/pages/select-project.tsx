@@ -1,16 +1,12 @@
-import { useState } from 'react';
 import { Navigate } from 'react-router';
 import logoSvg from '../assets/logo.svg';
 import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
 import { useAuthStore } from '../stores/auth';
 import { useUiStore } from '../stores/ui';
 
 export function SelectProjectPage() {
-  const { user, isAuthenticated, isLoading, selectProject } = useAuthStore();
+  const { user, isAuthenticated, isLoading } = useAuthStore();
   const { selectedProjectId, setSelectedProject } = useUiStore();
-  const [selecting, setSelecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -30,17 +26,8 @@ export function SelectProjectPage() {
 
   const projects = user?.projects ?? [];
 
-  const handleSelect = async (projectId: number) => {
-    setSelecting(true);
-    setError(null);
-    try {
-      await selectProject(projectId);
-      setSelectedProject(projectId);
-    } catch {
-      setError('Failed to select project. Please try again.');
-    } finally {
-      setSelecting(false);
-    }
+  const handleSelect = (projectId: number) => {
+    setSelectedProject(projectId);
   };
 
   return (
@@ -54,8 +41,6 @@ export function SelectProjectPage() {
           </div>
         </div>
 
-        {error && <ErrorBanner message={error} />}
-
         {projects.length === 0 ? (
           <EmptyState
             message="No projects available. Contact an administrator."
@@ -67,7 +52,6 @@ export function SelectProjectPage() {
               <button
                 key={project.projectId}
                 type="button"
-                disabled={selecting}
                 onClick={() => handleSelect(project.projectId)}
                 className="w-full rounded-md border border-surface-0 bg-background px-4 py-3 text-left transition-all hover:border-primary/30 hover:bg-surface-0/40 disabled:opacity-50"
               >

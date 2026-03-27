@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { LoginPage } from '../../src/pages/login';
 import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
-import { mockLoginResponse, mockMeResponse } from '../fixtures/api-responses';
+import { mockMeResponse } from '../fixtures/api-responses';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor } from '../test-utils';
 
@@ -25,13 +25,10 @@ describe('LoginPage', () => {
   });
 
   it('shows error on invalid credentials', async () => {
-    // Backend returns 400 for invalid credentials (validation error), not 401 (auth token missing/expired)
     fetchMock = mockFetch({
-      '/dashboard/auth/login': {
-        status: 400,
-        body: {
-          error: { code: 'VALIDATION_INVALID_CREDENTIALS', message: 'Invalid email or password' },
-        },
+      '/api/auth/sign-in/email': {
+        status: 401,
+        body: { message: 'Invalid email or password' },
       },
     });
 
@@ -53,7 +50,7 @@ describe('LoginPage', () => {
   it('redirects to /select-project when multiple projects', async () => {
     const meResponse = mockMeResponse({ projectCount: 2 });
     fetchMock = mockFetch({
-      '/dashboard/auth/login': { status: 200, body: mockLoginResponse() },
+      '/api/auth/sign-in/email': { status: 200, body: { user: { id: 1 } } },
       '/dashboard/auth/me': { status: 200, body: meResponse },
     });
 
@@ -80,12 +77,9 @@ describe('LoginPage', () => {
   });
 
   it('auto-selects project and redirects to / when single project', async () => {
-    const meResponse = mockMeResponse({ projectCount: 1, selectedProjectId: 1 });
+    const meResponse = mockMeResponse({ projectCount: 1 });
     fetchMock = mockFetch({
-      '/dashboard/auth/login': {
-        status: 200,
-        body: mockLoginResponse({ selectedProjectId: 1 }),
-      },
+      '/api/auth/sign-in/email': { status: 200, body: { user: { id: 1 } } },
       '/dashboard/auth/me': { status: 200, body: meResponse },
     });
 
