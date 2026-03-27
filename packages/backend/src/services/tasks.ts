@@ -266,33 +266,41 @@ export async function updateTaskProgress(
   }
 
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
-    await db
-      .insert(hashItems)
-      .values(
-        data.results.map((r) => ({
-          hashListId: taskRow.hashListId,
-          hashValue: r.hashValue,
-          plaintext: r.plaintext,
-          crackedAt: new Date(),
-          campaignId: taskRow.campaignId,
-          attackId: taskRow.attackId,
-          taskId,
-          agentId,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [hashItems.hashListId, hashItems.hashValue],
-        set: {
-          plaintext: sql`EXCLUDED.plaintext`,
-          crackedAt: sql`EXCLUDED.cracked_at`,
-          campaignId: sql`EXCLUDED.campaign_id`,
-          attackId: sql`EXCLUDED.attack_id`,
-          taskId: sql`EXCLUDED.task_id`,
-          agentId: sql`EXCLUDED.agent_id`,
-        },
-      });
+    try {
+      await db
+        .insert(hashItems)
+        .values(
+          data.results.map((r) => ({
+            hashListId: taskRow.hashListId,
+            hashValue: r.hashValue,
+            plaintext: r.plaintext,
+            crackedAt: new Date(),
+            campaignId: taskRow.campaignId,
+            attackId: taskRow.attackId,
+            taskId,
+            agentId,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [hashItems.hashListId, hashItems.hashValue],
+          set: {
+            plaintext: sql`EXCLUDED.plaintext`,
+            crackedAt: sql`EXCLUDED.cracked_at`,
+            campaignId: sql`EXCLUDED.campaign_id`,
+            attackId: sql`EXCLUDED.attack_id`,
+            taskId: sql`EXCLUDED.task_id`,
+            agentId: sql`EXCLUDED.agent_id`,
+          },
+        });
 
-    emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length);
+      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length);
+    } catch (err) {
+      logger.error(
+        { err, taskId, agentId, hashListId: taskRow.hashListId, resultCount: data.results.length },
+        'Failed to insert crack results'
+      );
+      return { error: 'Failed to store crack results' };
+    }
   }
 
   // Emit events and update campaign progress (no duplicate campaign fetch)
