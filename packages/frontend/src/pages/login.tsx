@@ -36,7 +36,9 @@ export function LoginPage() {
       // Auto-select happens in the store if user has exactly one project.
       // If user has multiple projects, navigate to project selection.
       const currentProjectId = useUiStore.getState().selectedProjectId;
-      if (!currentProjectId) {
+      if (currentProjectId) {
+        navigate('/', { replace: true });
+      } else {
         navigate('/select-project');
       }
     } catch (err) {

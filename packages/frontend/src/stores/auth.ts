@@ -77,10 +77,15 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     // BetterAuth handles logout at /api/auth/sign-out
-    await fetch(`${AUTH_BASE}/sign-out`, {
-      method: 'POST',
-      credentials: 'include',
-    });
+    // Clear local state regardless of server response (network may be down)
+    try {
+      await fetch(`${AUTH_BASE}/sign-out`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {
+      // Server-side session cleanup failed; clear local state anyway
+    }
     useUiStore.getState().setSelectedProject(null);
     set({ user: null, isAuthenticated: false });
   },
