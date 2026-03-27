@@ -1,0 +1,9 @@
+{
+  "name": "hash_hive",
+  "mode": "vendored",
+  "dependencies": {
+    "pantheon-ai/github-actions-validator": {
+      "version": "0.1.1"
+    }
+  }
+}
