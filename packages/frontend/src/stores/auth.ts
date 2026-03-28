@@ -80,8 +80,15 @@ export const useAuthStore = create<AuthState>((set) => ({
         if (signInRes.status >= 500) {
           throw new Error('Authentication service is temporarily unavailable');
         }
-        const body = await signInRes.json().catch(() => null);
-        throw new Error(body?.message ?? 'Invalid email or password');
+        const body: unknown = await signInRes.json().catch(() => null);
+        const message =
+          typeof body === 'object' &&
+          body !== null &&
+          'message' in body &&
+          typeof (body as Record<string, unknown>)['message'] === 'string'
+            ? ((body as Record<string, unknown>)['message'] as string)
+            : 'Invalid email or password';
+        throw new Error(message);
       }
 
       const user = await fetchAndMapUser();
