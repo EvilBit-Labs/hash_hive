@@ -40,6 +40,9 @@
     },
     "tessl-labs/devops-essentials": {
       "version": "0.1.1"
+    },
+    "tessl-labs/good-oss-citizen": {
+      "version": "1.0.1"
     }
   }
 }
