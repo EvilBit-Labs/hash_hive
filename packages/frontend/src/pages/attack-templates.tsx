@@ -85,7 +85,6 @@ export function AttackTemplatesPage() {
       name: template.name,
       description: template.description,
       mode: template.mode,
-      hashTypeId: template.hashTypeId,
       wordlistId: template.wordlistId,
       rulelistId: template.rulelistId,
       masklistId: template.masklistId,

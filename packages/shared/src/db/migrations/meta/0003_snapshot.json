@@ -1,6 +1,6 @@
 {
-  "id": "9d38c86d-f8ca-48f1-8282-d194f0f5c236",
-  "prevId": "39dd80a0-d6db-48be-90b2-9bba63d0c80f",
+  "id": "6fd7611b-8777-40bf-bcd4-bab108910f39",
+  "prevId": "9d38c86d-f8ca-48f1-8282-d194f0f5c236",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -348,6 +348,199 @@
           "columns": ["auth_token"]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.attack_templates": {
+      "name": "attack_templates",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hash_type_id": {
+          "name": "hash_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wordlist_id": {
+          "name": "wordlist_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rulelist_id": {
+          "name": "rulelist_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "masklist_id": {
+          "name": "masklist_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "advanced_configuration": {
+          "name": "advanced_configuration",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'{}'::jsonb"
+        },
+        "tags": {
+          "name": "tags",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'"
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "attack_templates_project_name_idx": {
+          "name": "attack_templates_project_name_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "attack_templates_project_id_idx": {
+          "name": "attack_templates_project_id_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "attack_templates_project_id_projects_id_fk": {
+          "name": "attack_templates_project_id_projects_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "projects",
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attack_templates_hash_type_id_hash_types_id_fk": {
+          "name": "attack_templates_hash_type_id_hash_types_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "hash_types",
+          "columnsFrom": ["hash_type_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attack_templates_wordlist_id_word_lists_id_fk": {
+          "name": "attack_templates_wordlist_id_word_lists_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "word_lists",
+          "columnsFrom": ["wordlist_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attack_templates_rulelist_id_rule_lists_id_fk": {
+          "name": "attack_templates_rulelist_id_rule_lists_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "rule_lists",
+          "columnsFrom": ["rulelist_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attack_templates_masklist_id_mask_lists_id_fk": {
+          "name": "attack_templates_masklist_id_mask_lists_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "mask_lists",
+          "columnsFrom": ["masklist_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attack_templates_created_by_users_id_fk": {
+          "name": "attack_templates_created_by_users_id_fk",
+          "tableFrom": "attack_templates",
+          "tableTo": "users",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

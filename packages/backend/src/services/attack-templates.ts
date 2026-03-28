@@ -2,6 +2,22 @@ import { attackTemplates } from '@hashhive/shared';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 
+export class DuplicateAttackTemplateNameError extends Error {
+  constructor(name: string) {
+    super(`An attack template named "${name}" already exists in this project`);
+    this.name = 'DuplicateAttackTemplateNameError';
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code: unknown }).code === '23505'
+  );
+}
+
 // ─── Attack Template CRUD ──────────────────────────────────────────
 
 export async function listAttackTemplates(filters: {
@@ -57,25 +73,32 @@ export async function createAttackTemplate(data: {
   tags?: string[] | undefined;
   createdBy?: number | undefined;
 }) {
-  const [template] = await db
-    .insert(attackTemplates)
-    .values({
-      projectId: data.projectId,
-      name: data.name,
-      description: data.description ?? null,
-      mode: data.mode,
-      hashTypeId: data.hashTypeId ?? null,
-      wordlistId: data.wordlistId ?? null,
-      rulelistId: data.rulelistId ?? null,
-      masklistId: data.masklistId ?? null,
-      advancedConfiguration:
-        data.advancedConfiguration === undefined ? {} : data.advancedConfiguration,
-      tags: data.tags ?? [],
-      createdBy: data.createdBy ?? null,
-    })
-    .returning();
+  try {
+    const [template] = await db
+      .insert(attackTemplates)
+      .values({
+        projectId: data.projectId,
+        name: data.name,
+        description: data.description ?? null,
+        mode: data.mode,
+        hashTypeId: data.hashTypeId ?? null,
+        wordlistId: data.wordlistId ?? null,
+        rulelistId: data.rulelistId ?? null,
+        masklistId: data.masklistId ?? null,
+        advancedConfiguration:
+          data.advancedConfiguration === undefined ? {} : data.advancedConfiguration,
+        tags: data.tags ?? [],
+        createdBy: data.createdBy ?? null,
+      })
+      .returning();
 
-  return template ?? null;
+    return template ?? null;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new DuplicateAttackTemplateNameError(data.name);
+    }
+    throw error;
+  }
 }
 
 export async function updateAttackTemplate(
@@ -92,13 +115,20 @@ export async function updateAttackTemplate(
     tags?: string[] | undefined;
   }
 ) {
-  const [updated] = await db
-    .update(attackTemplates)
-    .set({ ...data, updatedAt: new Date() })
-    .where(eq(attackTemplates.id, id))
-    .returning();
+  try {
+    const [updated] = await db
+      .update(attackTemplates)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(attackTemplates.id, id))
+      .returning();
 
-  return updated ?? null;
+    return updated ?? null;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new DuplicateAttackTemplateNameError(data.name ?? '');
+    }
+    throw error;
+  }
 }
 
 export async function deleteAttackTemplate(id: number) {

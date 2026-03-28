@@ -19,8 +19,15 @@
     {
       "idx": 2,
       "version": "7",
-      "when": 1774717580088,
-      "tag": "0002_fuzzy_angel",
+      "when": 1774726942426,
+      "tag": "0002_betterauth_and_schema_updates",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774726959553,
+      "tag": "0003_attack_templates",
       "breakpoints": true
     }
   ]

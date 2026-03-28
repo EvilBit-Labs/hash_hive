@@ -6,7 +6,7 @@ import { db } from '../db/index.js';
 
 export const auth = betterAuth({
   basePath: '/api/auth',
-  baseURL: env.BETTER_AUTH_URL,
+  ...(env.BETTER_AUTH_URL ? { baseURL: env.BETTER_AUTH_URL } : {}),
   secret: env.BETTER_AUTH_SECRET,
 
   database: drizzleAdapter(db, {
