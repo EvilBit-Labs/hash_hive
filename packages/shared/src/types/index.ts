@@ -4,12 +4,14 @@ import type {
   agentStatusSchema,
   benchmarkSubmissionSchema,
   createAttackRequestSchema,
+  createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
   hashCandidateSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
   insertAgentSchema,
   insertAttackSchema,
+  insertAttackTemplateSchema,
   insertCampaignSchema,
   insertHashItemSchema,
   insertHashListSchema,
@@ -22,11 +24,13 @@ import type {
   insertTaskSchema,
   insertUserSchema,
   insertWordListSchema,
+  instantiateAttackTemplateResponseSchema,
   loginRequestSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
   selectAttackSchema,
+  selectAttackTemplateSchema,
   selectCampaignSchema,
   selectHashItemSchema,
   selectHashListSchema,
@@ -88,6 +92,11 @@ export type SelectRuleList = z.infer<typeof selectRuleListSchema>;
 export type InsertMaskList = z.infer<typeof insertMaskListSchema>;
 export type SelectMaskList = z.infer<typeof selectMaskListSchema>;
 
+// ─── Attack Templates ──────────────────────────────────────────────
+
+export type InsertAttackTemplate = z.infer<typeof insertAttackTemplateSchema>;
+export type SelectAttackTemplate = z.infer<typeof selectAttackTemplateSchema>;
+
 // ─── Campaign Orchestration ─────────────────────────────────────────
 
 export type InsertCampaign = z.infer<typeof insertCampaignSchema>;
@@ -139,3 +148,7 @@ export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>;
 export type HashCandidate = z.infer<typeof hashCandidateSchema>;
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>;
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>;
+export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>;
+export type InstantiateAttackTemplateResponse = z.infer<
+  typeof instantiateAttackTemplateResponseSchema
+>;

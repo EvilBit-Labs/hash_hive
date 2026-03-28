@@ -30,6 +30,9 @@ const CampaignCreatePage = lazy(() =>
 const CampaignDetailPage = lazy(() =>
   import('./pages/campaign-detail').then((m) => ({ default: m.CampaignDetailPage }))
 );
+const AttackTemplatesPage = lazy(() =>
+  import('./pages/attack-templates').then((m) => ({ default: m.AttackTemplatesPage }))
+);
 const ResourcesPage = lazy(() =>
   import('./pages/resources').then((m) => ({ default: m.ResourcesPage }))
 );
@@ -79,6 +82,7 @@ function App() {
                   <Route path="/campaigns" element={<CampaignsPage />} />
                   <Route path="/campaigns/new" element={<CampaignCreatePage />} />
                   <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+                  <Route path="/attack-templates" element={<AttackTemplatesPage />} />
                   <Route path="/agents" element={<AgentsPage />} />
                   <Route path="/agents/:id" element={<AgentDetailPage />} />
                   <Route path="/resources" element={<ResourcesPage />} />

@@ -21,6 +21,7 @@ import { ErrorBanner } from '../components/ui/error-banner';
 import { Input } from '../components/ui/input';
 import { PageHeader } from '../components/ui/page-header';
 import { Select } from '../components/ui/select';
+import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates';
 import { useCreateCampaign } from '../hooks/use-campaigns';
 import { usePermissions } from '../hooks/use-permissions';
 import { useHashLists, useMasklists, useRulelists, useWordlists } from '../hooks/use-resources';
@@ -104,6 +105,10 @@ export function CampaignCreatePage() {
     open: boolean;
     type: UploadModalType;
   }>({ open: false, type: 'hash-lists' });
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const instantiateTemplate = useInstantiateAttackTemplate();
+  const { data: templatesData } = useAttackTemplates();
 
   // Resource queries for dropdowns
   const hashListsQuery = useHashLists();
@@ -345,7 +350,17 @@ export function CampaignCreatePage() {
             {/* Left column: Attack configuration form */}
             <div className="w-2/5 space-y-4">
               <form onSubmit={attackForm.handleSubmit(handleAddAttack)} className="space-y-3">
-                <h3 className="text-sm font-medium">Add Attack</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium">Add Attack</h3>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowTemplatePicker(true)}
+                  >
+                    Start from Template
+                  </Button>
+                </div>
                 <div className="space-y-3">
                   <div>
                     <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
@@ -584,6 +599,77 @@ export function CampaignCreatePage() {
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? 'Creating...' : 'Create Campaign'}
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Template picker overlay */}
+      {showTemplatePicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <button
+            type="button"
+            aria-label="Close template picker"
+            className="absolute inset-0 bg-crust/80"
+            onClick={() => setShowTemplatePicker(false)}
+          />
+          <div className="relative z-10 w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-4 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium">Select a Template</h3>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setShowTemplatePicker(false)}
+              >
+                Cancel
+              </button>
+            </div>
+            {templateError && <ErrorBanner message={templateError} className="mb-2 text-xs" />}
+            <div className="max-h-64 space-y-1.5 overflow-y-auto">
+              {!templatesData?.templates.length ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">
+                  No templates available.
+                </p>
+              ) : (
+                templatesData.templates.map((template) => (
+                  <div
+                    key={template.id}
+                    className="flex items-center justify-between rounded border border-surface-0 bg-surface-0/30 px-3 py-2"
+                  >
+                    <div className="text-xs">
+                      <span className="font-medium">{template.name}</span>
+                      <span className="ml-2 font-mono text-muted-foreground">
+                        Mode {template.mode}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={instantiateTemplate.isPending}
+                      onClick={async () => {
+                        try {
+                          const result = await instantiateTemplate.mutateAsync(template.id);
+                          const attack = result.attack;
+                          attackForm.setValue('mode', attack.mode);
+                          attackForm.setValue('wordlistId', attack.wordlistId ?? undefined);
+                          attackForm.setValue('rulelistId', attack.rulelistId ?? undefined);
+                          attackForm.setValue('masklistId', attack.masklistId ?? undefined);
+                          setTemplateError(null);
+                          setShowTemplatePicker(false);
+                        } catch (err) {
+                          if (err instanceof ApiError) {
+                            setTemplateError(err.message);
+                          } else {
+                            setTemplateError('Failed to load template');
+                          }
+                        }
+                      }}
+                    >
+                      Use
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

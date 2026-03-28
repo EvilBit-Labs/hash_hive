@@ -1,4 +1,4 @@
-import { Crosshair, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
+import { Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
@@ -22,6 +22,11 @@ const navItems = [
     label: 'Campaigns',
     href: '/campaigns',
     icon: <Crosshair className={ICON_CLASS} aria-hidden="true" />,
+  },
+  {
+    label: 'Templates',
+    href: '/attack-templates',
+    icon: <Layers className={ICON_CLASS} aria-hidden="true" />,
   },
   { label: 'Agents', href: '/agents', icon: <Monitor className={ICON_CLASS} aria-hidden="true" /> },
   {

@@ -5,6 +5,7 @@ import {
   agentErrors,
   agents,
   attacks,
+  attackTemplates,
   campaigns,
   hashItems,
   hashLists,
@@ -84,6 +85,11 @@ export const selectRuleListSchema = createSelectSchema(ruleLists);
 export const insertMaskListSchema = createInsertSchema(maskLists);
 export const selectMaskListSchema = createSelectSchema(maskLists);
 
+// ─── Attack Templates ──────────────────────────────────────────────
+
+export const insertAttackTemplateSchema = createInsertSchema(attackTemplates);
+export const selectAttackTemplateSchema = createSelectSchema(attackTemplates);
+
 // ─── Campaigns ──────────────────────────────────────────────────────
 
 export const insertCampaignSchema = createInsertSchema(campaigns);
@@ -120,6 +126,33 @@ export const createAttackRequestSchema = insertAttackSchema.pick({
   rulelistId: true,
   masklistId: true,
   dependencies: true,
+});
+
+/**
+ * Explicit request schema for creating attack templates.
+ * Mirrors the nullable DB columns so PATCH can clear fields back to null.
+ * (drizzle-zod insert schemas produce Buffer types for varchar/integer,
+ *  so we define this by hand to get proper string/number types.)
+ */
+export const createAttackTemplateRequestSchema = z.object({
+  name: z.string().min(1).max(255),
+  description: z.string().max(2000).nullable().optional(),
+  mode: z.number().int().nonnegative(),
+  hashTypeId: z.number().int().positive().nullable().optional(),
+  wordlistId: z.number().int().positive().nullable().optional(),
+  rulelistId: z.number().int().positive().nullable().optional(),
+  masklistId: z.number().int().positive().nullable().optional(),
+  advancedConfiguration: z.record(z.string(), z.unknown()).nullable().optional(),
+  tags: z.array(z.string().min(1).max(100)).max(20).optional(),
+});
+
+export const instantiateAttackTemplateResponseSchema = z.object({
+  mode: z.number().int(),
+  hashTypeId: z.number().int().nullable(),
+  wordlistId: z.number().int().nullable(),
+  rulelistId: z.number().int().nullable(),
+  masklistId: z.number().int().nullable(),
+  advancedConfiguration: z.unknown().nullable().optional(),
 });
 
 export const hashCandidateSchema = z.object({

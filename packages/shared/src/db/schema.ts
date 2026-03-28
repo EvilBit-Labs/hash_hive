@@ -280,6 +280,34 @@ export const maskLists = pgTable('mask_lists', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ─── Attack Templates ──────────────────────────────────────────────
+
+export const attackTemplates = pgTable(
+  'attack_templates',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+    mode: integer('mode').notNull(),
+    hashTypeId: integer('hash_type_id').references(() => hashTypes.id),
+    wordlistId: integer('wordlist_id').references(() => wordLists.id),
+    rulelistId: integer('rulelist_id').references(() => ruleLists.id),
+    masklistId: integer('masklist_id').references(() => maskLists.id),
+    advancedConfiguration: jsonb('advanced_configuration').default({}),
+    tags: text('tags').array().notNull().default([]),
+    createdBy: integer('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('attack_templates_project_name_idx').on(table.projectId, table.name),
+    index('attack_templates_project_id_idx').on(table.projectId),
+  ]
+);
+
 // ─── Campaign Orchestration ─────────────────────────────────────────
 
 export const campaigns = pgTable(
