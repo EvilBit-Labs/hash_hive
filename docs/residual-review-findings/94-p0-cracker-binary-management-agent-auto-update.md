@@ -33,7 +33,7 @@ non-blocking residual work.
 Plan: `docs/plans/2026-05-05-002-feat-cracker-binary-management-plan.md`
 
 | Req | Status | Evidence |
-|-----|--------|----------|
+| --- | --- | --- |
 | R1 | met | `cracker_binaries` table + composite unique index + `(engine, platform)` lookup index in migration `0004_cynical_the_order.sql` |
 | R2 | met | GET / POST / PATCH / DELETE in `dashboard/crackers.ts` plus chunked init/part/complete; `requireRole('admin')` on every route |
 | R3 | met | `POST /api/v1/agent/cracker/check-update` with `engine?: string` defaulting to `'hashcat'`; response shape matches plan |
