@@ -29,6 +29,7 @@ install-hooks:
 
 # Update dependencies
 update-deps:
+    mise upgrade --bump --local
     {{ mise_exec }} bun update
     {{ mise_exec }} pre-commit autoupdate
 
