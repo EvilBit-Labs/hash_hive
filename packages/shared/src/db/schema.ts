@@ -133,6 +133,13 @@ export const agents = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
+    /**
+     * @deprecated Use `capabilities.engines[]` (and the `cracker_binaries`
+     * registry) for engine + version tracking. This column is kept for
+     * back-compat with agents that have not adopted `engines[]` yet and
+     * will be removed in a follow-up cleanup once all agents emit the new
+     * field.
+     */
     crackerVersion: varchar('cracker_version', { length: 100 }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -389,5 +396,30 @@ export const tasks = pgTable(
     index('tasks_status_idx').on(table.status),
     index('tasks_status_campaign_id_idx').on(table.status, table.campaignId),
     index('tasks_campaign_id_status_idx').on(table.campaignId, table.status),
+  ]
+);
+
+// ─── Cracker Binaries ───────────────────────────────────────────────
+
+export const crackerBinaries = pgTable(
+  'cracker_binaries',
+  {
+    id: serial('id').primaryKey(),
+    engine: varchar('engine', { length: 50 }).notNull().default('hashcat'),
+    version: varchar('version', { length: 100 }).notNull(),
+    platform: varchar('platform', { length: 64 }).notNull(),
+    fileRef: jsonb('file_ref').default({}),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('cracker_binaries_engine_version_platform_idx').on(
+      table.engine,
+      table.version,
+      table.platform
+    ),
+    index('cracker_binaries_engine_platform_idx').on(table.engine, table.platform),
+    index('cracker_binaries_is_active_idx').on(table.isActive),
   ]
 );

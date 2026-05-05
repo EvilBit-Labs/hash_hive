@@ -3,9 +3,13 @@ import type {
   agentHeartbeatSchema,
   agentStatusSchema,
   benchmarkSubmissionSchema,
+  crackerCheckUpdateRequestSchema,
+  crackerCheckUpdateResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
+  createCrackerBinaryRequestSchema,
+  engineDescriptorSchema,
   hashCandidateSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
@@ -13,6 +17,7 @@ import type {
   insertAttackSchema,
   insertAttackTemplateSchema,
   insertCampaignSchema,
+  insertCrackerBinarySchema,
   insertHashItemSchema,
   insertHashListSchema,
   insertHashTypeSchema,
@@ -32,6 +37,7 @@ import type {
   selectAttackSchema,
   selectAttackTemplateSchema,
   selectCampaignSchema,
+  selectCrackerBinarySchema,
   selectHashItemSchema,
   selectHashListSchema,
   selectHashTypeSchema,
@@ -43,6 +49,7 @@ import type {
   selectTaskSchema,
   selectUserSchema,
   selectWordListSchema,
+  updateCrackerBinaryRequestSchema,
 } from '../schemas/index.js';
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -107,6 +114,40 @@ export type SelectAttack = z.infer<typeof selectAttackSchema>;
 
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type SelectTask = z.infer<typeof selectTaskSchema>;
+
+// ─── Cracker Binaries ───────────────────────────────────────────────
+
+export type InsertCrackerBinary = z.infer<typeof insertCrackerBinarySchema>;
+export type SelectCrackerBinary = z.infer<typeof selectCrackerBinarySchema>;
+
+export type EngineDescriptor = z.infer<typeof engineDescriptorSchema>;
+
+/**
+ * Shape of the agent's `capabilities` JSONB column. Distinct from the
+ * heartbeat-payload schema (which validates the wire format): this type
+ * describes what consumers can rely on when reading the persisted column.
+ *
+ * `engines` is the forward-looking field — agents advertise the cracker
+ * engines they run and at what version. `hashcatVersion` is preserved for
+ * back-compat with agents that have not adopted `engines[]` yet; consumers
+ * that need a single primary engine should fall back to it via a helper
+ * like `getPrimaryEngine`.
+ */
+export interface AgentCapabilities {
+  engines?: EngineDescriptor[];
+  hashcatVersion?: string;
+  gpuDevices?: Array<{
+    name: string;
+    memory: number;
+    computeCapability: string;
+  }>;
+  [key: string]: unknown;
+}
+
+export type CrackerCheckUpdateRequest = z.infer<typeof crackerCheckUpdateRequestSchema>;
+export type CrackerCheckUpdateResponse = z.infer<typeof crackerCheckUpdateResponseSchema>;
+export type CreateCrackerBinaryRequest = z.infer<typeof createCrackerBinaryRequestSchema>;
+export type UpdateCrackerBinaryRequest = z.infer<typeof updateCrackerBinaryRequestSchema>;
 
 // ─── Task Assignment Types ──────────────────────────────────────────
 

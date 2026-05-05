@@ -7,6 +7,7 @@ import {
   attacks,
   attackTemplates,
   campaigns,
+  crackerBinaries,
   hashItems,
   hashLists,
   hashTypes,
@@ -105,6 +106,11 @@ export const selectAttackSchema = createSelectSchema(attacks);
 export const insertTaskSchema = createInsertSchema(tasks);
 export const selectTaskSchema = createSelectSchema(tasks);
 
+// ─── Cracker Binaries ───────────────────────────────────────────────
+
+export const insertCrackerBinarySchema = createInsertSchema(crackerBinaries);
+export const selectCrackerBinarySchema = createSelectSchema(crackerBinaries);
+
 // ─── Custom API Schemas ─────────────────────────────────────────────
 
 export const loginRequestSchema = z.object({
@@ -194,11 +200,23 @@ export const benchmarkSubmissionSchema = z.object({
   crackerVersion: z.string().min(1).optional(),
 });
 
+/**
+ * Engine descriptor advertised by an agent in heartbeat capabilities.
+ * Lets the server know which cracker engines (hashcat, john, …) the agent
+ * runs and at what version. Defaulting / fallback to a legacy
+ * `hashcatVersion` field is handled in the consumer.
+ */
+export const engineDescriptorSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
     .object({
-      hashcatVersion: z.string(),
+      hashcatVersion: z.string().optional(),
+      engines: z.array(engineDescriptorSchema).optional(),
       gpuDevices: z.array(
         z.object({
           name: z.string(),
@@ -215,4 +233,38 @@ export const agentHeartbeatSchema = z.object({
       temperature: z.number().optional(),
     })
     .optional(),
+});
+
+// ─── Cracker Check-Update API ───────────────────────────────────────
+
+/**
+ * Request body for agent cracker update polls. `engine` defaults to
+ * `'hashcat'` when omitted so legacy agents keep working unchanged.
+ */
+export const crackerCheckUpdateRequestSchema = z.object({
+  engine: z.string().min(1).optional(),
+  version: z.string().min(1),
+  platform: z.string().min(1),
+});
+
+export const crackerCheckUpdateResponseSchema = z.object({
+  updateAvailable: z.boolean(),
+  engine: z.string(),
+  latestVersion: z.string().optional(),
+  downloadUrl: z.string().url().optional(),
+  expiresIn: z.number().int().positive().optional(),
+});
+
+/**
+ * Dashboard request schema for creating a cracker binary record (no file
+ * yet — file is uploaded in a follow-up call).
+ */
+export const createCrackerBinaryRequestSchema = z.object({
+  engine: z.string().min(1).max(50),
+  version: z.string().min(1).max(100),
+  platform: z.string().min(1).max(64),
+});
+
+export const updateCrackerBinaryRequestSchema = z.object({
+  isActive: z.boolean().optional(),
 });

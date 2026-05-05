@@ -1,10 +1,19 @@
-import { agentHeartbeatSchema, benchmarkSubmissionSchema } from '@hashhive/shared';
+import {
+  agentHeartbeatSchema,
+  benchmarkSubmissionSchema,
+  crackerCheckUpdateRequestSchema,
+} from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
 import { requireAgentToken } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js';
+import {
+  compareCrackerVersions,
+  getCrackerDownloadUrl,
+  getLatestCracker,
+} from '../../services/crackers.js';
 import { getAgentDownloadUrl } from '../../services/resources.js';
 import {
   assignNextTask,
@@ -23,6 +32,7 @@ agentRoutes.use('/tasks/*', requireAgentToken);
 agentRoutes.use('/errors', requireAgentToken);
 agentRoutes.use('/benchmark', requireAgentToken);
 agentRoutes.use('/resources/*', requireAgentToken);
+agentRoutes.use('/cracker/*', requireAgentToken);
 
 // ─── POST /heartbeat — agent heartbeat ──────────────────────────────
 
@@ -197,5 +207,47 @@ agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
 
   return c.json(result);
 });
+
+// ─── POST /cracker/check-update — agent cracker auto-update ─────────
+
+/**
+ * Returns the latest active cracker binary for the agent's engine + platform
+ * and a presigned download URL when the agent is behind. Missing `engine`
+ * defaults to `'hashcat'` for back-compat with agents that have not adopted
+ * the engines[] capability advertisement.
+ */
+agentRoutes.post(
+  '/cracker/check-update',
+  zValidator('json', crackerCheckUpdateRequestSchema),
+  async (c) => {
+    const data = c.req.valid('json');
+    const engine = (data.engine ?? 'hashcat').trim().toLowerCase();
+
+    const latest = await getLatestCracker({ engine, platform: data.platform });
+
+    if (!latest || compareCrackerVersions(latest.version, data.version) <= 0) {
+      return c.json({ updateAvailable: false, engine });
+    }
+
+    const downloadInfo = await getCrackerDownloadUrl(latest.id);
+    if (!downloadInfo) {
+      // Latest record exists but lacks an uploaded file — treat as no update
+      // available rather than failing the agent's poll.
+      logger.warn(
+        { crackerBinaryId: latest.id, engine, platform: data.platform },
+        'Latest cracker binary has no file ref'
+      );
+      return c.json({ updateAvailable: false, engine });
+    }
+
+    return c.json({
+      updateAvailable: true,
+      engine,
+      latestVersion: latest.version,
+      downloadUrl: downloadInfo.url,
+      expiresIn: downloadInfo.expiresIn,
+    });
+  }
+);
 
 export { agentRoutes };

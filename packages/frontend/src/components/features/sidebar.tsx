@@ -1,9 +1,11 @@
-import { Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { Cpu, Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
 import { useEvents } from '../../hooks/use-events';
+import { usePermissions } from '../../hooks/use-permissions';
 import { authClient } from '../../lib/auth-client';
+import { Permission, type PermissionKey } from '../../lib/permissions';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth';
 import { useUiStore } from '../../stores/ui';
@@ -12,7 +14,15 @@ import { ConnectionIndicator } from './connection-indicator';
 
 const ICON_CLASS = 'h-4 w-4';
 
-const navItems = [
+interface NavItem {
+  label: string;
+  href: string;
+  icon: React.ReactNode;
+  /** Optional permission required to render this entry. */
+  permission?: PermissionKey;
+}
+
+const navItems: readonly NavItem[] = [
   {
     label: 'Dashboard',
     href: '/',
@@ -39,6 +49,12 @@ const navItems = [
     href: '/results',
     icon: <Trophy className={ICON_CLASS} aria-hidden="true" />,
   },
+  {
+    label: 'Crackers',
+    href: '/crackers',
+    icon: <Cpu className={ICON_CLASS} aria-hidden="true" />,
+    permission: Permission.CRACKER_MANAGE,
+  },
 ];
 
 /** Shared sidebar content used by both desktop and mobile variants. */
@@ -48,6 +64,12 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { data: session } = authClient.useSession();
   const { selectedProjectId, setSelectedProject } = useUiStore();
   const { connected } = useEvents();
+  const { can } = usePermissions();
+
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => !item.permission || can(item.permission)),
+    [can]
+  );
 
   const handleProjectChange = (value: string) => {
     const projectId = value ? Number(value) : null;
@@ -85,7 +107,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
 
       {/* Navigation */}
       <nav className="flex-1 space-y-0.5 px-2 py-1">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = isActive(item.href);
           return (
             <Link
