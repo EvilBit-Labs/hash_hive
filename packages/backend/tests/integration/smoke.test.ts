@@ -45,6 +45,7 @@ describe('Integration: Agent workflow validation', () => {
       { method: 'POST', path: '/api/v1/agent/tasks/next' },
       { method: 'POST', path: '/api/v1/agent/tasks/1/report' },
       { method: 'POST', path: '/api/v1/agent/errors' },
+      { method: 'POST', path: '/api/v1/agent/cracker/check-update' },
     ];
 
     for (const { method, path } of endpoints) {
@@ -71,6 +72,7 @@ describe('Integration: Dashboard workflow validation', () => {
       { method: 'GET', path: '/api/v1/dashboard/campaigns' },
       { method: 'GET', path: '/api/v1/dashboard/tasks' },
       { method: 'GET', path: '/api/v1/dashboard/resources/hash-types' },
+      { method: 'GET', path: '/api/v1/dashboard/crackers' },
     ];
 
     for (const { method, path } of endpoints) {

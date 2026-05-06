@@ -7,6 +7,7 @@ import {
   attacks,
   attackTemplates,
   campaigns,
+  crackerBinaries,
   hashItems,
   hashLists,
   hashTypes,
@@ -105,6 +106,11 @@ export const selectAttackSchema = createSelectSchema(attacks);
 export const insertTaskSchema = createInsertSchema(tasks);
 export const selectTaskSchema = createSelectSchema(tasks);
 
+// ─── Cracker Binaries ───────────────────────────────────────────────
+
+export const insertCrackerBinarySchema = createInsertSchema(crackerBinaries);
+export const selectCrackerBinarySchema = createSelectSchema(crackerBinaries);
+
 // ─── Custom API Schemas ─────────────────────────────────────────────
 
 export const loginRequestSchema = z.object({
@@ -194,11 +200,51 @@ export const benchmarkSubmissionSchema = z.object({
   crackerVersion: z.string().min(1).optional(),
 });
 
+/**
+ * Cracker engines the registry knows about. Hashcat is the default
+ * everywhere; new engines are added here when they ship support across
+ * the registry, dispatcher, and agent contract.
+ *
+ * Stored values are always lowercase — see `normalizeEngineName` callers.
+ */
+export const KNOWN_ENGINES = ['hashcat', 'john'] as const;
+export type KnownEngineName = (typeof KNOWN_ENGINES)[number];
+
+/**
+ * Platform identifiers used in cracker binary keys. Closed set so the
+ * dashboard form and the agent contract cannot drift.
+ */
+export const KNOWN_PLATFORMS = [
+  'linux-x64',
+  'linux-arm64',
+  'windows-x64',
+  'darwin-x64',
+  'darwin-arm64',
+] as const;
+export type KnownPlatformName = (typeof KNOWN_PLATFORMS)[number];
+
+export const engineNameSchema = z.enum(KNOWN_ENGINES);
+export const platformNameSchema = z.enum(KNOWN_PLATFORMS);
+
+/**
+ * Engine descriptor advertised by an agent in heartbeat capabilities.
+ * Lets the server know which cracker engines (hashcat, john, …) the agent
+ * runs and at what version. Heartbeat is a wire-format schema — engine
+ * names are kept as `string` here (rather than the enum) because legacy
+ * agents may report unknown values; consumers downcast via
+ * `getPrimaryEngine`/`normalizeEngineName` at the boundary.
+ */
+export const engineDescriptorSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
     .object({
-      hashcatVersion: z.string(),
+      hashcatVersion: z.string().optional(),
+      engines: z.array(engineDescriptorSchema).optional(),
       gpuDevices: z.array(
         z.object({
           name: z.string(),
@@ -215,4 +261,59 @@ export const agentHeartbeatSchema = z.object({
       temperature: z.number().optional(),
     })
     .optional(),
+});
+
+// ─── Cracker Check-Update API ───────────────────────────────────────
+
+/**
+ * Request body for agent cracker update polls. `engine` defaults to
+ * `'hashcat'` when omitted so legacy agents keep working unchanged.
+ *
+ * Engine and platform stay as `string` here (not the enum) so agents
+ * advertising an unknown value get a soft `updateAvailable: false`
+ * response with a server-side warn log, instead of a 400 that would
+ * break the agent's update loop. The dashboard create schema below
+ * uses the enum because admin operators must pick a known value.
+ */
+export const crackerCheckUpdateRequestSchema = z.object({
+  engine: z.string().min(1).max(50).optional(),
+  version: z.string().min(1).max(100),
+  platform: z.string().min(1).max(64),
+});
+
+/**
+ * Response shape for `/agent/cracker/check-update`. Modeled as a
+ * discriminated union on `updateAvailable` so the
+ * "if-update-then-URL+version" invariant is expressed at the type level
+ * — a server bug returning `{updateAvailable: true}` without a URL no
+ * longer type-checks.
+ */
+export const crackerCheckUpdateResponseSchema = z.discriminatedUnion('updateAvailable', [
+  z.object({
+    updateAvailable: z.literal(false),
+    engine: z.string(),
+  }),
+  z.object({
+    updateAvailable: z.literal(true),
+    engine: z.string(),
+    latestVersion: z.string(),
+    downloadUrl: z.string().url(),
+    expiresIn: z.number().int().positive(),
+  }),
+]);
+
+/**
+ * Dashboard request schema for creating a cracker binary record (no file
+ * yet — file is uploaded in a follow-up call). Constrained to known
+ * engines / platforms because admin uploaders are expected to pick
+ * from the registry's supported set.
+ */
+export const createCrackerBinaryRequestSchema = z.object({
+  engine: engineNameSchema,
+  version: z.string().min(1).max(100),
+  platform: platformNameSchema,
+});
+
+export const updateCrackerBinaryRequestSchema = z.object({
+  isActive: z.boolean().optional(),
 });

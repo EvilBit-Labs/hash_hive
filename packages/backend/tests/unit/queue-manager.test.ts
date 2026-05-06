@@ -1,9 +1,22 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { QUEUE_NAMES, TASK_PRIORITY_QUEUES } from '../../src/config/queue.js';
 import { getQueueManager, setQueueManager } from '../../src/queue/context.js';
 import { QueueManager } from '../../src/queue/manager.js';
 
-describe('Queue config', () => {
+// This file must run in isolation (own bun:test process) to avoid module
+// cache poisoning from dashboard-api-contract.test.ts and attack-templates.test.ts,
+// both of which mock '../../src/queue/context.js' and '../../src/queue/manager.js'
+// at module scope. On Linux test runners those mocks have already been
+// installed in the shared bun:test process by the time this file runs,
+// so identity comparisons (toBe) and class-shape assertions fail.
+//
+// The package.json test script runs this file first with
+// QUEUE_MANAGER_TEST_ISOLATED=1, then runs the full suite where this file is
+// skipped via the guard below.
+const isIsolated = process.env['QUEUE_MANAGER_TEST_ISOLATED'] === '1';
+const describeIfIsolated = isIsolated ? describe : describe.skip;
+
+describeIfIsolated('Queue config', () => {
   test('QUEUE_NAMES has priority task queue names', () => {
     expect(QUEUE_NAMES.TASKS_HIGH).toBe('tasks-high');
     expect(QUEUE_NAMES.TASKS_NORMAL).toBe('tasks-normal');
@@ -20,7 +33,7 @@ describe('Queue config', () => {
   });
 });
 
-describe('Queue context', () => {
+describeIfIsolated('Queue context', () => {
   test('getQueueManager returns null before setQueueManager', () => {
     // Context starts null (or may have been set by other tests),
     // so we test the set/get cycle
@@ -39,7 +52,7 @@ describe('Queue context', () => {
   });
 });
 
-describe('QueueManager', () => {
+describeIfIsolated('QueueManager', () => {
   test('can be instantiated without errors', () => {
     const qm = new QueueManager();
     expect(qm).toBeDefined();

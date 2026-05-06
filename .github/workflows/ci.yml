@@ -1,7 +1,7 @@
 name: CI
 "on":
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
   workflow_dispatch:
 jobs:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
           install: true
@@ -21,7 +21,7 @@ jobs:
         run: just ci-check
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@4481f553995cc5011b158ce191746ac1a1d0f815 # v5.5.3
+        uses: codecov/codecov-action@3f20e214133d0983f9a10f3d63b0faf9241a3daa # v6.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -30,7 +30,7 @@ jobs:
     needs: ci-check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
           install: true
@@ -40,15 +40,25 @@ jobs:
       - run: just install
       - run: just build
 
+      # Use the project's pinned `@playwright/test` (frontend devDep) to
+      # install browser binaries, NOT `bunx playwright install` — that
+      # resolves to whatever Playwright version `bunx` happens to fetch,
+      # which downloads a different `chromium_headless_shell-vN` than
+      # what `@playwright/test@1.58.2` looks up at runtime, producing
+      # `Executable doesn't exist` errors when versions skew.
+      #
+      # The install runs through the workspace's `test:e2e:install`
+      # script so Playwright's CLI resolves to `node_modules/.bin/playwright`
+      # in the frontend package — same Playwright the test runner uses.
       - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium
+        run: mise x -- bun --filter @hashhive/frontend test:e2e:install
 
       - name: Run E2E tests
         run: bun --filter @hashhive/frontend test:e2e
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
           path: packages/frontend/playwright-report/

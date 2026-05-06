@@ -3,9 +3,13 @@ import type {
   agentHeartbeatSchema,
   agentStatusSchema,
   benchmarkSubmissionSchema,
+  crackerCheckUpdateRequestSchema,
+  crackerCheckUpdateResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
+  createCrackerBinaryRequestSchema,
+  engineDescriptorSchema,
   hashCandidateSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
@@ -13,6 +17,7 @@ import type {
   insertAttackSchema,
   insertAttackTemplateSchema,
   insertCampaignSchema,
+  insertCrackerBinarySchema,
   insertHashItemSchema,
   insertHashListSchema,
   insertHashTypeSchema,
@@ -32,6 +37,7 @@ import type {
   selectAttackSchema,
   selectAttackTemplateSchema,
   selectCampaignSchema,
+  selectCrackerBinarySchema,
   selectHashItemSchema,
   selectHashListSchema,
   selectHashTypeSchema,
@@ -43,6 +49,7 @@ import type {
   selectTaskSchema,
   selectUserSchema,
   selectWordListSchema,
+  updateCrackerBinaryRequestSchema,
 } from '../schemas/index.js';
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -107,6 +114,36 @@ export type SelectAttack = z.infer<typeof selectAttackSchema>;
 
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type SelectTask = z.infer<typeof selectTaskSchema>;
+
+// ─── Cracker Binaries ───────────────────────────────────────────────
+
+export type InsertCrackerBinary = z.infer<typeof insertCrackerBinarySchema>;
+export type SelectCrackerBinary = z.infer<typeof selectCrackerBinarySchema>;
+
+export type EngineDescriptor = z.infer<typeof engineDescriptorSchema>;
+
+/**
+ * Shape of the agent's `capabilities` JSONB column. Derived from the
+ * heartbeat schema so the wire format and the persisted-shape interface
+ * cannot drift. `engines` is the forward-looking field; `hashcatVersion`
+ * is preserved for back-compat with agents that have not adopted
+ * `engines[]` yet (use `getPrimaryEngine` to collapse both into a single
+ * record).
+ *
+ * The schema's `capabilities` field is optional, so we unwrap with
+ * `NonNullable` — consumers reading the JSONB column should treat the
+ * column itself as optional, not the inner shape.
+ */
+export type AgentCapabilities = NonNullable<z.infer<typeof agentHeartbeatSchema>['capabilities']>;
+
+export type CrackerCheckUpdateRequest = z.infer<typeof crackerCheckUpdateRequestSchema>;
+export type CrackerCheckUpdateResponse = z.infer<typeof crackerCheckUpdateResponseSchema>;
+export type CreateCrackerBinaryRequest = z.infer<typeof createCrackerBinaryRequestSchema>;
+export type UpdateCrackerBinaryRequest = z.infer<typeof updateCrackerBinaryRequestSchema>;
+
+export type { KnownEngineName, KnownPlatformName } from '../schemas/index.js';
+/** Re-exports of the engine/platform constants and types for callers. */
+export { KNOWN_ENGINES, KNOWN_PLATFORMS } from '../schemas/index.js';
 
 // ─── Task Assignment Types ──────────────────────────────────────────
 
