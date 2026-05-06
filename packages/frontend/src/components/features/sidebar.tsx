@@ -1,5 +1,5 @@
 import { Cpu, Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
 import { useEvents } from '../../hooks/use-events';
@@ -17,7 +17,7 @@ const ICON_CLASS = 'h-4 w-4';
 interface NavItem {
   label: string;
   href: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   /** Optional permission required to render this entry. */
   permission?: PermissionKey;
 }

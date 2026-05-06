@@ -31,11 +31,13 @@ function formatFileSize(bytes: number | undefined): string {
 }
 
 function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString();
-  } catch {
-    return iso;
-  }
+  // `new Date(...)` does not throw on invalid input — it returns a Date
+  // whose internal time is NaN. The previous try/catch never triggered
+  // and the UI showed "Invalid Date". Validate via getTime() instead.
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString();
 }
 
 export function CrackersPage() {

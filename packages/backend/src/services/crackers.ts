@@ -33,6 +33,16 @@ const DEFAULT_PART_SIZE = 64 * 1024 * 1024; // 64 MB
 const KNOWN_ENGINE_SET: ReadonlySet<string> = new Set(KNOWN_ENGINES);
 
 /**
+ * Defense-in-depth cap on the direct upload path. The route layer
+ * already rejects oversized requests via Content-Length and
+ * `file.size` checks; this value is enforced again at the service
+ * boundary so callers that bypass the route (CLI / future internal
+ * tooling) can't OOM the API by handing this function a multi-GB
+ * `File`. Mirrors the route-layer constant.
+ */
+export const CRACKER_DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
  * The persisted `fileRef` JSONB has three lifecycle states. Modeling them
  * as a discriminated union forces callers to handle each state instead of
  * everyone reaching into a bag of optionals and writing their own
@@ -160,17 +170,45 @@ export async function getCrackerBinaryById(id: number) {
   return row ?? null;
 }
 
+/**
+ * Thrown by `createCrackerBinary` when version/platform contain only
+ * whitespace. The Zod request schemas only enforce `min(1)` against the
+ * raw string; an input like `"   "` passes that check but normalizes to
+ * `""`, which would silently produce a row that breaks composite
+ * uniqueness semantics. The route layer maps this to HTTP 400.
+ */
+export class CrackerBinaryValidationError extends Error {
+  constructor(
+    public readonly field: 'version' | 'platform' | 'engine',
+    message: string
+  ) {
+    super(message);
+    this.name = 'CrackerBinaryValidationError';
+  }
+}
+
 export async function createCrackerBinary(data: {
   engine: string;
   version: string;
   platform: string;
 }) {
+  const engine = normalizeEngineName(data.engine);
+  const version = data.version.trim();
+  const platform = data.platform.trim();
+
+  if (version.length === 0) {
+    throw new CrackerBinaryValidationError('version', 'version cannot be empty after trimming');
+  }
+  if (platform.length === 0) {
+    throw new CrackerBinaryValidationError('platform', 'platform cannot be empty after trimming');
+  }
+
   const [row] = await db
     .insert(crackerBinaries)
     .values({
-      engine: normalizeEngineName(data.engine),
-      version: data.version.trim(),
-      platform: data.platform.trim(),
+      engine,
+      version,
+      platform,
       isActive: true,
     })
     .returning();
@@ -335,6 +373,16 @@ export async function uploadCrackerFile(
   id: number,
   file: File
 ): Promise<{ key: string; size: number }> {
+  // Defense-in-depth: refuse oversized files before we materialize them
+  // in memory. The route layer already does this against Content-Length
+  // and `file.size`, but enforcing it here means CLI and other internal
+  // callers can't bypass the cap.
+  if (file.size > CRACKER_DIRECT_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `Direct upload exceeds the ${CRACKER_DIRECT_UPLOAD_MAX_BYTES} byte cap; use the chunked upload path instead`
+    );
+  }
+
   const row = await getCrackerBinaryById(id);
   if (!row) throw new Error(`Cracker binary ${id} not found`);
 

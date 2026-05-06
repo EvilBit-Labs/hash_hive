@@ -18,6 +18,7 @@ import { requireSession } from '../../middleware/auth.js';
 import { requireRole } from '../../middleware/rbac.js';
 import {
   abortCrackerChunkedUpload,
+  CrackerBinaryValidationError,
   CrackerUploadIdMismatchError,
   completeCrackerChunkedUpload,
   createCrackerBinary,
@@ -99,6 +100,20 @@ crackerRoutes.post(
       const item = await createCrackerBinary(data);
       return c.json({ crackerBinary: item }, 201);
     } catch (err: unknown) {
+      // Whitespace-only version/platform pass Zod's `min(1)` but trim
+      // to empty inside the service. Surface that as 400 with a typed code.
+      if (err instanceof CrackerBinaryValidationError) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: err.message,
+              field: err.field,
+            },
+          },
+          400
+        );
+      }
       // Composite unique violation (engine, version, platform) surfaces
       // as 409 so the admin sees a typed conflict instead of a generic 500.
       if (isUniqueViolation(err)) {
@@ -296,12 +311,16 @@ crackerRoutes.put('/upload/:uploadId/part/:partNumber', requireRole('admin'), as
   const partNumber = Number(partNumberRaw);
   const crackerBinaryId = Number(c.req.query('crackerBinaryId'));
 
-  if (!uploadId || !crackerBinaryId || !Number.isFinite(crackerBinaryId)) {
+  // crackerBinaryId must be a positive integer. Truthiness checks let
+  // negative numbers through (`-1` is truthy and finite); explicit
+  // `Number.isInteger(...) && > 0` keeps invalid IDs from reaching the
+  // service layer.
+  if (!uploadId || !Number.isInteger(crackerBinaryId) || crackerBinaryId <= 0) {
     return c.json(
       {
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'uploadId and crackerBinaryId are required',
+          message: 'uploadId and a positive integer crackerBinaryId are required',
         },
       },
       400
@@ -309,7 +328,7 @@ crackerRoutes.put('/upload/:uploadId/part/:partNumber', requireRole('admin'), as
   }
 
   // partNumber must be an integer in [1, 10000] per the S3 multipart
-  // spec. `Number(...)` accepts `1.5`, `1e10`, `Infinity` — guard
+  // spec. `Number(...)` accepts `1.5`, `1e10`, `Infinity`, `-1` — guard
   // explicitly so garbage values surface as 400 rather than opaque 500s
   // from the S3 SDK.
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > S3_MAX_PART_NUMBER) {
@@ -380,12 +399,12 @@ crackerRoutes.post(
 crackerRoutes.delete('/upload/:uploadId', requireRole('admin'), async (c) => {
   const uploadId = c.req.param('uploadId');
   const crackerBinaryId = Number(c.req.query('crackerBinaryId'));
-  if (!uploadId || !crackerBinaryId || !Number.isFinite(crackerBinaryId)) {
+  if (!uploadId || !Number.isInteger(crackerBinaryId) || crackerBinaryId <= 0) {
     return c.json(
       {
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'uploadId and crackerBinaryId are required',
+          message: 'uploadId and a positive integer crackerBinaryId are required',
         },
       },
       400

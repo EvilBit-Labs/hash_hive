@@ -123,28 +123,18 @@ export type SelectCrackerBinary = z.infer<typeof selectCrackerBinarySchema>;
 export type EngineDescriptor = z.infer<typeof engineDescriptorSchema>;
 
 /**
- * Shape of the agent's `capabilities` JSONB column. Distinct from the
- * heartbeat-payload schema (which validates the wire format): this type
- * describes what consumers can rely on when reading the persisted column.
+ * Shape of the agent's `capabilities` JSONB column. Derived from the
+ * heartbeat schema so the wire format and the persisted-shape interface
+ * cannot drift. `engines` is the forward-looking field; `hashcatVersion`
+ * is preserved for back-compat with agents that have not adopted
+ * `engines[]` yet (use `getPrimaryEngine` to collapse both into a single
+ * record).
  *
- * `engines` is the forward-looking field — agents advertise the cracker
- * engines they run and at what version. `hashcatVersion` is preserved for
- * back-compat with agents that have not adopted `engines[]` yet; consumers
- * that need a single primary engine should fall back to it via a helper
- * like `getPrimaryEngine`.
- *
- * Intentionally has NO index signature: typos like `caps.engine` (singular)
- * should be type errors, and JSONB tolerates extras at runtime regardless.
+ * The schema's `capabilities` field is optional, so we unwrap with
+ * `NonNullable` — consumers reading the JSONB column should treat the
+ * column itself as optional, not the inner shape.
  */
-export interface AgentCapabilities {
-  engines?: EngineDescriptor[];
-  hashcatVersion?: string;
-  gpuDevices?: Array<{
-    name: string;
-    memory: number;
-    computeCapability: string;
-  }>;
-}
+export type AgentCapabilities = NonNullable<z.infer<typeof agentHeartbeatSchema>['capabilities']>;
 
 export type CrackerCheckUpdateRequest = z.infer<typeof crackerCheckUpdateRequestSchema>;
 export type CrackerCheckUpdateResponse = z.infer<typeof crackerCheckUpdateResponseSchema>;

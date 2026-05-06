@@ -200,6 +200,37 @@ paths:
         "401":
           $ref: "#/components/responses/AuthError"
 
+  /cracker/check-update:
+    post:
+      operationId: checkCrackerUpdate
+      summary: Poll for a newer cracker binary for this agent's engine + platform
+      description: |
+        Returns the latest active cracker binary the server knows about for
+        the given `engine` + `platform` and a presigned download URL when
+        the agent's `version` is older. Missing `engine` defaults to
+        `'hashcat'` for back-compat with agents that have not adopted
+        `capabilities.engines[]` yet.
+      tags: [Cracker]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrackerCheckUpdateRequest"
+      responses:
+        "200":
+          description: Update-check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrackerCheckUpdateResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/AuthError"
+
 components:
   securitySchemes:
     BearerAuth:
@@ -220,6 +251,19 @@ components:
           properties:
             hashcatVersion:
               type: string
+              description: |
+                Legacy field — agents that have not adopted `engines[]` still
+                advertise their hashcat version here. Consumers should treat
+                this as a back-compat fallback for `engines[]`.
+            engines:
+              type: array
+              description: |
+                Cracker engines the agent runs and at what version. The
+                forward-looking shape — replaces `hashcatVersion`. Multiple
+                engines may be advertised when an agent runs more than one
+                cracker (e.g., hashcat + john).
+              items:
+                $ref: '#/components/schemas/EngineDescriptor'
             gpuDevices:
               type: array
               items:
@@ -240,6 +284,77 @@ components:
               type: number
             temperature:
               type: number
+
+    EngineDescriptor:
+      type: object
+      required: [name, version]
+      description: |
+        Cracker engine descriptor. Engines that the registry knows about
+        today are `hashcat` and `john` (lowercase). Agents may advertise
+        other names; the server soft-fails (returns `updateAvailable:
+        false`) for unknown engines rather than rejecting heartbeats.
+      properties:
+        name:
+          type: string
+          example: hashcat
+        version:
+          type: string
+          example: "6.2.6"
+
+    CrackerCheckUpdateRequest:
+      type: object
+      required: [version, platform]
+      properties:
+        engine:
+          type: string
+          description: |
+            Cracker engine the agent runs. Defaults to `hashcat` when omitted.
+            Stored values are always lowercase; the server normalizes the
+            input.
+          example: hashcat
+        version:
+          type: string
+          description: The agent's currently-installed cracker version.
+          example: "6.2.6"
+        platform:
+          type: string
+          description: |
+            Platform identifier matching the registry's stored binaries.
+            Known values: `linux-x64`, `linux-arm64`, `windows-x64`,
+            `darwin-x64`, `darwin-arm64`.
+          example: linux-x64
+
+    CrackerCheckUpdateResponse:
+      oneOf:
+        - type: object
+          required: [updateAvailable, engine]
+          description: No update available — the agent is on the latest active version.
+          properties:
+            updateAvailable:
+              type: boolean
+              enum: [false]
+            engine:
+              type: string
+        - type: object
+          required: [updateAvailable, engine, latestVersion, downloadUrl, expiresIn]
+          description: Update available — agent should download the binary at `downloadUrl`.
+          properties:
+            updateAvailable:
+              type: boolean
+              enum: [true]
+            engine:
+              type: string
+            latestVersion:
+              type: string
+              example: "6.2.7"
+            downloadUrl:
+              type: string
+              format: uri
+              description: Presigned MinIO download URL valid for `expiresIn` seconds.
+            expiresIn:
+              type: integer
+              description: Lifetime of `downloadUrl` in seconds (currently 21600 — 6 hours).
+              example: 21600
 
     TaskDescriptor:
       type: object
@@ -396,6 +511,13 @@ components:
 
     AuthError:
       description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    ValidationError:
+      description: Request body or query parameters failed validation
       content:
         application/json:
           schema:

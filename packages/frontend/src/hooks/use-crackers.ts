@@ -6,6 +6,20 @@ import type {
 } from '@hashhive/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useUiStore } from '../stores/ui';
+
+/**
+ * Backend `requireRole('admin')` middleware derives project context from
+ * the `X-Project-Id` header, so any non-`api` fetch (e.g., raw FormData
+ * uploads, raw binary PUTs) must add it explicitly. Returns an empty
+ * record when no project is selected so the request still goes through
+ * — the backend will respond with `PROJECT_NOT_SELECTED` and the user
+ * sees a typed error rather than a silent failure.
+ */
+function projectHeaders(): Record<string, string> {
+  const projectId = useUiStore.getState().selectedProjectId;
+  return projectId ? { 'X-Project-Id': String(projectId) } : {};
+}
 
 /**
  * Wire DTO for cracker binaries. Derived from `SelectCrackerBinary` so a
@@ -149,6 +163,7 @@ export function useUploadCrackerFile(callbacks: MutationCallbacks = {}) {
       const res = await fetch(`/api/v1/dashboard/crackers/${input.id}/upload`, {
         method: 'POST',
         credentials: 'include',
+        headers: projectHeaders(),
         body: fd,
       });
       if (!res.ok) {
@@ -232,6 +247,7 @@ export function useUploadCrackerChunked(callbacks: MutationCallbacks = {}) {
           const res = await fetch(url, {
             method: 'PUT',
             credentials: 'include',
+            headers: projectHeaders(),
             body: chunk,
             ...(signal ? { signal } : {}),
           });
