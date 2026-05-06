@@ -22,6 +22,8 @@ export const users = pgTable('users', {
   status: varchar('status', { length: 20 }).notNull().default('active'),
   emailVerified: boolean('email_verified').notNull().default(true),
   image: text('image'),
+  apiKeyHash: varchar('api_key_hash', { length: 255 }).unique(),
+  apiKeyLastUsedAt: timestamp('api_key_last_used_at', { withTimezone: true }),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

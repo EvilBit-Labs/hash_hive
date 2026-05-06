@@ -14,6 +14,7 @@ import { securityHeaders } from './middleware/security-headers.js';
 import { getQueueManager, setQueueManager } from './queue/context.js';
 import { QueueManager } from './queue/manager.js';
 import { agentRoutes } from './routes/agent/index.js';
+import { controlRoutes } from './routes/control/index.js';
 import { dashboardAgentRoutes } from './routes/dashboard/agents.js';
 import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js';
 import { authRoutes } from './routes/dashboard/auth.js';
@@ -113,6 +114,7 @@ app.route('/api/v1/dashboard/events', eventRoutes);
 app.route('/api/v1/dashboard/crackers', crackerRoutes);
 
 app.route('/api/v1/agent', agentRoutes);
+app.route('/api/v1/control', controlRoutes);
 
 // ─── Error Handler ──────────────────────────────────────────────────
 
