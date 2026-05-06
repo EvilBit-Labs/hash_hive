@@ -40,8 +40,14 @@ jobs:
       - run: just install
       - run: just build
 
+      # Use the project's pinned `@playwright/test` (frontend devDep) to
+      # install browser binaries, NOT `bunx playwright install` — that
+      # resolves to whatever Playwright version `bunx` happens to fetch,
+      # which downloads a different `chromium_headless_shell-vN` than
+      # what `@playwright/test@1.58.2` looks up at runtime, producing
+      # `Executable doesn't exist` errors when versions skew.
       - name: Install Playwright browsers
-        run: mise x -- bunx playwright install --with-deps chromium
+        run: mise x -- bun --filter @hashhive/frontend exec playwright install --with-deps chromium
 
       - name: Run E2E tests
         run: bun --filter @hashhive/frontend test:e2e
