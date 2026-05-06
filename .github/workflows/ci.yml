@@ -46,8 +46,12 @@ jobs:
       # which downloads a different `chromium_headless_shell-vN` than
       # what `@playwright/test@1.58.2` looks up at runtime, producing
       # `Executable doesn't exist` errors when versions skew.
+      #
+      # The install runs through the workspace's `test:e2e:install`
+      # script so Playwright's CLI resolves to `node_modules/.bin/playwright`
+      # in the frontend package — same Playwright the test runner uses.
       - name: Install Playwright browsers
-        run: mise x -- bun --filter @hashhive/frontend exec playwright install --with-deps chromium
+        run: mise x -- bun --filter @hashhive/frontend test:e2e:install
 
       - name: Run E2E tests
         run: bun --filter @hashhive/frontend test:e2e

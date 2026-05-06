@@ -11,7 +11,8 @@
     "lint": "biome check ./src",
     "type-check": "tsc --noEmit",
     "test": "bun test --preload ./tests/setup.ts tests/",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@hashhive/shared": "workspace:*",
