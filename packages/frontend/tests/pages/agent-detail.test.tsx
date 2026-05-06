@@ -31,7 +31,7 @@ describe('AgentDetailPage', () => {
       initialRoute: '/agents/1',
     });
 
-    expect(screen.getByText('Loading agent\...')).toBeDefined();
+    expect(screen.getByText('Loading agent...')).toBeDefined();
   });
 
   it('shows not found when API returns no agent', async () => {

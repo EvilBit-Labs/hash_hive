@@ -6,6 +6,7 @@ import { Select } from '../components/ui/select';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
 import { TextLink } from '../components/ui/text-link';
 import { useAgents } from '../hooks/use-dashboard';
+import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
 import { useUiStore } from '../stores/ui';
 
 export function AgentsPage() {
@@ -51,25 +52,32 @@ export function AgentsPage() {
               <tr>
                 <Th>Name</Th>
                 <Th>Status</Th>
+                <Th>Cracker</Th>
                 <Th>Last Seen</Th>
                 <Th>Actions</Th>
               </tr>
             </TableHead>
             <TableBody>
-              {data.agents.map((agent) => (
-                <TableRow key={agent.id}>
-                  <Td className="text-sm font-medium text-foreground">{agent.name}</Td>
-                  <Td>
-                    <StatusBadge status={agent.status} />
-                  </Td>
-                  <Td className="text-xs text-muted-foreground">
-                    {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
-                  </Td>
-                  <Td>
-                    <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
-                  </Td>
-                </TableRow>
-              ))}
+              {data.agents.map((agent) => {
+                const engine = getPrimaryEngine(
+                  agent.capabilities as Record<string, unknown> | null | undefined
+                );
+                return (
+                  <TableRow key={agent.id}>
+                    <Td className="text-sm font-medium text-foreground">{agent.name}</Td>
+                    <Td>
+                      <StatusBadge status={agent.status} />
+                    </Td>
+                    <Td className="text-xs text-muted-foreground">{formatPrimaryEngine(engine)}</Td>
+                    <Td className="text-xs text-muted-foreground">
+                      {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
+                    </Td>
+                    <Td>
+                      <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
+                    </Td>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}

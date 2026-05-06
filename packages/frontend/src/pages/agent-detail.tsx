@@ -5,6 +5,7 @@ import { PageHeader } from '../components/ui/page-header';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
 import { TextLink } from '../components/ui/text-link';
 import { useAgent, useAgentBenchmarks, useAgentErrors } from '../hooks/use-dashboard';
+import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
 
 export function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -50,6 +51,14 @@ export function AgentDetailPage() {
             <div className="flex justify-between">
               <dt className="text-muted-foreground">ID</dt>
               <dd className="font-mono text-xs">{agent.id}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">Cracker</dt>
+              <dd className="font-mono text-xs">
+                {formatPrimaryEngine(
+                  getPrimaryEngine(agent.capabilities as Record<string, unknown> | null | undefined)
+                )}
+              </dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Last Seen</dt>

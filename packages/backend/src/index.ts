@@ -18,6 +18,7 @@ import { dashboardAgentRoutes } from './routes/dashboard/agents.js';
 import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js';
 import { authRoutes } from './routes/dashboard/auth.js';
 import { campaignRoutes } from './routes/dashboard/campaigns.js';
+import { crackerRoutes } from './routes/dashboard/crackers.js';
 import { createEventRoutes } from './routes/dashboard/events.js';
 import { hashRoutes } from './routes/dashboard/hashes.js';
 import { projectRoutes } from './routes/dashboard/projects.js';
@@ -109,6 +110,7 @@ app.route('/api/v1/dashboard/tasks', taskRoutes);
 app.route('/api/v1/dashboard/stats', statsRoutes);
 app.route('/api/v1/dashboard/results', resultsRoutes);
 app.route('/api/v1/dashboard/events', eventRoutes);
+app.route('/api/v1/dashboard/crackers', crackerRoutes);
 
 app.route('/api/v1/agent', agentRoutes);
 

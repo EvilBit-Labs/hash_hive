@@ -39,7 +39,7 @@ describe('CampaignDetailPage', () => {
       initialRoute: '/campaigns/1',
     });
 
-    expect(screen.getByText('Loading campaign\...')).toBeDefined();
+    expect(screen.getByText('Loading campaign...')).toBeDefined();
   });
 
   it('shows error when API returns 404', async () => {

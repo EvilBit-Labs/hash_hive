@@ -1,10 +1,21 @@
-import { agentHeartbeatSchema, benchmarkSubmissionSchema } from '@hashhive/shared';
+import {
+  agentHeartbeatSchema,
+  benchmarkSubmissionSchema,
+  crackerCheckUpdateRequestSchema,
+} from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
 import { requireAgentToken } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js';
+import {
+  compareCrackerVersions,
+  getCrackerDownloadUrl,
+  getLatestCracker,
+  isKnownEngine,
+  normalizeEngineName,
+} from '../../services/crackers.js';
 import { getAgentDownloadUrl } from '../../services/resources.js';
 import {
   assignNextTask,
@@ -23,6 +34,7 @@ agentRoutes.use('/tasks/*', requireAgentToken);
 agentRoutes.use('/errors', requireAgentToken);
 agentRoutes.use('/benchmark', requireAgentToken);
 agentRoutes.use('/resources/*', requireAgentToken);
+agentRoutes.use('/cracker/*', requireAgentToken);
 
 // ─── POST /heartbeat — agent heartbeat ──────────────────────────────
 
@@ -197,5 +209,70 @@ agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
 
   return c.json(result);
 });
+
+// ─── POST /cracker/check-update — agent cracker auto-update ─────────
+
+/**
+ * Returns the latest active cracker binary for the agent's engine + platform
+ * and a presigned download URL when the agent is behind. Missing `engine`
+ * defaults to `'hashcat'` for back-compat with agents that have not adopted
+ * the engines[] capability advertisement.
+ *
+ * Engine normalization delegates to the service-layer helper so the route
+ * and service can never disagree about what `'Hashcat'` means.
+ */
+agentRoutes.post(
+  '/cracker/check-update',
+  zValidator('json', crackerCheckUpdateRequestSchema),
+  async (c) => {
+    const data = c.req.valid('json');
+    const engine = normalizeEngineName(data.engine);
+    // Trim version + platform so an agent sending `'6.2.7 '` (trailing
+    // whitespace) doesn't compare unequal against the registry's stored
+    // value. The comparator treats whitespace as part of the version
+    // string, so the trim has to happen here.
+    const platform = data.platform.trim();
+    const version = data.version.trim();
+
+    // A misconfigured agent advertising `engine: "hashca"` would otherwise
+    // poll forever and silently appear up-to-date. Log a warn so an
+    // operator searching logs for "stale agent" can find it. We still
+    // return `updateAvailable: false` (not 400) — the agent contract is
+    // soft on engine names so unknown values don't break the update loop.
+    if (!isKnownEngine(engine)) {
+      logger.warn(
+        { engine, rawEngine: data.engine, platform },
+        'Cracker check-update from agent advertising unknown engine; treating as no update'
+      );
+      return c.json({ updateAvailable: false, engine });
+    }
+
+    const latest = await getLatestCracker({ engine, platform });
+
+    if (!latest || compareCrackerVersions(latest.version, version) <= 0) {
+      return c.json({ updateAvailable: false, engine });
+    }
+
+    const downloadInfo = await getCrackerDownloadUrl(latest.id);
+    if (!downloadInfo) {
+      // Latest record exists but lacks an uploaded file — treat as no update
+      // available rather than failing the agent's poll. Logged at warn so
+      // an admin can find rows that were created but never uploaded.
+      logger.warn(
+        { crackerBinaryId: latest.id, engine, platform: data.platform },
+        'Latest cracker binary has no completed file; agent will not see this version'
+      );
+      return c.json({ updateAvailable: false, engine });
+    }
+
+    return c.json({
+      updateAvailable: true,
+      engine,
+      latestVersion: latest.version,
+      downloadUrl: downloadInfo.url,
+      expiresIn: downloadInfo.expiresIn,
+    });
+  }
+);
 
 export { agentRoutes };

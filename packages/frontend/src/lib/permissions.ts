@@ -9,6 +9,7 @@ export const Permission = {
   PROJECT_SETTINGS: 'project:settings',
   TEMPLATE_VIEW: 'template:view',
   TEMPLATE_MANAGE: 'template:manage',
+  CRACKER_MANAGE: 'cracker:manage',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
