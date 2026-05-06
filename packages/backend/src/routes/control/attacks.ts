@@ -16,7 +16,12 @@ import {
   updateAttack,
 } from '../../services/campaigns.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import {
+  controlErrorResponse,
+  parseIdParam,
+  requireProjectMembership,
+  requireProjectRole,
+} from './helpers.js';
 
 export const controlAttackRoutes = new Hono<AppEnv>();
 
@@ -55,7 +60,7 @@ async function loadAttackInProject(id: number, projectId: number) {
 
 controlAttackRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const campaignIdRaw = c.req.query('campaignId');
     if (!campaignIdRaw) {
       return problemResponse(c, 400, 'validation', 'campaignId query parameter is required');
@@ -77,7 +82,7 @@ controlAttackRoutes.get('/', async (c) => {
 
 controlAttackRoutes.get('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const attack = await loadAttackInProject(id, projectId);
     if (!attack) return problemResponse(c, 404, 'not_found', 'attack not found');
@@ -89,7 +94,7 @@ controlAttackRoutes.get('/:id', async (c) => {
 
 controlAttackRoutes.post('/', zValidator('json', createAttackSchema), async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const data = c.req.valid('json');
     const campaign = await getCampaignById(data.campaignId);
     if (!campaign || campaign.projectId !== projectId) {
@@ -104,7 +109,7 @@ controlAttackRoutes.post('/', zValidator('json', createAttackSchema), async (c) 
 
 controlAttackRoutes.patch('/:id', zValidator('json', updateAttackSchema), async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const id = parseIdParam(c.req.param('id'));
     const existing = await loadAttackInProject(id, projectId);
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found');
@@ -118,7 +123,7 @@ controlAttackRoutes.patch('/:id', zValidator('json', updateAttackSchema), async 
 
 controlAttackRoutes.delete('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const id = parseIdParam(c.req.param('id'));
     const existing = await loadAttackInProject(id, projectId);
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found');

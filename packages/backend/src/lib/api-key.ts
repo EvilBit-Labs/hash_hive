@@ -56,7 +56,11 @@ export function parseApiKey(token: string): ParsedApiKey | null {
   if (!remainder) return null;
   if (!/^[1-9]\d*$/.test(userIdRaw)) return null;
   const userId = Number(userIdRaw);
-  if (!Number.isInteger(userId) || userId <= 0) return null;
+  // Reject ids that lose precision in double-precision FP — the integer
+  // beyond Number.MAX_SAFE_INTEGER is no longer the exact value the
+  // client sent, so a strict-equals lookup against the database id would
+  // silently match the wrong row.
+  if (!Number.isInteger(userId) || userId <= 0 || userId > Number.MAX_SAFE_INTEGER) return null;
   return { userId, remainder };
 }
 

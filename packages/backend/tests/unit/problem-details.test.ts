@@ -50,6 +50,23 @@ describe('problemResponse', () => {
     expect(body.type).toBe('about:blank');
   });
 
+  test('emits project_not_selected envelope', async () => {
+    const app = makeApp((c) =>
+      problemResponse(c, 400, 'project_not_selected', 'no project header')
+    );
+    const body = await (await app.request('/x')).json();
+    expect(body.type).toBe('https://hashhive.dev/errors/project-not-selected');
+    expect(body.title).toBe('Project not selected');
+  });
+
+  test('emits service_unavailable envelope for queue failures', async () => {
+    const app = makeApp((c) => problemResponse(c, 503, 'service_unavailable', 'queue is down'));
+    const body = await (await app.request('/x')).json();
+    expect(body.type).toBe('https://hashhive.dev/errors/service-unavailable');
+    expect(body.title).toBe('Service unavailable');
+    expect(body.status).toBe(503);
+  });
+
   test('uses request path as instance', async () => {
     const app = new Hono<AppEnv>();
     app.get('/api/v1/control/foo', (c) => problemResponse(c, 404, 'not_found', 'resource missing'));

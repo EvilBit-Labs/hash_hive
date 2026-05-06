@@ -9,13 +9,13 @@ import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { db } from '../../db/index.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, requireProjectId } from './_shared.js';
+import { controlErrorResponse, requireProjectMembership } from './helpers.js';
 
 export const controlStatsRoutes = new Hono<AppEnv>();
 
 controlStatsRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
 
     const [agentStats, campaignStats, taskStats, crackedStats] = await Promise.all([
       db

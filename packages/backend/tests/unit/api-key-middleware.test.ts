@@ -11,6 +11,7 @@ interface MockUserRow {
 
 let mockUserRow: MockUserRow | null = null;
 let lastUsedUpdates: Array<{ id: number }> = [];
+let throwOnUpdate = false;
 
 mock.module('../../src/db/index.js', () => ({
   db: {
@@ -25,6 +26,7 @@ mock.module('../../src/db/index.js', () => ({
       set: () => ({
         where: (_pred: unknown) => {
           // Predicate ignored; tests assert that an update fired by checking lastUsedUpdates length
+          if (throwOnUpdate) return Promise.reject(new Error('db down'));
           if (mockUserRow) lastUsedUpdates.push({ id: mockUserRow.id });
           return Promise.resolve();
         },
@@ -59,6 +61,7 @@ describe('requireApiKey middleware', () => {
   beforeEach(() => {
     mockUserRow = null;
     lastUsedUpdates = [];
+    throwOnUpdate = false;
   });
 
   it('rejects requests with no Authorization header', async () => {
@@ -140,6 +143,17 @@ describe('requireApiKey middleware', () => {
     });
     expect(lastUsedUpdates).toHaveLength(1);
     expect(lastUsedUpdates[0].id).toBe(99);
+  });
+
+  it('still authenticates (200) when the lastUsedAt update fails', async () => {
+    // The plan documents lastUsedAt as a best-effort write. A DB hiccup
+    // here must not deny the request — we already verified credentials.
+    const token = await seedUser(123);
+    throwOnUpdate = true;
+    const res = await app.request('/protected', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
   });
 
   it('treats X-Project-Id: 0 as null', async () => {

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { fireEvent } from '@testing-library/react';
+import { AccountPage } from '../../src/pages/account';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { cleanupAll, renderWithProviders, screen, waitFor } from '../test-utils';
-import { AccountPage } from '../../src/pages/account';
 
 let fetchMock: ReturnType<typeof mockFetch>;
 
@@ -116,6 +116,20 @@ describe('AccountPage API key section', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /^Rotate$/ })[1]);
     await waitFor(() => {
       expect(screen.getByText('cst_42_abc-DEF_token')).toBeDefined();
+    });
+  });
+
+  it('wipes the rotated raw token from the DOM after acknowledgement', async () => {
+    setupRoutes({ hasKey: true, prefix: 'cst_42_…', lastUsedAt: null });
+    renderWithProviders(<AccountPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Rotate/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Rotate$/ })[1]);
+    await waitFor(() => expect(screen.getByText('cst_42_abc-DEF_token')).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: /I've saved it/ }));
+    await waitFor(() => {
+      expect(screen.queryByText('cst_42_abc-DEF_token')).toBeNull();
     });
   });
 

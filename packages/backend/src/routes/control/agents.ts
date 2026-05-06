@@ -10,9 +10,13 @@ import { z } from 'zod';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import { getAgentById, listAgents, updateAgent } from '../../services/agents.js';
-import { findProjectMembership } from '../../services/auth.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import {
+  controlErrorResponse,
+  parseIdParam,
+  requireProjectMembership,
+  requireProjectRole,
+} from './helpers.js';
 
 export const controlAgentRoutes = new Hono<AppEnv>();
 
@@ -27,7 +31,7 @@ const updateAgentSchema = z
 
 controlAgentRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const params = Object.fromEntries(new URL(c.req.url).searchParams);
     const query = paginationQuerySchema.parse(params);
     const status = agentStatusFilter.parse(params['status']);
@@ -46,7 +50,7 @@ controlAgentRoutes.get('/', async (c) => {
 
 controlAgentRoutes.get('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const agent = await getAgentById(id);
     if (!agent || agent.projectId !== projectId) {
@@ -60,14 +64,8 @@ controlAgentRoutes.get('/:id', async (c) => {
 
 controlAgentRoutes.patch('/:id', zValidator('json', updateAgentSchema), async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'admin');
     const id = parseIdParam(c.req.param('id'));
-    const user = c.get('currentUser');
-
-    const membership = await findProjectMembership(user.userId, projectId);
-    if (!membership || !membership.roles.includes('admin')) {
-      return problemResponse(c, 403, 'forbidden', 'admin role required');
-    }
 
     const agent = await getAgentById(id);
     if (!agent || agent.projectId !== projectId) {

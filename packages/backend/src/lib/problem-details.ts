@@ -18,7 +18,7 @@ export type ProblemCode =
   | 'conflict'
   | 'internal'
   | 'project_not_selected'
-  | 'unprocessable';
+  | 'service_unavailable';
 
 interface ProblemMeta {
   type: string;
@@ -54,9 +54,9 @@ const PROBLEM_REGISTRY: Record<ProblemCode, ProblemMeta> = {
     type: 'https://hashhive.dev/errors/project-not-selected',
     title: 'Project not selected',
   },
-  unprocessable: {
-    type: 'https://hashhive.dev/errors/unprocessable',
-    title: 'Unprocessable entity',
+  service_unavailable: {
+    type: 'https://hashhive.dev/errors/service-unavailable',
+    title: 'Service unavailable',
   },
 };
 

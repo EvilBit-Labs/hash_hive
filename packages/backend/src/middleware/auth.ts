@@ -6,6 +6,7 @@ import { HTTPException } from 'hono/http-exception';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { auth } from '../lib/auth.js';
+import { parseProjectIdHeader } from '../lib/headers.js';
 import type { AppEnv } from '../types.js';
 
 function authError(message: string): HTTPException {
@@ -15,13 +16,6 @@ function authError(message: string): HTTPException {
       headers: { 'content-type': 'application/json' },
     }),
   });
-}
-
-/** Parse X-Project-Id header into a valid positive integer or null. */
-function parseProjectIdHeader(value: string | undefined): number | null {
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**

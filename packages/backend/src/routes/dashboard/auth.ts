@@ -34,6 +34,10 @@ authRouter.get('/me', requireSession, async (c) => {
 authRouter.post('/me/api-key', requireSession, async (c) => {
   const { userId } = c.get('currentUser');
   const { token, metadata } = await issueUserApiKey(userId);
+  // The raw token is shown to the user exactly once; keep it out of any
+  // intermediary cache or proxy buffer.
+  c.header('Cache-Control', 'no-store');
+  c.header('Pragma', 'no-cache');
   return c.json({ token, metadata });
 });
 

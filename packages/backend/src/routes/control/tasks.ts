@@ -10,7 +10,7 @@ import { problemResponse } from '../../lib/problem-details.js';
 import { getCampaignById } from '../../services/campaigns.js';
 import { getTaskById, listTasks } from '../../services/tasks.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
 
 export const controlTaskRoutes = new Hono<AppEnv>();
 
@@ -23,7 +23,7 @@ const taskFilterSchema = z.object({
 
 controlTaskRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const params = Object.fromEntries(new URL(c.req.url).searchParams);
     const query = paginationQuerySchema.parse(params);
     const filters = taskFilterSchema.parse(params);
@@ -59,7 +59,7 @@ controlTaskRoutes.get('/', async (c) => {
 
 controlTaskRoutes.get('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const task = await getTaskById(id);
     if (!task) return problemResponse(c, 404, 'not_found', 'task not found');

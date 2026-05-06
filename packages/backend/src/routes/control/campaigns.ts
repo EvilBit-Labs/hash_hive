@@ -1,6 +1,9 @@
 /**
  * Control API campaign endpoints. Full CRUD + state transitions —
  * automation's primary entry point for orchestrating cracking work.
+ *
+ * Role gates match the dashboard equivalents: write paths require
+ * `contributor` or `admin`; read paths require any project member.
  */
 
 import { zValidator } from '@hono/zod-validator';
@@ -16,7 +19,12 @@ import {
   updateCampaign,
 } from '../../services/campaigns.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import {
+  controlErrorResponse,
+  parseIdParam,
+  requireProjectMembership,
+  requireProjectRole,
+} from './helpers.js';
 
 export const controlCampaignRoutes = new Hono<AppEnv>();
 
@@ -45,7 +53,7 @@ const transitionTargetSchema = z.enum(['draft', 'running', 'paused', 'completed'
 
 controlCampaignRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const params = Object.fromEntries(new URL(c.req.url).searchParams);
     const query = paginationQuerySchema.parse(params);
     const filters = campaignFilterSchema.parse(params);
@@ -64,7 +72,7 @@ controlCampaignRoutes.get('/', async (c) => {
 
 controlCampaignRoutes.get('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const campaign = await getCampaignById(id);
     if (!campaign || campaign.projectId !== projectId) {
@@ -78,7 +86,7 @@ controlCampaignRoutes.get('/:id', async (c) => {
 
 controlCampaignRoutes.post('/', zValidator('json', createCampaignSchema), async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const user = c.get('currentUser');
     const data = c.req.valid('json');
     const campaign = await createCampaign({
@@ -94,7 +102,7 @@ controlCampaignRoutes.post('/', zValidator('json', createCampaignSchema), async 
 
 controlCampaignRoutes.patch('/:id', zValidator('json', updateCampaignSchema), async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const id = parseIdParam(c.req.param('id'));
     const existing = await getCampaignById(id);
     if (!existing || existing.projectId !== projectId) {
@@ -109,7 +117,7 @@ controlCampaignRoutes.patch('/:id', zValidator('json', updateCampaignSchema), as
 
 controlCampaignRoutes.post('/:id/transition', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
     const id = parseIdParam(c.req.param('id'));
     const existing = await getCampaignById(id);
     if (!existing || existing.projectId !== projectId) {
@@ -127,6 +135,13 @@ controlCampaignRoutes.post('/:id/transition', async (c) => {
     }
     const result = await transitionCampaign(id, parsed.data);
     if ('error' in result) {
+      // Queue-unavailable is a transient infrastructure issue; everything
+      // else is a state-machine conflict. Surface them with the correct
+      // HTTP status so automation can retry the former and treat the
+      // latter as a permanent rejection.
+      if ('code' in result && result.code === 'QUEUE_UNAVAILABLE') {
+        return problemResponse(c, 503, 'service_unavailable', result.error);
+      }
       return problemResponse(c, 409, 'conflict', result.error);
     }
     return c.json(result);

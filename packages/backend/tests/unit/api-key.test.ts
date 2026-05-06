@@ -62,6 +62,19 @@ describe('parseApiKey', () => {
   test('rejects tokens with empty remainder', () => {
     expect(parseApiKey('cst_42_')).toBeNull();
   });
+
+  test('rejects tokens with empty userId (cst__abc)', () => {
+    expect(parseApiKey('cst__abc')).toBeNull();
+  });
+
+  test('rejects userId with leading zero (cst_042_abc)', () => {
+    expect(parseApiKey('cst_042_abc')).toBeNull();
+  });
+
+  test('rejects userId beyond Number.MAX_SAFE_INTEGER', () => {
+    // 9007199254740993 = MAX_SAFE_INTEGER + 2; loses precision in JS Number.
+    expect(parseApiKey('cst_9007199254740993_abc')).toBeNull();
+  });
 });
 
 describe('verifyApiKey', () => {

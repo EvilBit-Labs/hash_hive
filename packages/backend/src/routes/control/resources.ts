@@ -15,7 +15,7 @@ import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import { getResourceById, listResources, type ResourceTable } from '../../services/resources.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
 
 export const controlResourceRoutes = new Hono<AppEnv>();
 
@@ -35,7 +35,7 @@ function resolveKind(c: Context<AppEnv>): ResourceKind | null {
 
 controlResourceRoutes.get('/:kind', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const kind = resolveKind(c);
     if (!kind) {
       return problemResponse(
@@ -56,7 +56,7 @@ controlResourceRoutes.get('/:kind', async (c) => {
 
 controlResourceRoutes.get('/:kind/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const kind = resolveKind(c);
     if (!kind) {
       return problemResponse(

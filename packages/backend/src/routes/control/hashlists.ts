@@ -10,13 +10,13 @@ import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import { getHashListById, getHashListStats, listHashLists } from '../../services/resources.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectId } from './_shared.js';
+import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
 
 export const controlHashListRoutes = new Hono<AppEnv>();
 
 controlHashListRoutes.get('/', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
     const all = await listHashLists(projectId);
     const slice = all.slice(query.offset, query.offset + query.limit);
@@ -28,7 +28,7 @@ controlHashListRoutes.get('/', async (c) => {
 
 controlHashListRoutes.get('/:id', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const hashList = await getHashListById(id, projectId);
     if (!hashList) return problemResponse(c, 404, 'not_found', 'hash list not found');
@@ -40,7 +40,7 @@ controlHashListRoutes.get('/:id', async (c) => {
 
 controlHashListRoutes.get('/:id/stats', async (c) => {
   try {
-    const projectId = requireProjectId(c);
+    const { projectId } = await requireProjectMembership(c);
     const id = parseIdParam(c.req.param('id'));
     const hashList = await getHashListById(id, projectId);
     if (!hashList) return problemResponse(c, 404, 'not_found', 'hash list not found');

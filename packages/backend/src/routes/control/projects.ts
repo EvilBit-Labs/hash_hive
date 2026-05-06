@@ -10,7 +10,7 @@ import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import { getProjectById, getUserProjects } from '../../services/projects.js';
 import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam } from './_shared.js';
+import { controlErrorResponse, parseIdParam } from './helpers.js';
 
 export const controlProjectRoutes = new Hono<AppEnv>();
 
