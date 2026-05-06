@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CrackerUploadModal } from '../components/features/cracker-upload-modal';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { Button } from '../components/ui/button';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorBanner } from '../components/ui/error-banner';
 import { PageHeader } from '../components/ui/page-header';
@@ -57,26 +58,37 @@ function CrackersAdminView() {
   const [engineFilter, setEngineFilter] = useState<EngineFilter>('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CrackerBinary | null>(null);
 
   const queryArgs: Parameters<typeof useCrackerBinaries>[0] = { includeInactive };
   if (engineFilter) {
     queryArgs.engine = engineFilter;
   }
-  const { data: binaries, isLoading, error, refetch } = useCrackerBinaries(queryArgs);
-  const updateBinary = useUpdateCrackerBinary();
-  const deleteBinary = useDeleteCrackerBinary();
+  const { data: binaries, isLoading, error: queryError, refetch } = useCrackerBinaries(queryArgs);
 
-  const handleToggleActive = async (binary: CrackerBinary) => {
-    await updateBinary.mutateAsync({ id: binary.id, isActive: !binary.isActive });
+  const updateBinary = useUpdateCrackerBinary({ onError: setActionError });
+  const deleteBinary = useDeleteCrackerBinary({ onError: setActionError });
+
+  const handleToggleActive = (binary: CrackerBinary) => {
+    setActionError(null);
+    updateBinary.mutate({ id: binary.id, isActive: !binary.isActive });
   };
 
-  const handleDelete = async (binary: CrackerBinary) => {
-    const confirmed = window.confirm(
-      `Delete ${binary.engine} ${binary.version} for ${binary.platform}? This removes the stored binary.`
-    );
-    if (!confirmed) return;
-    await deleteBinary.mutateAsync(binary.id);
+  const handleConfirmDelete = () => {
+    if (!pendingDelete) return;
+    setActionError(null);
+    deleteBinary.mutate(pendingDelete.id, {
+      onSettled: () => setPendingDelete(null),
+    });
   };
+
+  const queryErrorMessage =
+    queryError instanceof Error
+      ? queryError.message
+      : queryError
+        ? 'Failed to load cracker binaries'
+        : null;
 
   return (
     <div className="space-y-4">
@@ -85,11 +97,8 @@ function CrackersAdminView() {
         <Button onClick={() => setUploadOpen(true)}>Upload Binary</Button>
       </div>
 
-      {error && (
-        <ErrorBanner
-          message={error instanceof Error ? error.message : 'Failed to load cracker binaries'}
-        />
-      )}
+      {queryErrorMessage && <ErrorBanner message={queryErrorMessage} />}
+      {actionError && <ErrorBanner message={actionError} />}
 
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-1.5">
@@ -156,8 +165,11 @@ function CrackersAdminView() {
                         {binary.isActive ? 'Deactivate' : 'Activate'}
                       </Button>
                       <Button
-                        variant="secondary"
-                        onClick={() => handleDelete(binary)}
+                        variant="destructive"
+                        onClick={() => {
+                          setActionError(null);
+                          setPendingDelete(binary);
+                        }}
                         disabled={deleteBinary.isPending}
                         className="text-xs"
                       >
@@ -179,6 +191,21 @@ function CrackersAdminView() {
           setUploadOpen(false);
           refetch();
         }}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete cracker binary?"
+        message={
+          pendingDelete
+            ? `This permanently removes the ${pendingDelete.engine} ${pendingDelete.version} binary for ${pendingDelete.platform}, including the stored file.`
+            : ''
+        }
+        confirmLabel="Delete"
+        destructive
+        busy={deleteBinary.isPending}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </div>
   );

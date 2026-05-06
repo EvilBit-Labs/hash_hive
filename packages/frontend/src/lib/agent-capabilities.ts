@@ -8,10 +8,15 @@
  * both into a uniform `{ name, version }` shape so consumers can render
  * a single "Engine / Version" cell without inline branching.
  */
-export interface PrimaryEngine {
-  name: string;
-  version: string;
-}
+import type { EngineDescriptor } from '@hashhive/shared';
+
+/**
+ * Result of `getPrimaryEngine`. Reuses the shared `EngineDescriptor`
+ * shape so backend and frontend agree on field names and the legacy
+ * `hashcatVersion` fallback synthesizes the same record an agent emits
+ * via `capabilities.engines[0]`.
+ */
+export type PrimaryEngine = EngineDescriptor;
 
 interface CapabilitiesShape {
   engines?: Array<{ name?: unknown; version?: unknown }>;
@@ -38,5 +43,7 @@ export function getPrimaryEngine(
 
 export function formatPrimaryEngine(engine: PrimaryEngine | null): string {
   if (!engine) return '—';
-  return `${engine.name} ${engine.version}`;
+  // Trim defends against an agent emitting `{ version: '' }` or whitespace.
+  const version = engine.version.trim();
+  return version ? `${engine.name} ${version}` : engine.name;
 }

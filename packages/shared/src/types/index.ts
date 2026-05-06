@@ -132,6 +132,9 @@ export type EngineDescriptor = z.infer<typeof engineDescriptorSchema>;
  * back-compat with agents that have not adopted `engines[]` yet; consumers
  * that need a single primary engine should fall back to it via a helper
  * like `getPrimaryEngine`.
+ *
+ * Intentionally has NO index signature: typos like `caps.engine` (singular)
+ * should be type errors, and JSONB tolerates extras at runtime regardless.
  */
 export interface AgentCapabilities {
   engines?: EngineDescriptor[];
@@ -141,13 +144,16 @@ export interface AgentCapabilities {
     memory: number;
     computeCapability: string;
   }>;
-  [key: string]: unknown;
 }
 
 export type CrackerCheckUpdateRequest = z.infer<typeof crackerCheckUpdateRequestSchema>;
 export type CrackerCheckUpdateResponse = z.infer<typeof crackerCheckUpdateResponseSchema>;
 export type CreateCrackerBinaryRequest = z.infer<typeof createCrackerBinaryRequestSchema>;
 export type UpdateCrackerBinaryRequest = z.infer<typeof updateCrackerBinaryRequestSchema>;
+
+export type { KnownEngineName, KnownPlatformName } from '../schemas/index.js';
+/** Re-exports of the engine/platform constants and types for callers. */
+export { KNOWN_ENGINES, KNOWN_PLATFORMS } from '../schemas/index.js';
 
 // ─── Task Assignment Types ──────────────────────────────────────────
 

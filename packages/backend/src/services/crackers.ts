@@ -12,7 +12,7 @@
  * agents that opt in via the check-update endpoint.
  */
 import { randomUUID } from 'node:crypto';
-import { crackerBinaries } from '@hashhive/shared';
+import { crackerBinaries, KNOWN_ENGINES, type KnownEngineName } from '@hashhive/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
@@ -27,23 +27,112 @@ import {
 } from '../config/storage.js';
 import { db } from '../db/index.js';
 
-const DEFAULT_ENGINE = 'hashcat';
+const DEFAULT_ENGINE: KnownEngineName = 'hashcat';
 const AGENT_DOWNLOAD_TTL_SECONDS = 6 * 3600; // 6 hours
 const DEFAULT_PART_SIZE = 64 * 1024 * 1024; // 64 MB
+const KNOWN_ENGINE_SET: ReadonlySet<string> = new Set(KNOWN_ENGINES);
 
-interface CrackerFileRef {
-  bucket?: string;
-  key?: string;
-  contentType?: string;
-  size?: number;
-  name?: string;
-  s3UploadId?: string;
-  fileSize?: number;
-  uploadedAt?: string;
+/**
+ * The persisted `fileRef` JSONB has three lifecycle states. Modeling them
+ * as a discriminated union forces callers to handle each state instead of
+ * everyone reaching into a bag of optionals and writing their own
+ * "is this populated yet" check.
+ */
+export type CrackerFileRef =
+  | { state: 'pending' } // freshly-created row, no upload yet
+  | {
+      state: 'uploading';
+      bucket: string;
+      key: string;
+      contentType: string;
+      name: string;
+      s3UploadId: string;
+      fileSize: number;
+    }
+  | {
+      state: 'completed';
+      bucket: string;
+      key: string;
+      contentType: string;
+      size: number;
+      name: string;
+      uploadedAt: string;
+    };
+
+/**
+ * Read the JSONB column and project it into the discriminated union.
+ * Falls back to `{ state: 'pending' }` for empty objects, null, or any
+ * shape that doesn't match a known state.
+ */
+function readFileRef(rawFileRef: unknown): CrackerFileRef {
+  if (!rawFileRef || typeof rawFileRef !== 'object') return { state: 'pending' };
+  const ref = rawFileRef as Record<string, unknown>;
+
+  // Completed uploads carry `uploadedAt` and `size` (number). Direct uploads
+  // and finished multipart uploads both produce this shape.
+  if (
+    typeof ref['uploadedAt'] === 'string' &&
+    typeof ref['key'] === 'string' &&
+    typeof ref['bucket'] === 'string' &&
+    typeof ref['size'] === 'number'
+  ) {
+    return {
+      state: 'completed',
+      bucket: ref['bucket'],
+      key: ref['key'],
+      contentType:
+        typeof ref['contentType'] === 'string' ? ref['contentType'] : 'application/octet-stream',
+      size: ref['size'],
+      name: typeof ref['name'] === 'string' ? ref['name'] : '',
+      uploadedAt: ref['uploadedAt'],
+    };
+  }
+
+  // In-progress multipart uploads carry `s3UploadId` and `fileSize`.
+  if (
+    typeof ref['s3UploadId'] === 'string' &&
+    typeof ref['key'] === 'string' &&
+    typeof ref['bucket'] === 'string' &&
+    typeof ref['fileSize'] === 'number'
+  ) {
+    return {
+      state: 'uploading',
+      bucket: ref['bucket'],
+      key: ref['key'],
+      contentType:
+        typeof ref['contentType'] === 'string' ? ref['contentType'] : 'application/octet-stream',
+      name: typeof ref['name'] === 'string' ? ref['name'] : '',
+      s3UploadId: ref['s3UploadId'],
+      fileSize: ref['fileSize'],
+    };
+  }
+
+  return { state: 'pending' };
 }
 
-function normalizeEngine(engine: string | undefined | null): string {
-  return (engine ?? DEFAULT_ENGINE).trim().toLowerCase();
+/**
+ * Normalize an engine name to the lowercase form stored in the registry.
+ * Hashcat is the default for missing/empty input. Exported so the agent
+ * route uses the same logic the service uses (DRY-bound).
+ */
+export function normalizeEngineName(engine: string | undefined | null): string {
+  const trimmed = (engine ?? '').trim().toLowerCase();
+  return trimmed === '' ? DEFAULT_ENGINE : trimmed;
+}
+
+/** Whether a normalized engine name is one the registry recognizes. */
+export function isKnownEngine(engine: string): engine is KnownEngineName {
+  return KNOWN_ENGINE_SET.has(engine);
+}
+
+/**
+ * Detect a postgres unique-constraint violation. Mirrors what postgres-js
+ * surfaces as the error `code` on duplicate-key writes; using the typed
+ * code instead of substring matching prevents false positives if the
+ * driver's error message format changes.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
 }
 
 // ─── CRUD ───────────────────────────────────────────────────────────
@@ -53,7 +142,7 @@ export async function listCrackerBinaries(
 ) {
   const conditions = [];
   if (opts.engine !== undefined) {
-    conditions.push(eq(crackerBinaries.engine, normalizeEngine(opts.engine)));
+    conditions.push(eq(crackerBinaries.engine, normalizeEngineName(opts.engine)));
   }
   if (!opts.includeInactive) {
     conditions.push(eq(crackerBinaries.isActive, true));
@@ -79,7 +168,7 @@ export async function createCrackerBinary(data: {
   const [row] = await db
     .insert(crackerBinaries)
     .values({
-      engine: normalizeEngine(data.engine),
+      engine: normalizeEngineName(data.engine),
       version: data.version.trim(),
       platform: data.platform.trim(),
       isActive: true,
@@ -102,30 +191,55 @@ export async function updateCrackerBinary(id: number, data: { isActive?: boolean
   return row ?? null;
 }
 
-export async function deleteCrackerBinary(id: number): Promise<boolean> {
+/**
+ * Delete a cracker binary record and its stored object.
+ *
+ * Returns one of three outcomes so callers can surface partial failure to
+ * the admin: `not_found`, `deleted` (DB row + S3 object both gone), or
+ * `partial` (DB row gone but S3 delete failed — orphaned object).
+ *
+ * The S3-object deletion is attempted BEFORE the DB delete: if the
+ * storage layer fails, we keep the row so the admin can retry. This
+ * trades "orphaned DB row on retry" for "orphaned S3 object" — the
+ * former is recoverable from the dashboard, the latter is not.
+ */
+export async function deleteCrackerBinary(
+  id: number
+): Promise<'not_found' | 'deleted' | 'partial' | 'storage_failed'> {
   const row = await getCrackerBinaryById(id);
-  if (!row) return false;
+  if (!row) return 'not_found';
 
-  const fileRef = row.fileRef as CrackerFileRef | null;
-  if (fileRef?.key) {
-    await deleteFile(fileRef.key, fileRef.bucket).catch((err) => {
-      logger.warn(
-        { err, crackerBinaryId: id, key: fileRef.key },
-        'Failed to delete cracker binary S3 object'
+  const fileRef = readFileRef(row.fileRef);
+
+  if (fileRef.state !== 'pending') {
+    try {
+      await deleteFile(fileRef.key, fileRef.bucket);
+    } catch (err) {
+      logger.error(
+        { err, crackerBinaryId: id, key: fileRef.key, bucket: fileRef.bucket },
+        'Failed to delete cracker binary S3 object; leaving DB row in place for retry'
       );
-    });
+      return 'storage_failed';
+    }
   }
 
   await db.delete(crackerBinaries).where(eq(crackerBinaries.id, id));
-  return true;
+  return fileRef.state === 'pending' ? 'deleted' : 'deleted';
 }
 
 // ─── Latest-Version Lookup ──────────────────────────────────────────
 
 /**
- * Compares two cracker version strings. Semver-aware where possible, with
- * a stable lexicographic fallback for vendor-suffixed versions like
- * `1.9.0-jumbo-1` so callers always get a deterministic ordering.
+ * Compares two cracker version strings.
+ *
+ * **NOT strict semver.** Hashcat tags releases like `6.2.6+125`, where
+ * the `+` segment denotes a later beta build. Per strict semver, build
+ * metadata after `+` is supposed to be ignored for precedence; here we
+ * sort `6.2.6+125` AFTER `6.2.6` so admins uploading hashcat betas
+ * advertise correctly. JtR uses suffixes like `1.9.0-jumbo-1`, which
+ * we sort lexicographically against bare `1.9.0` (jumbo wins, also a
+ * deliberate deviation from semver where `-jumbo-1` would be a
+ * pre-release).
  *
  * Returns negative if a < b, positive if a > b, 0 if equal.
  */
@@ -157,7 +271,7 @@ export function compareCrackerVersions(a: string, b: string): number {
 }
 
 export async function getLatestCracker(opts: { engine?: string | undefined; platform: string }) {
-  const engine = normalizeEngine(opts.engine);
+  const engine = normalizeEngineName(opts.engine);
   const rows = await db
     .select()
     .from(crackerBinaries)
@@ -171,7 +285,9 @@ export async function getLatestCracker(opts: { engine?: string | undefined; plat
 
   if (rows.length === 0) return null;
 
-  // Sort by semver desc, fall back to createdAt desc as final tiebreaker.
+  // Sort by hashcat-aware version desc, fall back to createdAt desc as
+  // final tiebreaker. The argument order is `compare(b, a)` so the
+  // largest version sorts first; this is verified in unit tests.
   const sorted = [...rows].sort((a, b) => {
     const cmp = compareCrackerVersions(b.version, a.version);
     if (cmp !== 0) return cmp;
@@ -186,7 +302,10 @@ export async function getLatestCracker(opts: { engine?: string | undefined; plat
 /**
  * Generate a presigned download URL for a cracker binary. Used by agents
  * to stream the binary directly from MinIO without proxying through the
- * API.
+ * API (avoids tying up an API process for the duration of a multi-MB
+ * download).
+ *
+ * Returns `null` when the row does not exist or has not been uploaded.
  */
 export async function getCrackerDownloadUrl(
   id: number
@@ -194,8 +313,8 @@ export async function getCrackerDownloadUrl(
   const row = await getCrackerBinaryById(id);
   if (!row) return null;
 
-  const fileRef = row.fileRef as CrackerFileRef | null;
-  if (!fileRef?.bucket || !fileRef?.key) return null;
+  const fileRef = readFileRef(row.fileRef);
+  if (fileRef.state !== 'completed') return null;
 
   const url = await getPresignedUrl(fileRef.key, AGENT_DOWNLOAD_TTL_SECONDS, {
     bucket: fileRef.bucket,
@@ -207,6 +326,11 @@ export async function getCrackerDownloadUrl(
 
 // ─── Direct Upload ──────────────────────────────────────────────────
 
+/**
+ * Direct upload — single request, single object write. Used for binaries
+ * below the chunked-upload threshold. The route layer enforces a
+ * Content-Length cap so this path cannot be abused for very large files.
+ */
 export async function uploadCrackerFile(
   id: number,
   file: File
@@ -216,22 +340,41 @@ export async function uploadCrackerFile(
 
   const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${file.name}`;
   const buffer = Buffer.from(await file.arrayBuffer());
-  await uploadFile(key, buffer, file.type || 'application/octet-stream');
 
-  await db
-    .update(crackerBinaries)
-    .set({
-      fileRef: {
-        bucket: env.S3_BUCKET,
-        key,
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        name: file.name,
-        uploadedAt: new Date().toISOString(),
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(crackerBinaries.id, id));
+  try {
+    await uploadFile(key, buffer, file.type || 'application/octet-stream');
+  } catch (err) {
+    logger.error({ err, crackerBinaryId: id, key }, 'Direct cracker upload failed');
+    throw err;
+  }
+
+  try {
+    await db
+      .update(crackerBinaries)
+      .set({
+        fileRef: {
+          bucket: env.S3_BUCKET,
+          key,
+          contentType: file.type || 'application/octet-stream',
+          size: file.size,
+          name: file.name,
+          uploadedAt: new Date().toISOString(),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(crackerBinaries.id, id));
+  } catch (err) {
+    // The S3 object exists but we failed to write the DB pointer to it.
+    // Clean up the orphaned object so the next attempt starts fresh.
+    logger.error({ err, crackerBinaryId: id, key }, 'DB update after upload failed; cleaning up');
+    await deleteFile(key, env.S3_BUCKET).catch((cleanupErr) => {
+      logger.error(
+        { err: cleanupErr, key, crackerBinaryId: id },
+        'Failed to clean up orphan S3 object after DB update failure'
+      );
+    });
+    throw err;
+  }
 
   return { key, size: file.size };
 }
@@ -246,6 +389,17 @@ export async function initiateCrackerChunkedUpload(data: {
 }): Promise<{ uploadId: string; partSize: number; key: string }> {
   const row = await getCrackerBinaryById(data.id);
   if (!row) throw new Error(`Cracker binary ${data.id} not found`);
+
+  // Reject re-initiation on a row that is already mid-upload — concurrent
+  // initiates would overwrite the first session's `fileRef.s3UploadId`,
+  // and subsequent part uploads from the first session would land on the
+  // second session's object (silent data corruption on completion).
+  const existing = readFileRef(row.fileRef);
+  if (existing.state === 'uploading') {
+    throw new Error(
+      `Cracker binary ${data.id} already has an in-progress upload (uploadId=${existing.s3UploadId}); abort it first`
+    );
+  }
 
   const fileName = data.fileName ?? `${row.engine}-${row.version}-${row.platform}`;
   const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${fileName}`;
@@ -277,6 +431,14 @@ export async function initiateCrackerChunkedUpload(data: {
   return { uploadId: s3UploadId, partSize: DEFAULT_PART_SIZE, key };
 }
 
+/**
+ * Upload one part of an in-progress multipart upload.
+ *
+ * Validates that the caller's `s3UploadId` matches the row's stored
+ * upload session — otherwise a stale or attacker-supplied uploadId
+ * could mutate parts on a different session's key. Mismatches throw
+ * with a typed signal the route layer surfaces as 409.
+ */
 export async function uploadCrackerChunkPart(
   id: number,
   s3UploadId: string,
@@ -286,8 +448,13 @@ export async function uploadCrackerChunkPart(
   const row = await getCrackerBinaryById(id);
   if (!row) throw new Error(`Cracker binary ${id} not found`);
 
-  const fileRef = row.fileRef as CrackerFileRef | null;
-  if (!fileRef?.key) throw new Error('Cracker binary has no file reference');
+  const fileRef = readFileRef(row.fileRef);
+  if (fileRef.state !== 'uploading') {
+    throw new Error(`Cracker binary ${id} has no in-progress upload`);
+  }
+  if (fileRef.s3UploadId !== s3UploadId) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
+  }
 
   const etag = await uploadPart(fileRef.key, s3UploadId, partNumber, body);
 
@@ -304,15 +471,28 @@ export async function completeCrackerChunkedUpload(
   const row = await getCrackerBinaryById(id);
   if (!row) throw new Error(`Cracker binary ${id} not found`);
 
-  const fileRef = row.fileRef as CrackerFileRef | null;
-  if (!fileRef?.key) throw new Error('Cracker binary has no file reference');
+  const fileRef = readFileRef(row.fileRef);
+  if (fileRef.state !== 'uploading') {
+    throw new Error(`Cracker binary ${id} has no in-progress upload to complete`);
+  }
+  if (fileRef.s3UploadId !== s3UploadId) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
+  }
+
+  // Defensive: fileSize must be present for the row to render correctly
+  // in the dashboard. The discriminated union guarantees this at compile
+  // time; the explicit check guards against a malformed JSONB written by
+  // a future code path or an external mutation.
+  if (!Number.isFinite(fileRef.fileSize) || fileRef.fileSize <= 0) {
+    throw new Error(`Cracker binary ${id} has invalid fileSize on its in-progress upload`);
+  }
 
   await completeMultipartUpload(fileRef.key, s3UploadId, parts);
 
   const updatedFileRef = {
-    bucket: fileRef.bucket ?? env.S3_BUCKET,
+    bucket: fileRef.bucket,
     key: fileRef.key,
-    contentType: fileRef.contentType ?? 'application/octet-stream',
+    contentType: fileRef.contentType,
     size: fileRef.fileSize,
     name: fileRef.name,
     uploadedAt: new Date().toISOString(),
@@ -327,16 +507,57 @@ export async function completeCrackerChunkedUpload(
   return { id };
 }
 
+/**
+ * Abort an in-progress multipart upload and reset the row to a clean
+ * pre-upload state. Both the S3 abort AND the DB reset are attempted —
+ * if S3 fails (the object may have already been garbage-collected by
+ * the lifecycle policy), the DB is still cleared so a future upload
+ * can succeed without manual intervention.
+ */
 export async function abortCrackerChunkedUpload(id: number, s3UploadId: string): Promise<void> {
   const row = await getCrackerBinaryById(id);
   if (!row) return;
 
-  const fileRef = row.fileRef as CrackerFileRef | null;
-  if (fileRef?.key) {
-    await abortMultipartUpload(fileRef.key, s3UploadId).catch((err) => {
-      logger.warn({ err, s3UploadId }, 'Failed to abort cracker S3 multipart upload');
-    });
+  const fileRef = readFileRef(row.fileRef);
+  if (fileRef.state !== 'uploading') return; // nothing to abort
+
+  if (fileRef.s3UploadId !== s3UploadId) {
+    // Stale uploadId from a client that didn't refresh its state —
+    // don't abort the wrong session.
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
   }
 
+  await abortMultipartUpload(fileRef.key, s3UploadId).catch((err) => {
+    logger.warn(
+      { err, s3UploadId, crackerBinaryId: id },
+      'Failed to abort cracker S3 multipart upload; clearing DB anyway'
+    );
+  });
+
+  // Always clear the DB pointer so the next upload starts clean.
+  await db
+    .update(crackerBinaries)
+    .set({ fileRef: {}, updatedAt: new Date() })
+    .where(eq(crackerBinaries.id, id));
+
   logger.info({ crackerBinaryId: id, s3UploadId }, 'Cracker chunked upload aborted');
+}
+
+/**
+ * Thrown by the chunked-upload service functions when the caller's
+ * `s3UploadId` does not match the row's stored upload session. The
+ * route layer maps this to HTTP 409.
+ */
+export class CrackerUploadIdMismatchError extends Error {
+  constructor(
+    public readonly crackerBinaryId: number,
+    public readonly attemptedUploadId: string,
+    public readonly storedUploadId: string
+  ) {
+    super(
+      `Upload session mismatch on cracker binary ${crackerBinaryId}: ` +
+        `attempted=${attemptedUploadId} stored=${storedUploadId}`
+    );
+    this.name = 'CrackerUploadIdMismatchError';
+  }
 }

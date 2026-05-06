@@ -139,6 +139,10 @@ export const agents = pgTable(
      * back-compat with agents that have not adopted `engines[]` yet and
      * will be removed in a follow-up cleanup once all agents emit the new
      * field.
+     *
+     * Removal is tracked alongside #94 (Cracker Binary Management); once
+     * the agent project emits `engines[]` in heartbeat capabilities, drop
+     * this column and any callers reading it.
      */
     crackerVersion: varchar('cracker_version', { length: 100 }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),

@@ -1,12 +1,20 @@
 /**
  * Unit tests for the cracker service module.
  *
- * Pure-function tests cover the version comparator and engine normalization
- * — the deterministic logic that does not require a database round-trip.
- * DB-bound integration is exercised through the route tests in U3/U4.
+ * Pure-function tests cover the version comparator, engine normalization,
+ * known-engine detection, and unique-violation detection — all the
+ * deterministic logic that does not require a database round-trip. The
+ * `getLatestCracker` selection algorithm is exercised by sorting fixture
+ * arrays through the comparator with the same `(b, a)` argument order
+ * the service uses; the DB query itself is covered in route contract tests.
  */
 import { describe, expect, test } from 'bun:test';
-import { compareCrackerVersions } from '../../src/services/crackers.js';
+import {
+  compareCrackerVersions,
+  isKnownEngine,
+  isUniqueViolation,
+  normalizeEngineName,
+} from '../../src/services/crackers.js';
 
 describe('compareCrackerVersions', () => {
   test('returns 0 for equal versions', () => {
@@ -50,5 +58,70 @@ describe('compareCrackerVersions', () => {
 
   test('higher number beats vendor suffix on lower number', () => {
     expect(compareCrackerVersions('6.2.7', '6.2.6+125')).toBeGreaterThan(0);
+  });
+
+  test('reverse-argument sort produces highest-version-first ordering', () => {
+    // This mirrors getLatestCracker: rows.sort((a, b) => compareCrackerVersions(b.version, a.version)).
+    // A regression that swapped the argument order would always return the oldest binary.
+    const versions = ['6.2.5', '6.2.6+125', '6.2.6', '6.2.7'];
+    const sorted = [...versions].sort((a, b) => compareCrackerVersions(b, a));
+    expect(sorted[0]).toBe('6.2.7');
+    expect(sorted[sorted.length - 1]).toBe('6.2.5');
+  });
+});
+
+describe('normalizeEngineName', () => {
+  test('lowercases engine names so case cannot bypass uniqueness', () => {
+    expect(normalizeEngineName('Hashcat')).toBe('hashcat');
+    expect(normalizeEngineName('HASHCAT')).toBe('hashcat');
+  });
+
+  test('trims surrounding whitespace', () => {
+    expect(normalizeEngineName('  hashcat  ')).toBe('hashcat');
+    expect(normalizeEngineName('\thashcat\n')).toBe('hashcat');
+  });
+
+  test('defaults missing input to hashcat', () => {
+    expect(normalizeEngineName(undefined)).toBe('hashcat');
+    expect(normalizeEngineName(null)).toBe('hashcat');
+    expect(normalizeEngineName('')).toBe('hashcat');
+    expect(normalizeEngineName('   ')).toBe('hashcat');
+  });
+
+  test('passes through other valid engine names lowercased', () => {
+    expect(normalizeEngineName('john')).toBe('john');
+    expect(normalizeEngineName('John')).toBe('john');
+  });
+});
+
+describe('isKnownEngine', () => {
+  test('accepts the registered engines', () => {
+    expect(isKnownEngine('hashcat')).toBe(true);
+    expect(isKnownEngine('john')).toBe(true);
+  });
+
+  test('rejects unknown / typo engines', () => {
+    expect(isKnownEngine('hashca')).toBe(false);
+    expect(isKnownEngine('Hashcat')).toBe(false); // case-sensitive — caller should normalize first
+    expect(isKnownEngine('')).toBe(false);
+  });
+});
+
+describe('isUniqueViolation', () => {
+  test('detects postgres unique-violation by typed code', () => {
+    const err = Object.assign(new Error('duplicate key'), { code: '23505' });
+    expect(isUniqueViolation(err)).toBe(true);
+  });
+
+  test('returns false for non-unique-violation errors', () => {
+    expect(isUniqueViolation(new Error('boom'))).toBe(false);
+    expect(isUniqueViolation({ code: '42P01' })).toBe(false); // undefined_table
+    expect(isUniqueViolation('string error')).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation(undefined)).toBe(false);
+  });
+
+  test('handles plain objects with the right code', () => {
+    expect(isUniqueViolation({ code: '23505', message: 'whatever' })).toBe(true);
   });
 });

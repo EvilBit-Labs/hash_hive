@@ -13,6 +13,8 @@ import {
   compareCrackerVersions,
   getCrackerDownloadUrl,
   getLatestCracker,
+  isKnownEngine,
+  normalizeEngineName,
 } from '../../services/crackers.js';
 import { getAgentDownloadUrl } from '../../services/resources.js';
 import {
@@ -215,13 +217,29 @@ agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
  * and a presigned download URL when the agent is behind. Missing `engine`
  * defaults to `'hashcat'` for back-compat with agents that have not adopted
  * the engines[] capability advertisement.
+ *
+ * Engine normalization delegates to the service-layer helper so the route
+ * and service can never disagree about what `'Hashcat'` means.
  */
 agentRoutes.post(
   '/cracker/check-update',
   zValidator('json', crackerCheckUpdateRequestSchema),
   async (c) => {
     const data = c.req.valid('json');
-    const engine = (data.engine ?? 'hashcat').trim().toLowerCase();
+    const engine = normalizeEngineName(data.engine);
+
+    // A misconfigured agent advertising `engine: "hashca"` would otherwise
+    // poll forever and silently appear up-to-date. Log a warn so an
+    // operator searching logs for "stale agent" can find it. We still
+    // return `updateAvailable: false` (not 400) — the agent contract is
+    // soft on engine names so unknown values don't break the update loop.
+    if (!isKnownEngine(engine)) {
+      logger.warn(
+        { engine, rawEngine: data.engine, platform: data.platform },
+        'Cracker check-update from agent advertising unknown engine; treating as no update'
+      );
+      return c.json({ updateAvailable: false, engine });
+    }
 
     const latest = await getLatestCracker({ engine, platform: data.platform });
 
@@ -232,10 +250,11 @@ agentRoutes.post(
     const downloadInfo = await getCrackerDownloadUrl(latest.id);
     if (!downloadInfo) {
       // Latest record exists but lacks an uploaded file — treat as no update
-      // available rather than failing the agent's poll.
+      // available rather than failing the agent's poll. Logged at warn so
+      // an admin can find rows that were created but never uploaded.
       logger.warn(
         { crackerBinaryId: latest.id, engine, platform: data.platform },
-        'Latest cracker binary has no file ref'
+        'Latest cracker binary has no completed file; agent will not see this version'
       );
       return c.json({ updateAvailable: false, engine });
     }
