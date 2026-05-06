@@ -233,17 +233,22 @@ export async function updateCrackerBinary(id: number, data: { isActive?: boolean
  * Delete a cracker binary record and its stored object.
  *
  * Returns one of three outcomes so callers can surface partial failure to
- * the admin: `not_found`, `deleted` (DB row + S3 object both gone), or
- * `partial` (DB row gone but S3 delete failed — orphaned object).
+ * the admin:
+ * - `not_found`: no row matched the id.
+ * - `deleted`: row removed, and the stored object was either absent
+ *   (state `'pending'`), aborted (state `'uploading'`), or deleted (state
+ *   `'completed'`).
+ * - `storage_failed`: the storage cleanup (abort or delete) errored, so
+ *   the DB row was preserved for the admin to retry.
  *
- * The S3-object deletion is attempted BEFORE the DB delete: if the
- * storage layer fails, we keep the row so the admin can retry. This
- * trades "orphaned DB row on retry" for "orphaned S3 object" — the
- * former is recoverable from the dashboard, the latter is not.
+ * The storage operation runs BEFORE the DB delete: if storage fails the
+ * row stays put so the admin can retry. This trades "orphaned DB row
+ * on retry" for "orphaned S3 object" — the former is recoverable from
+ * the dashboard, the latter is not.
  */
 export async function deleteCrackerBinary(
   id: number
-): Promise<'not_found' | 'deleted' | 'partial' | 'storage_failed'> {
+): Promise<'not_found' | 'deleted' | 'storage_failed'> {
   const row = await getCrackerBinaryById(id);
   if (!row) return 'not_found';
 

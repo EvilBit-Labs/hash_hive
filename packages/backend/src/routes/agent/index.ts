@@ -227,6 +227,12 @@ agentRoutes.post(
   async (c) => {
     const data = c.req.valid('json');
     const engine = normalizeEngineName(data.engine);
+    // Trim version + platform so an agent sending `'6.2.7 '` (trailing
+    // whitespace) doesn't compare unequal against the registry's stored
+    // value. The comparator treats whitespace as part of the version
+    // string, so the trim has to happen here.
+    const platform = data.platform.trim();
+    const version = data.version.trim();
 
     // A misconfigured agent advertising `engine: "hashca"` would otherwise
     // poll forever and silently appear up-to-date. Log a warn so an
@@ -235,15 +241,15 @@ agentRoutes.post(
     // soft on engine names so unknown values don't break the update loop.
     if (!isKnownEngine(engine)) {
       logger.warn(
-        { engine, rawEngine: data.engine, platform: data.platform },
+        { engine, rawEngine: data.engine, platform },
         'Cracker check-update from agent advertising unknown engine; treating as no update'
       );
       return c.json({ updateAvailable: false, engine });
     }
 
-    const latest = await getLatestCracker({ engine, platform: data.platform });
+    const latest = await getLatestCracker({ engine, platform });
 
-    if (!latest || compareCrackerVersions(latest.version, data.version) <= 0) {
+    if (!latest || compareCrackerVersions(latest.version, version) <= 0) {
       return c.json({ updateAvailable: false, engine });
     }
 

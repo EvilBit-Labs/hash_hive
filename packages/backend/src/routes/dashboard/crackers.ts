@@ -18,6 +18,7 @@ import { requireSession } from '../../middleware/auth.js';
 import { requireRole } from '../../middleware/rbac.js';
 import {
   abortCrackerChunkedUpload,
+  CRACKER_DIRECT_UPLOAD_MAX_BYTES,
   CrackerBinaryValidationError,
   CrackerUploadIdMismatchError,
   completeCrackerChunkedUpload,
@@ -35,12 +36,16 @@ import type { AppEnv } from '../../types.js';
 
 const crackerRoutes = new Hono<AppEnv>();
 
-// Direct uploads are capped well below the chunked threshold so admin
-// clients route large binaries through the multipart path. The cap
-// applies to Content-Length (set by the browser FormData encoder).
-const DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
-
 const S3_MAX_PART_NUMBER = 10_000; // S3 multipart part-number range is [1, 10000]
+
+// multipart/form-data adds boundary + per-field headers around the file
+// payload. A request whose Content-Length is just above the file-size
+// cap still has a valid file under the cap. Pad the Content-Length
+// guard by 1 MB (well above any realistic boundary/header overhead) so
+// it remains a cheap DoS gate without rejecting valid uploads near the
+// boundary. The authoritative `file.size` check still runs after
+// parseBody so legitimately oversized files are rejected.
+const DIRECT_UPLOAD_CONTENT_LENGTH_MAX_BYTES = CRACKER_DIRECT_UPLOAD_MAX_BYTES + 1024 * 1024;
 
 crackerRoutes.use('*', requireSession);
 
@@ -212,15 +217,18 @@ crackerRoutes.post('/:id/upload', requireRole('admin'), async (c) => {
   }
 
   // Refuse direct uploads above the cap before we materialize the body.
-  // Clients with larger files must use the chunked endpoints below.
+  // The Content-Length cap is intentionally larger than the file-size
+  // cap to allow for multipart/form-data boundary + header overhead;
+  // the authoritative `file.size` check below rejects oversized files
+  // precisely. Clients with larger files must use the chunked endpoints.
   const contentLengthHeader = c.req.header('content-length');
   const contentLength = contentLengthHeader ? Number(contentLengthHeader) : NaN;
-  if (Number.isFinite(contentLength) && contentLength > DIRECT_UPLOAD_MAX_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > DIRECT_UPLOAD_CONTENT_LENGTH_MAX_BYTES) {
     return c.json(
       {
         error: {
           code: 'PAYLOAD_TOO_LARGE',
-          message: `Direct upload exceeds the ${DIRECT_UPLOAD_MAX_BYTES} byte cap; use the chunked upload endpoints for larger binaries.`,
+          message: `Direct upload exceeds the ${CRACKER_DIRECT_UPLOAD_MAX_BYTES} byte file-size cap; use the chunked upload endpoints for larger binaries.`,
         },
       },
       413
@@ -245,14 +253,15 @@ crackerRoutes.post('/:id/upload', requireRole('admin'), async (c) => {
       );
     }
 
-    // Same cap, applied to the actual file size in case Content-Length
-    // wasn't sent or was understated.
-    if (file.size > DIRECT_UPLOAD_MAX_BYTES) {
+    // Authoritative cap on the actual file payload (Content-Length may
+    // be absent or understated, and includes multipart overhead that
+    // file.size does not).
+    if (file.size > CRACKER_DIRECT_UPLOAD_MAX_BYTES) {
       return c.json(
         {
           error: {
             code: 'PAYLOAD_TOO_LARGE',
-            message: `File exceeds the ${DIRECT_UPLOAD_MAX_BYTES} byte direct-upload cap.`,
+            message: `File exceeds the ${CRACKER_DIRECT_UPLOAD_MAX_BYTES} byte direct-upload cap.`,
           },
         },
         413
