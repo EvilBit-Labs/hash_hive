@@ -42,7 +42,7 @@ export function getPrimaryEngine(
 }
 
 export function formatPrimaryEngine(engine: PrimaryEngine | null): string {
-  if (!engine) return '—';
+  if (!engine) return '-';
   // Trim defends against an agent emitting `{ version: '' }` or whitespace.
   const version = engine.version.trim();
   return version ? `${engine.name} ${version}` : engine.name;

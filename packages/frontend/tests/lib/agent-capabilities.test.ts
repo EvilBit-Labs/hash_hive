@@ -46,8 +46,10 @@ describe('getPrimaryEngine', () => {
 });
 
 describe('formatPrimaryEngine', () => {
-  test('renders dash for null engine', () => {
-    expect(formatPrimaryEngine(null)).toBe('—');
+  test('renders ASCII dash for null engine', () => {
+    // ASCII placeholder per the project's UI text guideline (no Unicode
+    // em/en dashes in dashboard text).
+    expect(formatPrimaryEngine(null)).toBe('-');
   });
 
   test('renders name + version', () => {

@@ -249,7 +249,21 @@ export async function deleteCrackerBinary(
 
   const fileRef = readFileRef(row.fileRef);
 
-  if (fileRef.state !== 'pending') {
+  // Branch on lifecycle state. An in-progress multipart upload needs
+  // `abortMultipartUpload` to free MinIO's stored parts; calling
+  // `deleteFile` on the key would leave orphaned parts behind because
+  // the assembled object doesn't exist yet.
+  if (fileRef.state === 'uploading') {
+    try {
+      await abortMultipartUpload(fileRef.key, fileRef.s3UploadId);
+    } catch (err) {
+      logger.error(
+        { err, crackerBinaryId: id, key: fileRef.key, s3UploadId: fileRef.s3UploadId },
+        'Failed to abort cracker S3 multipart upload during delete; leaving DB row in place for retry'
+      );
+      return 'storage_failed';
+    }
+  } else if (fileRef.state === 'completed') {
     try {
       await deleteFile(fileRef.key, fileRef.bucket);
     } catch (err) {
@@ -262,7 +276,7 @@ export async function deleteCrackerBinary(
   }
 
   await db.delete(crackerBinaries).where(eq(crackerBinaries.id, id));
-  return fileRef.state === 'pending' ? 'deleted' : 'deleted';
+  return 'deleted';
 }
 
 // ─── Latest-Version Lookup ──────────────────────────────────────────
@@ -300,12 +314,46 @@ export function compareCrackerVersions(a: string, b: string): number {
     if (an !== bn) return an - bn;
   }
 
-  // Tiebreak on the suffix lexicographically; an empty suffix wins
-  // (i.e. `6.2.6` is "older than" `6.2.6+125` so `+125` sorts later).
+  // Tiebreak on the suffix; an empty suffix wins (so `6.2.6` is older
+  // than `6.2.6+125`). For non-empty suffixes, compare token-by-token
+  // splitting on `.`, `-`, `+` so numeric segments sort numerically
+  // (`+10` after `+9`) and non-numeric tokens fall back to lex compare.
   if (pa.rest === pb.rest) return 0;
   if (pa.rest === '') return -1;
   if (pb.rest === '') return 1;
-  return pa.rest < pb.rest ? -1 : 1;
+  return compareSuffixTokens(pa.rest, pb.rest);
+}
+
+function compareSuffixTokens(a: string, b: string): number {
+  // Split on the conventional version delimiters. Empty leading tokens
+  // (e.g. from a leading `+`) are preserved so `+10` and `+9` compare
+  // their numeric tail correctly.
+  const tokensA = a.split(/[.+-]/);
+  const tokensB = b.split(/[.+-]/);
+
+  const len = Math.max(tokensA.length, tokensB.length);
+  for (let i = 0; i < len; i++) {
+    const ta = tokensA[i] ?? '';
+    const tb = tokensB[i] ?? '';
+    if (ta === tb) continue;
+    if (ta === '') return -1; // shorter wins -> older
+    if (tb === '') return 1;
+
+    const na = /^\d+$/.test(ta) ? Number.parseInt(ta, 10) : NaN;
+    const nb = /^\d+$/.test(tb) ? Number.parseInt(tb, 10) : NaN;
+    const aIsNum = !Number.isNaN(na);
+    const bIsNum = !Number.isNaN(nb);
+
+    if (aIsNum && bIsNum) {
+      if (na !== nb) return na - nb;
+      continue;
+    }
+    // Numeric tokens sort before non-numeric ones (`-1` < `-jumbo`).
+    if (aIsNum) return -1;
+    if (bIsNum) return 1;
+    return ta < tb ? -1 : 1;
+  }
+  return 0;
 }
 
 export async function getLatestCracker(opts: { engine?: string | undefined; platform: string }) {
@@ -396,8 +444,9 @@ export async function uploadCrackerFile(
     throw err;
   }
 
+  let updatedIds: Array<{ id: number }> = [];
   try {
-    await db
+    updatedIds = await db
       .update(crackerBinaries)
       .set({
         fileRef: {
@@ -410,7 +459,8 @@ export async function uploadCrackerFile(
         },
         updatedAt: new Date(),
       })
-      .where(eq(crackerBinaries.id, id));
+      .where(eq(crackerBinaries.id, id))
+      .returning({ id: crackerBinaries.id });
   } catch (err) {
     // The S3 object exists but we failed to write the DB pointer to it.
     // Clean up the orphaned object so the next attempt starts fresh.
@@ -422,6 +472,25 @@ export async function uploadCrackerFile(
       );
     });
     throw err;
+  }
+
+  // The lookup at line ~434 confirmed the row existed, but another admin
+  // could have deleted it in the window between the lookup and this
+  // update. A zero-row update is success at the DB level but means the
+  // freshly-uploaded S3 object has no row pointing at it — clean it up
+  // and surface the race as an error rather than silently leaking.
+  if (updatedIds.length === 0) {
+    logger.error(
+      { crackerBinaryId: id, key },
+      'Cracker binary row vanished during upload; cleaning up orphan S3 object'
+    );
+    await deleteFile(key, env.S3_BUCKET).catch((cleanupErr) => {
+      logger.error(
+        { err: cleanupErr, key, crackerBinaryId: id },
+        'Failed to clean up orphan S3 object after concurrent delete'
+      );
+    });
+    throw new Error(`Cracker binary ${id} disappeared during upload`);
   }
 
   return { key, size: file.size };

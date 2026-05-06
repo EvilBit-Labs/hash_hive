@@ -19,7 +19,7 @@ const ENGINES = ['', 'hashcat', 'john'] as const;
 type EngineFilter = (typeof ENGINES)[number];
 
 function formatFileSize(bytes: number | undefined): string {
-  if (!bytes || bytes <= 0) return '—';
+  if (!bytes || bytes <= 0) return '-';
   const units = ['B', 'KB', 'MB', 'GB'];
   let value = bytes;
   let unit = 0;
@@ -34,7 +34,7 @@ function formatDate(iso: string): string {
   // `new Date(...)` does not throw on invalid input — it returns a Date
   // whose internal time is NaN. The previous try/catch never triggered
   // and the UI showed "Invalid Date". Validate via getTime() instead.
-  if (!iso) return '—';
+  if (!iso) return '-';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleDateString();

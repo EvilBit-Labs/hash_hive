@@ -57,7 +57,14 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
   // message from the failing upload mutation.
   const rollbackBinary = useDeleteCrackerBinary();
 
-  const isUploading = createBinary.isPending || directUpload.isPending || chunkedUpload.isPending;
+  // Include the rollback's pending state so a quick retry after an
+  // upload failure can't race the cleanup and hit a 409 on the
+  // (engine, version, platform) composite uniqueness constraint.
+  const isUploading =
+    createBinary.isPending ||
+    directUpload.isPending ||
+    chunkedUpload.isPending ||
+    rollbackBinary.isPending;
   const canSubmit = !!file && version.trim().length > 0 && !isUploading;
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -139,10 +146,12 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
     } catch (err) {
       // Roll back the binary row so the user can retry without hitting a
       // 409 from the (engine, version, platform) composite uniqueness
-      // constraint. The error message has already been surfaced via the
-      // mutation's onError callback.
+      // constraint. Awaited so the form stays disabled until cleanup
+      // completes — the rollback mutation's pending state is part of
+      // `isUploading`, but a retry triggered between the catch and the
+      // mutation actually firing would otherwise race.
       if (createdId !== null) {
-        void rollback(createdId);
+        await rollback(createdId);
       }
       // err is already reflected in `error` via onError; nothing more to do.
       void err;

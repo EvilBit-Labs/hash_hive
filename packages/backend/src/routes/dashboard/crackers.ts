@@ -369,7 +369,30 @@ const completeUploadSchema = z.object({
         etag: z.string().min(1),
       })
     )
-    .min(1),
+    .min(1)
+    .superRefine((parts, ctx) => {
+      // S3 only validates these invariants after every part has been
+      // uploaded. Catching them here surfaces typed 400s before we
+      // call out to S3 with a definitely-broken parts list.
+      const seen = new Set<number>();
+      let prev = 0;
+      for (const part of parts) {
+        if (seen.has(part.partNumber)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Duplicate partNumber ${part.partNumber}`,
+          });
+        }
+        if (part.partNumber <= prev) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'parts must be sorted by partNumber ascending',
+          });
+        }
+        seen.add(part.partNumber);
+        prev = part.partNumber;
+      }
+    }),
   crackerBinaryId: z.number().int().positive(),
 });
 
