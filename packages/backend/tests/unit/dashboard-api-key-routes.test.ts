@@ -79,7 +79,10 @@ describe('dashboard /me/api-key routes', () => {
     const res = await authRoutes.request('/me/api-key');
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ hasKey: false, prefix: null, lastUsedAt: null });
+    // Discriminated union: hasKey:false carries no other fields (the
+    // discriminator alone is sufficient — no prefix or lastUsedAt to
+    // surface when there is no key).
+    expect(body).toEqual({ hasKey: false });
   });
 
   it('POST issues a new key and returns the raw token once', async () => {

@@ -1,7 +1,13 @@
-import { projects, projectUsers, users } from '@hashhive/shared';
+import {
+  type ApiKeyMetadata,
+  type IssueApiKeyResponse,
+  projects,
+  projectUsers,
+  users,
+} from '@hashhive/shared';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { generateApiKey } from '../lib/api-key.js';
+import { API_KEY_PREFIX, generateApiKey } from '../lib/api-key.js';
 
 /** Checks if a user is a member of a project. Returns the membership row or null. */
 export async function findProjectMembership(userId: number, projectId: number) {
@@ -48,10 +54,15 @@ export async function getUserWithProjects(userId: number) {
 
 // ─── API Key Management ─────────────────────────────────────────────
 
-export interface ApiKeyMetadata {
-  hasKey: boolean;
-  prefix: string | null;
-  lastUsedAt: string | null;
+/**
+ * Build the masked-prefix string shown to the user after the raw-token
+ * reveal is dismissed. Single source of truth for both the issue path
+ * (returned alongside the raw token) and the get-metadata path (returned
+ * when the user revisits the page). Keeping these unified guards against
+ * UI drift if the prefix shape ever changes.
+ */
+function prefixForUser(userId: number): string {
+  return `${API_KEY_PREFIX}_${userId}_…`;
 }
 
 /**
@@ -59,9 +70,7 @@ export interface ApiKeyMetadata {
  * Returns the raw token (shown once) plus metadata. The hash is the only
  * thing that gets persisted.
  */
-export async function issueUserApiKey(
-  userId: number
-): Promise<{ token: string; metadata: ApiKeyMetadata }> {
+export async function issueUserApiKey(userId: number): Promise<IssueApiKeyResponse> {
   const { token, hash } = await generateApiKey(userId);
   await db
     .update(users)
@@ -71,7 +80,7 @@ export async function issueUserApiKey(
     token,
     metadata: {
       hasKey: true,
-      prefix: maskedPrefix(token),
+      prefix: prefixForUser(userId),
       lastUsedAt: null,
     },
   };
@@ -94,21 +103,12 @@ export async function getUserApiKeyMetadata(userId: number): Promise<ApiKeyMetad
     .where(eq(users.id, userId))
     .limit(1);
 
-  if (!row || !row.apiKeyHash) {
-    return { hasKey: false, prefix: null, lastUsedAt: null };
+  if (!row?.apiKeyHash) {
+    return { hasKey: false };
   }
   return {
     hasKey: true,
-    prefix: `cst_${userId}_…`,
+    prefix: prefixForUser(userId),
     lastUsedAt: row.apiKeyLastUsedAt ? row.apiKeyLastUsedAt.toISOString() : null,
   };
-}
-
-function maskedPrefix(token: string): string {
-  // First two segments + ellipsis: matches the placeholder shown after the
-  // raw-token reveal is dismissed.
-  const firstSep = token.indexOf('_');
-  const secondSep = token.indexOf('_', firstSep + 1);
-  if (firstSep < 0 || secondSep < 0) return `${token.slice(0, 8)}…`;
-  return `${token.slice(0, secondSep)}_…`;
 }

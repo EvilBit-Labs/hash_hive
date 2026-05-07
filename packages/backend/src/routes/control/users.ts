@@ -2,10 +2,9 @@
  * Control API user endpoints.
  *
  * - `GET /users/me` -- caller's own profile, no project scoping.
- * - `GET /users` -- list of users who are members of the active project,
- *   admin-only. The earlier implementation queried the global `users`
- *   table, which let any project admin enumerate every account in the
- *   system. The fix scopes the listing through `project_users`.
+ * - `GET /users` -- members of the active project (admin-only). Listing
+ *   is scoped through `project_users` so a project admin can only see
+ *   members of the active project, not every account in the system.
  * - `GET /users/:id` -- single user, but only when that user is a member
  *   of the active project.
  */

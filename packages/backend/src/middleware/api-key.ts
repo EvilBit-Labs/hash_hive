@@ -21,7 +21,7 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
-import { parseApiKey, verifyApiKey } from '../lib/api-key.js';
+import { BCRYPT_COST, parseApiKey, verifyApiKey } from '../lib/api-key.js';
 import { parseProjectIdHeader } from '../lib/headers.js';
 import { problemResponse } from '../lib/problem-details.js';
 import type { AppEnv } from '../types.js';
@@ -29,17 +29,20 @@ import type { AppEnv } from '../types.js';
 const ACTIVE_STATUS = 'active';
 
 /**
- * Pre-computed bcrypt hash of an unguessable string. Used as a sentinel
- * when the user lookup misses so the auth path always pays the same
- * bcrypt cost. Generated once at module load; the input value never
- * leaves this module and is not a real credential.
+ * Pre-computed bcrypt hash used as a timing sentinel on the user-missing
+ * branch. Generated lazily once during the first import via top-level
+ * await — adds ≈ one bcrypt cost (~250ms at cost 12) to cold start.
+ * Acceptable because the alternative (lazy + cached on first miss)
+ * leaks a one-time miss-vs-hit timing differential.
+ *
+ * The 32 random bytes are unguessable so the sentinel hash cannot be
+ * replayed if the verify-then-discard logic is ever flattened. The
+ * bcrypt cost MUST match BCRYPT_COST so timing stays uniform.
  */
-const TIMING_SENTINEL_HASH = await Bun.password.hash(
-  // 32 random bytes encoded as base64url — content does not matter, only
-  // that bcrypt sees a non-empty input on the miss path.
-  base64UrlRandom(32),
-  { algorithm: 'bcrypt', cost: 12 }
-);
+const TIMING_SENTINEL_HASH = await Bun.password.hash(base64UrlRandom(32), {
+  algorithm: 'bcrypt',
+  cost: BCRYPT_COST,
+});
 
 function base64UrlRandom(byteLength: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
@@ -88,14 +91,16 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
     projectId: parseProjectIdHeader(c.req.header('x-project-id')),
   });
 
-  // Synchronous last-used update — internal/air-gapped system,
-  // accuracy matters more than write amplification (see plan U5
-  // rationale: the user explicitly requested no debounce).
-  try {
-    await db.update(users).set({ apiKeyLastUsedAt: new Date() }).where(eq(users.id, row.id));
-  } catch (err) {
-    logger.warn({ err, userId: row.id }, 'apiKeyLastUsedAt update failed');
-  }
+  // Fire-and-forget last-used update. Air-gapped deployment, low
+  // write volume, accuracy preferred over write amplification. The
+  // write is observability-only; coupling auth latency to it would
+  // mean a slow DB stalls every authenticated request even though
+  // the credentials are already verified. Failures are logged but
+  // never deny the request.
+  db.update(users)
+    .set({ apiKeyLastUsedAt: new Date() })
+    .where(eq(users.id, row.id))
+    .catch((err) => logger.warn({ err, userId: row.id }, 'apiKeyLastUsedAt update failed'));
 
   await next();
 });

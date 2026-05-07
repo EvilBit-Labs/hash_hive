@@ -3,12 +3,12 @@
  *
  * Two responsibilities:
  *
- * 1. **Project scoping with membership enforcement.** `requireProjectMembership`
- *    looks up `findProjectMembership` for the active user + `X-Project-Id`
- *    pair and returns the membership row so route handlers can do role
- *    checks. The earlier `requireProjectId` helper trusted the header
- *    verbatim — that left every project-scoped Control route open to
- *    cross-project read/write. The new helper is the single trust gate.
+ * 1. **Project scoping with membership enforcement.**
+ *    `requireProjectMembership` is the single trust gate for project-
+ *    scoped Control routes — it must be called before any query that
+ *    filters by `projectId`. It calls `findProjectMembership` and
+ *    returns the membership row so route handlers can do role checks
+ *    via `requireProjectRole`.
  *
  * 2. **Uniform error mapping.** `controlErrorResponse` translates typed
  *    errors into RFC 9457 problem-detail responses without leaking raw
@@ -16,6 +16,7 @@
  */
 
 import type { Context } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
 import { mapZodError, problemResponse } from '../../lib/problem-details.js';
@@ -92,12 +93,14 @@ const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+/**
+ * Parse the `id` URL param as a positive integer. Throws the underlying
+ * ZodError on failure so `controlErrorResponse` can surface the
+ * structured `errors[]` field — keeping the validation envelope
+ * consistent with the rest of the Control API.
+ */
 export function parseIdParam(value: string | undefined): number {
-  const parsed = idParamSchema.safeParse({ id: value });
-  if (!parsed.success) {
-    throw new ControlApiError(400, 'validation', 'id must be a positive integer');
-  }
-  return parsed.data.id;
+  return idParamSchema.parse({ id: value }).id;
 }
 
 /**
@@ -105,6 +108,10 @@ export function parseIdParam(value: string | undefined): number {
  * raw exception message to the client (info disclosure risk on a
  * machine-readable surface) — they get a uniform "internal error"
  * envelope while the underlying cause is logged with the request id.
+ *
+ * `HTTPException` thrown by Hono middleware (e.g. `zValidator`) keeps
+ * its native response so framework-shaped errors aren't relabelled
+ * with a 500 envelope.
  */
 export function controlErrorResponse(c: Context<AppEnv>, err: unknown): Response {
   if (err instanceof ControlApiError) {
@@ -113,9 +120,16 @@ export function controlErrorResponse(c: Context<AppEnv>, err: unknown): Response
   if (err instanceof z.ZodError) {
     return problemResponse(c, 400, 'validation', 'Invalid request', mapZodError(err));
   }
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  // Normalize non-Error throws so the logger keeps both the original
+  // type information and a usable Error shape.
+  const safe = err instanceof Error ? err : new Error(typeof err === 'string' ? err : String(err));
   logger.error(
     {
-      err,
+      err: safe,
+      errType: typeof err,
       requestId: c.get('requestId'),
       path: c.req.path,
     },

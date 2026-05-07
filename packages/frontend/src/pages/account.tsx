@@ -64,7 +64,7 @@ function ApiKeySection() {
         <RawTokenReveal token={rawToken} onDismiss={() => setRawToken(null)} />
       ) : metadata?.hasKey ? (
         <ExistingKeyView
-          prefix={metadata.prefix ?? '-'}
+          prefix={metadata.prefix}
           lastUsedAt={metadata.lastUsedAt}
           rotateBusy={issueMutation.isPending}
           revokeBusy={revokeMutation.isPending}
@@ -155,14 +155,20 @@ function ExistingKeyView({
 
 function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(token);
       setCopied(true);
+      setCopyError(null);
       setTimeout(() => setCopied(false), 2000);
     } catch {
+      // Most often: insecure context (bare-IP HTTP), missing permission,
+      // or a sandboxed iframe. Tell the user to copy manually instead of
+      // failing silently — the token is shown only once.
       setCopied(false);
+      setCopyError('Could not copy automatically. Select the token above and copy manually.');
     }
   };
 
@@ -172,13 +178,15 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
         Save this token now. It will not be shown again.
       </p>
       <div className="flex items-center gap-2">
-        <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs">
+        {/* select-all on click so the manual-copy fallback is one gesture */}
+        <code className="flex-1 select-all overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs">
           {token}
         </code>
         <Button onClick={handleCopy} variant="secondary" className="text-xs">
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
+      {copyError && <p className="text-xs text-amber-700 dark:text-amber-300">{copyError}</p>}
       <p className="text-xs text-muted-foreground">
         Store it in a password manager or your tool's secret store. Treat it like a password; anyone
         with this token can act as you against the Control API.

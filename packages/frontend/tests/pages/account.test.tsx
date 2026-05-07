@@ -148,4 +148,60 @@ describe('AccountPage API key section', () => {
       expect(screen.getByText(/You do not have an active API key/)).toBeDefined();
     });
   });
+
+  it('renders ErrorBanner when POST /me/api-key returns 500', async () => {
+    setupRoutes({ hasKey: false, prefix: null, lastUsedAt: null });
+    // Override the POST handler to fail.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = ((init?.method as string) ?? 'GET').toUpperCase();
+      if (url.includes('/dashboard/auth/me/api-key') && method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            error: { code: 'API_KEY_ISSUE_FAILED', message: 'Failed to issue API key' },
+          }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    renderWithProviders(<AccountPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Generate API Key/ })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Generate API Key/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to issue API key/)).toBeDefined();
+    });
+    // Crucially: no partial token reveal.
+    expect(screen.queryByText(/Save this token now/)).toBeNull();
+  });
+
+  it('renders ErrorBanner when fetch throws during issue', async () => {
+    setupRoutes({ hasKey: false, prefix: null, lastUsedAt: null });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = ((init?.method as string) ?? 'GET').toUpperCase();
+      if (url.includes('/dashboard/auth/me/api-key') && method === 'POST') {
+        throw new Error('network down');
+      }
+      return new Response(JSON.stringify({ hasKey: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    renderWithProviders(<AccountPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Generate API Key/ })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Generate API Key/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/network down/)).toBeDefined();
+    });
+  });
 });

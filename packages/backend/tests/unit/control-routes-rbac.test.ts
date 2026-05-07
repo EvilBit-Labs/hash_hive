@@ -74,6 +74,10 @@ if (!IS_ISOLATED) {
         })),
   }));
 
+  let mockTransitionResult: { campaign: object } | { error: string; code?: string } = {
+    campaign: {},
+  };
+
   mock.module('../../src/services/campaigns.js', () => ({
     getCampaignById: async (id: number) => mockCampaigns.find((c) => c.id === id) ?? null,
     listCampaigns: async ({ projectId }: { projectId?: number }) => ({
@@ -89,7 +93,7 @@ if (!IS_ISOLATED) {
       status: 'draft',
     }),
     updateCampaign: async (id: number) => ({ id }),
-    transitionCampaign: async () => ({ campaign: {} }),
+    transitionCampaign: async () => mockTransitionResult,
     listAttacks: async () => [],
     getAttackById: async (id: number) => mockAttacks.find((a) => a.id === id) ?? null,
     createAttack: async (data: { campaignId: number; projectId: number }) => ({ id: 888, ...data }),
@@ -285,6 +289,75 @@ if (!IS_ISOLATED) {
           body: JSON.stringify({ name: 'renamed' }),
         });
         expect(res.status).toBe(403);
+      });
+    });
+
+    describe('campaign transitions', () => {
+      it('maps QUEUE_UNAVAILABLE to 503 service_unavailable RFC 9457', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }];
+        activeProjectId = 1;
+        mockTransitionResult = { error: 'queue is down', code: 'QUEUE_UNAVAILABLE' };
+        const app = makeApp(controlCampaignRoutes);
+        const res = await app.request('/100/transition', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ targetStatus: 'running' }),
+        });
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body.type).toBe('https://hashhive.dev/errors/service-unavailable');
+      });
+
+      it('maps TASK_GENERATION_FAILED to 500 internal RFC 9457', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }];
+        activeProjectId = 1;
+        mockTransitionResult = { error: 'tasks blew up', code: 'TASK_GENERATION_FAILED' };
+        const app = makeApp(controlCampaignRoutes);
+        const res = await app.request('/100/transition', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ targetStatus: 'running' }),
+        });
+        expect(res.status).toBe(500);
+        const body = await res.json();
+        expect(body.type).toBe('https://hashhive.dev/errors/internal');
+      });
+
+      it('maps generic state-machine errors to 409 conflict RFC 9457', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }];
+        activeProjectId = 1;
+        mockTransitionResult = { error: 'cannot resume aborted campaign' };
+        const app = makeApp(controlCampaignRoutes);
+        const res = await app.request('/100/transition', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ targetStatus: 'running' }),
+        });
+        expect(res.status).toBe(409);
+        const body = await res.json();
+        expect(body.type).toBe('https://hashhive.dev/errors/conflict');
+      });
+    });
+
+    describe('id-param validation', () => {
+      it('returns 400 RFC 9457 with field-level errors[] for non-numeric :id', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }];
+        activeProjectId = 1;
+        const app = makeApp(controlCampaignRoutes);
+        const res = await app.request('/abc', { headers: authHeaders() });
+        expect(res.status).toBe(400);
+        expect(res.headers.get('content-type')).toContain('application/problem+json');
+        const body = await res.json();
+        expect(body.type).toBe('https://hashhive.dev/errors/validation');
+        expect(Array.isArray(body.errors)).toBe(true);
+      });
+
+      it('returns 400 for zero :id', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }];
+        activeProjectId = 1;
+        const app = makeApp(controlCampaignRoutes);
+        const res = await app.request('/0', { headers: authHeaders() });
+        expect(res.status).toBe(400);
       });
     });
   });

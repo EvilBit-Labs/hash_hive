@@ -1,28 +1,8 @@
-/**
- * React Query bindings for the user-profile API-key endpoints.
- *
- * Issue / rotate / revoke flow:
- *   - `useApiKeyMetadata`  -> reads metadata only (never the raw token)
- *   - `useIssueApiKey`     -> POST returns the raw token exactly once
- *   - `useRevokeApiKey`    -> DELETE; nulls the stored hash
- *
- * The page owns presentation: hooks return mutation results and call
- * `onError` for user-facing failure messaging, but never render anything.
- */
-
+import type { ApiKeyMetadata, IssueApiKeyResponse } from '@hashhive/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 
-export interface ApiKeyMetadata {
-  hasKey: boolean;
-  prefix: string | null;
-  lastUsedAt: string | null;
-}
-
-export interface IssueApiKeyResponse {
-  token: string;
-  metadata: ApiKeyMetadata;
-}
+export type { ApiKeyMetadata, IssueApiKeyResponse };
 
 interface MutationCallbacks {
   onError?: (message: string) => void;
@@ -60,11 +40,7 @@ export function useRevokeApiKey({ onError }: MutationCallbacks = {}) {
       await api.delete<unknown>('/dashboard/auth/me/api-key');
     },
     onSuccess: () => {
-      qc.setQueryData<ApiKeyMetadata>(QUERY_KEY, {
-        hasKey: false,
-        prefix: null,
-        lastUsedAt: null,
-      });
+      qc.setQueryData<ApiKeyMetadata>(QUERY_KEY, { hasKey: false });
     },
     onError: (err) => onError?.(errorMessage(err, 'Failed to revoke API key')),
   });

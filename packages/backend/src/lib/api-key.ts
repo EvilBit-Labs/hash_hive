@@ -10,10 +10,24 @@
  *
  * Hashes are stored using the same bcrypt cost as user passwords so a
  * compromised hash store is no easier to crack than a leaked password store.
+ *
+ * Security invariant: callers MUST follow `parseApiKey` with
+ * `verifyApiKey(token, hashFromDb)`. `parseApiKey` returning a userId is
+ * a parsing success, not authentication — only the bcrypt verify
+ * establishes that the token belongs to the named user.
  */
 
+import { logger } from '../config/logger.js';
+
 const RANDOM_BYTES = 32;
-const BCRYPT_COST = 12;
+
+/**
+ * Bcrypt cost factor for stored API-key hashes. Exported so consumers
+ * (notably the timing-sentinel hash in `requireApiKey`) cannot drift —
+ * a sentinel computed at a different cost would defeat the
+ * timing-uniformity goal it exists to serve.
+ */
+export const BCRYPT_COST = 12;
 
 export const API_KEY_PREFIX = 'cst' as const;
 
@@ -68,13 +82,16 @@ export function parseApiKey(token: string): ParsedApiKey | null {
  * Constant-time verify of a raw token against its stored bcrypt hash.
  * Returns false on any malformed input rather than throwing — the caller
  * should always treat a `false` return as "deny" without distinguishing
- * the failure mode (auth-error responses are uniform by design).
+ * the failure mode (auth-error responses are uniform by design). A real
+ * bcrypt failure (e.g. corrupt hash, runtime error) is logged so an
+ * opaque deny does not eat operational signal.
  */
 export async function verifyApiKey(token: string, hash: string): Promise<boolean> {
   if (!token || !hash) return false;
   try {
     return await Bun.password.verify(token, hash);
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, 'Bun.password.verify threw — treating as auth failure');
     return false;
   }
 }

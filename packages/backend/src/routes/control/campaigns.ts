@@ -9,6 +9,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { logger } from '../../config/logger.js';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import {
@@ -135,12 +136,25 @@ controlCampaignRoutes.post('/:id/transition', async (c) => {
     }
     const result = await transitionCampaign(id, parsed.data);
     if ('error' in result) {
-      // Queue-unavailable is a transient infrastructure issue; everything
-      // else is a state-machine conflict. Surface them with the correct
-      // HTTP status so automation can retry the former and treat the
-      // latter as a permanent rejection.
-      if ('code' in result && result.code === 'QUEUE_UNAVAILABLE') {
-        return problemResponse(c, 503, 'service_unavailable', result.error);
+      // Three branches with distinct retry semantics:
+      //   QUEUE_UNAVAILABLE -> 503 transient infra issue, retry later.
+      //   TASK_GENERATION_FAILED -> 500 internal error; the state did
+      //     not actually transition. Mislabeling this as a 409 conflict
+      //     would tell automation "you tried an invalid transition"
+      //     and skip retry — wrong, the transition was valid but
+      //     something downstream blew up.
+      //   Anything else -> 409 state-machine conflict, do not retry.
+      if ('code' in result) {
+        if (result.code === 'QUEUE_UNAVAILABLE') {
+          return problemResponse(c, 503, 'service_unavailable', result.error);
+        }
+        if (result.code === 'TASK_GENERATION_FAILED') {
+          logger.error(
+            { campaignId: id, requestId: c.get('requestId') },
+            'task generation failed during campaign transition'
+          );
+          return problemResponse(c, 500, 'internal', result.error);
+        }
       }
       return problemResponse(c, 409, 'conflict', result.error);
     }

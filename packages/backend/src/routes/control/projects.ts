@@ -3,12 +3,17 @@
  * authenticated user belongs to; project creation stays on the dashboard
  * surface (it's an admin-onboarding flow, not part of the automation
  * contract).
+ *
+ * Authorization model: a project is visible iff it appears in
+ * `getUserProjects(userId)`. Both list and get use that same view, so
+ * non-members see 404 (not 403) — preventing existence-enumeration of
+ * project ids the caller can't access.
  */
 
 import { Hono } from 'hono';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
-import { getProjectById, getUserProjects } from '../../services/projects.js';
+import { getUserProjects } from '../../services/projects.js';
 import type { AppEnv } from '../../types.js';
 import { controlErrorResponse, parseIdParam } from './helpers.js';
 
@@ -29,12 +34,13 @@ controlProjectRoutes.get('/', async (c) => {
 controlProjectRoutes.get('/:id', async (c) => {
   try {
     const id = parseIdParam(c.req.param('id'));
-    const project = await getProjectById(id);
-    if (!project) return problemResponse(c, 404, 'not_found', 'project not found');
-    // Project access enforced via getUserProjects view: confirm caller can see it.
     const { userId } = c.get('currentUser');
-    const visible = (await getUserProjects(userId)).some((p) => p.id === id);
-    if (!visible) return problemResponse(c, 403, 'forbidden', 'not a member of this project');
+    // Single visibility gate: if the project is in the caller's set we
+    // return it; otherwise 404 — same envelope whether the project
+    // doesn't exist or the caller can't see it. Avoids leaking
+    // existence via 403 vs 404 differentiation.
+    const project = (await getUserProjects(userId)).find((p) => p.id === id);
+    if (!project) return problemResponse(c, 404, 'not_found', 'project not found');
     return c.json(project);
   } catch (err) {
     return controlErrorResponse(c, err);

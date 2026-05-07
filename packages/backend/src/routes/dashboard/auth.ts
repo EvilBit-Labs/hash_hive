@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { logger } from '../../config/logger.js';
 import { requireSession } from '../../middleware/auth.js';
 import {
   getUserApiKeyMetadata,
@@ -25,32 +26,55 @@ authRouter.get('/me', requireSession, async (c) => {
   return c.json(result);
 });
 
-// ─── Account API Key ────────────────────────────────────────────────
-//
-// `POST /me/api-key`   issue or rotate (raw token returned once)
-// `GET /me/api-key`    metadata only (never the token, never the hash)
-// `DELETE /me/api-key` revoke
+// Account API Key endpoints. Each handler is wrapped in try/catch so a
+// transient DB failure surfaces as a structured 500 with operation +
+// userId in the log, rather than bubbling to Hono's default error
+// handler which would leave a partial-write incident invisible.
 
 authRouter.post('/me/api-key', requireSession, async (c) => {
   const { userId } = c.get('currentUser');
-  const { token, metadata } = await issueUserApiKey(userId);
-  // The raw token is shown to the user exactly once; keep it out of any
-  // intermediary cache or proxy buffer.
-  c.header('Cache-Control', 'no-store');
-  c.header('Pragma', 'no-cache');
-  return c.json({ token, metadata });
+  try {
+    const { token, metadata } = await issueUserApiKey(userId);
+    // Raw token is shown exactly once; mark response uncacheable.
+    c.header('Cache-Control', 'no-store');
+    return c.json({ token, metadata });
+  } catch (err) {
+    logger.error({ err, userId, op: 'issueUserApiKey' }, 'API key issue failed');
+    return c.json(
+      { error: { code: 'API_KEY_ISSUE_FAILED', message: 'Failed to issue API key' } },
+      500
+    );
+  }
 });
 
 authRouter.get('/me/api-key', requireSession, async (c) => {
   const { userId } = c.get('currentUser');
-  const metadata = await getUserApiKeyMetadata(userId);
-  return c.json(metadata);
+  try {
+    const metadata = await getUserApiKeyMetadata(userId);
+    // Per-user data; should not be cached by any shared proxy.
+    c.header('Cache-Control', 'no-store');
+    return c.json(metadata);
+  } catch (err) {
+    logger.error({ err, userId, op: 'getUserApiKeyMetadata' }, 'API key metadata read failed');
+    return c.json(
+      { error: { code: 'API_KEY_READ_FAILED', message: 'Failed to read API key metadata' } },
+      500
+    );
+  }
 });
 
 authRouter.delete('/me/api-key', requireSession, async (c) => {
   const { userId } = c.get('currentUser');
-  await revokeUserApiKey(userId);
-  return new Response(null, { status: 204 });
+  try {
+    await revokeUserApiKey(userId);
+    return new Response(null, { status: 204 });
+  } catch (err) {
+    logger.error({ err, userId, op: 'revokeUserApiKey' }, 'API key revoke failed');
+    return c.json(
+      { error: { code: 'API_KEY_REVOKE_FAILED', message: 'Failed to revoke API key' } },
+      500
+    );
+  }
 });
 
 export { authRouter as authRoutes };
