@@ -28,7 +28,7 @@ describe('GET /health', () => {
     const body = await res.json();
     expect(['ok', 'degraded']).toContain(body['status']);
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body['aggregateStatus']);
-    expect(body['version']).toBe('1.0.0');
+    expect(body['version']).toBe('1.1.0');
     expect(body['timestamp']).toBeDefined();
     expect(body['services']['database']).toBeDefined();
     expect(['connected', 'disconnected']).toContain(body['services']['database']['status']);
@@ -57,10 +57,14 @@ describe('GET /health', () => {
     expect(typeof body['services']['queues']['queues']).toBe('object');
   });
 
-  it('returns 503 when the body reports aggregateStatus=unhealthy (T-004)', async () => {
-    // Force a deterministic unhealthy outcome by importing the service
-    // and calling getSystemHealth with all-unhealthy synthetic probes;
-    // then drive the same envelope through the public route.
+  it('HTTP status mirrors body.aggregateStatus (200/503 contract)', async () => {
+    // This test runs against whatever state the unit env happens to be
+    // in (no QueueManager → typically unhealthy); it verifies the
+    // *invariant* between body.aggregateStatus and the HTTP status, not
+    // the 503 path on its own. Deterministic 200/503 path coverage —
+    // forced by mocking getSystemHealth — lives in
+    // tests/integration/health-deterministic.test.ts so the contract
+    // is not at the mercy of unit-env state.
     const res = await app.request('/health');
     const body = await res.json();
     if (body['aggregateStatus'] === 'unhealthy') {

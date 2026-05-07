@@ -1,4 +1,5 @@
 import { logger } from '../config/logger.js';
+import type { ComponentName, ComponentStatus } from './health.js';
 
 /**
  * FUTURE: Redis Pub/Sub Extension for Multi-Instance Deployments
@@ -152,8 +153,11 @@ const THROTTLE_MS = 250; // Max 4 events/sec per type+project
 const THROTTLE_PRUNE_INTERVAL_MS = 60_000;
 const THROTTLE_ENTRY_MAX_AGE_MS = 60_000;
 
-// Periodically prune stale entries to prevent unbounded growth
-setInterval(() => {
+// Periodically prune stale entries to prevent unbounded growth.
+// `.unref()` so the timer doesn't keep the event loop alive on its own —
+// a Node process with no other pending work (test teardown, graceful
+// shutdown) can exit cleanly instead of waiting for the next pulse.
+const pruneInterval = setInterval(() => {
   const cutoff = Date.now() - THROTTLE_ENTRY_MAX_AGE_MS;
   for (const [key, time] of lastEmitTimes) {
     if (time < cutoff) {
@@ -161,6 +165,7 @@ setInterval(() => {
     }
   }
 }, THROTTLE_PRUNE_INTERVAL_MS);
+pruneInterval.unref();
 
 /**
  * Test-only: clears the module-level client registry and throttle map
@@ -329,8 +334,8 @@ export function broadcastSystemEvent(type: SystemEventType, data: Record<string,
  * that flipped on a given monitor tick.
  */
 export function broadcastSystemHealth(
-  component: string,
-  status: 'healthy' | 'degraded' | 'unhealthy',
+  component: ComponentName,
+  status: ComponentStatus,
   message?: string
 ): void {
   broadcastSystemEvent('system_health', {

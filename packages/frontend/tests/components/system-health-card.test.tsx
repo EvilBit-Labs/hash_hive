@@ -239,8 +239,13 @@ describe('SystemHealthCard', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/Failed to load system health/);
   });
 
-  // Issue #109 testing review T-007
-  it('expands per-component detail with keyboard (Enter) on the focused button', async () => {
+  // Issue #109 testing review T-007. Asserting the row is a native
+  // `<button>` is what makes the keyboard-operability claim real:
+  // browsers fire click on Enter/Space for native buttons but not for
+  // a `<div role="button">` without an explicit onKeyDown. The test
+  // then dispatches the click that Enter would produce; this is the
+  // happy-dom-friendly equivalent of pressing Enter.
+  it('component row is a native <button> so Enter/Space activate it', async () => {
     fetchMock = mockFetch({
       '/dashboard/health': {
         status: 200,
@@ -268,31 +273,32 @@ describe('SystemHealthCard', () => {
       .getAllByRole('button')
       .find((b) => b.getAttribute('aria-label')?.startsWith('Job Queues'));
     expect(queuesButton).toBeDefined();
+    // Pin the keyboard contract: native <button> means Enter and Space
+    // activate the element without any custom onKeyDown handler.
+    expect(queuesButton!.tagName).toBe('BUTTON');
     queuesButton!.focus();
     expect(document.activeElement).toBe(queuesButton);
-    // Pressing Enter while focused on a <button> triggers a click in
-    // browsers; jsdom doesn't synthesize that, so we use fireEvent to
-    // dispatch the click that pressing Enter or Space would produce.
-    // The behavior under test is "the button is operable from keyboard
-    // focus", which still holds since real browsers fire click on
-    // Enter/Space.
+    // Dispatch the click that Enter/Space would produce on a native
+    // button (happy-dom doesn't synthesize the Enter→click for us).
     fireEvent.click(queuesButton!);
     expect(queuesButton!.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('renders skeleton with exactly four placeholder dots (one per component)', () => {
+  it('renders one skeleton row per component while loading', () => {
     fetchMock = mockFetch({
       '/dashboard/health': { status: 200, body: buildHealth() },
     });
     renderWithProviders(<SystemHealthCard />);
 
-    // Before the fetch resolves: exactly four "--" placeholders, one
-    // per skeleton row plus possibly one in the header. Tighten the
-    // assertion so a future regression that drops a skeleton row
-    // doesn't pass silently.
-    const placeholders = screen.getAllByText('--');
-    // Header may or may not render '--' depending on data state; the
-    // four skeleton rows always do.
-    expect(placeholders.length).toBeGreaterThanOrEqual(4);
+    // Before the fetch resolves we should have exactly one skeleton row
+    // per component label. A regression that dropped a row would fail
+    // here because the loaded text "Database" / "Redis" / etc. is
+    // unique to the skeleton and the loaded view alike — so checking
+    // the four labels are present is the most direct signal that all
+    // four rows rendered.
+    expect(screen.getByText('Database')).toBeDefined();
+    expect(screen.getByText('Redis')).toBeDefined();
+    expect(screen.getByText('Object Storage')).toBeDefined();
+    expect(screen.getByText('Job Queues')).toBeDefined();
   });
 });

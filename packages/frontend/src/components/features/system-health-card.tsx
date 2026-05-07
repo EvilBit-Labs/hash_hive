@@ -185,9 +185,16 @@ export function SystemHealthCard() {
       <div>
         {isLoading || !data
           ? COMPONENT_ORDER.map((name) => <SkeletonRow key={name} label={COMPONENT_LABELS[name]} />)
-          : COMPONENT_ORDER.map((name) => (
-              <ComponentRow key={name} name={name} health={data.components[name]} />
-            ))}
+          : COMPONENT_ORDER.map((name) => {
+              // Record<ComponentName, ComponentHealth> returns
+              // ComponentHealth | undefined under noUncheckedIndexedAccess;
+              // skip the row instead of crashing if the backend ever
+              // omits a component (defensive — current contract requires
+              // all four).
+              const health = data.components[name];
+              if (!health) return null;
+              return <ComponentRow key={name} name={name} health={health} />;
+            })}
       </div>
     </section>
   );

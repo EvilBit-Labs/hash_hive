@@ -49,7 +49,15 @@ export interface SystemHealth {
   components: Record<ComponentName, ComponentHealth>;
 }
 
-export const HEALTH_VERSION = '1.0.0';
+/**
+ * Schema version of the SystemHealth envelope. Bump when the
+ * `components` shape, status enum, or aggregate semantics change in a
+ * way consumers must adapt to. Distinct from the app's package version
+ * since the health surface evolves on its own cadence; see the
+ * Control API spec at packages/openapi/control-api.yaml for the
+ * matching `info.version` it documents.
+ */
+export const HEALTH_VERSION = '1.1.0';
 
 // Threshold semantics for the entire module: warn comparisons use `>=`
 // (inclusive boundary). "Warn at 10000" means 10000 is already the warn
@@ -72,19 +80,31 @@ export function aggregateStatus(
  * Runs a probe with a timeout. The probe returns a ComponentHealth-shaped
  * value (without durationMs); this wrapper attaches durationMs and coerces
  * thrown errors and timeouts into `unhealthy` ComponentHealth.
+ *
+ * The probe receives an AbortSignal that fires when the timeout wins so
+ * cancellation-aware drivers (S3 SDK's `abortSignal`, fetch, etc.) can
+ * actually terminate hung operations. Probes whose drivers do not
+ * support cancellation can ignore the signal — the wrapper still
+ * resolves on timeout, just without freeing the underlying resource.
+ * Postgres callers should also configure `statement_timeout` at the
+ * connection level so a hung query doesn't outlive the probe wrapper.
  */
 export async function runProbe(
   name: ComponentName,
-  probeFn: () => Promise<ProbeResult>,
+  probeFn: (signal: AbortSignal) => Promise<ProbeResult>,
   timeoutMs: number
 ): Promise<ComponentHealth> {
   const startedAt = Date.now();
+  const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race<ProbeResult>([
-      probeFn(),
+      probeFn(ac.signal),
       new Promise<ProbeResult>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('PROBE_TIMEOUT')), timeoutMs);
+        timer = setTimeout(() => {
+          ac.abort();
+          reject(new Error('PROBE_TIMEOUT'));
+        }, timeoutMs);
       }),
     ]);
     return { ...result, durationMs: Date.now() - startedAt };
@@ -145,11 +165,15 @@ export async function probeDatabase(
   await deps.ping();
   const { used, max } = await deps.poolStats();
   const pct = max > 0 ? (used / max) * 100 : 0;
-  const detail = { connectionsUsed: used, connectionsMax: max, connectionsPct: Math.round(pct) };
+  // Report the unrounded percentage so the displayed value never
+  // disagrees with the threshold check. Previously detail.connectionsPct
+  // could read 80 while the underlying 79.6% kept the status healthy,
+  // which was confusing for operators reading the number alone.
+  const detail = { connectionsUsed: used, connectionsMax: max, connectionsPct: pct };
   if (pct >= warnPct) {
     return {
       status: 'degraded',
-      message: `database connection pool ${Math.round(pct)}% full (${used}/${max}) at or above warn threshold ${warnPct}%`,
+      message: `database connection pool ${pct.toFixed(1)}% full (${used}/${max}) at or above warn threshold ${warnPct}%`,
       detail,
     };
   }
@@ -169,11 +193,20 @@ export async function probeRedis(deps: RedisProbeDeps): Promise<ProbeResult> {
 }
 
 export interface MinioProbeDeps {
-  check: () => Promise<{ status: 'connected' | 'disconnected'; bucket: string }>;
+  /**
+   * Probe the bucket. The optional `signal` is wired through to the S3
+   * client so a timeout in `runProbe` actually aborts the underlying
+   * HEAD request — without it, the AWS SDK socket can stay alive long
+   * after the wrapper resolves.
+   */
+  check: (signal?: AbortSignal) => Promise<{
+    status: 'connected' | 'disconnected';
+    bucket: string;
+  }>;
 }
 
-export async function probeMinio(deps: MinioProbeDeps): Promise<ProbeResult> {
-  const result = await deps.check();
+export async function probeMinio(deps: MinioProbeDeps, signal?: AbortSignal): Promise<ProbeResult> {
+  const result = await deps.check(signal);
   if (result.status !== 'connected') {
     return {
       status: 'unhealthy',
@@ -337,13 +370,17 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
   };
 
   const [database, redis, minio, queues] = await Promise.all([
+    // probeFn signatures all accept (signal: AbortSignal) so runProbe
+    // can abort the underlying driver call on timeout. probes that
+    // don't need it (sync redis status check, queue stat fan-out)
+    // simply ignore the argument.
     runProbe(
       'database',
       () => probeDatabase(probes.database, thresholds.dbConnectionWarnPct),
       thresholds.probeTimeoutMs
     ),
     runProbe('redis', () => probeRedis(probes.redis), thresholds.probeTimeoutMs),
-    runProbe('minio', () => probeMinio(probes.minio), thresholds.probeTimeoutMs),
+    runProbe('minio', (signal) => probeMinio(probes.minio, signal), thresholds.probeTimeoutMs),
     runProbe(
       'queues',
       () => probeQueues(probes.queues, thresholds.queueWarnDepth, thresholds.queueWarnFailed),

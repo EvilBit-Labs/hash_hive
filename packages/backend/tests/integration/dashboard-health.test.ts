@@ -88,13 +88,14 @@ describe('GET /api/v1/dashboard/health', () => {
     // Top-level envelope
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status);
     expect(typeof body.timestamp).toBe('string');
-    expect(body.version).toBe('1.0.0');
+    expect(body.version).toBe('1.1.0');
 
-    // All four components present
-    expect(body.components.database).toBeDefined();
-    expect(body.components.redis).toBeDefined();
-    expect(body.components.minio).toBeDefined();
-    expect(body.components.queues).toBeDefined();
+    // All four components present. Bracket notation per
+    // `noPropertyAccessFromIndexSignature` (Record<string, …>).
+    expect(body.components['database']).toBeDefined();
+    expect(body.components['redis']).toBeDefined();
+    expect(body.components['minio']).toBeDefined();
+    expect(body.components['queues']).toBeDefined();
 
     // Per-component status uses the new three-tier enum
     for (const c of Object.values(body.components)) {
@@ -112,7 +113,7 @@ describe('GET /api/v1/dashboard/health', () => {
       components: Record<string, { detail?: Record<string, unknown> }>;
     };
     // MinIO probe is mocked to connected, so detail should include the bucket name
-    expect(body.components.minio.detail?.['bucket']).toBe('hashhive-test');
+    expect(body.components['minio']?.detail?.['bucket']).toBe('hashhive-test');
   });
 
   // PR review I-1: the dashboard surface intentionally exposes the rich
@@ -145,8 +146,10 @@ describe('GET /api/v1/dashboard/health', () => {
     const someNonHealthy = Object.values(body.components).some((c) => c.status !== 'healthy');
     expect(someNonHealthy).toBe(true);
 
-    const queues = body.components.queues;
-    if (queues.status !== 'healthy') {
+    // Bracket access yields T | undefined under noUncheckedIndexedAccess;
+    // guard before reading nested fields.
+    const queues = body.components['queues'];
+    if (queues && queues.status !== 'healthy') {
       expect(queues.message).toBeDefined();
       expect(typeof queues.message).toBe('string');
       expect(queues.detail).toBeDefined();
@@ -154,6 +157,6 @@ describe('GET /api/v1/dashboard/health', () => {
     // minio probe is stubbed, so its detail.bucket is reliably present
     // — proves the dashboard surface keeps the field that the public
     // envelope is allowed to strip.
-    expect(body.components.minio.detail?.['bucket']).toBe('hashhive-test');
+    expect(body.components['minio']?.detail?.['bucket']).toBe('hashhive-test');
   });
 });

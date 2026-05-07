@@ -34,13 +34,23 @@ paths:
       operationId: getHealth
       summary: Health probe (authenticated)
       description: |
-        Reports the unified system-health snapshot. Issue #109 unified the
-        public `/health`, this `/api/v1/control/health`, and the new
-        `/api/v1/dashboard/health` so all three return identical
-        `SystemHealth` shapes (modulo the public surface stripping
-        per-component detail). Authenticated control consumers receive the
-        full shape including connection counts, queue depths, and probe
-        durations.
+        Reports the unified system-health snapshot. Issue #109 introduced
+        a single `getSystemHealth()` service that backs three endpoints,
+        but they expose two different envelope shapes:
+
+        - `/api/v1/control/health` (this endpoint) and
+          `/api/v1/dashboard/health` return the rich `SystemHealth`
+          shape — three-tier `status`, `components` map, per-component
+          `message`, `detail`, and `durationMs`.
+        - The public `/health` returns a backward-compatible legacy
+          envelope: two-tier `status: ok | degraded`, a `services` map,
+          and an additive `aggregateStatus` field carrying the full
+          three-tier signal. This shape exists so older load-balancer
+          probes that read `services.{database,redis,minio}.status`
+          keep working.
+
+        Authenticated control consumers receive the full shape including
+        connection counts, queue depths, and probe durations.
       tags: [Health]
       security:
         - BearerApiKey: []

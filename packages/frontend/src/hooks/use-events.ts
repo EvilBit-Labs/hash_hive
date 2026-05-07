@@ -92,7 +92,21 @@ export function useEvents(options: UseEventsOptions = {}) {
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as Record<string, unknown>;
+          // Validate envelope shape before any cast or invalidation.
+          // Without this guard, a non-object payload or one missing a
+          // string `type` would still flow through the casts below and
+          // hit invalidateQueries / onEvent with malformed data.
+          const parsed: unknown = JSON.parse(event.data);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            typeof (parsed as Record<string, unknown>)['type'] !== 'string'
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid envelope');
+            return;
+          }
+          const data = parsed as Record<string, unknown>;
           if (data['type'] === 'connected' || data['type'] === 'pong') return;
 
           const eventType = data['type'] as string;

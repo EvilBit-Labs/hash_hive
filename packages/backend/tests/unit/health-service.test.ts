@@ -135,8 +135,25 @@ describe('probeDatabase', () => {
       80
     );
     expect(result.status).toBe('degraded');
-    expect(result.message).toContain('85%');
+    // Message now uses unrounded pct (formatted to 1 decimal) so the
+    // displayed value matches the threshold-comparison value exactly.
+    expect(result.message).toContain('85.0%');
     expect(result.message).toContain('80%');
+  });
+
+  test('reports unrounded connectionsPct in detail (no display/decision drift)', async () => {
+    // 79.6% should remain healthy (below 80% threshold) AND read 79.6
+    // in detail.connectionsPct — previously detail rounded to 80 while
+    // the unrounded 79.6 kept status healthy, which was confusing.
+    const result = await probeDatabase(
+      {
+        ping: async () => undefined,
+        poolStats: async () => ({ used: 796, max: 1000 }),
+      },
+      80
+    );
+    expect(result.status).toBe('healthy');
+    expect(result.detail?.['connectionsPct']).toBeCloseTo(79.6, 5);
   });
 
   test('throws (caught upstream by runProbe) when ping fails', async () => {
@@ -307,7 +324,7 @@ describe('getSystemHealth', () => {
   test('returns SystemHealth shape with all four components and version', async () => {
     const result = await getSystemHealth({ probes: allHealthyProbes });
     expect(result.status).toBe('healthy');
-    expect(result.version).toBe('1.0.0');
+    expect(result.version).toBe('1.1.0');
     expect(result.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(result.components.database.status).toBe('healthy');
     expect(result.components.redis.status).toBe('healthy');
@@ -472,7 +489,7 @@ describe('legacyPublicEnvelope', () => {
     expect(env.services.minio.status).toBe('connected');
     expect(env.services.minio.bucket).toBe('hashhive-test');
     expect(env.services.queues.status).toBe('connected');
-    expect(env.version).toBe('1.0.0');
+    expect(env.version).toBe('1.1.0');
   });
 
   test('degraded maps to status="degraded" body, aggregateStatus="degraded", services stay "connected"', async () => {

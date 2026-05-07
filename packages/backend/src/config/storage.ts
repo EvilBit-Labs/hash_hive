@@ -80,12 +80,15 @@ export async function getPresignedUrl(
   );
 }
 
-export async function checkMinioHealth(): Promise<{
+export async function checkMinioHealth(signal?: AbortSignal): Promise<{
   status: 'connected' | 'disconnected';
   bucket: string;
 }> {
   try {
-    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }));
+    // Only attach `abortSignal` when actually provided —
+    // exactOptionalPropertyTypes refuses `{ abortSignal: undefined }`.
+    const opts = signal ? { abortSignal: signal } : undefined;
+    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }), opts);
     return { status: 'connected', bucket: env.S3_BUCKET };
   } catch {
     return { status: 'disconnected', bucket: env.S3_BUCKET };

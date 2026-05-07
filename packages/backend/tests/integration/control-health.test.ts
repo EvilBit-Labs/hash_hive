@@ -2,9 +2,12 @@
  * Integration tests for GET /api/v1/control/health (issue #109).
  *
  * The control health endpoint was refactored to delegate to the unified
- * health service. Verifies the SystemHealth shape on success and the
- * RFC 9457 problem-details envelope when the service throws — both
- * paths previously had zero coverage (testing review T-001).
+ * health service. Verifies:
+ *   - 401 paths: missing/invalid auth scheme and clearly malformed
+ *     bearer tokens land the RFC 9457 problem-details envelope.
+ *   - 200 path: a valid API key returns the SystemHealth shape with the
+ *     `components` envelope (and not the public legacy `services`
+ *     shape).
  */
 import { beforeAll, describe, expect, it, mock } from 'bun:test';
 
@@ -76,9 +79,13 @@ describe('GET /api/v1/control/health', () => {
   });
 
   it('rejects a malformed control API key with 401 problem details', async () => {
-    // Valid `Bearer cst_*` shape but the key has never been issued.
+    // Token is shaped wrong on purpose (no `cst_` prefix, no userId
+    // segment) so the parser rejects it before any DB lookup runs.
+    // A token shaped like `Bearer cst_999_<40-byte>` would pass the
+    // parser and hit a DB lookup that returns 500 in a fully-stubbed
+    // unit env (CI-red), masking the parser-level test intent.
     const res = await app.request('/api/v1/control/health', {
-      headers: { authorization: 'Bearer cst_999_' + 'x'.repeat(40) },
+      headers: { authorization: 'Bearer malformed-control-key' },
     });
     expect(res.status).toBe(401);
     expect(res.headers.get('content-type')).toContain('application/problem+json');
@@ -117,14 +124,16 @@ describe('GET /api/v1/control/health', () => {
         components: Record<string, { status: string; durationMs: number }>;
       };
       expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status);
-      expect(body.version).toBe('1.0.0');
+      expect(body.version).toBe('1.1.0');
       expect(typeof body.timestamp).toBe('string');
       // All four components present — same shape as the dashboard surface,
-      // unlike the public /health envelope.
-      expect(body.components.database).toBeDefined();
-      expect(body.components.redis).toBeDefined();
-      expect(body.components.minio).toBeDefined();
-      expect(body.components.queues).toBeDefined();
+      // unlike the public /health envelope. Bracket notation per
+      // `noPropertyAccessFromIndexSignature` (Record<string, …> requires
+      // it).
+      expect(body.components['database']).toBeDefined();
+      expect(body.components['redis']).toBeDefined();
+      expect(body.components['minio']).toBeDefined();
+      expect(body.components['queues']).toBeDefined();
       // Per-component status uses the three-tier enum
       for (const c of Object.values(body.components)) {
         expect(['healthy', 'degraded', 'unhealthy']).toContain(c.status);
