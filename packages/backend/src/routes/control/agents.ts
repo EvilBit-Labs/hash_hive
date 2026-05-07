@@ -13,6 +13,7 @@ import { getAgentById, listAgents, updateAgent } from '../../services/agents.js'
 import type { AppEnv } from '../../types.js';
 import {
   controlErrorResponse,
+  controlValidationHook,
   parseIdParam,
   requireProjectMembership,
   requireProjectRole,
@@ -62,19 +63,23 @@ controlAgentRoutes.get('/:id', async (c) => {
   }
 });
 
-controlAgentRoutes.patch('/:id', zValidator('json', updateAgentSchema), async (c) => {
-  try {
-    const { projectId } = await requireProjectRole(c, 'admin');
-    const id = parseIdParam(c.req.param('id'));
+controlAgentRoutes.patch(
+  '/:id',
+  zValidator('json', updateAgentSchema, controlValidationHook),
+  async (c) => {
+    try {
+      const { projectId } = await requireProjectRole(c, 'admin');
+      const id = parseIdParam(c.req.param('id'));
 
-    const agent = await getAgentById(id);
-    if (!agent || agent.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'agent not found');
+      const agent = await getAgentById(id);
+      if (!agent || agent.projectId !== projectId) {
+        return problemResponse(c, 404, 'not_found', 'agent not found');
+      }
+
+      const updated = await updateAgent(id, c.req.valid('json'));
+      return c.json(updated);
+    } catch (err) {
+      return controlErrorResponse(c, err);
     }
-
-    const updated = await updateAgent(id, c.req.valid('json'));
-    return c.json(updated);
-  } catch (err) {
-    return controlErrorResponse(c, err);
   }
-});
+);

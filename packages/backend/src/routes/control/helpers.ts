@@ -104,6 +104,36 @@ export function parseIdParam(value: string | undefined): number {
 }
 
 /**
+ * `zValidator` hook for Control API write routes. Replaces the
+ * default HTTPException throw with an RFC 9457 problem-details response
+ * that carries field-level `errors[]` from `mapZodError`. Pass this as
+ * the third argument to `zValidator(...)` so validation failures stay
+ * inside the Control envelope contract instead of falling through to
+ * Hono's default 400.
+ *
+ * Typed permissively because `@hono/zod-validator` v0.7 emits
+ * `error: $ZodError<Schema>` (zod v4 core) on failure, but `mapZodError`
+ * is typed against `z.ZodError`. The two have the same `issues[]`
+ * runtime shape; the cast preserves type safety at the helper boundary
+ * without forcing every caller to manage the version difference.
+ */
+export function controlValidationHook(
+  result: { success: boolean; error?: unknown },
+  c: Context
+): Response | undefined {
+  if (!result.success) {
+    return problemResponse(
+      c,
+      400,
+      'validation',
+      'Invalid request',
+      mapZodError(result.error as z.ZodError)
+    );
+  }
+  return undefined;
+}
+
+/**
  * Centralized error → response mapping. Internal errors never leak the
  * raw exception message to the client (info disclosure risk on a
  * machine-readable surface) — they get a uniform "internal error"

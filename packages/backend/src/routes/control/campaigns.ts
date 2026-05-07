@@ -22,6 +22,7 @@ import {
 import type { AppEnv } from '../../types.js';
 import {
   controlErrorResponse,
+  controlValidationHook,
   parseIdParam,
   requireProjectMembership,
   requireProjectRole,
@@ -51,6 +52,7 @@ const updateCampaignSchema = z
   .strict();
 
 const transitionTargetSchema = z.enum(['draft', 'running', 'paused', 'completed', 'cancelled']);
+const transitionRequestSchema = z.object({ targetStatus: transitionTargetSchema }).strict();
 
 controlCampaignRoutes.get('/', async (c) => {
   try {
@@ -85,81 +87,98 @@ controlCampaignRoutes.get('/:id', async (c) => {
   }
 });
 
-controlCampaignRoutes.post('/', zValidator('json', createCampaignSchema), async (c) => {
-  try {
-    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
-    const user = c.get('currentUser');
-    const data = c.req.valid('json');
-    const campaign = await createCampaign({
-      projectId,
-      createdBy: user.userId,
-      ...data,
-    });
-    return c.json(campaign, 201);
-  } catch (err) {
-    return controlErrorResponse(c, err);
+controlCampaignRoutes.post(
+  '/',
+  zValidator('json', createCampaignSchema, controlValidationHook),
+  async (c) => {
+    try {
+      const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
+      const user = c.get('currentUser');
+      const data = c.req.valid('json');
+      const campaign = await createCampaign({
+        projectId,
+        createdBy: user.userId,
+        ...data,
+      });
+      return c.json(campaign, 201);
+    } catch (err) {
+      return controlErrorResponse(c, err);
+    }
   }
-});
+);
 
-controlCampaignRoutes.patch('/:id', zValidator('json', updateCampaignSchema), async (c) => {
-  try {
-    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
-    const id = parseIdParam(c.req.param('id'));
-    const existing = await getCampaignById(id);
-    if (!existing || existing.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'campaign not found');
-    }
-    const updated = await updateCampaign(id, c.req.valid('json'));
-    return c.json(updated);
-  } catch (err) {
-    return controlErrorResponse(c, err);
-  }
-});
-
-controlCampaignRoutes.post('/:id/transition', async (c) => {
-  try {
-    const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
-    const id = parseIdParam(c.req.param('id'));
-    const existing = await getCampaignById(id);
-    if (!existing || existing.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'campaign not found');
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = transitionTargetSchema.safeParse(body.targetStatus);
-    if (!parsed.success) {
-      return problemResponse(
-        c,
-        400,
-        'validation',
-        'targetStatus must be one of: draft, running, paused, completed, cancelled'
-      );
-    }
-    const result = await transitionCampaign(id, parsed.data);
-    if ('error' in result) {
-      // Three branches with distinct retry semantics:
-      //   QUEUE_UNAVAILABLE -> 503 transient infra issue, retry later.
-      //   TASK_GENERATION_FAILED -> 500 internal error; the state did
-      //     not actually transition. Mislabeling this as a 409 conflict
-      //     would tell automation "you tried an invalid transition"
-      //     and skip retry — wrong, the transition was valid but
-      //     something downstream blew up.
-      //   Anything else -> 409 state-machine conflict, do not retry.
-      if ('code' in result) {
-        if (result.code === 'QUEUE_UNAVAILABLE') {
-          return problemResponse(c, 503, 'service_unavailable', result.error);
-        }
-        if (result.code === 'TASK_GENERATION_FAILED') {
-          logger.error(
-            { campaignId: id, requestId: c.get('requestId') },
-            'task generation failed during campaign transition'
-          );
-          return problemResponse(c, 500, 'internal', result.error);
-        }
+controlCampaignRoutes.patch(
+  '/:id',
+  zValidator('json', updateCampaignSchema, controlValidationHook),
+  async (c) => {
+    try {
+      const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
+      const id = parseIdParam(c.req.param('id'));
+      const existing = await getCampaignById(id);
+      if (!existing || existing.projectId !== projectId) {
+        return problemResponse(c, 404, 'not_found', 'campaign not found');
       }
-      return problemResponse(c, 409, 'conflict', result.error);
+      const updated = await updateCampaign(id, c.req.valid('json'));
+      return c.json(updated);
+    } catch (err) {
+      return controlErrorResponse(c, err);
     }
-    return c.json(result);
-  } catch (err) {
-    return controlErrorResponse(c, err);
   }
-});
+);
+
+controlCampaignRoutes.post(
+  '/:id/transition',
+  zValidator('json', transitionRequestSchema, controlValidationHook),
+  async (c) => {
+    try {
+      const { projectId } = await requireProjectRole(c, 'contributor', 'admin');
+      const id = parseIdParam(c.req.param('id'));
+      const existing = await getCampaignById(id);
+      if (!existing || existing.projectId !== projectId) {
+        return problemResponse(c, 404, 'not_found', 'campaign not found');
+      }
+      const { targetStatus } = c.req.valid('json');
+      const result = await transitionCampaign(id, targetStatus);
+      if ('error' in result) {
+        // Three branches with distinct retry semantics:
+        //   QUEUE_UNAVAILABLE -> 503 transient infra issue, retry later.
+        //   TASK_GENERATION_FAILED -> 500 internal error; the state did
+        //     not actually transition. Mislabeling this as a 409 conflict
+        //     would tell automation "you tried an invalid transition"
+        //     and skip retry — wrong, the transition was valid but
+        //     something downstream blew up.
+        //   Anything else -> 409 state-machine conflict, do not retry.
+        if ('code' in result) {
+          if (result.code === 'QUEUE_UNAVAILABLE') {
+            // Transient infra error — surface a generic "service
+            // unavailable" message so we don't leak internal queue text.
+            logger.warn(
+              { campaignId: id, requestId: c.get('requestId'), error: result.error },
+              'campaign transition deferred — queue unavailable'
+            );
+            return problemResponse(
+              c,
+              503,
+              'service_unavailable',
+              'Service temporarily unavailable'
+            );
+          }
+          if (result.code === 'TASK_GENERATION_FAILED') {
+            // Internal error — log the full cause server-side, return a
+            // generic message so SQL/stack details don't reach the
+            // client.
+            logger.error(
+              { campaignId: id, requestId: c.get('requestId'), error: result.error },
+              'task generation failed during campaign transition'
+            );
+            return problemResponse(c, 500, 'internal', 'An unexpected error occurred');
+          }
+        }
+        return problemResponse(c, 409, 'conflict', result.error);
+      }
+      return c.json(result);
+    } catch (err) {
+      return controlErrorResponse(c, err);
+    }
+  }
+);
