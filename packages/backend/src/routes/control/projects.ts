@@ -13,7 +13,7 @@
 import { Hono } from 'hono';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
-import { getUserProjects, getUserProjectsPaginated } from '../../services/projects.js';
+import { findUserProjectById, getUserProjectsPaginated } from '../../services/projects.js';
 import type { AppEnv } from '../../types.js';
 import { controlErrorResponse, parseIdParam } from './helpers.js';
 
@@ -37,13 +37,11 @@ controlProjectRoutes.get('/:id', async (c) => {
   try {
     const id = parseIdParam(c.req.param('id'));
     const { userId } = c.get('currentUser');
-    // Single visibility gate: if the project is in the caller's set we
-    // return it; otherwise 404 — same envelope whether the project
-    // doesn't exist or the caller can't see it. Avoids leaking
-    // existence via 403 vs 404 differentiation. Single-row lookup so a
-    // full membership list isn't materialized just to check
-    // visibility.
-    const project = (await getUserProjects(userId)).find((p) => p.id === id);
+    // Single-row visibility gate: returns the project when the caller
+    // is a member, null otherwise. Same envelope (404) whether the
+    // project doesn't exist or the caller can't see it — avoids
+    // leaking existence via 403 vs 404 differentiation.
+    const project = await findUserProjectById(userId, id);
     if (!project) return problemResponse(c, 404, 'not_found', 'project not found');
     return c.json(project);
   } catch (err) {

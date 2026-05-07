@@ -13,7 +13,7 @@ import {
   deleteAttack,
   getAttackById,
   getCampaignById,
-  listAttacks,
+  listAttacksPaginated,
   updateAttack,
 } from '../../services/campaigns.js';
 import type { AppEnv } from '../../types.js';
@@ -78,12 +78,11 @@ controlAttackRoutes.get('/', async (c) => {
     if (!campaign || campaign.projectId !== projectId) {
       return problemResponse(c, 404, 'not_found', 'campaign not found');
     }
-    // listAttacks returns the full set; slice to honor offset/limit
-    // and report the total separately so the response shape matches
-    // every other Control list endpoint.
-    const all = await listAttacks(campaignId);
-    const items = all.slice(query.offset, query.offset + query.limit);
-    return c.json(paginate(items, all.length, query));
+    const { items, total } = await listAttacksPaginated(campaignId, {
+      limit: query.limit,
+      offset: query.offset,
+    });
+    return c.json(paginate(items, total, query));
   } catch (err) {
     return controlErrorResponse(c, err);
   }

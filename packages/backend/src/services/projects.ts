@@ -58,6 +58,31 @@ export async function getUserProjects(userId: number) {
 }
 
 /**
+ * Single-row lookup for "is project X visible to user Y" — does the
+ * full join in one query instead of materializing every membership.
+ * Returns the project row when the user is a member, `null` otherwise.
+ * Same shape as a single element of `getUserProjects` so callers can
+ * substitute it cleanly.
+ */
+export async function findUserProjectById(userId: number, projectId: number) {
+  const [row] = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      slug: projects.slug,
+      description: projects.description,
+      settings: projects.settings,
+      roles: projectUsers.roles,
+      createdAt: projects.createdAt,
+    })
+    .from(projectUsers)
+    .innerJoin(projects, eq(projectUsers.projectId, projects.id))
+    .where(and(eq(projectUsers.userId, userId), eq(projects.id, projectId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Paginated variant of `getUserProjects` for the Control API. Returns
  * `{ items, total }` with a deterministic `(id desc)` order so
  * pagination is stable across new project creations.

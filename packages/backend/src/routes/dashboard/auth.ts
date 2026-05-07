@@ -35,8 +35,12 @@ authRouter.post('/me/api-key', requireSession, async (c) => {
   const { userId } = c.get('currentUser');
   try {
     const { token, metadata } = await issueUserApiKey(userId);
-    // Raw token is shown exactly once; mark response uncacheable.
+    // Raw token is shown exactly once; mark response uncacheable for
+    // both modern (Cache-Control) and legacy/HTTP-1.0 (Pragma)
+    // intermediaries that may sit between the dashboard and the
+    // backend in air-gapped deployments.
     c.header('Cache-Control', 'no-store');
+    c.header('Pragma', 'no-cache');
     return c.json({ token, metadata });
   } catch (err) {
     logger.error({ err, userId, op: 'issueUserApiKey' }, 'API key issue failed');

@@ -64,18 +64,20 @@ paths:
     get:
       operationId: getProject
       summary: Get a single project
+      description: |
+        Returns the project record when the caller is a member.
+        Non-members get `404 not_found` (not 403) so the existence of
+        project ids is not enumerable through this endpoint.
       tags: [Projects]
       security:
         - BearerApiKey: []
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
         "200":
           description: Project record
-        "403":
-          $ref: "#/components/responses/Forbidden"
+        "401":
+          $ref: "#/components/responses/AuthError"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -397,11 +399,29 @@ paths:
           required: true
           schema:
             type: integer
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "401":
           $ref: "#/components/responses/AuthError"
         "200":
-          description: List of attacks
+          description: Paginated attacks for the named campaign
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, offset, limit]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+                  offset:
+                    type: integer
+                  limit:
+                    type: integer
         "404":
           $ref: "#/components/responses/NotFound"
     post:

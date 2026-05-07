@@ -95,6 +95,10 @@ if (!IS_ISOLATED) {
     updateCampaign: async (id: number) => ({ id }),
     transitionCampaign: async () => mockTransitionResult,
     listAttacks: async () => [],
+    listAttacksPaginated: async (campaignId: number) => ({
+      items: mockAttacks.filter((a) => a.campaignId === campaignId),
+      total: mockAttacks.filter((a) => a.campaignId === campaignId).length,
+    }),
     getAttackById: async (id: number) => mockAttacks.find((a) => a.id === id) ?? null,
     createAttack: async (data: { campaignId: number; projectId: number }) => ({ id: 888, ...data }),
     updateAttack: async (id: number) => ({ id }),
