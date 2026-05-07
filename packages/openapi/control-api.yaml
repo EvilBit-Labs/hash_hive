@@ -70,6 +70,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Project record
         "403":
@@ -102,6 +104,8 @@ paths:
         - $ref: "#/components/parameters/Offset"
         - $ref: "#/components/parameters/Limit"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated users
         "403":
@@ -118,6 +122,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: User record
         "403":
@@ -137,6 +143,8 @@ paths:
         - $ref: "#/components/parameters/Offset"
         - $ref: "#/components/parameters/Limit"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated hash lists
         "400":
@@ -153,6 +161,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Hash list record
         "404":
@@ -169,6 +179,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Stats payload
         "404":
@@ -184,6 +196,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Stats payload
         "400":
@@ -207,6 +221,8 @@ paths:
         - $ref: "#/components/parameters/Offset"
         - $ref: "#/components/parameters/Limit"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated resources
 
@@ -227,6 +243,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Resource record
         "404":
@@ -249,6 +267,8 @@ paths:
             type: string
             enum: [draft, running, paused, completed, cancelled]
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated campaigns
     post:
@@ -276,6 +296,8 @@ paths:
                 priority:
                   type: integer
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "201":
           description: Created campaign
         "400":
@@ -292,6 +314,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Campaign record
         "404":
@@ -319,6 +343,8 @@ paths:
                 priority:
                   type: integer
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Updated campaign
         "404":
@@ -348,8 +374,14 @@ paths:
       responses:
         "200":
           description: Updated campaign
+        "401":
+          $ref: "#/components/responses/AuthError"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /attacks:
     get:
@@ -366,6 +398,8 @@ paths:
           schema:
             type: integer
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: List of attacks
         "404":
@@ -399,6 +433,8 @@ paths:
                 masklistId:
                   type: integer
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "201":
           description: Created attack
 
@@ -413,6 +449,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Attack record
     patch:
@@ -425,6 +463,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Updated attack
     delete:
@@ -437,6 +477,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "204":
           description: Deleted
 
@@ -457,6 +499,8 @@ paths:
             type: string
             enum: [online, offline, busy, error, benchmarked]
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated agents
 
@@ -471,6 +515,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Agent record
         "404":
@@ -485,6 +531,8 @@ paths:
         - $ref: "#/components/parameters/IdPath"
         - $ref: "#/components/parameters/ProjectIdHeader"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Updated agent
         "403":
@@ -507,6 +555,8 @@ paths:
         - $ref: "#/components/parameters/Offset"
         - $ref: "#/components/parameters/Limit"
       responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated tasks
 
@@ -637,6 +687,18 @@ components:
             $ref: "#/components/schemas/Problem"
     Conflict:
       description: Operation conflicts with current resource state
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Server-side failure that is not the caller's fault (e.g., downstream task generation failed)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: Transient infrastructure issue (e.g., queue down); the operation is safe to retry
       content:
         application/problem+json:
           schema:

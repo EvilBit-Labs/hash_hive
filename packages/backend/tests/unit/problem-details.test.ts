@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { mapZodError, problemResponse } from '../../src/lib/problem-details.js';
@@ -6,7 +7,7 @@ import type { AppEnv } from '../../src/types.js';
 
 const PROBLEM_CONTENT_TYPE = 'application/problem+json';
 
-function makeApp(handler: (c: Parameters<Parameters<typeof app.get>[1]>[0]) => Response) {
+function makeApp(handler: (c: Context<AppEnv>) => Response) {
   const app = new Hono<AppEnv>();
   app.get('/x', handler);
   return app;
@@ -86,8 +87,10 @@ describe('mapZodError', () => {
 
     const errors = mapZodError(parsed.error);
     expect(errors).toHaveLength(2);
-    expect(errors[0].path).toBe('name');
-    expect(errors[1].path).toBe('age');
+    const [nameError, ageError] = errors;
+    if (!nameError || !ageError) throw new Error('expected two validation errors');
+    expect(nameError.path).toBe('name');
+    expect(ageError.path).toBe('age');
     expect(errors.every((e) => typeof e.code === 'string')).toBe(true);
     expect(errors.every((e) => typeof e.message === 'string')).toBe(true);
   });
@@ -98,7 +101,9 @@ describe('mapZodError', () => {
     if (parsed.success) throw new Error('expected schema to fail');
 
     const errors = mapZodError(parsed.error);
-    expect(errors[0].path).toBe('user.email');
+    const [firstError] = errors;
+    if (!firstError) throw new Error('expected at least one validation error');
+    expect(firstError.path).toBe('user.email');
   });
 
   test('handles top-level errors with empty path', () => {
@@ -107,6 +112,8 @@ describe('mapZodError', () => {
     if (parsed.success) throw new Error('expected schema to fail');
 
     const errors = mapZodError(parsed.error);
-    expect(errors[0].path).toBe('');
+    const [firstError] = errors;
+    if (!firstError) throw new Error('expected at least one validation error');
+    expect(firstError.path).toBe('');
   });
 });

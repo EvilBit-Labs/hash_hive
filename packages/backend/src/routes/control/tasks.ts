@@ -14,10 +14,15 @@ import { controlErrorResponse, parseIdParam, requireProjectMembership } from './
 
 export const controlTaskRoutes = new Hono<AppEnv>();
 
+// `campaignId` is REQUIRED — the dashboard tasks service does not
+// enforce project scoping by itself, so the caller must name a campaign
+// we can verify belongs to the active project. Marking it required at
+// the Zod layer means the validation message and the RFC 9457
+// problem-details envelope are single-sourced through controlErrorResponse.
 const taskFilterSchema = z.object({
   status: z.enum(['pending', 'running', 'completed', 'failed', 'exhausted']).optional(),
   agentId: z.coerce.number().int().positive().optional(),
-  campaignId: z.coerce.number().int().positive().optional(),
+  campaignId: z.coerce.number().int().positive(),
   attackId: z.coerce.number().int().positive().optional(),
 });
 
@@ -28,22 +33,9 @@ controlTaskRoutes.get('/', async (c) => {
     const query = paginationQuerySchema.parse(params);
     const filters = taskFilterSchema.parse(params);
 
-    // Project-scope through campaignId — if a campaign filter is supplied,
-    // confirm it belongs to the active project. Otherwise the dashboard
-    // tasks service does not enforce project scoping by itself, so we
-    // require a campaign filter for Control listings.
-    if (filters.campaignId) {
-      const campaign = await getCampaignById(filters.campaignId);
-      if (!campaign || campaign.projectId !== projectId) {
-        return problemResponse(c, 404, 'not_found', 'campaign not found');
-      }
-    } else {
-      return problemResponse(
-        c,
-        400,
-        'validation',
-        'campaignId is required to scope tasks to the active project'
-      );
+    const campaign = await getCampaignById(filters.campaignId);
+    if (!campaign || campaign.projectId !== projectId) {
+      return problemResponse(c, 404, 'not_found', 'campaign not found');
     }
 
     const { tasks, total } = await listTasks({

@@ -1,5 +1,5 @@
 import { projects, projectUsers } from '@hashhive/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, count, desc, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 
 export async function createProject(data: {
@@ -55,6 +55,38 @@ export async function getUserProjects(userId: number) {
     .from(projectUsers)
     .innerJoin(projects, eq(projectUsers.projectId, projects.id))
     .where(eq(projectUsers.userId, userId));
+}
+
+/**
+ * Paginated variant of `getUserProjects` for the Control API. Returns
+ * `{ items, total }` with a deterministic `(id desc)` order so
+ * pagination is stable across new project creations.
+ */
+export async function getUserProjectsPaginated(
+  userId: number,
+  opts: { limit: number; offset: number }
+) {
+  const whereClause = eq(projectUsers.userId, userId);
+  const [items, countResult] = await Promise.all([
+    db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        slug: projects.slug,
+        description: projects.description,
+        settings: projects.settings,
+        roles: projectUsers.roles,
+        createdAt: projects.createdAt,
+      })
+      .from(projectUsers)
+      .innerJoin(projects, eq(projectUsers.projectId, projects.id))
+      .where(whereClause)
+      .orderBy(desc(projects.id))
+      .limit(opts.limit)
+      .offset(opts.offset),
+    db.select({ value: count() }).from(projectUsers).where(whereClause),
+  ]);
+  return { items, total: Number(countResult[0]?.value ?? 0) };
 }
 
 export async function updateProject(

@@ -21,15 +21,20 @@ BASE="${HASHHIVE_BASE_URL%/}/api/v1/control"
 HDR_AUTH=(-H "Authorization: Bearer ${HASHHIVE_API_KEY}")
 HDR_PROJECT=(-H "X-Project-Id: ${HASHHIVE_PROJECT_ID}")
 
+# Per-process body file so concurrent runs (CI matrix, two terminals)
+# don't trample each other's response bodies.
+BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/control-smoke-body.XXXXXX")
+trap 'rm -f "$BODY_FILE"' EXIT
+
 call() {
   local label="$1"; shift
   local expect="$1"; shift
   echo "→ ${label}"
   local status
-  status=$(curl -sS -o /tmp/control-smoke-body -w '%{http_code}' "$@" || true)
+  status=$(curl -sS -o "$BODY_FILE" -w '%{http_code}' "$@" || true)
   if [[ "${status}" != "${expect}" ]]; then
     echo "   FAIL: expected ${expect}, got ${status}"
-    cat /tmp/control-smoke-body
+    cat "$BODY_FILE"
     echo
     exit 1
   fi

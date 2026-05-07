@@ -6,6 +6,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import {
   createAttack,
@@ -58,23 +59,30 @@ async function loadAttackInProject(id: number, projectId: number) {
   return attack;
 }
 
+// `campaignId` is REQUIRED for the same project-scoping reason as
+// /tasks. Validating at the Zod layer single-sources the validation
+// envelope through controlErrorResponse.
+const attackListQuerySchema = z.object({
+  campaignId: z.coerce.number().int().positive(),
+});
+
 controlAttackRoutes.get('/', async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c);
-    const campaignIdRaw = c.req.query('campaignId');
-    if (!campaignIdRaw) {
-      return problemResponse(c, 400, 'validation', 'campaignId query parameter is required');
-    }
-    const campaignId = Number(campaignIdRaw);
-    if (!Number.isInteger(campaignId) || campaignId <= 0) {
-      return problemResponse(c, 400, 'validation', 'campaignId must be a positive integer');
-    }
+    const params = Object.fromEntries(new URL(c.req.url).searchParams);
+    const query = paginationQuerySchema.parse(params);
+    const { campaignId } = attackListQuerySchema.parse(params);
+
     const campaign = await getCampaignById(campaignId);
     if (!campaign || campaign.projectId !== projectId) {
       return problemResponse(c, 404, 'not_found', 'campaign not found');
     }
-    const items = await listAttacks(campaignId);
-    return c.json({ items, total: items.length });
+    // listAttacks returns the full set; slice to honor offset/limit
+    // and report the total separately so the response shape matches
+    // every other Control list endpoint.
+    const all = await listAttacks(campaignId);
+    const items = all.slice(query.offset, query.offset + query.limit);
+    return c.json(paginate(items, all.length, query));
   } catch (err) {
     return controlErrorResponse(c, err);
   }

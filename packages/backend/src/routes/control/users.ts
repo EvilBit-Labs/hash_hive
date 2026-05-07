@@ -10,7 +10,7 @@
  */
 
 import { projectUsers, users } from '@hashhive/shared';
-import { and, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { db } from '../../db/index.js';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
@@ -60,6 +60,9 @@ controlUserRoutes.get('/', async (c) => {
         .from(users)
         .innerJoin(projectUsers, eq(projectUsers.userId, users.id))
         .where(eq(projectUsers.projectId, projectId))
+        // Stable order so concurrent inserts/role changes don't shift
+        // rows across pages. id ascends monotonically and is unique.
+        .orderBy(asc(users.id))
         .limit(query.limit)
         .offset(query.offset),
       db.select({ value: count() }).from(projectUsers).where(eq(projectUsers.projectId, projectId)),

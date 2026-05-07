@@ -21,10 +21,17 @@ export function AccountPage() {
 }
 
 function ApiKeySection() {
-  const { data: metadata, isLoading } = useApiKeyMetadata();
+  const { data: metadata, isLoading, error: queryError } = useApiKeyMetadata();
   const [actionError, setActionError] = useState<string | null>(null);
   const [rawToken, setRawToken] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'rotate' | 'revoke' | null>(null);
+
+  const queryErrorMessage =
+    queryError instanceof Error
+      ? queryError.message
+      : queryError
+        ? 'Failed to load API key metadata'
+        : null;
 
   const issueMutation = useIssueApiKey({ onError: setActionError });
   const revokeMutation = useRevokeApiKey({ onError: setActionError });
@@ -56,10 +63,18 @@ function ApiKeySection() {
         <span className="text-xs text-muted-foreground">For automation, CI, and CLI tools</span>
       </header>
 
+      {queryErrorMessage && <ErrorBanner message={queryErrorMessage} />}
       {actionError && <ErrorBanner message={actionError} />}
 
       {isLoading ? (
         <p className="text-xs text-muted-foreground">Loading...</p>
+      ) : queryErrorMessage ? (
+        // Don't fall through to "no key" when the metadata read failed —
+        // showing the Generate button could clobber an existing key the
+        // user just couldn't load.
+        <p className="text-xs text-muted-foreground">
+          Reload the page to retry, or contact an administrator if the problem persists.
+        </p>
       ) : rawToken ? (
         <RawTokenReveal token={rawToken} onDismiss={() => setRawToken(null)} />
       ) : metadata?.hasKey ? (

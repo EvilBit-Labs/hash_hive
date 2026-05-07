@@ -1,19 +1,30 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { fireEvent } from '@testing-library/react';
 import { AccountPage } from '../../src/pages/account';
-import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { cleanupAll, renderWithProviders, screen, waitFor } from '../test-utils';
 
-let fetchMock: ReturnType<typeof mockFetch>;
+// One fetch swap per test, captured at setup so afterEach restores the
+// REAL fetch (not a previous mock). Earlier this file double-swapped
+// (mockFetch() then a custom function) which left a leaked mock as the
+// "original" the helper restored. The tests now manage the swap
+// directly so the lifecycle is observable.
+let realFetch: typeof globalThis.fetch | null = null;
 
 afterEach(() => {
   cleanupAll();
-  if (fetchMock) restoreFetch(fetchMock);
+  if (realFetch) {
+    globalThis.fetch = realFetch;
+    realFetch = null;
+  }
 });
 
-beforeEach(() => {
-  fetchMock = mockFetch();
-});
+type FetchHandler = (input: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
+
+function installFetch(handler: FetchHandler) {
+  realFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    Promise.resolve(handler(input, init))) as typeof fetch;
+}
 
 function setupRoutes(initialMetadata: {
   hasKey: boolean;
@@ -22,8 +33,7 @@ function setupRoutes(initialMetadata: {
 }) {
   const state = { metadata: initialMetadata };
 
-  fetchMock = mockFetch();
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  installFetch((input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const method = ((init?.method as string) ?? 'GET').toUpperCase();
 
@@ -55,7 +65,7 @@ function setupRoutes(initialMetadata: {
       status: 404,
       headers: { 'Content-Type': 'application/json' },
     });
-  }) as typeof fetch;
+  });
 
   return state;
 }
@@ -150,10 +160,7 @@ describe('AccountPage API key section', () => {
   });
 
   it('renders ErrorBanner when POST /me/api-key returns 500', async () => {
-    setupRoutes({ hasKey: false, prefix: null, lastUsedAt: null });
-    // Override the POST handler to fail.
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    installFetch((input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       const method = ((init?.method as string) ?? 'GET').toUpperCase();
       if (url.includes('/dashboard/auth/me/api-key') && method === 'POST') {
@@ -164,8 +171,12 @@ describe('AccountPage API key section', () => {
           { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
       }
-      return originalFetch(input, init);
-    }) as typeof fetch;
+      // GET path: pretend no key exists.
+      return new Response(JSON.stringify({ hasKey: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
 
     renderWithProviders(<AccountPage />);
     await waitFor(() => {
@@ -181,8 +192,7 @@ describe('AccountPage API key section', () => {
   });
 
   it('renders ErrorBanner when fetch throws during issue', async () => {
-    setupRoutes({ hasKey: false, prefix: null, lastUsedAt: null });
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    installFetch((input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       const method = ((init?.method as string) ?? 'GET').toUpperCase();
       if (url.includes('/dashboard/auth/me/api-key') && method === 'POST') {
@@ -192,7 +202,7 @@ describe('AccountPage API key section', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
-    }) as typeof fetch;
+    });
 
     renderWithProviders(<AccountPage />);
     await waitFor(() => {

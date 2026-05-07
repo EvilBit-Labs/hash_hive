@@ -1,10 +1,11 @@
 /**
  * Control API resource-file endpoints (wordlists, rules, masks).
  *
- * Read-only listing and inspection — uploads remain on the dashboard
- * surface (presigned URLs and chunked-upload coordination are
- * interactive workflows). Automation can list and delete its own
- * resources.
+ * Read-only listing and inspection. Uploads stay on the dashboard
+ * surface — presigned URLs and chunked-upload coordination are
+ * interactive workflows that don't compose well with one-shot
+ * automation. Mutating endpoints (POST/PATCH/DELETE) are not
+ * implemented in this Control surface.
  */
 
 import { maskLists, ruleLists, wordLists } from '@hashhive/shared';
@@ -13,7 +14,11 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
-import { getResourceById, listResources, type ResourceTable } from '../../services/resources.js';
+import {
+  getResourceById,
+  listResourcesPaginated,
+  type ResourceTable,
+} from '../../services/resources.js';
 import type { AppEnv } from '../../types.js';
 import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
 
@@ -46,9 +51,11 @@ controlResourceRoutes.get('/:kind', async (c) => {
       );
     }
     const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
-    const all = await listResources(RESOURCE_TABLES[kind], projectId);
-    const slice = all.slice(query.offset, query.offset + query.limit);
-    return c.json(paginate(slice, all.length, query));
+    const { items, total } = await listResourcesPaginated(RESOURCE_TABLES[kind], projectId, {
+      limit: query.limit,
+      offset: query.offset,
+    });
+    return c.json(paginate(items, total, query));
   } catch (err) {
     return controlErrorResponse(c, err);
   }

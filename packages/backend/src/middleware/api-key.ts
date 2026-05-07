@@ -56,12 +56,15 @@ function authProblem(c: Context<AppEnv>): Response {
 }
 
 export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<Response | void> => {
+  // Auth scheme tokens are case-insensitive per RFC 7235 — accept both
+  // `Bearer` and `bearer` so CLI clients and curl one-liners aren't
+  // arbitrarily picky about capitalization.
   const authHeader = c.req.header('authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const [scheme, token = ''] = authHeader?.trim().split(/\s+/, 2) ?? [];
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
     return authProblem(c);
   }
 
-  const token = authHeader.slice('Bearer '.length).trim();
   const parsed = parseApiKey(token);
   if (!parsed) return authProblem(c);
 

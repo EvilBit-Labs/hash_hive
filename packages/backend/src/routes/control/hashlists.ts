@@ -8,7 +8,11 @@
 import { Hono } from 'hono';
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
-import { getHashListById, getHashListStats, listHashLists } from '../../services/resources.js';
+import {
+  getHashListById,
+  getHashListStats,
+  listHashListsPaginated,
+} from '../../services/resources.js';
 import type { AppEnv } from '../../types.js';
 import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
 
@@ -18,9 +22,11 @@ controlHashListRoutes.get('/', async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c);
     const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
-    const all = await listHashLists(projectId);
-    const slice = all.slice(query.offset, query.offset + query.limit);
-    return c.json(paginate(slice, all.length, query));
+    const { items, total } = await listHashListsPaginated(projectId, {
+      limit: query.limit,
+      offset: query.offset,
+    });
+    return c.json(paginate(items, total, query));
   } catch (err) {
     return controlErrorResponse(c, err);
   }
