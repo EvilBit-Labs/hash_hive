@@ -57,12 +57,21 @@ export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID;
 
 /**
  * Discriminated union over event scope. Project events carry a real
- * project id; system events carry the sentinel literal. The union shape
- * means TypeScript refuses `{ type: 'agent_status', projectId: 0 }`
- * (project event with system sentinel) and `{ type: 'system_health',
- * projectId: 42 }` (system event leaking into project channel) at
- * compile time. `emit()` accepts the project arm; `broadcastSystemEvent()`
- * accepts the system arm.
+ * project id; system events carry the sentinel literal. The realistic
+ * mistake — a system event leaking into a project channel with a real
+ * project id, e.g. `{ type: 'system_health', projectId: 42 }` — is
+ * rejected at compile time because the system arm types `projectId` as
+ * the literal `0`.
+ *
+ * The inverse case (a project event constructed with the sentinel
+ * `projectId: 0`) is NOT compile-rejected: `0` is a valid `number` and
+ * the project arm types `projectId: number`. Branding `ProjectId` would
+ * close that gap but adds ceremony at every call site for marginal
+ * benefit, since every emit of a project event in this codebase passes
+ * a real id from the database.
+ *
+ * `emit()` accepts the project arm; `broadcastSystemEvent()` accepts
+ * the system arm.
  */
 export type AppEvent =
   | {

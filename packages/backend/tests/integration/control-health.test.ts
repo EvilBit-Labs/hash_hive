@@ -32,7 +32,16 @@ mock.module('../../src/db/index.js', () => ({
         where: () => Promise.resolve(),
       }),
     }),
-    execute: async () => [{ used: 1, max: 100 }],
+    // Discriminate by query content so a regression that swapped
+    // pg_stat_activity / pg_settings shapes (or renamed `used`/`max`)
+    // would surface — a single shared shape would mask real column
+    // mismatches.
+    execute: async (q: unknown) => {
+      const sqlText = String(q);
+      if (sqlText.includes('pg_stat_activity')) return [{ used: 1 }];
+      if (sqlText.includes('pg_settings')) return [{ max: 100 }];
+      return [];
+    },
   },
   client: {},
 }));

@@ -119,18 +119,37 @@ describe('SystemHealthCard', () => {
 
   it('per-component status text reflects the component status (not just aggregate)', async () => {
     // Issue #109 (PR review C-2): a regression that mapped every dot to
-    // bg-success would still pass the aggregate-label test. Pin the
-    // per-component status text so the card's primary signal is locked in.
+    // bg-success would pass an aggregate-label-only test. Pin the
+    // per-row status text via the existing aria-label (`<COMPONENT>
+    // status: <status>...`) so a row-shuffle regression that put the
+    // wrong status next to the wrong row also fails. All four fixture
+    // components include a `detail` payload so each row renders as a
+    // button (the row scoping needs the aria-label, which only the
+    // expandable button form provides).
     fetchMock = mockFetch({
       '/dashboard/health': {
         status: 200,
         body: buildHealth({
           status: 'unhealthy',
           components: {
-            database: { status: 'unhealthy', message: 'pool exhausted', durationMs: 4 },
-            redis: { status: 'degraded', message: 'high latency', durationMs: 2 },
+            database: {
+              status: 'unhealthy',
+              message: 'pool exhausted',
+              durationMs: 4,
+              detail: { connectionsUsed: 100, connectionsMax: 100 },
+            },
+            redis: {
+              status: 'degraded',
+              message: 'high latency',
+              durationMs: 2,
+              detail: { latencyMs: 800 },
+            },
             minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
-            queues: { status: 'healthy', durationMs: 12 },
+            queues: {
+              status: 'healthy',
+              durationMs: 12,
+              detail: { queues: { 'tasks-normal': { waiting: 1, active: 0, failed: 0 } } },
+            },
           },
         }),
       },
@@ -141,15 +160,29 @@ describe('SystemHealthCard', () => {
       expect(screen.getByText('Unhealthy')).toBeDefined();
     });
 
-    // The per-component row shows the literal status string. Two
-    // components are non-healthy → both their messages render too.
+    // Per-row scoping: each row's status is wired into its aria-label
+    // (e.g. "Database status: unhealthy. Click to show details.").
+    // A row-shuffle regression would map the wrong status to the wrong
+    // row's label and fail these assertions — unlike a global
+    // `getAllByText('healthy').length >= 1` which can't catch shuffles.
+    const dbRow = screen
+      .getAllByRole('button')
+      .find((b) => b.getAttribute('aria-label')?.startsWith('Database status:'));
+    expect(dbRow?.getAttribute('aria-label')).toContain('unhealthy');
+
+    const redisRow = screen
+      .getAllByRole('button')
+      .find((b) => b.getAttribute('aria-label')?.startsWith('Redis status:'));
+    expect(redisRow?.getAttribute('aria-label')).toContain('degraded');
+
+    const minioRow = screen
+      .getAllByRole('button')
+      .find((b) => b.getAttribute('aria-label')?.startsWith('Object Storage status:'));
+    expect(minioRow?.getAttribute('aria-label')).toContain('healthy');
+
+    // Per-component messages render adjacent to their row.
     expect(screen.getByText('pool exhausted')).toBeDefined();
     expect(screen.getByText('high latency')).toBeDefined();
-    // The status text appears on each row — at least one 'healthy',
-    // one 'degraded', one 'unhealthy' must all be visible somewhere.
-    expect(screen.getAllByText('healthy').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('degraded').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('unhealthy').length).toBeGreaterThanOrEqual(1);
   });
 
   it('expands per-component detail on click when detail is present', async () => {

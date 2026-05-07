@@ -20,9 +20,11 @@ async function main() {
   // duplicate scheduler upsert from the API and worker processes is
   // safe.
   //
-  // Init failure is treated as fail-fast: a worker without a
-  // QueueManager cannot do its job, and warn-and-continue would leave
-  // the process alive but silently broken until ops noticed.
+  // Synchronous init failure (e.g. queue construction throws after
+  // Redis connects) propagates to main().catch and exits the process.
+  // Note that QueueManager.init() itself swallows initial Redis
+  // connection failure and waits for the `ready` event; "fail-fast"
+  // here covers post-connect setup errors, not Redis-down-at-startup.
   const queueManager = new QueueManager();
   setQueueManager(queueManager);
   await queueManager.init();

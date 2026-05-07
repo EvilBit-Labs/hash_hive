@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   __resetEventsForTesting,
+  type AppEvent,
   broadcastSystemEvent,
   broadcastSystemHealth,
   emit,
@@ -17,6 +18,23 @@ import {
   registerClient,
   unregisterClient,
 } from '../../src/services/events.js';
+
+// Compile-time exhaustiveness pin for the drift-guard test below. Adding
+// a new EventType without updating this map is a type error, which then
+// guides the contributor to also extend the runtime drift guard. There's
+// no way to derive a runtime array from a TypeScript union, so this is
+// the closest we can get to a single source of truth.
+type _EventTypeExhaustive = Record<AppEvent['type'], true>;
+const _EVENT_TYPE_GUARD: _EventTypeExhaustive = {
+  agent_status: true,
+  campaign_status: true,
+  task_update: true,
+  crack_result: true,
+  resource_update: true,
+  system_health: true,
+};
+// Reference the constant so unused-export rules don't strip it.
+void _EVENT_TYPE_GUARD;
 
 interface FakeWs {
   readyState: number;

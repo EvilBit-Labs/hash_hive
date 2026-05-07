@@ -96,7 +96,11 @@ export async function runProbe(
     // should land in the `error` log channel so alerting fires — a
     // TypeError surfacing as "database unhealthy" is a debugging trap.
     const isProgrammingError =
-      err instanceof TypeError || err instanceof ReferenceError || err instanceof SyntaxError;
+      err instanceof TypeError ||
+      err instanceof ReferenceError ||
+      err instanceof SyntaxError ||
+      err instanceof RangeError ||
+      err instanceof URIError;
     if (isProgrammingError) {
       logger.error(
         { err, probe: name },
@@ -105,11 +109,18 @@ export async function runProbe(
     } else if (!isTimeout) {
       logger.warn({ err, probe: name }, 'health probe failed');
     }
+    // Programming errors carry stack-revealing messages (e.g.
+    // "Cannot read properties of undefined (reading 'foo')") that
+    // would leak through to authenticated SystemHealth consumers.
+    // The full err is in the structured log line; clients see a
+    // generic message so probe-internal state is never on the wire.
     const message = isTimeout
       ? `probe timed out after ${timeoutMs}ms`
-      : err instanceof Error
-        ? err.message
-        : 'probe failed';
+      : isProgrammingError
+        ? 'probe failed: internal error'
+        : err instanceof Error
+          ? err.message
+          : 'probe failed';
     return {
       status: 'unhealthy',
       message,

@@ -137,6 +137,14 @@ describe('GET /api/v1/dashboard/health', () => {
     // preserve the structured envelope on every component. (In test env
     // queues will be unhealthy because there's no QueueManager; that
     // gives us a real non-healthy component to inspect.)
+    // Precondition guard: the test's whole point is to verify
+    // non-healthy components retain message + detail. If a future
+    // refactor mocks the queue manager (or otherwise makes every
+    // component healthy in test env), this assertion fails loudly
+    // instead of letting the conditional block below silently skip.
+    const someNonHealthy = Object.values(body.components).some((c) => c.status !== 'healthy');
+    expect(someNonHealthy).toBe(true);
+
     const queues = body.components.queues;
     if (queues.status !== 'healthy') {
       expect(queues.message).toBeDefined();

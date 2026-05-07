@@ -7,7 +7,7 @@
  * would pass that test vacuously. This file mocks `getSystemHealth`
  * directly to drive each terminal HTTP outcome.
  */
-import { describe, expect, it, mock } from 'bun:test';
+import { afterAll, describe, expect, it, mock } from 'bun:test';
 import type { ComponentHealth, SystemHealth } from '../../src/services/health.js';
 
 let mockedAggregateStatus: SystemHealth['status'] = 'healthy';
@@ -61,6 +61,15 @@ mock.module('../../src/config/storage.js', () => ({
 }));
 
 import { app } from '../../src/index.js';
+
+// Defensive cleanup: Bun normally isolates test files per process so
+// the health/storage mocks here don't bleed into other suites. If that
+// isolation model ever changes (e.g. running `bun test --concurrency=1`
+// across files in one process), `mock.restore()` keeps the unmocked
+// `getSystemHealth` for any test file that runs after this one.
+afterAll(() => {
+  mock.restore();
+});
 
 describe('GET /health — deterministic 200 vs 503', () => {
   it('returns 200 with body status="ok" when service reports healthy', async () => {
