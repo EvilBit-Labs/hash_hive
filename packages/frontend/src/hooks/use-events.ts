@@ -8,7 +8,8 @@ export type EventType =
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
-  | 'resource_update';
+  | 'resource_update'
+  | 'system_health';
 
 export interface AppEvent {
   type: EventType;
@@ -66,6 +67,7 @@ export function useEvents(options: UseEventsOptions = {}) {
         reconnectAttemptsRef.current = 0;
       };
 
+      // Project-scoped query keys: invalidated with [key, selectedProjectId].
       const invalidationKeys: Record<string, string[]> = {
         agent_status: ['agents', 'dashboard-stats'],
         campaign_status: ['campaigns', 'dashboard-stats'],
@@ -80,15 +82,30 @@ export function useEvents(options: UseEventsOptions = {}) {
         resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
       };
 
+      // System-scoped query keys: invalidated with just [key], no project.
+      // Issue #109: system_health is system-wide; the query key has no
+      // projectId component, so the project-scoped invalidation path
+      // would never match it.
+      const systemInvalidationKeys: Record<string, string[]> = {
+        system_health: ['system-health'],
+      };
+
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as Record<string, unknown>;
           if (data['type'] === 'connected' || data['type'] === 'pong') return;
 
-          const keys = invalidationKeys[data['type'] as string];
-          if (keys) {
-            for (const key of keys) {
+          const eventType = data['type'] as string;
+          const projectKeys = invalidationKeys[eventType];
+          if (projectKeys) {
+            for (const key of projectKeys) {
               queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] });
+            }
+          }
+          const systemKeys = systemInvalidationKeys[eventType];
+          if (systemKeys) {
+            for (const key of systemKeys) {
+              queryClient.invalidateQueries({ queryKey: [key] });
             }
           }
 

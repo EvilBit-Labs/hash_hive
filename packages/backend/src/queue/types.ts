@@ -28,6 +28,10 @@ export interface HeartbeatMonitorJob {
   triggeredAt: string;
 }
 
+export interface HealthMonitorJob {
+  triggeredAt: string;
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -40,4 +44,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HASH_LIST_PARSING]: HashListParseJob;
   [QUEUE_NAMES.TASK_GENERATION]: TaskGenerationJob;
   [QUEUE_NAMES.HEARTBEAT_MONITOR]: HeartbeatMonitorJob;
+  [QUEUE_NAMES.HEALTH_MONITOR]: HealthMonitorJob;
 };

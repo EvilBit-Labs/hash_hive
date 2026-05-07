@@ -21,12 +21,34 @@ import { logger } from '../config/logger.js';
 
 // ─── Event Types ────────────────────────────────────────────────────
 
-export type EventType =
+/**
+ * Project-scoped event types — `emit()` filters delivery by the client's
+ * subscribed project IDs.
+ */
+export type ProjectEventType =
   | 'agent_status'
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
   | 'resource_update';
+
+/**
+ * System-wide event types — `broadcastSystemEvent()` bypasses project
+ * scoping and delivers to every subscribed client. Reserved for events
+ * that affect every operator regardless of which project they have
+ * selected (system health, future global maintenance notices, etc.).
+ */
+export type SystemEventType = 'system_health';
+
+export type EventType = ProjectEventType | SystemEventType;
+
+/**
+ * Sentinel projectId carried on AppEvent payloads for system-wide events.
+ * Chosen as `0` because Postgres project ids are positive integers, so a
+ * project-scoped consumer filtering on `event.projectId === current` will
+ * never falsely match a system event.
+ */
+export const SYSTEM_EVENT_PROJECT_ID = 0;
 
 export interface AppEvent {
   type: EventType;
@@ -43,12 +65,18 @@ interface WebSocketClient {
   subscribedTypes: Set<EventType>;
 }
 
+// MUST stay in sync with the EventType union above. There's no way to
+// derive a runtime array from a TypeScript union, so adding a new member
+// requires touching both. Any new entry here means new clients connecting
+// without `?types=` will receive the new event by default — verify that
+// is the intended behavior before adding.
 const ALL_EVENT_TYPES: EventType[] = [
   'agent_status',
   'campaign_status',
   'task_update',
   'crack_result',
   'resource_update',
+  'system_health',
 ];
 
 let clientIdCounter = 0;
@@ -84,15 +112,35 @@ export function getClientCount(): number {
 const lastEmitTimes = new Map<string, number>();
 const THROTTLE_MS = 250; // Max 4 events/sec per type+project
 
+// Throttle map maintenance: how often to prune entries that no longer
+// matter (background pulse) and what age qualifies an entry for pruning.
+// Both are 60s so the worst-case dwell of an inactive throttle key is
+// ~120s — short enough for a few hundred KB cap, long enough to absorb
+// bursts without thrashing.
+const THROTTLE_PRUNE_INTERVAL_MS = 60_000;
+const THROTTLE_ENTRY_MAX_AGE_MS = 60_000;
+
 // Periodically prune stale entries to prevent unbounded growth
 setInterval(() => {
-  const cutoff = Date.now() - 60_000; // Remove entries older than 60s
+  const cutoff = Date.now() - THROTTLE_ENTRY_MAX_AGE_MS;
   for (const [key, time] of lastEmitTimes) {
     if (time < cutoff) {
       lastEmitTimes.delete(key);
     }
   }
-}, 60_000);
+}, THROTTLE_PRUNE_INTERVAL_MS);
+
+/**
+ * Test-only: clears the module-level client registry and throttle map
+ * so each test starts from a clean slate. Production callers must not
+ * use this — clearing the client map mid-broadcast would drop active
+ * WS subscribers.
+ */
+export function __resetEventsForTesting(): void {
+  clients.clear();
+  lastEmitTimes.clear();
+  clientIdCounter = 0;
+}
 
 /**
  * Emits an event to all connected clients that are subscribed
@@ -181,5 +229,73 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
     projectId,
     data: { hashListId, crackedCount: count },
     timestamp: new Date().toISOString(),
+  });
+}
+
+// ─── System-wide Broadcast (issue #109) ─────────────────────────────
+
+/**
+ * Broadcasts a system-wide event to every subscribed client, bypassing
+ * the project-scope filter that `emit()` applies. Still respects
+ * `subscribedTypes` so a client that opts out of `system_health` won't
+ * receive it.
+ *
+ * No throttle: system events are infrequent by design (cadence is
+ * controlled by the producer — e.g. health monitor's 30s interval —
+ * and only fires on transitions, not every tick). Throttling here
+ * would silently swallow simultaneous transitions (multiple components
+ * flipping on the same tick).
+ */
+export function broadcastSystemEvent(type: SystemEventType, data: Record<string, unknown>): void {
+  const event: AppEvent = {
+    type,
+    // SYSTEM_EVENT_PROJECT_ID sentinel: 0 is not a valid Postgres
+    // project id, so consumers that filter `event.projectId === current`
+    // (the natural pattern for project-scoped events) won't accidentally
+    // match system events. Consumers that explicitly want system events
+    // can match on `event.type` from the SystemEventType union, which is
+    // the documented contract — projectId is implementation detail.
+    projectId: SYSTEM_EVENT_PROJECT_ID,
+    data,
+    timestamp: new Date().toISOString(),
+  };
+  const payload = JSON.stringify(event);
+  let delivered = 0;
+
+  for (const [clientId, client] of clients) {
+    if (!client.subscribedTypes.has(type)) {
+      continue;
+    }
+    if (client.ws.readyState !== 1) {
+      clients.delete(clientId);
+      continue;
+    }
+    try {
+      client.ws.send(payload);
+      delivered++;
+    } catch {
+      clients.delete(clientId);
+    }
+  }
+
+  if (delivered > 0) {
+    logger.debug({ type, delivered }, 'system event broadcasted');
+  }
+}
+
+/**
+ * Convenience wrapper for issuing a `system_health` event for a single
+ * component status transition. The worker calls this once per component
+ * that flipped on a given monitor tick.
+ */
+export function broadcastSystemHealth(
+  component: string,
+  status: 'healthy' | 'degraded' | 'unhealthy',
+  message?: string
+): void {
+  broadcastSystemEvent('system_health', {
+    component,
+    status,
+    ...(message ? { message } : {}),
   });
 }

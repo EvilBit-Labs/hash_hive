@@ -1,12 +1,9 @@
-import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
-import { checkMinioHealth } from './config/storage.js';
-import { db } from './db/index.js';
 import { auth } from './lib/auth.js';
 import { requestId } from './middleware/request-id.js';
 import { requestLogger } from './middleware/request-logger.js';
@@ -22,11 +19,13 @@ import { campaignRoutes } from './routes/dashboard/campaigns.js';
 import { crackerRoutes } from './routes/dashboard/crackers.js';
 import { createEventRoutes } from './routes/dashboard/events.js';
 import { hashRoutes } from './routes/dashboard/hashes.js';
+import { healthRoutes as dashboardHealthRoutes } from './routes/dashboard/health.js';
 import { projectRoutes } from './routes/dashboard/projects.js';
 import { resourceRoutes } from './routes/dashboard/resources.js';
 import { resultsRoutes } from './routes/dashboard/results.js';
 import { statsRoutes } from './routes/dashboard/stats.js';
 import { taskRoutes } from './routes/dashboard/tasks.js';
+import { getSystemHealth, legacyPublicEnvelope } from './services/health.js';
 import type { AppEnv } from './types.js';
 
 const { upgradeWebSocket, websocket } = createBunWebSocket();
@@ -48,40 +47,19 @@ app.use(
 );
 
 // ─── Health Check ───────────────────────────────────────────────────
+//
+// Public, unauthenticated endpoint used by load balancers. Delegates to
+// the centralized health service (issue #109) but keeps the legacy
+// envelope shape so older probes that read services.{database,redis,
+// minio}.status keep working. HTTP 503 fires only when the system is
+// unhealthy; degraded queues stay 200 so we don't flap LB rotation on
+// transient warnings.
 
 app.get('/health', async (c) => {
-  const qm = getQueueManager();
-  let dbCheck: Promise<{ status: 'connected' | 'disconnected' }>;
-  try {
-    dbCheck = db
-      .execute(sql`SELECT 1`)
-      .then(() => ({ status: 'connected' as const }))
-      .catch(() => ({ status: 'disconnected' as const }));
-  } catch {
-    dbCheck = Promise.resolve({ status: 'disconnected' as const });
-  }
-
-  const [databaseHealth, redisHealth, minioHealth] = await Promise.all([
-    dbCheck,
-    qm ? qm.getHealth() : Promise.resolve({ status: 'disconnected' as const, queues: {} }),
-    checkMinioHealth(),
-  ]);
-
-  const allConnected =
-    databaseHealth.status === 'connected' &&
-    redisHealth.status === 'connected' &&
-    minioHealth.status === 'connected';
-
-  return c.json({
-    status: allConnected ? 'ok' : 'degraded',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    services: {
-      database: databaseHealth,
-      redis: redisHealth,
-      minio: minioHealth,
-    },
-  });
+  const health = await getSystemHealth();
+  const envelope = legacyPublicEnvelope(health);
+  const httpStatus = health.status === 'unhealthy' ? 503 : 200;
+  return c.json(envelope, httpStatus);
 });
 
 // ─── BetterAuth Handler ──────────────────────────────────────────────
@@ -112,6 +90,7 @@ app.route('/api/v1/dashboard/stats', statsRoutes);
 app.route('/api/v1/dashboard/results', resultsRoutes);
 app.route('/api/v1/dashboard/events', eventRoutes);
 app.route('/api/v1/dashboard/crackers', crackerRoutes);
+app.route('/api/v1/dashboard/health', dashboardHealthRoutes);
 
 app.route('/api/v1/agent', agentRoutes);
 app.route('/api/v1/control', controlRoutes);

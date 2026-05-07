@@ -322,4 +322,47 @@ describe('useEvents', () => {
     const ws = wsMock.instances[0]!;
     expect(ws.url).toContain('types=crack_result');
   });
+
+  // Issue #109 (testing review T-002): system_health events use a
+  // different invalidation path because their query key has no project
+  // component. Verify the new branch fires invalidation with just
+  // ['system-health'] (no projectId), separately from project-scoped
+  // events.
+  it('invalidates [system-health] (un-scoped) on system_health event', async () => {
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    renderEventsHook(qc);
+
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    ws.simulateMessage({
+      type: 'system_health',
+      projectId: 0,
+      data: { component: 'database', status: 'degraded' },
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      const calls = invalidateSpy.mock.calls;
+      const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
+      // The system invalidation must use a single-element key with NO
+      // projectId — the dashboard health query is system-wide.
+      const systemHealthCall = queryKeys.find(
+        (k: unknown[]) => k.length === 1 && k[0] === 'system-health'
+      );
+      expect(systemHealthCall).toBeDefined();
+    });
+  });
 });

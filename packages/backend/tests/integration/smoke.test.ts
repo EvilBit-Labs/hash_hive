@@ -25,7 +25,9 @@ import { app } from '../../src/index.js';
 describe('Integration: Health check', () => {
   it('should return health status with all expected fields', async () => {
     const res = await app.request('/health');
-    expect(res.status).toBe(200);
+    // Issue #109: /health returns 503 when system is unhealthy (e.g. Redis
+    // unreachable in test env), 200 otherwise. Body shape is identical.
+    expect([200, 503]).toContain(res.status);
 
     const body = await res.json();
     expect(['ok', 'degraded']).toContain(body['status']);
