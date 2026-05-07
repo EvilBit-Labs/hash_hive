@@ -87,9 +87,10 @@ export async function runHealthMonitorTick(
   try {
     report = await deps.fetchHealth();
   } catch (err) {
-    // getSystemHealth() should not throw — every probe coerces errors to
-    // unhealthy. But if it does, swallow here so BullMQ doesn't flood
-    // the failed-jobs metric. The next tick gets a fresh shot.
+    // Defensive: every current probe coerces errors to unhealthy, but a
+    // future probe could throw. Swallow here so a single bad tick
+    // doesn't flood BullMQ's failed-jobs metric. The next tick gets a
+    // fresh shot.
     logger.error({ err }, 'health monitor: getSystemHealth threw — skipping tick');
     return { transitioned: [], initialized: [], unchanged: [] };
   }

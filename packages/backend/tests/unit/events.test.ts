@@ -182,6 +182,60 @@ describe('emit (regression: project scoping unchanged)', () => {
     expect(wsOther.sent).toHaveLength(0);
   });
 
+  test('ALL_EVENT_TYPES default subscription delivers every EventType member (drift guard)', () => {
+    // The events.ts source warns: ALL_EVENT_TYPES MUST stay in sync with
+    // the EventType union. If a future EventType is added but the array
+    // is not updated, default-subscribed clients (no ?types= param)
+    // silently miss the new event. This test enumerates every type and
+    // verifies a default-subscribed client receives each one.
+    const ws = createFakeWs();
+    trackedRegister(ws, [1]); // No eventTypes arg → default to ALL_EVENT_TYPES
+
+    // Every project-scoped type should reach the client
+    emit({
+      type: 'agent_status',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+    emit({
+      type: 'campaign_status',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+    emit({
+      type: 'task_update',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+    emit({
+      type: 'crack_result',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+    emit({
+      type: 'resource_update',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+    // System type also reaches (broadcast bypass + default subscription)
+    broadcastSystemEvent('system_health', { component: 'database', status: 'healthy' });
+
+    const types = ws.sent.map((p) => JSON.parse(p).type as string).sort();
+    expect(types).toEqual([
+      'agent_status',
+      'campaign_status',
+      'crack_result',
+      'resource_update',
+      'system_health',
+      'task_update',
+    ]);
+  });
+
   test('throttle key includes both type and projectId (no cross-type collisions)', () => {
     // Issue #109 testing review T-006: prove that emitting two different
     // event types in quick succession on the same projectId both deliver

@@ -45,17 +45,40 @@ export type EventType = ProjectEventType | SystemEventType;
 /**
  * Sentinel projectId carried on AppEvent payloads for system-wide events.
  * Chosen as `0` because Postgres project ids are positive integers, so a
- * project-scoped consumer filtering on `event.projectId === current` will
- * never falsely match a system event.
+ * project-scoped consumer filtering on `event.projectId === current`
+ * will never falsely match a system event.
+ *
+ * Typed as the literal `0` so AppEvent's discriminated union can refuse
+ * mismatched (type, projectId) pairs at compile time — see AppEvent
+ * below.
  */
-export const SYSTEM_EVENT_PROJECT_ID = 0;
+export const SYSTEM_EVENT_PROJECT_ID = 0 as const;
+export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID;
 
-export interface AppEvent {
-  type: EventType;
-  projectId: number;
-  data: Record<string, unknown>;
-  timestamp: string;
-}
+/**
+ * Discriminated union over event scope. Project events carry a real
+ * project id; system events carry the sentinel literal. The union shape
+ * means TypeScript refuses `{ type: 'agent_status', projectId: 0 }`
+ * (project event with system sentinel) and `{ type: 'system_health',
+ * projectId: 42 }` (system event leaking into project channel) at
+ * compile time. `emit()` accepts the project arm; `broadcastSystemEvent()`
+ * accepts the system arm.
+ */
+export type AppEvent =
+  | {
+      type: ProjectEventType;
+      projectId: number;
+      data: Record<string, unknown>;
+      timestamp: string;
+    }
+  | {
+      type: SystemEventType;
+      projectId: SystemEventProjectId;
+      data: Record<string, unknown>;
+      timestamp: string;
+    };
+
+export type ProjectAppEvent = Extract<AppEvent, { type: ProjectEventType }>;
 
 // ─── Connection Registry ────────────────────────────────────────────
 
@@ -143,10 +166,13 @@ export function __resetEventsForTesting(): void {
 }
 
 /**
- * Emits an event to all connected clients that are subscribed
- * to the event's project and type. Applies per-type throttling.
+ * Emits a project-scoped event to all connected clients that are
+ * subscribed to the event's project and type. Applies per-type
+ * throttling. System events must use `broadcastSystemEvent` instead;
+ * routing one through here would silently drop because no client has
+ * SYSTEM_EVENT_PROJECT_ID in its projectIds set.
  */
-export function emit(event: AppEvent) {
+export function emit(event: ProjectAppEvent) {
   const throttleKey = `${event.type}:${event.projectId}`;
   const now = Date.now();
   const lastEmit = lastEmitTimes.get(throttleKey) ?? 0;
@@ -179,7 +205,11 @@ export function emit(event: AppEvent) {
     try {
       client.ws.send(payload);
       delivered++;
-    } catch {
+    } catch (err) {
+      logger.warn(
+        { err, clientId, type: event.type, projectId: event.projectId },
+        'WebSocket send failed; dropping client'
+      );
       clients.delete(clientId);
     }
   }
@@ -273,7 +303,8 @@ export function broadcastSystemEvent(type: SystemEventType, data: Record<string,
     try {
       client.ws.send(payload);
       delivered++;
-    } catch {
+    } catch (err) {
+      logger.warn({ err, clientId, type }, 'WebSocket send failed; dropping client');
       clients.delete(clientId);
     }
   }

@@ -117,6 +117,41 @@ describe('SystemHealthCard', () => {
     expect(statusEl.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('per-component status text reflects the component status (not just aggregate)', async () => {
+    // Issue #109 (PR review C-2): a regression that mapped every dot to
+    // bg-success would still pass the aggregate-label test. Pin the
+    // per-component status text so the card's primary signal is locked in.
+    fetchMock = mockFetch({
+      '/dashboard/health': {
+        status: 200,
+        body: buildHealth({
+          status: 'unhealthy',
+          components: {
+            database: { status: 'unhealthy', message: 'pool exhausted', durationMs: 4 },
+            redis: { status: 'degraded', message: 'high latency', durationMs: 2 },
+            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            queues: { status: 'healthy', durationMs: 12 },
+          },
+        }),
+      },
+    });
+    renderWithProviders(<SystemHealthCard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unhealthy')).toBeDefined();
+    });
+
+    // The per-component row shows the literal status string. Two
+    // components are non-healthy → both their messages render too.
+    expect(screen.getByText('pool exhausted')).toBeDefined();
+    expect(screen.getByText('high latency')).toBeDefined();
+    // The status text appears on each row — at least one 'healthy',
+    // one 'degraded', one 'unhealthy' must all be visible somewhere.
+    expect(screen.getAllByText('healthy').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('degraded').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('unhealthy').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('expands per-component detail on click when detail is present', async () => {
     fetchMock = mockFetch({
       '/dashboard/health': {

@@ -37,7 +37,7 @@ export function useSystemHealth() {
     retry: 1,
     // The card's job is to *report* outages — keep showing the last good
     // snapshot during a transient fetch failure rather than flipping the
-    // UI to a loading or error state. Issue #109 reliability review (rel-6).
+    // UI to a loading or error state.
     placeholderData: keepPreviousData,
     staleTime: 15_000,
   });

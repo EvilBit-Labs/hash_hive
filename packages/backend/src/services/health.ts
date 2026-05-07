@@ -25,12 +25,22 @@ export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
 
 export type ComponentName = 'database' | 'redis' | 'minio' | 'queues';
 
-export interface ComponentHealth {
-  status: ComponentStatus;
-  message?: string;
-  detail?: Record<string, unknown>;
-  durationMs: number;
-}
+/**
+ * Probe result shape without a `durationMs` field — that field is
+ * attached by the `runProbe` wrapper, never by the probe author. Split
+ * by status: a `degraded` or `unhealthy` result must carry a `message`
+ * so consumers always have a useful error string to render.
+ */
+export type ProbeResult =
+  | { status: 'healthy'; message?: string; detail?: Record<string, unknown> }
+  | { status: 'degraded' | 'unhealthy'; message: string; detail?: Record<string, unknown> };
+
+/**
+ * Full ComponentHealth — ProbeResult plus the durationMs measurement
+ * runProbe attaches. Discriminated by status so callers rendering
+ * non-healthy components get `message` typed as required.
+ */
+export type ComponentHealth = ProbeResult & { durationMs: number };
 
 export interface SystemHealth {
   status: ComponentStatus;
@@ -40,6 +50,10 @@ export interface SystemHealth {
 }
 
 export const HEALTH_VERSION = '1.0.0';
+
+// Threshold semantics for the entire module: warn comparisons use `>=`
+// (inclusive boundary). "Warn at 10000" means 10000 is already the warn
+// state. "Warn at 80%" fires when pool reaches 80%.
 
 /**
  * Aggregates per-component statuses using a worst-of rule:
@@ -61,22 +75,34 @@ export function aggregateStatus(
  */
 export async function runProbe(
   name: ComponentName,
-  probeFn: () => Promise<Omit<ComponentHealth, 'durationMs'>>,
+  probeFn: () => Promise<ProbeResult>,
   timeoutMs: number
 ): Promise<ComponentHealth> {
   const startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await Promise.race<Omit<ComponentHealth, 'durationMs'>>([
+    const result = await Promise.race<ProbeResult>([
       probeFn(),
-      new Promise<Omit<ComponentHealth, 'durationMs'>>((_, reject) => {
+      new Promise<ProbeResult>((_, reject) => {
         timer = setTimeout(() => reject(new Error('PROBE_TIMEOUT')), timeoutMs);
       }),
     ]);
     return { ...result, durationMs: Date.now() - startedAt };
   } catch (err) {
     const isTimeout = err instanceof Error && err.message === 'PROBE_TIMEOUT';
-    if (!isTimeout) {
+    // Distinguish operator-actionable infra failures (network, auth,
+    // bucket missing) from programming errors. The latter still get
+    // coerced to `unhealthy` so the report contract holds, but they
+    // should land in the `error` log channel so alerting fires — a
+    // TypeError surfacing as "database unhealthy" is a debugging trap.
+    const isProgrammingError =
+      err instanceof TypeError || err instanceof ReferenceError || err instanceof SyntaxError;
+    if (isProgrammingError) {
+      logger.error(
+        { err, probe: name },
+        'health probe threw a programming error — likely a bug, not infra'
+      );
+    } else if (!isTimeout) {
       logger.warn({ err, probe: name }, 'health probe failed');
     }
     const message = isTimeout
@@ -104,12 +130,11 @@ export interface DatabaseProbeDeps {
 export async function probeDatabase(
   deps: DatabaseProbeDeps,
   warnPct: number
-): Promise<Omit<ComponentHealth, 'durationMs'>> {
+): Promise<ProbeResult> {
   await deps.ping();
   const { used, max } = await deps.poolStats();
   const pct = max > 0 ? (used / max) * 100 : 0;
   const detail = { connectionsUsed: used, connectionsMax: max, connectionsPct: Math.round(pct) };
-  // Inclusive boundary: "warn at 80%" fires when pool is at or above 80% full.
   if (pct >= warnPct) {
     return {
       status: 'degraded',
@@ -125,9 +150,7 @@ export interface RedisProbeDeps {
   status: () => 'connected' | 'disconnected';
 }
 
-export async function probeRedis(
-  deps: RedisProbeDeps
-): Promise<Omit<ComponentHealth, 'durationMs'>> {
+export async function probeRedis(deps: RedisProbeDeps): Promise<ProbeResult> {
   if (deps.status() !== 'connected') {
     return { status: 'unhealthy', message: 'redis connection not ready' };
   }
@@ -138,9 +161,7 @@ export interface MinioProbeDeps {
   check: () => Promise<{ status: 'connected' | 'disconnected'; bucket: string }>;
 }
 
-export async function probeMinio(
-  deps: MinioProbeDeps
-): Promise<Omit<ComponentHealth, 'durationMs'>> {
+export async function probeMinio(deps: MinioProbeDeps): Promise<ProbeResult> {
   const result = await deps.check();
   if (result.status !== 'connected') {
     return {
@@ -169,7 +190,7 @@ export async function probeQueues(
   deps: QueuesProbeDeps,
   warnDepth: number,
   warnFailed: number
-): Promise<Omit<ComponentHealth, 'durationMs'>> {
+): Promise<ProbeResult> {
   const result = await deps.health();
   if (result.status !== 'connected') {
     return {
@@ -179,8 +200,6 @@ export async function probeQueues(
     };
   }
 
-  // Inclusive boundary: thresholds fire at or above the configured value
-  // ("warn at 10000" means 10000 is already in the warn state).
   const offenders: string[] = [];
   for (const [name, stats] of Object.entries(result.queues)) {
     if (stats.waiting >= warnDepth) {
@@ -205,9 +224,9 @@ export async function probeQueues(
 // ─── Default Production Wiring ──────────────────────────────────────
 
 // pg_settings.max_connections only changes on Postgres restart, so it's
-// safe to cache for the lifetime of the process. Caching it eliminates one
-// of the three sequential round-trips probeDatabase otherwise pays per
-// tick (rel-4 in code review).
+// safe to cache for the lifetime of the process. Caching it eliminates
+// one of the three sequential round-trips probeDatabase otherwise pays
+// per tick.
 let cachedMaxConnections: number | null = null;
 
 async function defaultDatabasePoolStats(): Promise<{ used: number; max: number }> {
@@ -220,8 +239,17 @@ async function defaultDatabasePoolStats(): Promise<{ used: number; max: number }
     const maxRows = (await db.execute(
       sql`SELECT setting::int AS max FROM pg_settings WHERE name = 'max_connections'`
     )) as unknown as Array<{ max: number }>;
-    max = maxRows[0]?.max ?? 1;
-    cachedMaxConnections = max;
+    const candidate = maxRows[0]?.max;
+    // Validate before caching: a Postgres misconfiguration or a future
+    // schema-change in pg_settings could return 0/NaN/non-integer; we'd
+    // poison the cache for the lifetime of the process.
+    if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate > 0) {
+      cachedMaxConnections = candidate;
+      max = candidate;
+    } else {
+      logger.warn({ candidate }, 'pg_settings returned unexpected max_connections; not caching');
+      max = 1;
+    }
   }
   const used = usedRows[0]?.used ?? 0;
   return { used, max };
@@ -245,9 +273,10 @@ function buildDefaultProbes(): {
       poolStats: defaultDatabasePoolStats,
     },
     redis: {
-      // Cheap status check via QueueManager's connection — no queue iteration.
-      // Fixes C4: previously this called qm.getHealth() which the queues probe
-      // already runs, doubling Redis round-trips per health request.
+      // Cheap status check via QueueManager's connection — no queue
+      // iteration. Avoids doubling Redis round-trips per health request,
+      // which would happen if redis and queues probes both called
+      // qm.getHealth().
       status: () => qm?.getRedisStatus() ?? 'disconnected',
     },
     minio: { check: checkMinioHealth },
@@ -320,7 +349,7 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
   };
 }
 
-// ─── Caching layer (rel-2) ──────────────────────────────────────────
+// ─── Caching layer ──────────────────────────────────────────────────
 //
 // Each call fans out probes that hit Postgres (3 queries), Redis (status
 // + per-queue counts × 7 queues = ~21 calls), MinIO (HeadBucket), and
@@ -387,24 +416,34 @@ export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<S
  *   `connected` since it's reachable; only `unhealthy` collapses to
  *   `disconnected`.
  * - `services.minio.bucket` — preserved.
- * - `services.queues.queues` — restored (api-contract-3): a flat
- *   `{ queueName: { waiting, active, failed } }` map matching what
- *   `qm.getHealth()` previously returned in the inline /health handler.
- *   Anonymous callers can already infer queue health from this; keeping
- *   it preserves the contract.
+ * - `services.queues.queues` — a flat `{ queueName: { waiting, active,
+ *   failed } }` map matching what `qm.getHealth()` previously returned
+ *   in the inline /health handler. Preserved so anonymous probes that
+ *   already iterated this map keep working.
  *
  * New additive field:
  * - `aggregateStatus: 'healthy' | 'degraded' | 'unhealthy'` — the full
  *   three-tier signal, exposed in the body so JSON-only monitors can
  *   distinguish degraded from unhealthy without inspecting the HTTP
- *   status (api-contract-4).
+ *   status.
  *
  * Anti-leak guarantee: per-component `detail` and `message` are omitted
  * so probe error messages, DB connection counts, and queue offender
- * details never reach anonymous callers (security review residual
- * risks). The only structured data that survives is queue counts —
- * already part of the pre-#109 contract.
+ * details never reach anonymous callers. The only structured data that
+ * survives is queue counts — already part of the pre-#109 contract.
  */
+/**
+ * Anti-leak guard fields on every legacy-envelope service entry: a
+ * future PR adding `message` or `detail` here would silently leak
+ * probe internals to anonymous callers, so we make it a compile error
+ * instead. New per-service fields (like `bucket` on minio or `queues`
+ * on queues) are added by intersection on the specific entry below.
+ */
+type LegacyServiceGuards = {
+  message?: never;
+  detail?: never;
+};
+
 export interface LegacyHealthEnvelope {
   status: 'ok' | 'degraded';
   /** Three-tier aggregate: healthy | degraded | unhealthy. */
@@ -412,10 +451,13 @@ export interface LegacyHealthEnvelope {
   timestamp: string;
   version: string;
   services: {
-    database: { status: 'connected' | 'disconnected' };
-    redis: { status: 'connected' | 'disconnected' };
-    minio: { status: 'connected' | 'disconnected'; bucket?: string };
-    queues: {
+    database: LegacyServiceGuards & { status: 'connected' | 'disconnected' };
+    redis: LegacyServiceGuards & { status: 'connected' | 'disconnected' };
+    minio: LegacyServiceGuards & {
+      status: 'connected' | 'disconnected';
+      bucket?: string;
+    };
+    queues: LegacyServiceGuards & {
       status: 'connected' | 'disconnected';
       queues: Record<string, { waiting: number; active: number; failed: number }>;
     };

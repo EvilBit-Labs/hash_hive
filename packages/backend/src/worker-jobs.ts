@@ -12,18 +12,20 @@ async function main() {
   await connection.connect();
   logger.info('Jobs worker connected to Redis');
 
-  // Issue #109 fix (rel-1): the health-monitor worker calls
-  // getSystemHealth() → getQueueManager(); without a QueueManager in the
-  // worker process the redis and queues probes silently report unhealthy
-  // forever. Instantiate one here so the worker has the same probe
-  // surface as the API process. BullMQ's upsertJobScheduler is
-  // idempotent so the duplicate scheduler upsert from the API and
-  // worker processes is safe.
+  // The health-monitor worker calls getSystemHealth() →
+  // getQueueManager(); without a QueueManager in the worker process the
+  // redis and queues probes silently report unhealthy forever.
+  // Instantiate one here so the worker has the same probe surface as
+  // the API process. BullMQ's upsertJobScheduler is idempotent so the
+  // duplicate scheduler upsert from the API and worker processes is
+  // safe.
+  //
+  // Init failure is treated as fail-fast: a worker without a
+  // QueueManager cannot do its job, and warn-and-continue would leave
+  // the process alive but silently broken until ops noticed.
   const queueManager = new QueueManager();
   setQueueManager(queueManager);
-  await queueManager.init().catch((err) => {
-    logger.warn({ err }, 'Worker QueueManager init failed — health probes may misreport');
-  });
+  await queueManager.init();
 
   const hashListWorker = createHashListParserWorker(connection);
   logger.info('Hash list parser worker started');

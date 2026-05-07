@@ -39,6 +39,18 @@ const AGGREGATE_LABEL: Record<ComponentStatus, string> = {
   unhealthy: 'Unhealthy',
 };
 
+/**
+ * Renders an error from an unknown reject value. Plain-string and
+ * plain-object rejections (from custom fetch wrappers) need a fallback
+ * description so the user sees something more actionable than a bare
+ * "Failed to load system health".
+ */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return 'unknown error';
+}
+
 interface StatusDotProps {
   status: ComponentStatus;
   pulse?: boolean;
@@ -162,7 +174,7 @@ export function SystemHealthCard() {
           role="alert"
           className="border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive"
         >
-          Failed to load system health{error instanceof Error ? `: ${error.message}` : ''}
+          Failed to load system health: {describeError(error)}
         </div>
       )}
 

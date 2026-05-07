@@ -108,9 +108,9 @@ export class QueueManager {
 
   /**
    * Returns the Redis connection status without iterating every queue.
-   * Used by the system-health probe (issue #109) to avoid the duplicate
-   * qm.getHealth() round-trip that probeRedis would otherwise pay alongside
-   * probeQueues — see C4 in the code review.
+   * Used by the system-health probe (issue #109) so probeRedis and
+   * probeQueues don't both call the heavier qm.getHealth() and double
+   * the Redis round-trips per health request.
    */
   getRedisStatus(): 'connected' | 'disconnected' {
     return getRedisStatus(this.connection);

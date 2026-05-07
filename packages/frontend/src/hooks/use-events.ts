@@ -110,8 +110,12 @@ export function useEvents(options: UseEventsOptions = {}) {
           }
 
           onEventRef.current?.(data as unknown as AppEvent);
-        } catch {
-          // Ignore malformed messages
+        } catch (err) {
+          // Surface schema drift between server and client to console.
+          // Silently dropping the frame would mask backend events from
+          // the dashboard with no diagnostic signal.
+          // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+          console.warn('[useEvents] dropped malformed WS frame', err);
         }
       };
 

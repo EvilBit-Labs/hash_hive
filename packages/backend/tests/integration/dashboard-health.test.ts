@@ -114,4 +114,38 @@ describe('GET /api/v1/dashboard/health', () => {
     // MinIO probe is mocked to connected, so detail should include the bucket name
     expect(body.components.minio.detail?.['bucket']).toBe('hashhive-test');
   });
+
+  // PR review I-1: the dashboard surface intentionally exposes the rich
+  // payload (detail + message) that the public envelope strips. Verify
+  // the *inverse* of the legacyPublicEnvelope leak-prevention tests —
+  // when a component is non-healthy, the dashboard reader must still see
+  // the structured detail so the card can render it. A regression that
+  // accidentally stripped detail on the dashboard route would silently
+  // degrade the card's diagnostic value.
+  it('preserves detail and message on non-healthy components for authenticated readers', async () => {
+    const res = await app.request('/api/v1/dashboard/health', {
+      headers: { cookie: 'hh.session_token=valid-session' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      components: Record<
+        string,
+        { status: string; message?: string; detail?: Record<string, unknown> }
+      >;
+    };
+    // Whatever the actual component states, the response shape must
+    // preserve the structured envelope on every component. (In test env
+    // queues will be unhealthy because there's no QueueManager; that
+    // gives us a real non-healthy component to inspect.)
+    const queues = body.components.queues;
+    if (queues.status !== 'healthy') {
+      expect(queues.message).toBeDefined();
+      expect(typeof queues.message).toBe('string');
+      expect(queues.detail).toBeDefined();
+    }
+    // minio probe is stubbed, so its detail.bucket is reliably present
+    // — proves the dashboard surface keeps the field that the public
+    // envelope is allowed to strip.
+    expect(body.components.minio.detail?.['bucket']).toBe('hashhive-test');
+  });
 });
