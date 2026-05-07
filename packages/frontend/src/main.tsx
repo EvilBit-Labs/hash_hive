@@ -43,6 +43,7 @@ const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default:
 const CrackersPage = lazy(() =>
   import('./pages/crackers').then((m) => ({ default: m.CrackersPage }))
 );
+const AccountPage = lazy(() => import('./pages/account').then((m) => ({ default: m.AccountPage })));
 const NotFoundPage = lazy(() =>
   import('./pages/not-found').then((m) => ({ default: m.NotFoundPage }))
 );
@@ -92,6 +93,7 @@ function App() {
                   <Route path="/resources/hash-lists/:id" element={<HashListDetailPage />} />
                   <Route path="/results" element={<ResultsPage />} />
                   <Route path="/crackers" element={<CrackersPage />} />
+                  <Route path="/account" element={<AccountPage />} />
                 </Route>
               </Route>
               <Route path="*" element={<NotFoundPage />} />

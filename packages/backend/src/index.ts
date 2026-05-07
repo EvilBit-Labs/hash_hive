@@ -14,6 +14,7 @@ import { securityHeaders } from './middleware/security-headers.js';
 import { getQueueManager, setQueueManager } from './queue/context.js';
 import { QueueManager } from './queue/manager.js';
 import { agentRoutes } from './routes/agent/index.js';
+import { controlRoutes } from './routes/control/index.js';
 import { dashboardAgentRoutes } from './routes/dashboard/agents.js';
 import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js';
 import { authRoutes } from './routes/dashboard/auth.js';
@@ -113,8 +114,31 @@ app.route('/api/v1/dashboard/events', eventRoutes);
 app.route('/api/v1/dashboard/crackers', crackerRoutes);
 
 app.route('/api/v1/agent', agentRoutes);
+app.route('/api/v1/control', controlRoutes);
 
 // ─── Error Handler ──────────────────────────────────────────────────
+
+const CONTROL_PATH_PREFIX = '/api/v1/control/';
+const CONTROL_PROBLEM_CONTENT_TYPE = 'application/problem+json';
+
+function isControlPath(path: string): boolean {
+  return path.startsWith(CONTROL_PATH_PREFIX) || path === '/api/v1/control';
+}
+
+function controlProblemBody(
+  status: number,
+  code: string,
+  detail: string,
+  instance: string
+): string {
+  return JSON.stringify({
+    type: `https://hashhive.dev/errors/${code.replace(/_/g, '-')}`,
+    title: status === 404 ? 'Not found' : 'Internal error',
+    status,
+    detail,
+    instance,
+  });
+}
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) {
@@ -126,6 +150,14 @@ app.onError((err, c) => {
 
   // Never leak internal details (SQL queries, stack traces) to clients — even in dev.
   // The full error is already logged above; the client gets a safe generic message.
+  if (isControlPath(c.req.path)) {
+    // Control API consumers expect RFC 9457 problem-details on every
+    // error path; the dashboard envelope would break their parsers.
+    return new Response(
+      controlProblemBody(500, 'internal', 'An unexpected error occurred', c.req.path),
+      { status: 500, headers: { 'content-type': CONTROL_PROBLEM_CONTENT_TYPE } }
+    );
+  }
   return c.json(
     {
       error: {
@@ -141,8 +173,19 @@ app.onError((err, c) => {
 
 // ─── Not Found Handler ──────────────────────────────────────────────
 
-app.notFound((c) =>
-  c.json(
+app.notFound((c) => {
+  if (isControlPath(c.req.path)) {
+    return new Response(
+      controlProblemBody(
+        404,
+        'not_found',
+        `Route ${c.req.method} ${c.req.path} not found`,
+        c.req.path
+      ),
+      { status: 404, headers: { 'content-type': CONTROL_PROBLEM_CONTENT_TYPE } }
+    );
+  }
+  return c.json(
     {
       error: {
         code: 'NOT_FOUND',
@@ -151,8 +194,8 @@ app.notFound((c) =>
       },
     },
     404
-  )
-);
+  );
+});
 
 // ─── Start Server ───────────────────────────────────────────────────
 

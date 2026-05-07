@@ -1,4 +1,14 @@
-import { Cpu, Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
+import {
+  Cpu,
+  Crosshair,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  Monitor,
+  Package,
+  Trophy,
+  X,
+} from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
@@ -54,6 +64,11 @@ const navItems: readonly NavItem[] = [
     href: '/crackers',
     icon: <Cpu className={ICON_CLASS} aria-hidden="true" />,
     permission: Permission.CRACKER_MANAGE,
+  },
+  {
+    label: 'Account',
+    href: '/account',
+    icon: <KeyRound className={ICON_CLASS} aria-hidden="true" />,
   },
 ];
 

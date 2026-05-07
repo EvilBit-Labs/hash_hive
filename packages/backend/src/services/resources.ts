@@ -36,6 +36,31 @@ export async function listHashLists(projectId: number) {
     .orderBy(desc(hashLists.createdAt));
 }
 
+/**
+ * Paginated variant of `listHashLists` for callers that need to bound
+ * the result set (e.g., the Control API). Returns `{ items, total }`
+ * with the count derived from a single matching `count(*)` query so
+ * callers don't have to choose between fetching everything for a
+ * length and paying a separate roundtrip.
+ */
+export async function listHashListsPaginated(
+  projectId: number,
+  opts: { limit: number; offset: number }
+) {
+  const whereClause = eq(hashLists.projectId, projectId);
+  const [items, countResult] = await Promise.all([
+    db
+      .select()
+      .from(hashLists)
+      .where(whereClause)
+      .orderBy(desc(hashLists.createdAt), desc(hashLists.id))
+      .limit(opts.limit)
+      .offset(opts.offset),
+    db.select({ value: count() }).from(hashLists).where(whereClause),
+  ]);
+  return { items, total: Number(countResult[0]?.value ?? 0) };
+}
+
 export async function getHashListById(id: number, projectId: number) {
   const [hl] = await db
     .select()
@@ -228,6 +253,31 @@ export async function listResources(table: ResourceTable, projectId: number) {
     .from(table)
     .where(eq(table.projectId, projectId))
     .orderBy(desc(table.createdAt));
+}
+
+/**
+ * Paginated variant of `listResources` for the Control API. Same shape
+ * as `listHashListsPaginated`. Returns `{ items, total }` with a
+ * deterministic `(createdAt desc, id desc)` order so insertions during
+ * pagination don't drop or duplicate rows across pages.
+ */
+export async function listResourcesPaginated(
+  table: ResourceTable,
+  projectId: number,
+  opts: { limit: number; offset: number }
+) {
+  const whereClause = eq(table.projectId, projectId);
+  const [items, countResult] = await Promise.all([
+    db
+      .select()
+      .from(table)
+      .where(whereClause)
+      .orderBy(desc(table.createdAt), desc(table.id))
+      .limit(opts.limit)
+      .offset(opts.offset),
+    db.select({ value: count() }).from(table).where(whereClause),
+  ]);
+  return { items, total: Number(countResult[0]?.value ?? 0) };
 }
 
 export async function getResourceById(table: ResourceTable, id: number, projectId: number) {
