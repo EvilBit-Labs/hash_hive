@@ -140,3 +140,34 @@ MinIO: localhost:9000/9001        # S3-compatible storage (minioadmin/minioadmin
 - Drizzle schema exports select/insert types via drizzle-zod
 - OpenAPI spec defines Agent API contract types
 - Zod schemas provide runtime validation + static types
+
+## Design Context
+
+Design context for the React frontend lives in `.impeccable.md` at the repo root. Read it before any UI/UX work. Summary:
+
+### Users
+HashHive serves three operator roles (admins, power-users, end users), all technical security/red-team personnel running the platform in a private lab on a closed network. 1–3 concurrent dashboard users, long sessions, often viewed on a second monitor or wall display while hashcat is running on 7–10+ GPU rigs. The job is "tell me at a glance that my rigs are running and surface the moment a hash cracks."
+
+### Brand Personality
+**Operator-grade, editorial, candid.** Direct technical voice ("Queue depth 12,340 exceeds warn threshold 10,000" beats "Something's not quite right!"). Treats the user as a peer, never condescends. The dashboard reads like a well-designed data magazine, not a SaaS template. Emotional register: **dramatic ops theater** — pit-wall HUD / NOC display, big numbers when earned, motion when *the system* moves, never when chrome moves.
+
+### Aesthetic Direction
+**Dark-only Catppuccin Macchiato** (locked via `<html class="dark">` and `color-scheme: dark`; no light mode exists). Peach `#f5a97f` is the brand primary. The full Catppuccin accent range is available for **editorial use** — per-attack-mode chunking, graph series in lavender → sapphire → sky → teal → green sequence, domain accents — not just status. Status colors (green/yellow/red) stay reserved for actual status. Typography: Space Grotesk + Space Mono. Motion: compositor-friendly, ease-out-exponential, reserved for operator moments.
+
+### Anti-References (explicit rejection list)
+The following aesthetic lanes are **rejected**:
+- NOT generic SaaS dashboard (no Linear/Vercel/Stripe reflex, no gradient hero metrics, no cards-on-cards)
+- NOT enterprise security tool (no navy + gold, no Splunk/Tenable density)
+- NOT hacker theater (no Matrix green-on-black, no skull icons, no fake-leet typography)
+- NOT neon crypto dashboard (no glassmorphism, no neon gradients, no Coinbase Pro vibe)
+
+If a design choice could be guessed from "password-cracking platform" alone, rework it.
+
+### Design Principles
+1. **Theater earns its place.** Motion is reserved for operator moments (crack, transition, completion), never for chrome.
+2. **Editorial color, never neon noise.** Catppuccin's full range is for chunking and series; semantic green/yellow/red is reserved for status.
+3. **Every signal pairs with a non-color cue.** Status = color + icon + label. Survives color-blind operators and grayscale screenshots.
+4. **Keyboard is a first-class peer of mouse.** Visible focus rings, logical tab order, kbd hints on frequent actions, reduced-motion respected.
+5. **No category reflexes.** SaaS-cream, enterprise-navy, hacker-green, crypto-neon are all explicit anti-references.
+
+For full context, principles, and locked tokens, read `.impeccable.md`.
