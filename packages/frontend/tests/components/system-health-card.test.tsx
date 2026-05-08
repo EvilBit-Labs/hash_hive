@@ -7,7 +7,7 @@ import type { SystemHealth } from '../../src/hooks/use-system-health';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
 import { cleanupAll, fireEvent, renderWithProviders, screen, waitFor } from '../test-utils';
 
-let fetchMock: ReturnType<typeof mockFetch>;
+let fetchMock: ReturnType<typeof mockFetch> | undefined;
 
 afterEach(() => {
   cleanupAll();
@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  fetchMock = undefined as unknown as ReturnType<typeof mockFetch>;
+  fetchMock = undefined;
 });
 
 function buildHealth(overrides: Partial<SystemHealth> = {}): SystemHealth {

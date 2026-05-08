@@ -38,14 +38,23 @@ function buildSystemHealth(): SystemHealth {
   };
 }
 
-// Mock the entire health module synchronously. Importers will see only
-// the functions/types we re-export here; legacyPublicEnvelope lives in
-// the same file and is needed by index.ts, so we require() it through
-// the synthetic factory below to keep its real implementation.
-const realHealth = require('../../src/services/health.js') as Record<string, unknown>;
+// Explicit re-exports — only the symbols `index.ts` actually consumes
+// from this module. `legacyPublicEnvelope` keeps its real
+// implementation; `getSystemHealth` is mocked. Capturing real
+// implementations via `require()` works in current Bun (mock.module is
+// not hoisted), but if hoisting is added later the require would see
+// the mocked value. Naming each export keeps the contract explicit
+// and removes the dependency on Bun-internal evaluation order.
+import {
+  __resetSystemHealthCache as realResetCache,
+  HEALTH_VERSION as REAL_HEALTH_VERSION,
+  legacyPublicEnvelope as realLegacyPublicEnvelope,
+} from '../../src/services/health.js';
 
 mock.module('../../src/services/health.js', () => ({
-  ...realHealth,
+  legacyPublicEnvelope: realLegacyPublicEnvelope,
+  HEALTH_VERSION: REAL_HEALTH_VERSION,
+  __resetSystemHealthCache: realResetCache,
   getSystemHealth: mock(async () => buildSystemHealth()),
 }));
 

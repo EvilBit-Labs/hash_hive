@@ -109,6 +109,22 @@ export function useEvents(options: UseEventsOptions = {}) {
           const data = parsed as Record<string, unknown>;
           if (data['type'] === 'connected' || data['type'] === 'pong') return;
 
+          // Validate the rest of the envelope before invalidation /
+          // callback dispatch. The type guard above only pinned `type`;
+          // a frame with `type: 'agent_status'` but missing
+          // `projectId`/`timestamp`/`data` would still cast through to
+          // AppEvent without these checks.
+          if (
+            typeof data['projectId'] !== 'number' ||
+            typeof data['timestamp'] !== 'string' ||
+            typeof data['data'] !== 'object' ||
+            data['data'] === null
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid event payload');
+            return;
+          }
+
           const eventType = data['type'] as string;
           const projectKeys = invalidationKeys[eventType];
           if (projectKeys) {
@@ -123,7 +139,12 @@ export function useEvents(options: UseEventsOptions = {}) {
             }
           }
 
-          onEventRef.current?.(data as unknown as AppEvent);
+          onEventRef.current?.({
+            type: data['type'] as EventType,
+            projectId: data['projectId'] as number,
+            data: data['data'] as Record<string, unknown>,
+            timestamp: data['timestamp'] as string,
+          });
         } catch (err) {
           // Surface schema drift between server and client to console.
           // Silently dropping the frame would mask backend events from

@@ -691,15 +691,50 @@ components:
               $ref: "#/components/schemas/ComponentHealth"
 
     ComponentHealth:
+      description: |
+        Discriminated by `status`. Healthy components may omit `message`;
+        degraded and unhealthy components must include one. Mirrors the
+        `ProbeResult` discriminated union in `services/health.ts`.
+      oneOf:
+        - $ref: "#/components/schemas/HealthyComponent"
+        - $ref: "#/components/schemas/NonHealthyComponent"
+      discriminator:
+        propertyName: status
+        mapping:
+          healthy: "#/components/schemas/HealthyComponent"
+          degraded: "#/components/schemas/NonHealthyComponent"
+          unhealthy: "#/components/schemas/NonHealthyComponent"
+
+    HealthyComponent:
       type: object
       required: [status, durationMs]
       properties:
         status:
           type: string
-          enum: [healthy, degraded, unhealthy]
+          enum: [healthy]
         message:
           type: string
-          description: Human-readable summary; present when status is degraded or unhealthy.
+          description: Optional note from the probe; usually omitted.
+        detail:
+          type: object
+          description: Probe-specific structured detail (shape varies per component).
+        durationMs:
+          type: integer
+          description: Probe execution time in milliseconds.
+
+    NonHealthyComponent:
+      type: object
+      required: [status, message, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [degraded, unhealthy]
+        message:
+          type: string
+          description: |
+            Human-readable summary of why this component is not healthy.
+            Required for degraded/unhealthy so consumers always have a
+            useful error string to render.
         detail:
           type: object
           description: |

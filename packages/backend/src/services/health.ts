@@ -525,8 +525,7 @@ function extractQueueStats(
 }
 
 export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope {
-  const minioBucket =
-    (health.components.minio.detail?.['bucket'] as string | undefined) ?? undefined;
+  const minioBucket = health.components.minio.detail?.['bucket'] as string | undefined;
   return {
     status: health.status === 'healthy' ? 'ok' : 'degraded',
     aggregateStatus: health.status,

@@ -9,7 +9,7 @@
  * Mocks BetterAuth and storage so the test does not depend on real
  * Postgres / Redis / MinIO availability.
  */
-import { describe, expect, it, mock } from 'bun:test';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
 //
@@ -62,7 +62,24 @@ mock.module('../../src/config/storage.js', () => ({
   getPresignedUrl: mock(),
 }));
 
+// Force the queue manager to be absent so the queues probe deterministically
+// reports `disconnected → unhealthy` regardless of what other test files have
+// set on the global registry. Combined with the cache reset below this makes
+// the "non-healthy component" assertions in this file order-independent.
+mock.module('../../src/queue/context.js', () => ({
+  getQueueManager: () => null,
+  setQueueManager: () => {},
+}));
+
 import { app } from '../../src/index.js';
+import { __resetSystemHealthCache } from '../../src/services/health.js';
+
+// Clear the 5s system-health cache before each case so a stale value
+// from a prior test (or another suite that ran moments earlier) cannot
+// leak through.
+beforeEach(() => {
+  __resetSystemHealthCache();
+});
 
 describe('GET /api/v1/dashboard/health', () => {
   it('returns 401 without a session cookie', async () => {

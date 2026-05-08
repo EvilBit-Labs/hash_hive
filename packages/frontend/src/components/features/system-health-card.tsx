@@ -6,8 +6,10 @@
  * unhealthy. Click a row to expand its raw `detail` payload.
  *
  * Aria: aggregate status uses role="status" + aria-live="polite" so
- * screen readers announce changes. Status dots respect
- * prefers-reduced-motion (no pulse on unhealthy).
+ * screen readers announce changes. The aggregate status dot pulses
+ * when the system is degraded or unhealthy (signals "needs attention").
+ * Pulse animation is suppressed via `motion-reduce:hidden` when the
+ * user has `prefers-reduced-motion` set.
  */
 import { useState } from 'react';
 import {

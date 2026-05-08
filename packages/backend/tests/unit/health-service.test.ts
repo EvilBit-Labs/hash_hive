@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import {
+  __resetSystemHealthCache,
   aggregateStatus,
   type ComponentHealth,
   type ComponentName,
@@ -11,6 +12,15 @@ import {
   probeRedis,
   runProbe,
 } from '../../src/services/health.js';
+
+// getSystemHealth() carries a 5s in-memory cache + in-flight dedupe.
+// Tests that pass `probes:` bypass the cache by design, but tests that
+// run AFTER one without the bypass could hit a stale cached value.
+// Reset before each test so every assertion observes only its own
+// probes — eliminates ordering-dependent CI flakes.
+beforeEach(() => {
+  __resetSystemHealthCache();
+});
 
 function makeComponent(status: ComponentHealth['status']): ComponentHealth {
   return { status, durationMs: 1 };

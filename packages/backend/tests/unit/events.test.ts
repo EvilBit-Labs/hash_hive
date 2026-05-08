@@ -53,6 +53,31 @@ function createFakeWs(readyState = 1): FakeWs {
   return ws;
 }
 
+/**
+ * Read the parsed payload of a delivered frame, asserting first that
+ * the frame index actually exists. Replaces `JSON.parse(ws.sent[i]!)`
+ * patterns that bypass `noUncheckedIndexedAccess` and produce opaque
+ * "Cannot read properties of undefined" errors when a broadcast is
+ * missing.
+ *
+ * Returns a loosely-typed payload shape (`type`, `projectId`, `data`)
+ * so individual tests can read nested fields without their own casts.
+ */
+interface ParsedFrame {
+  type: string;
+  projectId: number;
+  data: Record<string, unknown>;
+  timestamp: string;
+}
+
+function getFrame(ws: FakeWs, index: number): ParsedFrame {
+  const raw = ws.sent[index];
+  if (raw === undefined) {
+    throw new Error(`expected ws.sent[${index}] to exist; ws has ${ws.sent.length} frames`);
+  }
+  return JSON.parse(raw) as ParsedFrame;
+}
+
 // Reset the module-level client registry and throttle map before each
 // test so suite-wide ordering doesn't leak state (testing review T-006).
 const registeredIds: number[] = [];
@@ -92,7 +117,7 @@ describe('broadcastSystemEvent', () => {
 
     expect(ws1.sent).toHaveLength(1);
     expect(ws2.sent).toHaveLength(1);
-    const payload = JSON.parse(ws1.sent[0]!);
+    const payload = getFrame(ws1, 0);
     expect(payload.type).toBe('system_health');
     expect(payload.data.component).toBe('database');
     expect(payload.data.status).toBe('degraded');
@@ -123,6 +148,35 @@ describe('broadcastSystemEvent', () => {
     registeredIds.splice(registeredIds.indexOf(id), 1);
   });
 
+  test('open socket whose send() throws is evicted; delivery continues to peers', () => {
+    // The closed-socket case (above) covers the readyState !== 1 path.
+    // This case covers the OPEN-but-send-throws path: e.g. an oversized
+    // frame, an EPIPE under backpressure, or a buffer-overflow. The bad
+    // client must be dropped without taking down delivery to healthy
+    // peers.
+    const throwingWs: FakeWs = {
+      readyState: 1,
+      sent: [],
+      send: () => {
+        throw new Error('synthetic send failure');
+      },
+    };
+    const healthyWs = createFakeWs();
+    const throwingId = trackedRegister(throwingWs, [1]);
+    trackedRegister(healthyWs, [1]);
+    const before = getClientCount();
+
+    broadcastSystemEvent('system_health', { component: 'queues', status: 'degraded' });
+
+    // Throwing client received nothing and was evicted.
+    expect(throwingWs.sent).toHaveLength(0);
+    expect(getClientCount()).toBe(before - 1);
+    // Healthy peer still got the broadcast.
+    expect(healthyWs.sent).toHaveLength(1);
+    // Already evicted from the map; remove from local tracking too.
+    registeredIds.splice(registeredIds.indexOf(throwingId), 1);
+  });
+
   test('does NOT throttle simultaneous events (two components flip on same tick)', () => {
     const ws = createFakeWs();
     trackedRegister(ws, [1]);
@@ -131,8 +185,8 @@ describe('broadcastSystemEvent', () => {
     broadcastSystemEvent('system_health', { component: 'redis', status: 'unhealthy' });
 
     expect(ws.sent).toHaveLength(2);
-    const first = JSON.parse(ws.sent[0]!);
-    const second = JSON.parse(ws.sent[1]!);
+    const first = getFrame(ws, 0);
+    const second = getFrame(ws, 1);
     expect(first.data.component).toBe('database');
     expect(second.data.component).toBe('redis');
   });
@@ -141,7 +195,7 @@ describe('broadcastSystemEvent', () => {
     const ws = createFakeWs();
     trackedRegister(ws, [99]);
     broadcastSystemEvent('system_health', { component: 'queues', status: 'degraded' });
-    const payload = JSON.parse(ws.sent[0]!);
+    const payload = getFrame(ws, 0);
     expect(payload.projectId).toBe(0);
   });
 });
@@ -151,7 +205,7 @@ describe('broadcastSystemHealth', () => {
     const ws = createFakeWs();
     trackedRegister(ws, [1]);
     broadcastSystemHealth('database', 'degraded', 'pool 90% full');
-    const payload = JSON.parse(ws.sent[0]!);
+    const payload = getFrame(ws, 0);
     expect(payload.data).toEqual({
       component: 'database',
       status: 'degraded',
@@ -163,7 +217,7 @@ describe('broadcastSystemHealth', () => {
     const ws = createFakeWs();
     trackedRegister(ws, [1]);
     broadcastSystemHealth('redis', 'healthy');
-    const payload = JSON.parse(ws.sent[0]!);
+    const payload = getFrame(ws, 0);
     expect(payload.data.message).toBeUndefined();
     expect(payload.data.component).toBe('redis');
     expect(payload.data.status).toBe('healthy');

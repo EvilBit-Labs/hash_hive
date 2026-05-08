@@ -26,8 +26,12 @@ async function main() {
   // connection failure and waits for the `ready` event; "fail-fast"
   // here covers post-connect setup errors, not Redis-down-at-startup.
   const queueManager = new QueueManager();
-  setQueueManager(queueManager);
+  // Initialize first, register second: the registry should never hold
+  // a half-initialized manager. Today the two calls are synchronous
+  // and non-overlapping, but the order makes the invariant explicit
+  // for any future change that adds an await between them.
   await queueManager.init();
+  setQueueManager(queueManager);
 
   const hashListWorker = createHashListParserWorker(connection);
   logger.info('Hash list parser worker started');
