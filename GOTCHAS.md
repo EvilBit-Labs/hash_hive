@@ -29,6 +29,10 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 
 - **Never leak internal errors to clients**: The global `app.onError()` handler must NOT send `err.message` in any environment (including dev) — Drizzle errors include full SQL queries with table names and column names. Always return a generic message and log the full error server-side.
 
+- **Use `Context<AppEnv>` for handler/helper signatures, never `Parameters<typeof Hono.prototype.get>[1]`**: The `Parameters<...>` form fails under TS strict mode (`Property 'get' does not exist on type 'never'`). Import `Context` from `hono` directly: `function helper(c: Context<AppEnv>)`.
+
+- **Zod v3 vs v4 at the `@hono/zod-validator` hook boundary**: v0.7 emits `$ZodError` (zod v4 core) on validation failure, but local helpers like `mapZodError` are typed against `z.ZodError` from zod v3. Runtime `issues[]` shape matches; cast through `unknown` (`mapZodError(result.error as z.ZodError)`) at the hook boundary, not at every call site.
+
 ## Drizzle ORM
 
 - **`db.execute(sql`...`)` returns array-like result** — access rows as `result[0]`, not `result.rows[0]`
@@ -69,6 +73,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - **Shared module cache gotcha**: `mock.module` **merges** mock exports into the real module's ESM namespace — non-mocked exports pass through, but mocked ones (e.g., `resolveGenerationStrategy: mock()`) silently replace the real function for ALL test files in the same run. Never mock individual exports of a module unless every consumer in every test file can tolerate the mock.
 - **Flaky module cache**: Tests relying on `mock.module` can pass in isolation but fail in the full suite non-deterministically. If a test fails in `bun --filter @hashhive/backend test` but passes alone, re-run the full suite once before debugging — bun's module evaluation order across files is not guaranteed.
 - **Separate test files for conflicting mocks**: If a module is already imported at top level in one test file (e.g., `resolveGenerationStrategy` in `campaigns.test.ts`), tests needing full module mocks for the same source must go in a separate test file to avoid import-order conflicts.
+- **Isolated-phase pattern for files needing exclusive `mock.module` ownership**: `mock.module` runs at module load (before `describe.skip` can suppress it) and persists process-wide. Wrap the entire file body in `if (IS_ISOLATED) { ... }` and use `require('../../src/...')` inside to defer ESM resolution past the mocks. Gate via env var (e.g. `CONTROL_RBAC_TEST_ISOLATED=1`) wired through `package.json`'s test script as a separate phase. Existing examples: `tasks.test.ts`, `queue-manager.test.ts`, `control-routes-rbac.test.ts`.
 
 **Mock Patterns:**
 
