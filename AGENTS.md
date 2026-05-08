@@ -27,6 +27,16 @@ Users issue and rotate Control API keys from the dashboard Account page (`/accou
 - Prefer mermaid diagrams for architectural or sequence diagrams in documentation.
 - Agents (hashcat workers) are the primary API consumer. Never break the agent API to improve the dashboard experience.
 
+## Validation Gates (MANDATORY)
+
+Two gates protect the codebase from drifting red. Both are non-negotiable; if either fails, fix the failures before proceeding -- do not commit a red tree, do not open a PR with failures, and do not ask the human for permission to skip the gate.
+
+- **After completing any change task, you MUST run `just check`.** This runs format, lint, type-check, and build. It is the fast quality gate (typically <30s) and catches the majority of drift before it lands. Run it after every meaningful change, not just at the end of a session.
+- **Before committing, you MUST run `just ci-check`.** This runs the full test suite on top of `just check` and is what CI runs. Local `just ci-check` green is the contract; if it fails locally it will fail in CI.
+- **If either command fails, you fix it and rerun until green.** This includes test failures you didn't expect, lint findings on adjacent code the formatter touched, and type errors surfaced by upstream dependency changes. The standard is "green at commit time", not "green on the change you intended to make".
+
+Recipes that wrap individual concerns (`just test-frontend`, `just type-check`, etc.) are useful for iterating on a specific failure but never substitute for the two gates above.
+
 ## Agent Rules <!-- tessl-managed -->
 
 @.tessl/RULES.md follow the [instructions](.tessl/RULES.md)
