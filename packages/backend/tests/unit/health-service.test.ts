@@ -86,6 +86,34 @@ describe('runProbe', () => {
     expect(result.message).toContain('timed out');
     expect(result.message).toContain('50ms');
   });
+
+  test('passes an AbortSignal to the probe and aborts it on timeout', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const probeFn = (signal: AbortSignal) =>
+      new Promise<never>(() => {
+        // Capture the signal so the test can assert it aborts.
+        receivedSignal = signal;
+      });
+    const result = await runProbe('database', probeFn, 30);
+    expect(result.status).toBe('unhealthy');
+    expect(result.message).toContain('timed out');
+    // The probe captured the signal; once the wrapper times out, it
+    // should be aborted so cancellation-aware drivers (S3 SDK
+    // abortSignal, fetch) terminate the underlying call.
+    expect(receivedSignal).toBeDefined();
+    expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  test('does NOT abort the signal when the probe resolves before timeout', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const probeFn = async (signal: AbortSignal) => {
+      receivedSignal = signal;
+      return { status: 'healthy' as const };
+    };
+    const result = await runProbe('database', probeFn, 1000);
+    expect(result.status).toBe('healthy');
+    expect(receivedSignal?.aborted).toBe(false);
+  });
 });
 
 describe('probeDatabase', () => {

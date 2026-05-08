@@ -146,12 +146,26 @@ describe('GET /api/v1/dashboard/health', () => {
     const someNonHealthy = Object.values(body.components).some((c) => c.status !== 'healthy');
     expect(someNonHealthy).toBe(true);
 
-    // Bracket access yields T | undefined under noUncheckedIndexedAccess;
-    // guard before reading nested fields.
+    // The contract under test: every non-healthy component carries a
+    // `message` (required by the ComponentHealth discriminated union).
+    // `detail` is optional per probe — redis omits it, queues+minio
+    // include it — so we only assert message presence on the
+    // first-non-healthy. Detail is asserted on the queues path (which
+    // always carries `{ queues: {} }`) and the minio path (which always
+    // carries `{ bucket }`) below.
+    const nonHealthy = Object.values(body.components).find((c) => c.status !== 'healthy');
+    expect(nonHealthy).toBeDefined();
+    expect(nonHealthy?.message).toBeDefined();
+    expect(typeof nonHealthy?.message).toBe('string');
+
+    // Pin the queues path: when queues is non-healthy (the reliable
+    // signal in unit-test env without a QueueManager), its detail must
+    // include the queues map. Bracket access yields T | undefined; pin
+    // presence first so a regression that drops the key entirely fails
+    // loudly instead of silently skipping via optional chaining.
     const queues = body.components['queues'];
+    expect(queues).toBeDefined();
     if (queues && queues.status !== 'healthy') {
-      expect(queues.message).toBeDefined();
-      expect(typeof queues.message).toBe('string');
       expect(queues.detail).toBeDefined();
     }
     // minio probe is stubbed, so its detail.bucket is reliably present

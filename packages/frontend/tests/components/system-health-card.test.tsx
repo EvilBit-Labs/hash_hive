@@ -22,7 +22,7 @@ function buildHealth(overrides: Partial<SystemHealth> = {}): SystemHealth {
   return {
     status: 'healthy',
     timestamp: '2026-05-06T12:00:00.000Z',
-    version: '1.0.0',
+    version: '1.1.0',
     components: {
       database: { status: 'healthy', durationMs: 4 },
       redis: { status: 'healthy', durationMs: 2 },
@@ -239,13 +239,15 @@ describe('SystemHealthCard', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/Failed to load system health/);
   });
 
-  // Issue #109 testing review T-007. Asserting the row is a native
-  // `<button>` is what makes the keyboard-operability claim real:
-  // browsers fire click on Enter/Space for native buttons but not for
-  // a `<div role="button">` without an explicit onKeyDown. The test
-  // then dispatches the click that Enter would produce; this is the
-  // happy-dom-friendly equivalent of pressing Enter.
-  it('component row is a native <button> so Enter/Space activate it', async () => {
+  // Issue #109 testing review T-007. The keyboard-operability claim
+  // ("Enter/Space activate the row") rests on the row being a native
+  // `<button>` — browsers translate Enter/Space presses into click on
+  // native buttons, but not on `<div role="button">` without an
+  // explicit onKeyDown. We pin the native-button tag here and exercise
+  // the click handler that Enter would produce; happy-dom doesn't
+  // synthesize the Enter→click translation, so a real keyDown event
+  // would be testing happy-dom rather than our component.
+  it('component row is a native <button> tag (gives Enter/Space activation for free)', async () => {
     fetchMock = mockFetch({
       '/dashboard/health': {
         status: 200,
@@ -290,15 +292,21 @@ describe('SystemHealthCard', () => {
     });
     renderWithProviders(<SystemHealthCard />);
 
-    // Before the fetch resolves we should have exactly one skeleton row
-    // per component label. A regression that dropped a row would fail
-    // here because the loaded text "Database" / "Redis" / etc. is
-    // unique to the skeleton and the loaded view alike — so checking
-    // the four labels are present is the most direct signal that all
-    // four rows rendered.
+    // While the fetch is pending we should have exactly one row per
+    // component. The four component labels render in both skeleton and
+    // loaded states, so they're insufficient on their own to pin "we're
+    // in the skeleton state". The skeleton-only signal is the `--`
+    // status placeholder rendered by SkeletonRow — count those to
+    // confirm the loading branch fired (one per component, possibly
+    // plus one in the header).
     expect(screen.getByText('Database')).toBeDefined();
     expect(screen.getByText('Redis')).toBeDefined();
     expect(screen.getByText('Object Storage')).toBeDefined();
     expect(screen.getByText('Job Queues')).toBeDefined();
+    // Skeleton-specific assertion: 4 rows × `--` placeholder, plus the
+    // header `--` when no data is loaded yet (5 total, but allow >= 4
+    // in case the header placeholder is suppressed).
+    const placeholders = screen.getAllByText('--');
+    expect(placeholders.length).toBeGreaterThanOrEqual(4);
   });
 });

@@ -28,7 +28,7 @@ function buildSystemHealth(): SystemHealth {
   return {
     status: mockedAggregateStatus,
     timestamp: '2026-05-07T00:00:00.000Z',
-    version: '1.0.0',
+    version: '1.1.0',
     components: {
       database: buildComponent(mockedAggregateStatus === 'unhealthy' ? 'unhealthy' : 'healthy'),
       redis: buildComponent('healthy'),

@@ -43,14 +43,21 @@ const AGGREGATE_LABEL: Record<ComponentStatus, string> = {
  * Renders an error from an unknown reject value. Plain-string and
  * plain-object rejections (from custom fetch wrappers) need a fallback
  * description so the user sees something more actionable than a bare
- * "Failed to load system health".
+ * "Failed to load system health". The property access is wrapped in
+ * try/catch because adversarial inputs may define `message` as a getter
+ * that throws — we never want describeError to itself throw during
+ * render and blank the card.
  */
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
   if (err && typeof err === 'object' && 'message' in err) {
-    const msg = (err as { message: unknown }).message;
-    if (typeof msg === 'string') return msg;
+    try {
+      const msg = (err as { message: unknown }).message;
+      if (typeof msg === 'string') return msg;
+    } catch {
+      // Fall through: getter threw, treat as unknown.
+    }
   }
   return 'unknown error';
 }
