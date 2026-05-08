@@ -6,7 +6,23 @@ info:
     integrations. Authenticated by per-user API keys (format `cst_*`),
     paginated with `offset`/`limit`, and emits RFC 9457 problem-details on
     errors.
-  version: 1.0.0
+
+    ## Changelog
+
+    ### 1.1.0 (issue #109)
+
+    Breaking change to `GET /health`:
+    - Top-level `status` enum widened from `[ok, degraded]` to
+      `[healthy, degraded, unhealthy]`.
+    - `services` field replaced with `components` (rich `SystemHealth`
+      shape including per-component `message`, `detail`, and
+      `durationMs`).
+    - New `queues` component added.
+
+    Consumers that pinned the old envelope must update before upgrading.
+    No deprecation window: this surface was introduced in 1.0.0 and has
+    no known external automation consumers yet.
+  version: 1.1.0
 
 servers:
   - url: /api/v1/control
@@ -17,26 +33,34 @@ paths:
     get:
       operationId: getHealth
       summary: Health probe (authenticated)
+      description: |
+        Reports the unified system-health snapshot. Issue #109 introduced
+        a single `getSystemHealth()` service that backs three endpoints,
+        but they expose two different envelope shapes:
+
+        - `/api/v1/control/health` (this endpoint) and
+          `/api/v1/dashboard/health` return the rich `SystemHealth`
+          shape — three-tier `status`, `components` map, per-component
+          `message`, `detail`, and `durationMs`.
+        - The public `/health` returns a backward-compatible legacy
+          envelope: two-tier `status: ok | degraded`, a `services` map,
+          and an additive `aggregateStatus` field carrying the full
+          three-tier signal. This shape exists so older load-balancer
+          probes that read `services.{database,redis,minio}.status`
+          keep working.
+
+        Authenticated control consumers receive the full shape including
+        connection counts, queue depths, and probe durations.
       tags: [Health]
       security:
         - BearerApiKey: []
       responses:
         "200":
-          description: Service health
+          description: System health snapshot
           content:
             application/json:
               schema:
-                type: object
-                required: [status, timestamp, services]
-                properties:
-                  status:
-                    type: string
-                    enum: [ok, degraded]
-                  timestamp:
-                    type: string
-                    format: date-time
-                  services:
-                    type: object
+                $ref: "#/components/schemas/SystemHealth"
         "401":
           $ref: "#/components/responses/AuthError"
 
@@ -636,6 +660,91 @@ components:
         minimum: 1
 
   schemas:
+    SystemHealth:
+      type: object
+      description: |
+        Unified system-health snapshot returned by all three health surfaces
+        (issue #109). Aggregate `status` follows worst-of: `unhealthy` if any
+        component is unhealthy, else `degraded` if any is degraded, else
+        `healthy`.
+      required: [status, timestamp, version, components]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+        components:
+          type: object
+          required: [database, redis, minio, queues]
+          properties:
+            database:
+              $ref: "#/components/schemas/ComponentHealth"
+            redis:
+              $ref: "#/components/schemas/ComponentHealth"
+            minio:
+              $ref: "#/components/schemas/ComponentHealth"
+            queues:
+              $ref: "#/components/schemas/ComponentHealth"
+
+    ComponentHealth:
+      description: |
+        Discriminated by `status`. Healthy components may omit `message`;
+        degraded and unhealthy components must include one. Mirrors the
+        `ProbeResult` discriminated union in `services/health.ts`.
+      oneOf:
+        - $ref: "#/components/schemas/HealthyComponent"
+        - $ref: "#/components/schemas/NonHealthyComponent"
+      discriminator:
+        propertyName: status
+        mapping:
+          healthy: "#/components/schemas/HealthyComponent"
+          degraded: "#/components/schemas/NonHealthyComponent"
+          unhealthy: "#/components/schemas/NonHealthyComponent"
+
+    HealthyComponent:
+      type: object
+      required: [status, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        message:
+          type: string
+          description: Optional note from the probe; usually omitted.
+        detail:
+          type: object
+          description: Probe-specific structured detail (shape varies per component).
+        durationMs:
+          type: integer
+          description: Probe execution time in milliseconds.
+
+    NonHealthyComponent:
+      type: object
+      required: [status, message, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [degraded, unhealthy]
+        message:
+          type: string
+          description: |
+            Human-readable summary of why this component is not healthy.
+            Required for degraded/unhealthy so consumers always have a
+            useful error string to render.
+        detail:
+          type: object
+          description: |
+            Probe-specific structured detail (e.g., `{connectionsUsed,
+            connectionsMax, connectionsPct}` for database, `{queues}` map
+            for queues). Shape varies per component.
+        durationMs:
+          type: integer
+          description: Probe execution time in milliseconds.
+
     Problem:
       type: object
       description: RFC 9457 Problem Details envelope

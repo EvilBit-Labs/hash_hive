@@ -1,5 +1,6 @@
 import { type ConnectionOptions, Queue } from 'bullmq';
 import type Redis from 'ioredis';
+import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { QUEUE_NAMES, type QueueName } from '../config/queue.js';
 import { createRedisClient, getRedisStatus } from '../config/redis.js';
@@ -68,6 +69,16 @@ export class QueueManager {
       );
     }
 
+    // Schedule repeatable health monitor (issue #109).
+    const healthQueue = this.queues.get(QUEUE_NAMES.HEALTH_MONITOR);
+    if (healthQueue) {
+      await healthQueue.upsertJobScheduler(
+        'health-check',
+        { every: env.HEALTH_MONITOR_INTERVAL_MS },
+        { data: { triggeredAt: new Date().toISOString() } }
+      );
+    }
+
     logger.info('Queue manager initialized');
   }
 
@@ -93,6 +104,16 @@ export class QueueManager {
       logger.error({ err, queueName }, 'Failed to enqueue job');
       return false;
     }
+  }
+
+  /**
+   * Returns the Redis connection status without iterating every queue.
+   * Used by the system-health probe (issue #109) so probeRedis and
+   * probeQueues don't both call the heavier qm.getHealth() and double
+   * the Redis round-trips per health request.
+   */
+  getRedisStatus(): 'connected' | 'disconnected' {
+    return getRedisStatus(this.connection);
   }
 
   async getHealth(): Promise<QueueHealth> {

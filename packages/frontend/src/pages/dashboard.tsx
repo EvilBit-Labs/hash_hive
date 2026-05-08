@@ -1,5 +1,6 @@
 import { ConnectionIndicator } from '../components/features/connection-indicator';
 import { StatCard } from '../components/features/stat-card';
+import { SystemHealthCard } from '../components/features/system-health-card';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
 import { useDashboardStats } from '../hooks/use-dashboard';
@@ -63,6 +64,8 @@ export function DashboardPage() {
           accent="--success"
         />
       </div>
+
+      <SystemHealthCard />
     </div>
   );
 }

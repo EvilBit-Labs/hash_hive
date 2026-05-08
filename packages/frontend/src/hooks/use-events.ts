@@ -8,7 +8,8 @@ export type EventType =
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
-  | 'resource_update';
+  | 'resource_update'
+  | 'system_health';
 
 export interface AppEvent {
   type: EventType;
@@ -66,6 +67,7 @@ export function useEvents(options: UseEventsOptions = {}) {
         reconnectAttemptsRef.current = 0;
       };
 
+      // Project-scoped query keys: invalidated with [key, selectedProjectId].
       const invalidationKeys: Record<string, string[]> = {
         agent_status: ['agents', 'dashboard-stats'],
         campaign_status: ['campaigns', 'dashboard-stats'],
@@ -80,21 +82,75 @@ export function useEvents(options: UseEventsOptions = {}) {
         resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
       };
 
+      // System-scoped query keys: invalidated with just [key], no project.
+      // Issue #109: system_health is system-wide; the query key has no
+      // projectId component, so the project-scoped invalidation path
+      // would never match it.
+      const systemInvalidationKeys: Record<string, string[]> = {
+        system_health: ['system-health'],
+      };
+
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as Record<string, unknown>;
+          // Validate envelope shape before any cast or invalidation.
+          // Without this guard, a non-object payload or one missing a
+          // string `type` would still flow through the casts below and
+          // hit invalidateQueries / onEvent with malformed data.
+          const parsed: unknown = JSON.parse(event.data);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            typeof (parsed as Record<string, unknown>)['type'] !== 'string'
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid envelope');
+            return;
+          }
+          const data = parsed as Record<string, unknown>;
           if (data['type'] === 'connected' || data['type'] === 'pong') return;
 
-          const keys = invalidationKeys[data['type'] as string];
-          if (keys) {
-            for (const key of keys) {
+          // Validate the rest of the envelope before invalidation /
+          // callback dispatch. The type guard above only pinned `type`;
+          // a frame with `type: 'agent_status'` but missing
+          // `projectId`/`timestamp`/`data` would still cast through to
+          // AppEvent without these checks.
+          if (
+            typeof data['projectId'] !== 'number' ||
+            typeof data['timestamp'] !== 'string' ||
+            typeof data['data'] !== 'object' ||
+            data['data'] === null
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid event payload');
+            return;
+          }
+
+          const eventType = data['type'] as string;
+          const projectKeys = invalidationKeys[eventType];
+          if (projectKeys) {
+            for (const key of projectKeys) {
               queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] });
             }
           }
+          const systemKeys = systemInvalidationKeys[eventType];
+          if (systemKeys) {
+            for (const key of systemKeys) {
+              queryClient.invalidateQueries({ queryKey: [key] });
+            }
+          }
 
-          onEventRef.current?.(data as unknown as AppEvent);
-        } catch {
-          // Ignore malformed messages
+          onEventRef.current?.({
+            type: data['type'] as EventType,
+            projectId: data['projectId'] as number,
+            data: data['data'] as Record<string, unknown>,
+            timestamp: data['timestamp'] as string,
+          });
+        } catch (err) {
+          // Surface schema drift between server and client to console.
+          // Silently dropping the frame would mask backend events from
+          // the dashboard with no diagnostic signal.
+          // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+          console.warn('[useEvents] dropped malformed WS frame', err);
         }
       };
 

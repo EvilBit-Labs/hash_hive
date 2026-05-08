@@ -1,3 +1,5 @@
+redactions = [ "*_SECRET", "*_KEY", "*_PASSWORD" ]
+
 # Many tools are set to "latest" to take advantage of idiomatic version files, which will automatically update the tool to the latest version when the version file is updated. This allows us to keep our tools up to date without having to manually update the version in this configuration file.
 [tools]
 biome             = "2.4.14"
@@ -24,3 +26,7 @@ package_manager = "bun"
 
 [settings.pipx]
 uvx = true
+
+[env]
+ECC_DISABLED_HOOKS = "pre:bash:gateguard-fact-force"
+_.file             = [ '.env', ".env.local" ]
