@@ -19,7 +19,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1017.0",
+    "@aws-sdk/client-s3": "3.1046.0",
     "@aws-sdk/s3-request-presigner": "3.1017.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-validator": "^0.7.6",
