@@ -20,10 +20,14 @@ export function AgentErrorBadge({
   }
 
   const isFatal = severity === 'fatal';
+  const severityLabel = isFatal ? 'fatal' : 'warning';
   const styles = isFatal
     ? 'bg-destructive/15 text-destructive border-destructive/30 hover:bg-destructive/25'
     : 'bg-warning/15 text-warning border-warning/30 hover:bg-warning/25';
-  const label = `${count} ${count === 1 ? 'error' : 'errors'} in last 24h`;
+  // Severity is conveyed by color AND by the accessible name so screen
+  // readers and colorblind users get the same signal a sighted user
+  // sees from the warning vs destructive tint.
+  const label = `${count} ${count === 1 ? 'error' : 'errors'} (${severityLabel}) in last 24h`;
 
   return (
     <Link
@@ -37,6 +41,7 @@ export function AgentErrorBadge({
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {count}
+      <span className="sr-only">{severityLabel}</span>
     </Link>
   );
 }

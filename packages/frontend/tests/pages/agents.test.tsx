@@ -180,7 +180,7 @@ describe('AgentsPage', () => {
       expect(screen.getByText('Rig Alpha')).toBeDefined();
     });
 
-    const badge = screen.getByRole('link', { name: /3 errors in last 24h/i });
+    const badge = screen.getByRole('link', { name: /3 errors.*\(fatal\).*in last 24h/i });
     expect(badge).toBeDefined();
     expect(badge.getAttribute('href')).toBe('/agents/1#errors');
     expect(badge.className).toContain('text-destructive');
