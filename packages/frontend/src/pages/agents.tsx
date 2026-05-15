@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
 import { AgentErrorBadge } from '../components/features/agent-error-badge';
 import { type AgentFilter, AgentFilterButtons } from '../components/features/agent-filter-buttons';
 import { StatusBadge } from '../components/features/status-badge';
@@ -33,9 +32,10 @@ function formatCurrentTask(
 
 export function AgentsPage() {
   const { selectedProjectId } = useUiStore();
-  const [statusFilter, setStatusFilter] = useState<AgentFilter>('');
-  const navigate = useNavigate();
-  const { data, isLoading } = useAgents(statusFilter ? { status: statusFilter } : undefined);
+  const [statusFilter, setStatusFilter] = useState<AgentFilter>('all');
+  const { data, isLoading } = useAgents(
+    statusFilter === 'all' ? undefined : { status: statusFilter }
+  );
 
   if (!selectedProjectId) {
     return (
@@ -44,10 +44,6 @@ export function AgentsPage() {
         <EmptyState message="Select a project to view agents." />
       </div>
     );
-  }
-
-  function goToAgent(agentId: number, hash?: string) {
-    navigate(`/agents/${agentId}${hash ?? ''}`);
   }
 
   return (
@@ -72,7 +68,6 @@ export function AgentsPage() {
                 <Th>Current Task</Th>
                 <Th>Hardware</Th>
                 <Th>Cracker</Th>
-                <Th>Actions</Th>
               </tr>
             </TableHead>
             <TableBody>
@@ -85,42 +80,20 @@ export function AgentsPage() {
                 const severity = agent.worstSeverity24h ?? null;
 
                 return (
-                  <TableRow
-                    key={agent.id}
-                    role="link"
-                    tabIndex={0}
-                    className="cursor-pointer hover:bg-surface-0/40"
-                    onClick={(e) => {
-                      // Inner interactive elements (Details link, error badge)
-                      // navigate themselves; ignore their bubbled clicks so the
-                      // user doesn't get two history entries.
-                      if (
-                        e.target !== e.currentTarget &&
-                        (e.target as HTMLElement).closest('a, button')
-                      ) {
-                        return;
-                      }
-                      goToAgent(agent.id);
-                    }}
-                    onKeyDown={(e) => {
-                      // Only respond to the row's own focus, not bubbled events
-                      // from focused inner buttons/links (which have their own
-                      // keyboard handlers).
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        goToAgent(agent.id);
-                      }
-                    }}
-                  >
-                    <Td className="text-sm font-medium text-foreground">
+                  <TableRow key={agent.id}>
+                    <Td className="text-sm font-medium">
                       <div className="flex items-center gap-2">
-                        <span>{agent.name}</span>
+                        <TextLink
+                          to={`/agents/${agent.id}`}
+                          className="text-sm text-foreground hover:text-primary"
+                        >
+                          {agent.name}
+                        </TextLink>
                         <AgentErrorBadge
                           count={errorCount}
                           severity={severity}
                           agentId={agent.id}
-                          onActivate={(id) => goToAgent(id, '#errors')}
+                          hashTarget="#errors"
                         />
                       </div>
                     </Td>
@@ -137,9 +110,6 @@ export function AgentsPage() {
                       {gpus === null ? '—' : `${gpus} GPU${gpus === 1 ? '' : 's'}`}
                     </Td>
                     <Td className="text-xs text-muted-foreground">{formatPrimaryEngine(engine)}</Td>
-                    <Td>
-                      <TextLink to={`/agents/${agent.id}`}>Details</TextLink>
-                    </Td>
                   </TableRow>
                 );
               })}

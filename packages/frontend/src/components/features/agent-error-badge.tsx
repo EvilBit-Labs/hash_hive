@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import type { AgentWorstSeverity } from '../../hooks/use-dashboard';
 import { cn } from '../../lib/utils';
 
@@ -5,10 +6,15 @@ interface AgentErrorBadgeProps {
   count: number;
   severity: AgentWorstSeverity;
   agentId: number;
-  onActivate?: (agentId: number) => void;
+  hashTarget?: string;
 }
 
-export function AgentErrorBadge({ count, severity, agentId, onActivate }: AgentErrorBadgeProps) {
+export function AgentErrorBadge({
+  count,
+  severity,
+  agentId,
+  hashTarget = '#errors',
+}: AgentErrorBadgeProps) {
   if (count <= 0 || !severity) {
     return null;
   }
@@ -20,14 +26,10 @@ export function AgentErrorBadge({ count, severity, agentId, onActivate }: AgentE
   const label = `${count} ${count === 1 ? 'error' : 'errors'} in last 24h`;
 
   return (
-    <button
-      type="button"
+    <Link
+      to={`/agents/${agentId}${hashTarget}`}
       aria-label={label}
       title={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onActivate?.(agentId);
-      }}
       className={cn(
         'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors',
         styles
@@ -35,6 +37,6 @@ export function AgentErrorBadge({ count, severity, agentId, onActivate }: AgentE
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {count}
-    </button>
+    </Link>
   );
 }

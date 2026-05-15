@@ -7,30 +7,39 @@ import { StatusBadge } from './status-badge';
 interface AgentTasksSectionProps {
   tasks: AgentTask[] | undefined;
   isLoading: boolean;
+  isError?: boolean;
 }
 
 function progressPercent(progress: Record<string, unknown>): string {
   const value = progress['percent'] ?? progress['completed'] ?? progress['progress'];
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return `${Math.round(value)}%`;
+  if (value === undefined || value === null) return '—';
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
+    console.warn('[AgentTasksSection] non-numeric progress.percent', value);
+    return 'invalid';
   }
-  return '—';
+  return `${Math.round(value)}%`;
 }
 
 function progressSpeed(progress: Record<string, unknown>): string {
   const speed = progress['speedHs'] ?? progress['speed'];
-  if (typeof speed === 'number' && Number.isFinite(speed)) {
-    return `${speed.toLocaleString()} H/s`;
+  if (speed === undefined || speed === null) return '—';
+  if (typeof speed !== 'number' || !Number.isFinite(speed)) {
+    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
+    console.warn('[AgentTasksSection] non-numeric progress.speed', speed);
+    return 'invalid';
   }
-  return '—';
+  return `${speed.toLocaleString()} H/s`;
 }
 
-export function AgentTasksSection({ tasks, isLoading }: AgentTasksSectionProps) {
+export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSectionProps) {
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-medium">Current Tasks</h3>
       {isLoading ? (
         <EmptyState message="Loading tasks..." />
+      ) : isError ? (
+        <EmptyState message="Failed to load tasks — refresh to retry." />
       ) : !tasks || tasks.length === 0 ? (
         <EmptyState message="No active tasks assigned." />
       ) : (

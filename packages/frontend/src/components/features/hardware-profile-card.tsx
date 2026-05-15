@@ -30,8 +30,23 @@ interface GpuInfo {
   memory?: number;
 }
 
-function pick<T>(value: unknown): T | undefined {
-  return typeof value === 'object' && value !== null ? (value as T) : undefined;
+// Labeled-cast helper: agent-reported jsonb has no enforced schema, so we
+// accept only the plain-object shape we know how to render. Arrays, Dates,
+// Maps, Sets, and other non-plain objects are rejected so a firmware drift
+// surfaces as a visible warning rather than silently rendering "—" rows.
+function pick<T>(value: unknown, label: string): T | undefined {
+  if (value === undefined) return undefined;
+  const isPlainObject =
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+  if (!isPlainObject) {
+    // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+    console.warn(`[HardwareProfileCard] ${label} has unexpected shape`, value);
+    return undefined;
+  }
+  return value as T;
 }
 
 function formatBytes(mb: number | undefined): string {
@@ -90,9 +105,9 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
     );
   }
 
-  const os = pick<OsInfo>(profile['os']);
-  const cpu = pick<CpuInfo>(profile['cpu']);
-  const ram = pick<RamInfo>(profile['ram']);
+  const os = pick<OsInfo>(profile['os'], 'os');
+  const cpu = pick<CpuInfo>(profile['cpu'], 'cpu');
+  const ram = pick<RamInfo>(profile['ram'], 'ram');
   const gpusRaw = profile['gpus'];
   const gpus: GpuInfo[] = Array.isArray(gpusRaw) ? (gpusRaw as GpuInfo[]) : [];
   const hashcatVersion =

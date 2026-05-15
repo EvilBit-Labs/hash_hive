@@ -12,6 +12,11 @@
  * `crackers.test.ts` directly against the pure helpers.
  */
 import { describe, expect, it, mock } from 'bun:test';
+// Pull the real compareCrackerVersions in BEFORE mock.module runs so the mock
+// can re-export it. mock.module is process-global in bun:test; the previous
+// approach of inlining the algorithm duplicated ~70 lines of behavior and
+// risked drift between this file and src/services/crackers.ts.
+import { compareCrackerVersions as realCompareCrackerVersions } from '../../src/services/crackers.js';
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
 
@@ -136,78 +141,11 @@ mock.module('../../src/services/crackers.js', () => ({
   isKnownEngine: (engine: string) => engine === 'hashcat' || engine === 'john',
   normalizeEngineName: (engine: string | undefined | null) =>
     (engine ?? '').trim().toLowerCase() || 'hashcat',
-  // mock.module is process-global in bun:test, so any replacement here leaks
-  // into the rest of the test suite (notably crackers.test.ts, which exercises
-  // the real comparator). Mirror the real algorithm from
-  // src/services/crackers.ts:compareCrackerVersions so the leak does not flip
-  // dedicated comparator tests on CI's full-suite run. Keep this in sync with
-  // the source — drift will surface as crackers.test.ts failures on CI but not
-  // locally on macOS (test-file ordering masks the leak there).
-  compareCrackerVersions: (a: string, b: string): number => {
-    const parse = (v: string): { nums: number[]; rest: string } => {
-      let lastNumericEnd = 0;
-      let inNumber = false;
-      for (let i = 0; i < v.length; i++) {
-        const ch = v.charCodeAt(i);
-        const isDigit = ch >= 48 && ch <= 57;
-        const isDot = ch === 46;
-        if (isDigit) {
-          inNumber = true;
-          lastNumericEnd = i + 1;
-        } else if (isDot && inNumber) {
-          inNumber = false;
-        } else {
-          break;
-        }
-      }
-      const numericPart = v.slice(0, lastNumericEnd);
-      const rest = v.slice(lastNumericEnd);
-      const nums =
-        numericPart.length === 0
-          ? []
-          : numericPart
-              .split('.')
-              .filter((s) => s.length > 0)
-              .map((s) => Number.parseInt(s, 10));
-      return { nums, rest };
-    };
-    const compareSuffixTokens = (sa: string, sb: string): number => {
-      const tokensA = sa.split(/[.+-]/);
-      const tokensB = sb.split(/[.+-]/);
-      const tlen = Math.max(tokensA.length, tokensB.length);
-      for (let i = 0; i < tlen; i++) {
-        const ta = tokensA[i] ?? '';
-        const tb = tokensB[i] ?? '';
-        if (ta === tb) continue;
-        if (ta === '') return -1;
-        if (tb === '') return 1;
-        const na = /^\d+$/.test(ta) ? Number.parseInt(ta, 10) : Number.NaN;
-        const nb = /^\d+$/.test(tb) ? Number.parseInt(tb, 10) : Number.NaN;
-        const aIsNum = !Number.isNaN(na);
-        const bIsNum = !Number.isNaN(nb);
-        if (aIsNum && bIsNum) {
-          if (na !== nb) return na - nb;
-          continue;
-        }
-        if (aIsNum) return -1;
-        if (bIsNum) return 1;
-        return ta < tb ? -1 : 1;
-      }
-      return 0;
-    };
-    const pa = parse(a);
-    const pb = parse(b);
-    const len = Math.max(pa.nums.length, pb.nums.length);
-    for (let i = 0; i < len; i++) {
-      const an = pa.nums[i] ?? 0;
-      const bn = pb.nums[i] ?? 0;
-      if (an !== bn) return an - bn;
-    }
-    if (pa.rest === pb.rest) return 0;
-    if (pa.rest === '') return -1;
-    if (pb.rest === '') return 1;
-    return compareSuffixTokens(pa.rest, pb.rest);
-  },
+  // mock.module is process-global in bun:test, so replacing the comparator
+  // here would leak into crackers.test.ts (which exercises the real impl).
+  // Re-export the real implementation imported above so both call sites stay
+  // in sync automatically.
+  compareCrackerVersions: realCompareCrackerVersions,
 }));
 
 // ─── Mock Required Infra ─────────────────────────────────────────────

@@ -20,24 +20,34 @@ dashboardAgentRoutes.use('*', requireSession);
 const AGENT_LIST_MAX_LIMIT = 200;
 const AGENT_LIST_DEFAULT_LIMIT = 50;
 
-function parsePaginationParam(raw: string | undefined, max: number, fallback: number): number {
+function parsePositiveIntParam(raw: string | undefined, max: number, fallback: number): number {
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(Math.floor(parsed), max);
 }
 
+function parseOffsetParam(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  const parsed = Number(raw);
+  // Non-finite and negative values fall back to 0 rather than 400 — matches
+  // the limit param's permissive contract and avoids leaking Infinity into
+  // Drizzle's .offset() (which the driver may either reject or send as a
+  // bogus query depending on version).
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.floor(parsed);
+}
+
 // GET /agents — list agents with optional filtering
 dashboardAgentRoutes.get('/', requireProjectAccess(), async (c) => {
   const { projectId } = c.get('currentUser');
   const status = c.req.query('status') ?? undefined;
-  const limit = parsePaginationParam(
+  const limit = parsePositiveIntParam(
     c.req.query('limit'),
     AGENT_LIST_MAX_LIMIT,
     AGENT_LIST_DEFAULT_LIMIT
   );
-  const offsetRaw = c.req.query('offset');
-  const offset = offsetRaw === undefined ? 0 : Math.max(0, Math.floor(Number(offsetRaw)) || 0);
+  const offset = parseOffsetParam(c.req.query('offset'));
 
   const result = await listAgents({ projectId: projectId ?? undefined, status, limit, offset });
   return c.json(result);

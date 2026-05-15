@@ -14,9 +14,10 @@ interface AgentErrorRow {
 
 interface AgentErrorLogProps {
   errors: AgentErrorRow[] | undefined;
+  isError?: boolean;
 }
 
-export function AgentErrorLog({ errors }: AgentErrorLogProps) {
+export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   function toggleExpanded(id: number) {
@@ -34,7 +35,9 @@ export function AgentErrorLog({ errors }: AgentErrorLogProps) {
   return (
     <section id="errors" className="space-y-3">
       <h3 className="text-sm font-medium">Error Log</h3>
-      {!errors || errors.length === 0 ? (
+      {isError ? (
+        <EmptyState message="Failed to load errors — refresh to retry." />
+      ) : !errors || errors.length === 0 ? (
         <EmptyState message="No errors recorded." />
       ) : (
         <Table>

@@ -29,8 +29,19 @@ describe('SeverityBadge', () => {
     expect(badge?.className).toContain('text-destructive');
   });
 
-  it('falls back to destructive styling for unknown severities', () => {
-    const { container } = renderWithProviders(<SeverityBadge severity="something-unexpected" />);
+  it('uses neutral styling for unknown / informational severities', () => {
+    // Unknown severities (info/debug/notice/...) intentionally do NOT use the
+    // destructive style — the backend filters them out of the badge count and
+    // the visual treatment must match.
+    const { container } = renderWithProviders(<SeverityBadge severity="info" />);
+    const badge = container.querySelector('span.inline-flex');
+    expect(badge?.className).toContain('text-muted-foreground');
+    expect(badge?.className).not.toContain('text-destructive');
+    expect(badge?.className).not.toContain('text-warning');
+  });
+
+  it('applies destructive styling for error severity (matching backend fatal allowlist)', () => {
+    const { container } = renderWithProviders(<SeverityBadge severity="error" />);
     const badge = container.querySelector('span.inline-flex');
     expect(badge?.className).toContain('text-destructive');
   });

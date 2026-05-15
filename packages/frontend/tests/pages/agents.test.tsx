@@ -89,7 +89,7 @@ describe('AgentsPage', () => {
     expect(allButton.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('clicking Online button updates aria-pressed and triggers refetch', async () => {
+  it('clicking Online button triggers a refetch with ?status=online', async () => {
     fetchMock = mockFetch({
       '/dashboard/agents': { status: 200, body: mockAgentsResponse() },
     });
@@ -107,9 +107,26 @@ describe('AgentsPage', () => {
     await waitFor(() => {
       expect(onlineButton.getAttribute('aria-pressed')).toBe('true');
     });
+
+    // Verify the new fetch actually carried status=online — the previous
+    // assertion only checked aria-pressed, which a state/query-key decoupling
+    // regression would silently pass.
+    await waitFor(() => {
+      const calls = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      const urls = calls
+        .map((c) => c[0])
+        .map((x) =>
+          typeof x === 'string'
+            ? x
+            : x instanceof URL
+              ? x.href
+              : ((x as { url?: string }).url ?? '')
+        );
+      expect(urls.some((u) => u.includes('/dashboard/agents?status=online'))).toBe(true);
+    });
   });
 
-  it('renders Details link for each agent', async () => {
+  it('agent name renders as a link to its detail page', async () => {
     fetchMock = mockFetch({
       '/dashboard/agents': {
         status: 200,
@@ -127,8 +144,8 @@ describe('AgentsPage', () => {
       expect(screen.getByText('Rig Gamma')).toBeDefined();
     });
 
-    const detailsLink = screen.getByText('Details');
-    expect(detailsLink.closest('a')?.getAttribute('href')).toBe('/agents/42');
+    const nameLink = screen.getByText('Rig Gamma');
+    expect(nameLink.closest('a')?.getAttribute('href')).toBe('/agents/42');
   });
 
   it('renders error badge when agent has 24h errors', async () => {
@@ -163,8 +180,9 @@ describe('AgentsPage', () => {
       expect(screen.getByText('Rig Alpha')).toBeDefined();
     });
 
-    const badge = screen.getByRole('button', { name: /3 errors in last 24h/i });
+    const badge = screen.getByRole('link', { name: /3 errors in last 24h/i });
     expect(badge).toBeDefined();
+    expect(badge.getAttribute('href')).toBe('/agents/1#errors');
     expect(badge.className).toContain('text-destructive');
   });
 

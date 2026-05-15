@@ -290,6 +290,52 @@ describe('useEvents', () => {
     });
   });
 
+  it('does NOT broadly invalidate agent keys on unrelated events', async () => {
+    // Negative case: a regression that wildcard-added 'agent' to every event's
+    // broad-invalidation list would silently pass the positive assertions
+    // above. Lock the inverse contract: resource_update must not touch any
+    // agent-detail query key.
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    renderEventsHook(qc);
+
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    ws.simulateMessage({
+      type: 'resource_update',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      // Project-scoped resource keys are invalidated (existing contract).
+      const calls = invalidateSpy.mock.calls;
+      const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'hash-lists' && k[1] === 1)).toBe(true);
+    });
+
+    // After resource_update settles, none of the broad agent keys should
+    // have been invalidated.
+    const queryKeys = invalidateSpy.mock.calls.map(
+      (c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey
+    );
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k.length === 1)).toBe(false);
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors' && k.length === 1)).toBe(false);
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(false);
+  });
+
   // Verifies exponential backoff: 1s (2^0), 2s (2^1) delays between reconnect attempts.
   // All time advancement uses fake timers - no real setTimeout waits.
   it('reconnects with exponential backoff after disconnect', async () => {

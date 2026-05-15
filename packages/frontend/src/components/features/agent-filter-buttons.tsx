@@ -1,6 +1,6 @@
 import { cn } from '../../lib/utils';
 
-export type AgentFilter = '' | 'online' | 'offline' | 'error';
+export type AgentFilter = 'all' | 'online' | 'offline' | 'error';
 
 interface AgentFilterButtonsProps {
   value: AgentFilter;
@@ -8,7 +8,7 @@ interface AgentFilterButtonsProps {
 }
 
 const FILTERS: { value: AgentFilter; label: string }[] = [
-  { value: '', label: 'All' },
+  { value: 'all', label: 'All' },
   { value: 'online', label: 'Online' },
   { value: 'offline', label: 'Offline' },
   { value: 'error', label: 'Error' },
@@ -26,7 +26,7 @@ export function AgentFilterButtons({ value, onChange }: AgentFilterButtonsProps)
         const isActive = filter.value === value;
         return (
           <button
-            key={filter.value || 'all'}
+            key={filter.value}
             type="button"
             aria-pressed={isActive}
             onClick={() => onChange(filter.value)}

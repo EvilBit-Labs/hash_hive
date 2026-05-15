@@ -1,4 +1,5 @@
-import { useParams } from 'react-router';
+import { useEffect } from 'react';
+import { useLocation, useParams } from 'react-router';
 import { AgentErrorLog } from '../components/features/agent-error-log';
 import { AgentTasksSection } from '../components/features/agent-tasks-section';
 import { HardwareProfileCard } from '../components/features/hardware-profile-card';
@@ -19,19 +20,45 @@ import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities
 function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
   if (!capabilities) return '—';
   const modes = capabilities['hashModes'] ?? capabilities['supportedModes'];
-  if (Array.isArray(modes) && modes.length > 0) {
-    return modes.join(', ');
+  if (modes === undefined || modes === null) return '—';
+  if (!Array.isArray(modes)) {
+    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
+    console.warn('[AgentDetailPage] capabilities.hashModes has unexpected shape', modes);
+    return 'invalid';
   }
-  return '—';
+  if (modes.length === 0) return '—';
+  return modes.join(', ');
 }
 
 export function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const agentId = Number(id);
+  const { hash } = useLocation();
+
+  // React Router does not auto-scroll to URL fragments. The agent error
+  // badge on the list page deep-links to /agents/:id#errors; without this,
+  // the user lands at the top of the detail page and has to scroll manually.
+  // The effect runs after the data resolves so the target element exists.
+  useEffect(() => {
+    if (!hash) return;
+    const target = document.getElementById(hash.slice(1));
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [hash]);
+
   const { data: agentData, isLoading } = useAgent(agentId);
-  const { data: errorsData } = useAgentErrors(agentId);
-  const { data: tasksData, isLoading: isTasksLoading } = useAgentTasks(agentId);
-  const { data: benchmarksData, isLoading: isBenchmarksLoading } = useAgentBenchmarks(agentId);
+  const { data: errorsData, isError: isErrorsError } = useAgentErrors(agentId);
+  const {
+    data: tasksData,
+    isLoading: isTasksLoading,
+    isError: isTasksError,
+  } = useAgentTasks(agentId);
+  const {
+    data: benchmarksData,
+    isLoading: isBenchmarksLoading,
+    isError: isBenchmarksError,
+  } = useAgentBenchmarks(agentId);
 
   // Keep detail page reactive to real-time updates. useEvents handles
   // invalidation of agent / agent-errors / agent-tasks keys.
@@ -102,14 +129,20 @@ export function AgentDetailPage() {
         <HardwareProfileCard profile={agent.hardwareProfile} />
       </div>
 
-      <AgentTasksSection tasks={tasksData?.tasks} isLoading={isTasksLoading} />
+      <AgentTasksSection
+        tasks={tasksData?.tasks}
+        isLoading={isTasksLoading}
+        isError={isTasksError}
+      />
 
-      <AgentErrorLog errors={errorsData?.errors} />
+      <AgentErrorLog errors={errorsData?.errors} isError={isErrorsError} />
 
       <section className="space-y-3">
         <h3 className="text-sm font-medium">Benchmarks</h3>
         {isBenchmarksLoading ? (
           <EmptyState message="Loading benchmarks..." />
+        ) : isBenchmarksError ? (
+          <EmptyState message="Failed to load benchmarks — refresh to retry." />
         ) : benchmarksData?.benchmarks && benchmarksData.benchmarks.length > 0 ? (
           <Table>
             <TableHead>
