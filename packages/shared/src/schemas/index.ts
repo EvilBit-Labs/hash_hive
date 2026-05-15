@@ -290,6 +290,48 @@ export const agentHardwareProfileSchema = z.object({
   temperature: z.number().optional(),
 });
 
+/**
+ * Worst error-severity bucket observed for an agent in the last 24 hours.
+ * Maps to the three-state badge on the agent list page.
+ */
+export const agentWorstSeveritySchema = z.union([
+  z.literal('warning'),
+  z.literal('fatal'),
+  z.null(),
+]);
+
+/**
+ * Single active task associated with an agent, displayed inline on the
+ * agent list row. `null` on `currentTask` indicates the agent has no
+ * active task; pending tasks are NOT surfaced here — they appear on the
+ * agent detail's tasks endpoint.
+ */
+export const agentCurrentTaskSchema = z.object({
+  id: z.number().int(),
+  campaignId: z.number().int(),
+  campaignName: z.string(),
+  attackId: z.number().int(),
+  attackMode: z.number().int(),
+  status: z.string(),
+});
+
+/**
+ * Wire-shape contract for `GET /dashboard/agents/:id/tasks`. `startedAt`
+ * and `assignedAt` are serialized as ISO strings (Drizzle `Date` doesn't
+ * survive JSON).
+ */
+export const agentTaskSummarySchema = z.object({
+  id: z.number().int(),
+  campaignId: z.number().int(),
+  campaignName: z.string(),
+  attackId: z.number().int(),
+  attackMode: z.number().int(),
+  status: z.string(),
+  progress: z.record(z.string(), z.unknown()),
+  startedAt: z.string().nullable(),
+  assignedAt: z.string().nullable(),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
