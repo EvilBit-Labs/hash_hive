@@ -12,6 +12,11 @@
  * `crackers.test.ts` directly against the pure helpers.
  */
 import { describe, expect, it, mock } from 'bun:test';
+// Pull the real compareCrackerVersions in BEFORE mock.module runs so the mock
+// can re-export it. mock.module is process-global in bun:test; the previous
+// approach of inlining the algorithm duplicated ~70 lines of behavior and
+// risked drift between this file and src/services/crackers.ts.
+import { compareCrackerVersions as realCompareCrackerVersions } from '../../src/services/crackers.js';
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
 
@@ -136,7 +141,11 @@ mock.module('../../src/services/crackers.js', () => ({
   isKnownEngine: (engine: string) => engine === 'hashcat' || engine === 'john',
   normalizeEngineName: (engine: string | undefined | null) =>
     (engine ?? '').trim().toLowerCase() || 'hashcat',
-  compareCrackerVersions: (a: string, b: string) => a.localeCompare(b),
+  // mock.module is process-global in bun:test, so replacing the comparator
+  // here would leak into crackers.test.ts (which exercises the real impl).
+  // Re-export the real implementation imported above so both call sites stay
+  // in sync automatically.
+  compareCrackerVersions: realCompareCrackerVersions,
 }));
 
 // ─── Mock Required Infra ─────────────────────────────────────────────

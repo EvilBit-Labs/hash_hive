@@ -547,6 +547,10 @@ paths:
           $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated agents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAgents"
 
   /agents/{id}:
     get:
@@ -660,6 +664,102 @@ components:
         minimum: 1
 
   schemas:
+    PaginatedAgents:
+      description: |
+        Matches the flat `{ items, total, offset, limit }` envelope produced
+        by `paginate()` in packages/backend/src/lib/pagination.ts. The Control
+        API intentionally uses offset/limit (not page/pageSize) because it
+        composes more naturally with scripted automation.
+      type: object
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentListItem"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    AgentListItem:
+      description: |
+        Agent row enriched with dashboard summary fields. `errorCount24h`,
+        `worstSeverity24h`, and `currentTask` are computed server-side from
+        `agent_errors` rows in the last 24 hours and the agent's active task
+        assignment. Producers may also surface these fields through other
+        surfaces (notably the dashboard) — the shape is intentionally
+        identical across surfaces.
+      type: object
+      required:
+        [
+          id,
+          name,
+          status,
+          projectId,
+          createdAt,
+          errorCount24h,
+          worstSeverity24h,
+          currentTask,
+        ]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+        lastSeenAt:
+          # OpenAPI 3.1 — `nullable: true` is dropped from the vocabulary;
+          # use JSON Schema type-array unions instead so generated clients
+          # see the null possibility.
+          type: [string, "null"]
+          format: date-time
+        projectId:
+          type: integer
+        capabilities:
+          type: [object, "null"]
+          additionalProperties: true
+        hardwareProfile:
+          type: [object, "null"]
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        errorCount24h:
+          type: integer
+          description: Count of warning+fatal severities in the last 24 hours.
+        worstSeverity24h:
+          type: [string, "null"]
+          enum: [warning, fatal, null]
+          description: |
+            Highest severity tier observed in the last 24 hours, mapped to the
+            dashboard's three-state badge. Lower-importance severities
+            (info/debug/notice/...) are excluded.
+        currentTask:
+          description: |
+            Active task assignment for the agent, if any. `null` when the
+            agent has no `assigned` or `running` task — pending tasks are
+            intentionally not surfaced here (they appear on the detail-page
+            tasks endpoint).
+          type: [object, "null"]
+          required: [id, campaignId, campaignName, attackId, attackMode, status]
+          properties:
+            id:
+              type: integer
+            campaignId:
+              type: integer
+            campaignName:
+              type: string
+            attackId:
+              type: integer
+            attackMode:
+              type: integer
+            status:
+              type: string
+
     SystemHealth:
       type: object
       description: |

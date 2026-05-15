@@ -239,6 +239,99 @@ export const engineDescriptorSchema = z.object({
   version: z.string().min(1),
 });
 
+/**
+ * Structured hardware profile reported by agents. Every field is optional
+ * so older agents emitting a sparse payload keep working. The dashboard's
+ * `HardwareProfileCard` renders this same shape — the schema is the single
+ * source of truth for both the wire contract and the rendered fields.
+ *
+ * `*Mb` keys are canonical; the suffix-less aliases (`total`/`available`/
+ * `memory`) are accepted for compatibility with older agent builds and
+ * are dropped during a future cleanup pass.
+ */
+export const agentHardwareProfileSchema = z.object({
+  os: z
+    .object({
+      name: z.string().optional(),
+      version: z.string().optional(),
+      platform: z.string().optional(),
+    })
+    .optional(),
+  cpu: z
+    .object({
+      model: z.string().optional(),
+      cores: z.number().optional(),
+    })
+    .optional(),
+  ram: z
+    .object({
+      totalMb: z.number().optional(),
+      availableMb: z.number().optional(),
+      total: z.number().optional(),
+      available: z.number().optional(),
+    })
+    .optional(),
+  gpus: z
+    .array(
+      z.object({
+        model: z.string().optional(),
+        driver: z.string().optional(),
+        driverVersion: z.string().optional(),
+        memoryMb: z.number().optional(),
+        memory: z.number().optional(),
+      })
+    )
+    .optional(),
+  hashcatVersion: z.string().optional(),
+  // Live counters reported on every heartbeat. Kept on the same payload
+  // to avoid splitting the agent's contract across two endpoints.
+  cpuUsage: z.number().optional(),
+  memoryUsage: z.number().optional(),
+  temperature: z.number().optional(),
+});
+
+/**
+ * Worst error-severity bucket observed for an agent in the last 24 hours.
+ * Maps to the three-state badge on the agent list page.
+ */
+export const agentWorstSeveritySchema = z.union([
+  z.literal('warning'),
+  z.literal('fatal'),
+  z.null(),
+]);
+
+/**
+ * Single active task associated with an agent, displayed inline on the
+ * agent list row. `null` on `currentTask` indicates the agent has no
+ * active task; pending tasks are NOT surfaced here — they appear on the
+ * agent detail's tasks endpoint.
+ */
+export const agentCurrentTaskSchema = z.object({
+  id: z.number().int(),
+  campaignId: z.number().int(),
+  campaignName: z.string(),
+  attackId: z.number().int(),
+  attackMode: z.number().int(),
+  status: z.string(),
+});
+
+/**
+ * Wire-shape contract for `GET /dashboard/agents/:id/tasks`. `startedAt`
+ * and `assignedAt` are serialized as ISO strings (Drizzle `Date` doesn't
+ * survive JSON).
+ */
+export const agentTaskSummarySchema = z.object({
+  id: z.number().int(),
+  campaignId: z.number().int(),
+  campaignName: z.string(),
+  attackId: z.number().int(),
+  attackMode: z.number().int(),
+  status: z.string(),
+  progress: z.record(z.string(), z.unknown()),
+  startedAt: z.string().nullable(),
+  assignedAt: z.string().nullable(),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
@@ -254,13 +347,7 @@ export const agentHeartbeatSchema = z.object({
       ),
     })
     .optional(),
-  deviceInfo: z
-    .object({
-      cpuUsage: z.number(),
-      memoryUsage: z.number(),
-      temperature: z.number().optional(),
-    })
-    .optional(),
+  deviceInfo: agentHardwareProfileSchema.optional(),
 });
 
 // ─── Cracker Check-Update API ───────────────────────────────────────

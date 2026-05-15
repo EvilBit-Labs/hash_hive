@@ -28,6 +28,7 @@ import type { ComponentName, ComponentStatus } from './health.js';
  */
 export type ProjectEventType =
   | 'agent_status'
+  | 'agent_error'
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
@@ -235,6 +236,20 @@ export function emit(event: ProjectAppEvent) {
 
 // ─── Convenience Emitters ───────────────────────────────────────────
 
+/**
+ * Emit when a new row lands in `agent_errors`. Distinct from
+ * `agent_status` so the per-type throttle doesn't drop a fresh error
+ * just because the agent emitted a heartbeat in the same 250ms window.
+ */
+export function emitAgentError(projectId: number, agentId: number, severity: string) {
+  emit({
+    type: 'agent_error',
+    projectId,
+    data: { agentId, severity },
+    timestamp: new Date().toISOString(),
+  });
+}
+
 export function emitAgentStatus(projectId: number, agentId: number, status: string) {
   emit({
     type: 'agent_status',
@@ -257,12 +272,22 @@ export function emitTaskUpdate(
   projectId: number,
   taskId: number,
   status: string,
-  progress?: Record<string, unknown>
+  options?: {
+    agentId?: number | null | undefined;
+    progress?: Record<string, unknown> | undefined;
+  }
 ) {
   emit({
     type: 'task_update',
     projectId,
-    data: { taskId, status, ...(progress ? { progress } : {}) },
+    data: {
+      taskId,
+      status,
+      ...(options?.agentId !== undefined && options.agentId !== null
+        ? { agentId: options.agentId }
+        : {}),
+      ...(options?.progress ? { progress: options.progress } : {}),
+    },
     timestamp: new Date().toISOString(),
   });
 }

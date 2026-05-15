@@ -1,6 +1,6 @@
-import type { AssignedTask } from '@hashhive/shared';
+import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared';
 import { agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, desc, eq, gt, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { getAgentBenchmarkForMode } from './agents.js';
@@ -347,7 +347,10 @@ export async function updateTaskProgress(
   }
 
   // Emit events and update campaign progress (no duplicate campaign fetch)
-  emitTaskUpdate(taskRow.projectId, taskId, data.status, data.progress);
+  emitTaskUpdate(taskRow.projectId, taskId, data.status, {
+    agentId,
+    progress: data.progress,
+  });
   await updateCampaignProgress(taskRow.campaignId);
 
   return { task: updated };
@@ -394,7 +397,9 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
       .returning();
 
     if (updated && campaign) {
-      emitTaskUpdate(campaign.projectId, taskId, 'pending');
+      // Surface the agent that was just freed so listeners can refresh that
+      // agent's caches; the row itself no longer holds agentId after retry.
+      emitTaskUpdate(campaign.projectId, taskId, 'pending', { agentId });
     }
 
     return { task: updated, retried: true };
@@ -414,7 +419,7 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     .returning();
 
   if (updated && campaign) {
-    emitTaskUpdate(campaign.projectId, taskId, 'failed');
+    emitTaskUpdate(campaign.projectId, taskId, 'failed', { agentId });
   }
 
   return { task: updated, retried: false };
@@ -559,4 +564,75 @@ export async function getZapsForTask(
   const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue);
 
   return { zaps, hasMore };
+}
+
+// ─── Per-Agent Task Listing ─────────────────────────────────────────
+
+export const AGENT_TASK_ACTIVE_STATUSES = ['pending', 'assigned', 'running'] as const;
+export type AgentTaskActiveStatus = (typeof AGENT_TASK_ACTIVE_STATUSES)[number];
+
+/**
+ * Test-only: convert a raw join-row shape (same fields the SQL selects)
+ * into the wire-shape AgentTaskSummary[]. Exported so the projection
+ * logic — Date→ISO conversion, progress fallback, status preservation —
+ * can be unit-tested without a database.
+ */
+export function projectAgentTaskRows(
+  rows: ReadonlyArray<{
+    id: number;
+    campaignId: number;
+    campaignName: string;
+    attackId: number;
+    attackMode: number;
+    status: string;
+    progress: unknown;
+    startedAt: Date | string | null;
+    assignedAt: Date | string | null;
+  }>
+): AgentTaskSummary[] {
+  const iso = (v: Date | string | null): string | null => {
+    if (v === null) return null;
+    if (v instanceof Date) return v.toISOString();
+    return v;
+  };
+  return rows.map((row) => ({
+    id: row.id,
+    campaignId: row.campaignId,
+    campaignName: row.campaignName,
+    attackId: row.attackId,
+    attackMode: row.attackMode,
+    status: row.status,
+    progress: (row.progress as Record<string, unknown> | null) ?? {},
+    startedAt: iso(row.startedAt),
+    assignedAt: iso(row.assignedAt),
+  }));
+}
+
+/**
+ * Returns active tasks assigned to an agent (pending, assigned, running),
+ * joined with campaign and attack names for display in the agent detail UI.
+ *
+ * Project scoping is the caller's responsibility — verify the agent belongs
+ * to the caller's project before invoking.
+ */
+export async function listTasksByAgent(agentId: number): Promise<AgentTaskSummary[]> {
+  const rows = await db
+    .select({
+      id: tasks.id,
+      campaignId: campaigns.id,
+      campaignName: campaigns.name,
+      attackId: attacks.id,
+      attackMode: attacks.mode,
+      status: tasks.status,
+      progress: tasks.progress,
+      startedAt: tasks.startedAt,
+      assignedAt: tasks.assignedAt,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
+    .where(and(eq(tasks.agentId, agentId), inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])))
+    .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt));
+
+  return projectAgentTaskRows(rows);
 }
