@@ -155,10 +155,19 @@ export function useEvents(options: UseEventsOptions = {}) {
               // No agentId on the payload — fall back to prefix invalidation
               // so we still refresh, but log so we know the producer should
               // be carrying agentId.
+              //
+              // Constraint the event-type value before logging: WS payload is
+              // attacker-influenced, so we treat eventType as data (not part
+              // of the format string) and only log a known-shape allowlist of
+              // characters to avoid log-injection vectors flagged by CodeQL.
+              const safeEventType =
+                typeof eventType === 'string'
+                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                  : 'unknown';
               // biome-ignore lint/suspicious/noConsole: protocol drift signal
               console.warn(
-                `[useEvents] ${eventType} event missing agentId; falling back to broad invalidation`,
-                payload
+                '[useEvents] event missing agentId; falling back to broad invalidation',
+                { eventType: safeEventType }
               );
               for (const key of agentScopedKeys) {
                 queryClient.invalidateQueries({ queryKey: [key] });

@@ -57,7 +57,7 @@ function pick<T>(value: unknown, label: string): T | undefined {
     Object.getPrototypeOf(value) === Object.prototype;
   if (!isPlainObject) {
     // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
-    console.warn(`[HardwareProfileCard] ${label} has unexpected shape`, value);
+    console.warn('[HardwareProfileCard] field has unexpected shape', { label, value });
     return undefined;
   }
   return value as T;
