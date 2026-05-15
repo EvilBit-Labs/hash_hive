@@ -237,7 +237,7 @@ describe('useEvents', () => {
     ws.simulateMessage({
       type: 'agent_status',
       projectId: 1,
-      data: {},
+      data: { agentId: 42, status: 'online' },
       timestamp: new Date().toISOString(),
     });
 
@@ -246,13 +246,45 @@ describe('useEvents', () => {
       const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'agents' && k[1] === 1)).toBe(true);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
-      // Detail-page queries use the agent id as the second positional element,
-      // so they must be invalidated by the broad single-element key.
-      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k.length === 1)).toBe(true);
-      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors' && k.length === 1)).toBe(
-        true
-      );
-      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(true);
+      // Per-agent caches are invalidated with [prefix, agentId] so only the
+      // affected agent's detail page refreshes, not every cached agent.
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k[1] === 42)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors' && k[1] === 42)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k[1] === 42)).toBe(true);
+    });
+  });
+
+  it('does not invalidate unrelated agent ids on agent_status events', async () => {
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    renderEventsHook(qc);
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    ws.simulateMessage({
+      type: 'agent_status',
+      projectId: 1,
+      data: { agentId: 7, status: 'online' },
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      const calls = invalidateSpy.mock.calls;
+      const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
+      // Only agent 7's caches should be invalidated.
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k[1] === 7)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k[1] === 99)).toBe(false);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k[1] === 99)).toBe(false);
     });
   });
 
@@ -277,7 +309,7 @@ describe('useEvents', () => {
     ws.simulateMessage({
       type: 'task_update',
       projectId: 1,
-      data: {},
+      data: { taskId: 5, agentId: 42, status: 'running' },
       timestamp: new Date().toISOString(),
     });
 
@@ -286,6 +318,39 @@ describe('useEvents', () => {
       const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'tasks' && k[1] === 1)).toBe(true);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
+      // Per-agent invalidation uses [prefix, agentId] now.
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k[1] === 42)).toBe(true);
+    });
+  });
+
+  it('falls back to broad invalidation when task_update event lacks agentId', async () => {
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    renderEventsHook(qc);
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    ws.simulateMessage({
+      type: 'task_update',
+      projectId: 1,
+      data: { taskId: 5, status: 'pending' }, // no agentId
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      const calls = invalidateSpy.mock.calls;
+      const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
+      // Without agentId we fall back to single-element prefix invalidation.
       expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(true);
     });
   });
@@ -326,14 +391,14 @@ describe('useEvents', () => {
       expect(queryKeys.some((k: unknown[]) => k[0] === 'hash-lists' && k[1] === 1)).toBe(true);
     });
 
-    // After resource_update settles, none of the broad agent keys should
+    // After resource_update settles, none of the agent-scoped keys should
     // have been invalidated.
     const queryKeys = invalidateSpy.mock.calls.map(
       (c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey
     );
-    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k.length === 1)).toBe(false);
-    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors' && k.length === 1)).toBe(false);
-    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(false);
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent')).toBe(false);
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors')).toBe(false);
+    expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks')).toBe(false);
   });
 
   // Verifies exponential backoff: 1s (2^0), 2s (2^1) delays between reconnect attempts.

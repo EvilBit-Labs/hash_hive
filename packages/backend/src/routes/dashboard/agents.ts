@@ -27,13 +27,13 @@ function parsePositiveIntParam(raw: string | undefined, max: number, fallback: n
   return Math.min(Math.floor(parsed), max);
 }
 
+// Permissive parsing — non-finite, negative, and unparseable offsets fall
+// back to 0 rather than returning 400, matching the limit param's contract.
+// Crucially, this also keeps `Infinity` from leaking into Drizzle's .offset(),
+// which the driver may either reject or send as a bogus query.
 function parseOffsetParam(raw: string | undefined): number {
   if (raw === undefined) return 0;
   const parsed = Number(raw);
-  // Non-finite and negative values fall back to 0 rather than 400 — matches
-  // the limit param's permissive contract and avoids leaking Infinity into
-  // Drizzle's .offset() (which the driver may either reject or send as a
-  // bogus query depending on version).
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   return Math.floor(parsed);
 }

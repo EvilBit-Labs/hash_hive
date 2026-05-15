@@ -1,6 +1,11 @@
+import type { AgentCurrentTask, AgentTaskSummary, AgentWorstSeverity } from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useUiStore } from '../stores/ui';
+
+// Re-export so existing component imports keep working without forcing every
+// caller to switch to the shared package directly.
+export type { AgentCurrentTask, AgentWorstSeverity } from '@hashhive/shared';
 
 interface DashboardStats {
   agents: { total: number; online: number; offline: number; error: number };
@@ -13,17 +18,6 @@ interface DashboardStats {
   };
   tasks: { total: number; pending: number; running: number; completed: number; failed: number };
   cracked: { total: number };
-}
-
-export type AgentWorstSeverity = 'warning' | 'fatal' | null;
-
-export interface AgentCurrentTask {
-  id: number;
-  campaignId: number;
-  campaignName: string;
-  attackId: number;
-  attackMode: number;
-  status: string;
 }
 
 interface Agent {
@@ -40,17 +34,9 @@ interface Agent {
   currentTask?: AgentCurrentTask | null;
 }
 
-export interface AgentTask {
-  id: number;
-  campaignId: number;
-  campaignName: string;
-  attackId: number;
-  attackMode: number;
-  status: string;
-  progress: Record<string, unknown>;
-  startedAt: string | null;
-  assignedAt: string | null;
-}
+// Frontend alias for the shared task-detail shape — keeps existing component
+// imports stable while pointing at the shared source of truth.
+export type AgentTask = AgentTaskSummary;
 
 interface Campaign {
   id: number;

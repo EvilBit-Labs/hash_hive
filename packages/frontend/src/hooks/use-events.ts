@@ -82,12 +82,12 @@ export function useEvents(options: UseEventsOptions = {}) {
         resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
       };
 
-      // Broad query keys: invalidated with just [key], matching every query
-      // whose key starts with that prefix. Used for entity-detail caches
-      // (e.g., ['agent', agentId, projectId]) where agentId sits between
-      // the prefix and projectId, so the project-scoped invalidation above
-      // would never prefix-match them.
-      const broadInvalidationKeys: Record<string, string[]> = {
+      // Per-agent query key prefixes. We invalidate `[prefix, agentId]`
+      // so only the affected agent's caches refresh — a fleet-wide event
+      // stream doesn't fan out into every detail tab. The exact cache
+      // shape lives in use-dashboard.ts (`useAgent`, `useAgentErrors`,
+      // `useAgentTasks`).
+      const agentScopedKeysByEvent: Record<string, string[]> = {
         agent_status: ['agent', 'agent-errors', 'agent-tasks'],
         task_update: ['agent-tasks', 'agent'],
       };
@@ -142,10 +142,27 @@ export function useEvents(options: UseEventsOptions = {}) {
               queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] });
             }
           }
-          const broadKeys = broadInvalidationKeys[eventType];
-          if (broadKeys) {
-            for (const key of broadKeys) {
-              queryClient.invalidateQueries({ queryKey: [key] });
+          const agentScopedKeys = agentScopedKeysByEvent[eventType];
+          if (agentScopedKeys) {
+            const payload = data['data'] as Record<string, unknown>;
+            const rawAgentId = payload['agentId'];
+            const agentId = typeof rawAgentId === 'number' ? rawAgentId : null;
+            if (agentId !== null) {
+              for (const key of agentScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key, agentId] });
+              }
+            } else {
+              // No agentId on the payload — fall back to prefix invalidation
+              // so we still refresh, but log so we know the producer should
+              // be carrying agentId.
+              // biome-ignore lint/suspicious/noConsole: protocol drift signal
+              console.warn(
+                `[useEvents] ${eventType} event missing agentId; falling back to broad invalidation`,
+                payload
+              );
+              for (const key of agentScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key] });
+              }
             }
           }
           const systemKeys = systemInvalidationKeys[eventType];

@@ -547,6 +547,18 @@ paths:
           $ref: "#/components/responses/AuthError"
         "200":
           description: Paginated agents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentListItem"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
 
   /agents/{id}:
     get:
@@ -660,6 +672,95 @@ components:
         minimum: 1
 
   schemas:
+    Pagination:
+      type: object
+      required: [limit, offset, total]
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+
+    AgentListItem:
+      description: |
+        Agent row enriched with dashboard summary fields. `errorCount24h`,
+        `worstSeverity24h`, and `currentTask` are computed server-side from
+        `agent_errors` rows in the last 24 hours and the agent's active task
+        assignment. Producers may also surface these fields through other
+        surfaces (notably the dashboard) — the shape is intentionally
+        identical across surfaces.
+      type: object
+      required:
+        [
+          id,
+          name,
+          status,
+          projectId,
+          createdAt,
+          errorCount24h,
+          worstSeverity24h,
+          currentTask,
+        ]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+        projectId:
+          type: integer
+        capabilities:
+          type: object
+          additionalProperties: true
+          nullable: true
+        hardwareProfile:
+          type: object
+          additionalProperties: true
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        errorCount24h:
+          type: integer
+          description: Count of warning+fatal severities in the last 24 hours.
+        worstSeverity24h:
+          type: string
+          enum: [warning, fatal]
+          nullable: true
+          description: |
+            Highest severity tier observed in the last 24 hours, mapped to the
+            dashboard's three-state badge. Lower-importance severities
+            (info/debug/notice/...) are excluded.
+        currentTask:
+          nullable: true
+          description: |
+            Active task assignment for the agent, if any. `null` when the
+            agent has no `assigned` or `running` task — pending tasks are
+            intentionally not surfaced here (they appear on the detail-page
+            tasks endpoint).
+          type: object
+          required: [id, campaignId, campaignName, attackId, attackMode, status]
+          properties:
+            id:
+              type: integer
+            campaignId:
+              type: integer
+            campaignName:
+              type: string
+            attackId:
+              type: integer
+            attackMode:
+              type: integer
+            status:
+              type: string
+
     SystemHealth:
       type: object
       description: |

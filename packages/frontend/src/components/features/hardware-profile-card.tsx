@@ -15,6 +15,20 @@ interface CpuInfo {
   cores?: number;
 }
 
+// RAM / GPU shapes accept two key variants for resilience against agent
+// firmware drift:
+//   * `*Mb` keys (totalMb, availableMb, memoryMb) — the canonical form the
+//     current hashcat-shim agent emits.
+//   * Suffix-less `total`/`available`/`memory` — older agent builds and
+//     JtR-style agents that emit a generic structure without unit suffixes.
+//
+// `driver` vs `driverVersion` is the same story: hashcat-shim uses `driver`
+// (full string), some older builds emit `driverVersion` instead. The card
+// reads whichever is present without preferring one over the other; format
+// is text-only so no unit conversion ambiguity.
+//
+// Long-term we want to enforce a single shape at the heartbeat boundary with
+// a Zod schema; until that lands these fallbacks are the safest behavior.
 interface RamInfo {
   totalMb?: number;
   availableMb?: number;

@@ -257,12 +257,22 @@ export function emitTaskUpdate(
   projectId: number,
   taskId: number,
   status: string,
-  progress?: Record<string, unknown>
+  options?: {
+    agentId?: number | null | undefined;
+    progress?: Record<string, unknown> | undefined;
+  }
 ) {
   emit({
     type: 'task_update',
     projectId,
-    data: { taskId, status, ...(progress ? { progress } : {}) },
+    data: {
+      taskId,
+      status,
+      ...(options?.agentId !== undefined && options.agentId !== null
+        ? { agentId: options.agentId }
+        : {}),
+      ...(options?.progress ? { progress: options.progress } : {}),
+    },
     timestamp: new Date().toISOString(),
   });
 }

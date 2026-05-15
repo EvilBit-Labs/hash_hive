@@ -171,7 +171,13 @@ export const agentErrors = pgTable(
     taskId: integer('task_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('agent_errors_agent_id_idx').on(table.agentId)]
+  (table) => [
+    // Composite index supports both the 24h window scan
+    // (aggregateRecentErrors in services/agents.ts) and the ORDER BY
+    // created_at DESC LIMIT path in getAgentErrors. Subsumes the previous
+    // single-column agent_id index, which is dropped in the migration.
+    index('agent_errors_agent_id_created_at_idx').on(table.agentId, table.createdAt.desc()),
+  ]
 );
 
 export const agentBenchmarks = pgTable(

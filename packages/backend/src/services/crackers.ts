@@ -303,22 +303,23 @@ export async function deleteCrackerBinary(
 export function compareCrackerVersions(a: string, b: string): number {
   // Find the end of the longest leading numeric prefix matching
   // [0-9]+(\.[0-9]+)*. The first character that doesn't fit becomes the start
-  // of the suffix. Implemented without regex because Bun's regex engine on
-  // Linux has shown inconsistent greedy-matching behavior on repeating
-  // non-capturing groups (which caused parse('6.2.0') to return
-  // { nums: [6, 2], rest: '.0' } instead of { nums: [6, 2, 0], rest: '' }).
+  // of the suffix. Implemented as a forward scan rather than a regex so the
+  // parsing decision is obviously linear-time and the trailing-suffix
+  // semantics are easy to read at a glance.
   const parse = (v: string): { nums: number[]; rest: string } => {
-    let lastNumericEnd = 0; // exclusive index — end of the last accepted digit
+    let lastNumericEnd = 0;
     let inNumber = false;
     for (let i = 0; i < v.length; i++) {
       const ch = v.charCodeAt(i);
-      const isDigit = ch >= 48 && ch <= 57; // '0'..'9'
-      const isDot = ch === 46; // '.'
+      const isDigit = ch >= 48 && ch <= 57;
+      const isDot = ch === 46;
       if (isDigit) {
         inNumber = true;
         lastNumericEnd = i + 1;
       } else if (isDot && inNumber) {
-        // Dot only continues the numeric prefix when followed by a digit.
+        // A dot inside the numeric prefix is consumed but doesn't extend
+        // lastNumericEnd — if the next char isn't a digit, the dot becomes
+        // part of the suffix (so '6.2.' parses as nums=[6,2], rest='.').
         inNumber = false;
       } else {
         break;

@@ -14,7 +14,6 @@ import {
   useAgentErrors,
   useAgentTasks,
 } from '../hooks/use-dashboard';
-import { useEvents } from '../hooks/use-events';
 import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
 
 function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
@@ -60,9 +59,9 @@ export function AgentDetailPage() {
     isError: isBenchmarksError,
   } = useAgentBenchmarks(agentId);
 
-  // Keep detail page reactive to real-time updates. useEvents handles
-  // invalidation of agent / agent-errors / agent-tasks keys.
-  useEvents({ types: ['agent_status', 'task_update'] });
+  // Real-time updates are subscribed globally by <EventsProvider> in the
+  // app layout — that listener invalidates this page's keys via the
+  // [prefix, agentId] invalidation map in use-events.ts.
 
   if (isLoading) {
     return <EmptyState message="Loading agent..." />;

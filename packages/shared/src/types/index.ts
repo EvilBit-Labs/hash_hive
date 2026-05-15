@@ -211,3 +211,51 @@ export interface IssueApiKeyResponse {
   readonly token: string;
   readonly metadata: Extract<ApiKeyMetadata, { hasKey: true }>;
 }
+
+// ─── Agent List / Detail UI shared shapes ───────────────────────────
+
+/**
+ * Worst error-severity bucket observed for an agent in the last 24 hours.
+ * Maps to the three-state badge on the agent list page:
+ *   * `'fatal'`   — at least one severity in {fatal, critical, error}
+ *   * `'warning'` — only warnings present
+ *   * `null`      — no qualifying errors in the window
+ *
+ * Lower-importance severities (info/debug/notice/...) intentionally do
+ * not contribute to either bucket.
+ */
+export type AgentWorstSeverity = 'warning' | 'fatal' | null;
+
+/**
+ * Single active task associated with an agent, suitable for inline
+ * display on the agent list row. Backend `listAgents` populates this
+ * from the `assigned`/`running` task with the most recent start time.
+ * `null` when the agent has no active task; pending tasks are NOT
+ * surfaced here — they appear on the agent detail's tasks endpoint.
+ */
+export interface AgentCurrentTask {
+  readonly id: number;
+  readonly campaignId: number;
+  readonly campaignName: string;
+  readonly attackId: number;
+  readonly attackMode: number;
+  readonly status: string;
+}
+
+/**
+ * One active task assignment for an agent's detail page. Wire shape
+ * for `GET /dashboard/agents/:id/tasks` — `startedAt` / `assignedAt`
+ * are serialized as ISO strings because the dashboard surface uses
+ * JSON (Date objects don't survive the boundary).
+ */
+export interface AgentTaskSummary {
+  readonly id: number;
+  readonly campaignId: number;
+  readonly campaignName: string;
+  readonly attackId: number;
+  readonly attackMode: number;
+  readonly status: string;
+  readonly progress: Record<string, unknown>;
+  readonly startedAt: string | null;
+  readonly assignedAt: string | null;
+}

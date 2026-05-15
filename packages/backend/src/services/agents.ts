@@ -1,42 +1,121 @@
-import type { SelectAgentBenchmark } from '@hashhive/shared';
+import type { AgentCurrentTask, AgentWorstSeverity, SelectAgentBenchmark } from '@hashhive/shared';
 import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitAgentStatus } from './events.js';
 
-type WorstSeverity = 'warning' | 'fatal' | null;
-
-interface CurrentTaskSummary {
-  id: number;
-  campaignId: number;
-  campaignName: string;
-  attackId: number;
-  attackMode: number;
-  status: string;
-}
-
+// SelectAgent from @hashhive/shared is the zod-strict shape (jsonb as Json),
+// but Drizzle's row selection narrows jsonb to `unknown`. Deriving from
+// getAgentById's return shape keeps AgentListRow assignable from the raw row
+// without bouncing through a Json cast.
 type SelectedAgent = NonNullable<Awaited<ReturnType<typeof getAgentById>>>;
 
 export type AgentListRow = SelectedAgent & {
   errorCount24h: number;
-  worstSeverity24h: WorstSeverity;
-  currentTask: CurrentTaskSummary | null;
+  worstSeverity24h: AgentWorstSeverity;
+  currentTask: AgentCurrentTask | null;
 };
 
 // currentTask on the list response only shows tasks the agent is actively
 // executing — pending tasks (queued for an agent but not yet started) are not
 // surfaced here. The detail page's listTasksByAgent intentionally includes
-// 'pending' so operators can see the full queue for one agent.
+// 'pending' (see AGENT_TASK_ACTIVE_STATUSES in services/tasks.ts) so operators
+// can see the full queue for one agent.
 const ACTIVE_TASK_STATUSES = ['assigned', 'running'] as const;
 
-// Severity policy for the 24h error badge:
-//   * fatal = any error severity at or above ordinary "error" (an error worth
-//     paging on — fatal/critical/error).
-//   * warning = explicit warnings only.
-// Lower-importance severities (info/debug/notice/etc.) do not contribute to
-// the count or the badge color.
-const FATAL_SEVERITIES = ['fatal', 'critical', 'error'];
-const WARNING_SEVERITIES = ['warning'];
+// Severity policy for the 24h error badge.
+// `info`/`debug`/`notice` and other unknown severities intentionally do not
+// contribute to the count or the badge color — the SQL `count(*) FILTER`
+// applies the same allowlist, so the two layers can't drift.
+export const FATAL_SEVERITIES = ['fatal', 'critical', 'error'];
+export const WARNING_SEVERITIES = ['warning'];
+
+/**
+ * Classify a severity-allowlist hit pair into the three-state badge.
+ * Pure function exported so the policy is unit-testable without touching
+ * the database.
+ */
+export function classifyWorstSeverity(opts: {
+  hasFatal: boolean;
+  hasWarning: boolean;
+}): AgentWorstSeverity {
+  if (opts.hasFatal) return 'fatal';
+  if (opts.hasWarning) return 'warning';
+  return null;
+}
+
+/**
+ * Test-only helper: classify a buffered set of severity rows the same way
+ * the SQL aggregate does. Mirrors the FILTER/bool_or behavior in
+ * aggregateRecentErrors so tests can pin the policy without a database.
+ */
+export function classifyRecentErrors(rows: { severity: string }[]): {
+  count: number;
+  worstSeverity: AgentWorstSeverity;
+} {
+  let hasFatal = false;
+  let hasWarning = false;
+  let count = 0;
+  for (const row of rows) {
+    const lower = row.severity.toLowerCase();
+    const isFatal = FATAL_SEVERITIES.includes(lower);
+    const isWarning = WARNING_SEVERITIES.includes(lower);
+    if (isFatal || isWarning) count += 1;
+    if (isFatal) hasFatal = true;
+    if (isWarning) hasWarning = true;
+  }
+  return { count, worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }) };
+}
+
+interface ActiveTaskRow {
+  taskId: number;
+  status: string;
+  campaignId: number;
+  campaignName: string;
+  attackId: number;
+  attackMode: number;
+  startedAt?: Date | string | null | undefined;
+  assignedAt?: Date | string | null | undefined;
+}
+
+/**
+ * Selects one task per agent from a pre-sorted list of active tasks,
+ * preferring 'running' over 'assigned' and then the most recently
+ * started/assigned. Pure so the ordering policy is unit-testable.
+ */
+export function pickCurrentTaskByAgent(
+  rows: (ActiveTaskRow & { agentId: number | null })[]
+): Map<number, AgentCurrentTask> {
+  const ts = (v: Date | string | null | undefined): number => {
+    if (!v) return 0;
+    if (v instanceof Date) return v.getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const sorted = [...rows]
+    .filter((r): r is ActiveTaskRow & { agentId: number } => r.agentId !== null)
+    .sort((a, b) => {
+      const statusRank = (s: string) => (s === 'running' ? 0 : 1);
+      const byStatus = statusRank(a.status) - statusRank(b.status);
+      if (byStatus !== 0) return byStatus;
+      const byStarted = ts(b.startedAt) - ts(a.startedAt);
+      if (byStarted !== 0) return byStarted;
+      return ts(b.assignedAt) - ts(a.assignedAt);
+    });
+  const map = new Map<number, AgentCurrentTask>();
+  for (const row of sorted) {
+    if (map.has(row.agentId)) continue;
+    map.set(row.agentId, {
+      id: row.taskId,
+      campaignId: row.campaignId,
+      campaignName: row.campaignName,
+      attackId: row.attackId,
+      attackMode: row.attackMode,
+      status: row.status,
+    });
+  }
+  return map;
+}
 
 export async function getAgentById(agentId: number) {
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -101,15 +180,15 @@ export async function listAgents(filters: {
 
 async function aggregateRecentErrors(
   agentIds: number[]
-): Promise<Map<number, { count: number; worstSeverity: WorstSeverity }>> {
-  const map = new Map<number, { count: number; worstSeverity: WorstSeverity }>();
+): Promise<Map<number, { count: number; worstSeverity: AgentWorstSeverity }>> {
+  const map = new Map<number, { count: number; worstSeverity: AgentWorstSeverity }>();
   if (agentIds.length === 0) {
     return map;
   }
 
   // Server-side aggregation: bounded wire size at one row per agent, regardless
   // of how many errors a noisy agent emits. Unknown severities (info/debug/...)
-  // are excluded from `count` and from the `has_warning` / `has_fatal` flags.
+  // are excluded from `count` and from the `hasWarning` / `hasFatal` flags.
   const fatalArray = sql`ARRAY[${sql.raw(FATAL_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
   const warningArray = sql`ARRAY[${sql.raw(WARNING_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
 
@@ -134,7 +213,10 @@ async function aggregateRecentErrors(
     if (count === 0) continue;
     map.set(row.agentId, {
       count,
-      worstSeverity: row.hasFatal ? 'fatal' : row.hasWarning ? 'warning' : null,
+      worstSeverity: classifyWorstSeverity({
+        hasFatal: Boolean(row.hasFatal),
+        hasWarning: Boolean(row.hasWarning),
+      }),
     });
   }
 
@@ -158,32 +240,26 @@ async function fetchCurrentTasks(
       campaignName: campaigns.name,
       attackId: attacks.id,
       attackMode: attacks.mode,
+      startedAt: tasks.startedAt,
+      assignedAt: tasks.assignedAt,
     })
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .innerJoin(attacks, eq(tasks.attackId, attacks.id))
     .where(and(inArray(tasks.agentId, agentIds), inArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
-    // Deterministic ordering when an agent has multiple active tasks:
-    // prefer 'running' over 'assigned', then most recently started, then most
-    // recently assigned.
+    // Push the deterministic ordering — running before assigned, most
+    // recently started/assigned first — to the database. The helper
+    // pickCurrentTaskByAgent re-applies the same policy so unit tests
+    // can pin it without a DB.
     .orderBy(
       sql`CASE WHEN ${tasks.status} = 'running' THEN 0 ELSE 1 END`,
       desc(tasks.startedAt),
       desc(tasks.assignedAt)
     );
 
-  for (const row of rows) {
-    if (row.agentId === null || map.has(row.agentId)) {
-      continue;
-    }
-    map.set(row.agentId, {
-      id: row.taskId,
-      campaignId: row.campaignId,
-      campaignName: row.campaignName,
-      attackId: row.attackId,
-      attackMode: row.attackMode,
-      status: row.status,
-    });
+  const selected = pickCurrentTaskByAgent(rows);
+  for (const [agentId, task] of selected) {
+    map.set(agentId, task);
   }
 
   return map;
