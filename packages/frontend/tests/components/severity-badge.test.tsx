@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { cleanup, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { SeverityBadge } from '../../src/components/features/severity-badge';
-import { renderWithProviders } from '../test-utils';
+import { cleanupAll, renderWithProviders } from '../test-utils';
 
-afterEach(cleanup);
+afterEach(cleanupAll);
 
 describe('SeverityBadge', () => {
   it('renders the severity text', () => {

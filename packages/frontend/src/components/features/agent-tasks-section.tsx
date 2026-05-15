@@ -12,7 +12,7 @@ interface AgentTasksSectionProps {
 
 function progressPercent(progress: Record<string, unknown>): string {
   const value = progress['percent'] ?? progress['completed'] ?? progress['progress'];
-  if (value === undefined || value === null) return '—';
+  if (value === undefined || value === null) return '-';
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
     console.warn('[AgentTasksSection] non-numeric progress.percent', value);
@@ -23,7 +23,7 @@ function progressPercent(progress: Record<string, unknown>): string {
 
 function progressSpeed(progress: Record<string, unknown>): string {
   const speed = progress['speedHs'] ?? progress['speed'];
-  if (speed === undefined || speed === null) return '—';
+  if (speed === undefined || speed === null) return '-';
   if (typeof speed !== 'number' || !Number.isFinite(speed)) {
     // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
     console.warn('[AgentTasksSection] non-numeric progress.speed', speed);
@@ -39,7 +39,7 @@ export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSecti
       {isLoading ? (
         <EmptyState message="Loading tasks..." />
       ) : isError ? (
-        <EmptyState message="Failed to load tasks — refresh to retry." />
+        <EmptyState message="Failed to load tasks - refresh to retry." />
       ) : !tasks || tasks.length === 0 ? (
         <EmptyState message="No active tasks assigned." />
       ) : (

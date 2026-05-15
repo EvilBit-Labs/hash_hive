@@ -17,15 +17,15 @@ import {
 import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
 
 function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
-  if (!capabilities) return '—';
+  if (!capabilities) return '-';
   const modes = capabilities['hashModes'] ?? capabilities['supportedModes'];
-  if (modes === undefined || modes === null) return '—';
+  if (modes === undefined || modes === null) return '-';
   if (!Array.isArray(modes)) {
     // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
     console.warn('[AgentDetailPage] capabilities.hashModes has unexpected shape', modes);
     return 'invalid';
   }
-  if (modes.length === 0) return '—';
+  if (modes.length === 0) return '-';
   return modes.join(', ');
 }
 
@@ -33,18 +33,6 @@ export function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const agentId = Number(id);
   const { hash } = useLocation();
-
-  // React Router does not auto-scroll to URL fragments. The agent error
-  // badge on the list page deep-links to /agents/:id#errors; without this,
-  // the user lands at the top of the detail page and has to scroll manually.
-  // The effect runs after the data resolves so the target element exists.
-  useEffect(() => {
-    if (!hash) return;
-    const target = document.getElementById(hash.slice(1));
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [hash]);
 
   const { data: agentData, isLoading } = useAgent(agentId);
   const { data: errorsData, isError: isErrorsError } = useAgentErrors(agentId);
@@ -58,6 +46,21 @@ export function AgentDetailPage() {
     isLoading: isBenchmarksLoading,
     isError: isBenchmarksError,
   } = useAgentBenchmarks(agentId);
+
+  // React Router does not auto-scroll to URL fragments. The agent error
+  // badge on the list page deep-links to /agents/:id#errors; without this,
+  // the user lands at the top of the detail page. The effect lists agentData
+  // and errorsData as deps intentionally — they are TRIGGERS that re-fire the
+  // scroll after the loading state clears and the target element actually
+  // exists in the DOM. The closure doesn't reference them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: trigger-only deps for post-load scrollIntoView
+  useEffect(() => {
+    if (!hash || isLoading) return;
+    const target = document.getElementById(hash.slice(1));
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [hash, isLoading, agentData, errorsData]);
 
   // Real-time updates are subscribed globally by <EventsProvider> in the
   // app layout — that listener invalidates this page's keys via the
@@ -141,7 +144,7 @@ export function AgentDetailPage() {
         {isBenchmarksLoading ? (
           <EmptyState message="Loading benchmarks..." />
         ) : isBenchmarksError ? (
-          <EmptyState message="Failed to load benchmarks — refresh to retry." />
+          <EmptyState message="Failed to load benchmarks - refresh to retry." />
         ) : benchmarksData?.benchmarks && benchmarksData.benchmarks.length > 0 ? (
           <Table>
             <TableHead>

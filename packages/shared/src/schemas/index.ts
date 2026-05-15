@@ -239,6 +239,57 @@ export const engineDescriptorSchema = z.object({
   version: z.string().min(1),
 });
 
+/**
+ * Structured hardware profile reported by agents. Every field is optional
+ * so older agents emitting a sparse payload keep working. The dashboard's
+ * `HardwareProfileCard` renders this same shape — the schema is the single
+ * source of truth for both the wire contract and the rendered fields.
+ *
+ * `*Mb` keys are canonical; the suffix-less aliases (`total`/`available`/
+ * `memory`) are accepted for compatibility with older agent builds and
+ * are dropped during a future cleanup pass.
+ */
+export const agentHardwareProfileSchema = z.object({
+  os: z
+    .object({
+      name: z.string().optional(),
+      version: z.string().optional(),
+      platform: z.string().optional(),
+    })
+    .optional(),
+  cpu: z
+    .object({
+      model: z.string().optional(),
+      cores: z.number().optional(),
+    })
+    .optional(),
+  ram: z
+    .object({
+      totalMb: z.number().optional(),
+      availableMb: z.number().optional(),
+      total: z.number().optional(),
+      available: z.number().optional(),
+    })
+    .optional(),
+  gpus: z
+    .array(
+      z.object({
+        model: z.string().optional(),
+        driver: z.string().optional(),
+        driverVersion: z.string().optional(),
+        memoryMb: z.number().optional(),
+        memory: z.number().optional(),
+      })
+    )
+    .optional(),
+  hashcatVersion: z.string().optional(),
+  // Live counters reported on every heartbeat. Kept on the same payload
+  // to avoid splitting the agent's contract across two endpoints.
+  cpuUsage: z.number().optional(),
+  memoryUsage: z.number().optional(),
+  temperature: z.number().optional(),
+});
+
 export const agentHeartbeatSchema = z.object({
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
@@ -254,13 +305,7 @@ export const agentHeartbeatSchema = z.object({
       ),
     })
     .optional(),
-  deviceInfo: z
-    .object({
-      cpuUsage: z.number(),
-      memoryUsage: z.number(),
-      temperature: z.number().optional(),
-    })
-    .optional(),
+  deviceInfo: agentHardwareProfileSchema.optional(),
 });
 
 // ─── Cracker Check-Update API ───────────────────────────────────────

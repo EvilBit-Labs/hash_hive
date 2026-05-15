@@ -1,53 +1,23 @@
+import type { AgentHardwareProfile } from '@hashhive/shared';
 import { EmptyState } from '../ui/empty-state';
 
 interface HardwareProfileCardProps {
+  // Backend `hardwareProfile` is jsonb (unstructured at the DB level), so
+  // the prop accepts the lax shape. Each sub-section is then narrowed
+  // through `pick<T>()` into the schema-derived type for rendering.
   profile: Record<string, unknown> | null | undefined;
 }
 
-interface OsInfo {
-  name?: string;
-  version?: string;
-  platform?: string;
-}
+type OsInfo = NonNullable<AgentHardwareProfile['os']>;
+type CpuInfo = NonNullable<AgentHardwareProfile['cpu']>;
+type RamInfo = NonNullable<AgentHardwareProfile['ram']>;
+type GpuInfo = NonNullable<NonNullable<AgentHardwareProfile['gpus']>[number]>;
 
-interface CpuInfo {
-  model?: string;
-  cores?: number;
-}
-
-// RAM / GPU shapes accept two key variants for resilience against agent
-// firmware drift:
-//   * `*Mb` keys (totalMb, availableMb, memoryMb) — the canonical form the
-//     current hashcat-shim agent emits.
-//   * Suffix-less `total`/`available`/`memory` — older agent builds and
-//     JtR-style agents that emit a generic structure without unit suffixes.
-//
-// `driver` vs `driverVersion` is the same story: hashcat-shim uses `driver`
-// (full string), some older builds emit `driverVersion` instead. The card
-// reads whichever is present without preferring one over the other; format
-// is text-only so no unit conversion ambiguity.
-//
-// Long-term we want to enforce a single shape at the heartbeat boundary with
-// a Zod schema; until that lands these fallbacks are the safest behavior.
-interface RamInfo {
-  totalMb?: number;
-  availableMb?: number;
-  total?: number;
-  available?: number;
-}
-
-interface GpuInfo {
-  model?: string;
-  driver?: string;
-  driverVersion?: string;
-  memoryMb?: number;
-  memory?: number;
-}
-
-// Labeled-cast helper: agent-reported jsonb has no enforced schema, so we
-// accept only the plain-object shape we know how to render. Arrays, Dates,
-// Maps, Sets, and other non-plain objects are rejected so a firmware drift
-// surfaces as a visible warning rather than silently rendering "—" rows.
+// Labeled-cast helper: heartbeat validates the agentHardwareProfileSchema
+// at the API boundary, but rows persisted from older agents may still carry
+// shapes outside it. Accept only plain-object shapes; reject arrays, Dates,
+// Maps, Sets, and other non-plain objects so firmware drift surfaces as a
+// visible console warning rather than silently rendering '-' rows.
 function pick<T>(value: unknown, label: string): T | undefined {
   if (value === undefined) return undefined;
   const isPlainObject =
@@ -63,9 +33,11 @@ function pick<T>(value: unknown, label: string): T | undefined {
   return value as T;
 }
 
+const FALLBACK = '-';
+
 function formatBytes(mb: number | undefined): string {
   if (typeof mb !== 'number' || !Number.isFinite(mb)) {
-    return '—';
+    return FALLBACK;
   }
   if (mb >= 1024) {
     return `${(mb / 1024).toFixed(1)} GB`;
@@ -78,7 +50,7 @@ function Row({ label, value }: { label: string; value: string | number | undefin
     <div className="flex justify-between gap-3">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="text-right font-mono text-xs">
-        {value === undefined || value === null || value === '' ? '—' : value}
+        {value === undefined || value === null || value === '' ? FALLBACK : value}
       </dd>
     </div>
   );

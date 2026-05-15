@@ -1,16 +1,13 @@
+import type { SelectAgentError } from '@hashhive/shared';
 import { Fragment, useState } from 'react';
 import { EmptyState } from '../ui/empty-state';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table';
 import { SeverityBadge } from './severity-badge';
 
-interface AgentErrorRow {
-  id: number;
-  severity: string;
-  message: string;
-  context?: Record<string, unknown> | null;
-  taskId?: number | null;
-  createdAt: string;
-}
+// Wire-shape: backend serializes `createdAt` as ISO strings, but
+// SelectAgentError has it as a Date (Drizzle row shape). Map at the
+// boundary so consumers stay typed.
+export type AgentErrorRow = Omit<SelectAgentError, 'createdAt'> & { createdAt: string };
 
 interface AgentErrorLogProps {
   errors: AgentErrorRow[] | undefined;
@@ -36,7 +33,7 @@ export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
     <section id="errors" className="space-y-3">
       <h3 className="text-sm font-medium">Error Log</h3>
       {isError ? (
-        <EmptyState message="Failed to load errors — refresh to retry." />
+        <EmptyState message="Failed to load errors - refresh to retry." />
       ) : !errors || errors.length === 0 ? (
         <EmptyState message="No errors recorded." />
       ) : (
@@ -81,7 +78,7 @@ export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
                       {new Date(err.createdAt).toLocaleString()}
                     </Td>
                     <Td className="text-xs text-muted-foreground">
-                      {err.taskId ? `#${err.taskId}` : '—'}
+                      {err.taskId ? `#${err.taskId}` : '-'}
                     </Td>
                   </TableRow>
                   {isOpen && hasContext && (

@@ -218,7 +218,11 @@ describe('AgentsPage', () => {
       expect(screen.getByText('Rig Alpha')).toBeDefined();
     });
 
-    expect(screen.queryByText(/errors in last 24h/i)).toBeNull();
+    // Use role/name so we assert the absence of the badge link itself, not
+    // merely the absence of any DOM node containing the phrase — a future
+    // tooltip or aria-describedby string containing the same phrase would
+    // false-pass a text query.
+    expect(screen.queryByRole('link', { name: /errors in last 24h/i })).toBeNull();
   });
 
   it('renders GPU count when hardwareProfile.gpus is populated', async () => {

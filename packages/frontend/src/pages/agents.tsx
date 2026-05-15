@@ -26,7 +26,7 @@ function formatCurrentTask(
     | null
     | undefined
 ): string {
-  if (!task) return '—';
+  if (!task) return '-';
   return `${task.campaignName} (mode ${task.attackMode})`;
 }
 
@@ -107,7 +107,7 @@ export function AgentsPage() {
                       {formatCurrentTask(agent.currentTask)}
                     </Td>
                     <Td className="text-xs text-muted-foreground">
-                      {gpus === null ? '—' : `${gpus} GPU${gpus === 1 ? '' : 's'}`}
+                      {gpus === null ? '-' : `${gpus} GPU${gpus === 1 ? '' : 's'}`}
                     </Td>
                     <Td className="text-xs text-muted-foreground">{formatPrimaryEngine(engine)}</Td>
                   </TableRow>

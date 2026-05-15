@@ -1,4 +1,9 @@
-import type { AgentCurrentTask, AgentTaskSummary, AgentWorstSeverity } from '@hashhive/shared';
+import type {
+  AgentCurrentTask,
+  AgentTaskSummary,
+  AgentWorstSeverity,
+  SelectAgentError,
+} from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useUiStore } from '../stores/ui';
@@ -49,14 +54,10 @@ interface Campaign {
   completedAt: string | null;
 }
 
-interface AgentError {
-  id: number;
-  agentId: number;
-  severity: string;
-  message: string;
-  metadata: Record<string, unknown> | null;
-  createdAt: string;
-}
+// SelectAgentError has `createdAt: Date` (Drizzle row shape) but the wire
+// shape serializes it as an ISO string. Map at the boundary so consumers
+// stay typed without re-declaring the row shape locally.
+export type AgentError = Omit<SelectAgentError, 'createdAt'> & { createdAt: string };
 
 export function useDashboardStats() {
   const { selectedProjectId } = useUiStore();

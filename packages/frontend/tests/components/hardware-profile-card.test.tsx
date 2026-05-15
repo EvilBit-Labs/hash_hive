@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { cleanup, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { HardwareProfileCard } from '../../src/components/features/hardware-profile-card';
-import { renderWithProviders } from '../test-utils';
+import { cleanupAll, renderWithProviders } from '../test-utils';
 
-afterEach(cleanup);
+// cleanupAll() also resets Zustand stores, which is the project-wide
+// convention; bare `cleanup` only touches the DOM.
+afterEach(cleanupAll);
 
 describe('HardwareProfileCard', () => {
   it('renders empty state when profile is null', () => {

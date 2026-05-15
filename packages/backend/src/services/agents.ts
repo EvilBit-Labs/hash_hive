@@ -373,6 +373,24 @@ export async function logAgentError(data: {
     })
     .returning();
 
+  // Surface the insertion on the event stream so the detail page's
+  // error log refreshes in real time. Without this, errors posted via
+  // POST /api/v1/agent/errors only become visible on the next status
+  // change or a manual page reload. We reuse the agent_status event
+  // type rather than introducing a new one — the WS client already
+  // invalidates agent-errors on agent_status, and the agent's
+  // observable state (its error history) is exactly what changed.
+  if (error) {
+    const [agent] = await db
+      .select({ projectId: agents.projectId, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, data.agentId))
+      .limit(1);
+    if (agent) {
+      emitAgentStatus(agent.projectId, data.agentId, agent.status);
+    }
+  }
+
   return error ?? null;
 }
 
