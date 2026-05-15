@@ -61,7 +61,12 @@ function isKnownShape(profile: Record<string, unknown>): boolean {
 }
 
 export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
-  if (!profile) {
+  // `agents.hardware_profile` defaults to `{}` in the DB schema, so an
+  // agent that has never reported a profile shows up as an empty object
+  // here — not null/undefined. Treat empty objects as "missing" so the
+  // never-reported case renders the intended empty state instead of
+  // falling through to the unknown-shape disclosure.
+  if (!profile || Object.keys(profile).length === 0) {
     return (
       <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
         <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">

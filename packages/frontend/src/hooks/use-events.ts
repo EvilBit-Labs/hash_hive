@@ -5,6 +5,7 @@ import { useUiStore } from '../stores/ui';
 
 export type EventType =
   | 'agent_status'
+  | 'agent_error'
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
@@ -89,6 +90,7 @@ export function useEvents(options: UseEventsOptions = {}) {
       // `useAgentTasks`).
       const agentScopedKeysByEvent: Record<string, string[]> = {
         agent_status: ['agent', 'agent-errors', 'agent-tasks'],
+        agent_error: ['agent-errors', 'agent'],
         task_update: ['agent-tasks', 'agent'],
       };
 
@@ -226,6 +228,10 @@ export function useEvents(options: UseEventsOptions = {}) {
   }, [session, selectedProjectId, stableTypes, queryClient]);
 
   // Polling fallback: invalidate queries every 30s when disconnected
+  // from the WebSocket. Includes the agent-detail keys (broadly, since
+  // no event payload is available during polling) so a disconnected
+  // detail page still refreshes its tasks/errors/agent caches instead
+  // of going stale until the WS reconnects.
   useEffect(() => {
     if (!polling) return;
 
@@ -233,6 +239,9 @@ export function useEvents(options: UseEventsOptions = {}) {
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats', selectedProjectId] });
       queryClient.invalidateQueries({ queryKey: ['agents', selectedProjectId] });
       queryClient.invalidateQueries({ queryKey: ['campaigns', selectedProjectId] });
+      queryClient.invalidateQueries({ queryKey: ['agent'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-errors'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-tasks'] });
     }, 30_000);
 
     return () => clearInterval(interval);

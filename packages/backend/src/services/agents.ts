@@ -2,7 +2,7 @@ import type { AgentCurrentTask, AgentWorstSeverity, SelectAgentBenchmark } from 
 import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { emitAgentStatus } from './events.js';
+import { emitAgentError, emitAgentStatus } from './events.js';
 
 // SelectAgent from @hashhive/shared is the zod-strict shape (jsonb as Json),
 // but Drizzle's row selection narrows jsonb to `unknown`. Deriving from
@@ -374,20 +374,19 @@ export async function logAgentError(data: {
     .returning();
 
   // Surface the insertion on the event stream so the detail page's
-  // error log refreshes in real time. Without this, errors posted via
-  // POST /api/v1/agent/errors only become visible on the next status
-  // change or a manual page reload. We reuse the agent_status event
-  // type rather than introducing a new one — the WS client already
-  // invalidates agent-errors on agent_status, and the agent's
-  // observable state (its error history) is exactly what changed.
+  // error log refreshes in real time. Use the dedicated `agent_error`
+  // event type rather than reusing `agent_status`: the per-type/per-
+  // project throttle in events.ts is 250ms keyed on `(eventType,
+  // projectId)`, so reusing `agent_status` would silently drop a new
+  // error event if a heartbeat just fired for the same project.
   if (error) {
     const [agent] = await db
-      .select({ projectId: agents.projectId, status: agents.status })
+      .select({ projectId: agents.projectId })
       .from(agents)
       .where(eq(agents.id, data.agentId))
       .limit(1);
     if (agent) {
-      emitAgentStatus(agent.projectId, data.agentId, agent.status);
+      emitAgentError(agent.projectId, data.agentId, data.severity);
     }
   }
 
