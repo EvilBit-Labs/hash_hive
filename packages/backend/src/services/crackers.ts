@@ -301,32 +301,39 @@ export async function deleteCrackerBinary(
  * Returns negative if a < b, positive if a > b, 0 if equal.
  */
 export function compareCrackerVersions(a: string, b: string): number {
-  // Walk forward collecting dot-separated numeric components; the first
-  // non-numeric character (or trailing non-numeric run) becomes the suffix.
-  // Implemented without regex backtracking — Bun's regex engine on Linux has
-  // historically been inconsistent about greedy matching inside repeating
-  // non-capturing groups, which caused 6.2.0 to parse as { nums: [6,2], rest:
-  // '.0' } instead of { nums: [6,2,0], rest: '' }.
+  // Find the end of the longest leading numeric prefix matching
+  // [0-9]+(\.[0-9]+)*. The first character that doesn't fit becomes the start
+  // of the suffix. Implemented without regex because Bun's regex engine on
+  // Linux has shown inconsistent greedy-matching behavior on repeating
+  // non-capturing groups (which caused parse('6.2.0') to return
+  // { nums: [6, 2], rest: '.0' } instead of { nums: [6, 2, 0], rest: '' }).
   const parse = (v: string): { nums: number[]; rest: string } => {
-    const nums: number[] = [];
-    let i = 0;
-    while (i < v.length) {
-      const start = i;
-      while (i < v.length && v.charCodeAt(i) >= 0x30 && v.charCodeAt(i) <= 0x39) {
-        i++;
+    let lastNumericEnd = 0; // exclusive index — end of the last accepted digit
+    let inNumber = false;
+    for (let i = 0; i < v.length; i++) {
+      const ch = v.charCodeAt(i);
+      const isDigit = ch >= 48 && ch <= 57; // '0'..'9'
+      const isDot = ch === 46; // '.'
+      if (isDigit) {
+        inNumber = true;
+        lastNumericEnd = i + 1;
+      } else if (isDot && inNumber) {
+        // Dot only continues the numeric prefix when followed by a digit.
+        inNumber = false;
+      } else {
+        break;
       }
-      if (i === start) break; // Current position is not a digit.
-      nums.push(Number.parseInt(v.slice(start, i), 10));
-      // Continue only when the next char is '.' followed by another digit.
-      const nextIsDot = v[i] === '.';
-      const charAfterDot = nextIsDot ? v.charCodeAt(i + 1) : Number.NaN;
-      if (nextIsDot && charAfterDot >= 0x30 && charAfterDot <= 0x39) {
-        i++;
-        continue;
-      }
-      break;
     }
-    return { nums, rest: v.slice(i) };
+    const numericPart = v.slice(0, lastNumericEnd);
+    const rest = v.slice(lastNumericEnd);
+    const nums =
+      numericPart.length === 0
+        ? []
+        : numericPart
+            .split('.')
+            .filter((s) => s.length > 0)
+            .map((s) => Number.parseInt(s, 10));
+    return { nums, rest };
   };
 
   const pa = parse(a);
