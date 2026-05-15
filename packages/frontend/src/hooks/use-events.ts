@@ -82,6 +82,16 @@ export function useEvents(options: UseEventsOptions = {}) {
         resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
       };
 
+      // Broad query keys: invalidated with just [key], matching every query
+      // whose key starts with that prefix. Used for entity-detail caches
+      // (e.g., ['agent', agentId, projectId]) where agentId sits between
+      // the prefix and projectId, so the project-scoped invalidation above
+      // would never prefix-match them.
+      const broadInvalidationKeys: Record<string, string[]> = {
+        agent_status: ['agent', 'agent-errors', 'agent-tasks'],
+        task_update: ['agent-tasks', 'agent'],
+      };
+
       // System-scoped query keys: invalidated with just [key], no project.
       // Issue #109: system_health is system-wide; the query key has no
       // projectId component, so the project-scoped invalidation path
@@ -130,6 +140,12 @@ export function useEvents(options: UseEventsOptions = {}) {
           if (projectKeys) {
             for (const key of projectKeys) {
               queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] });
+            }
+          }
+          const broadKeys = broadInvalidationKeys[eventType];
+          if (broadKeys) {
+            for (const key of broadKeys) {
+              queryClient.invalidateQueries({ queryKey: [key] });
             }
           }
           const systemKeys = systemInvalidationKeys[eventType];

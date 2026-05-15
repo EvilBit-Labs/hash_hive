@@ -1,6 +1,6 @@
 import type { AssignedTask } from '@hashhive/shared';
 import { agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, desc, eq, gt, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { getAgentBenchmarkForMode } from './agents.js';
@@ -559,4 +559,59 @@ export async function getZapsForTask(
   const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue);
 
   return { zaps, hasMore };
+}
+
+// ─── Per-Agent Task Listing ─────────────────────────────────────────
+
+export interface AgentTaskListItem {
+  id: number;
+  campaignId: number;
+  campaignName: string;
+  attackId: number;
+  attackMode: number;
+  status: string;
+  progress: Record<string, unknown>;
+  startedAt: string | null;
+  assignedAt: string | null;
+}
+
+const AGENT_TASK_ACTIVE_STATUSES = ['pending', 'assigned', 'running'] as const;
+
+/**
+ * Returns active tasks assigned to an agent (pending, assigned, running),
+ * joined with campaign and attack names for display in the agent detail UI.
+ *
+ * Project scoping is the caller's responsibility — verify the agent belongs
+ * to the caller's project before invoking.
+ */
+export async function listTasksByAgent(agentId: number): Promise<AgentTaskListItem[]> {
+  const rows = await db
+    .select({
+      id: tasks.id,
+      campaignId: campaigns.id,
+      campaignName: campaigns.name,
+      attackId: attacks.id,
+      attackMode: attacks.mode,
+      status: tasks.status,
+      progress: tasks.progress,
+      startedAt: tasks.startedAt,
+      assignedAt: tasks.assignedAt,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
+    .where(and(eq(tasks.agentId, agentId), inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])))
+    .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt));
+
+  return rows.map((row) => ({
+    id: row.id,
+    campaignId: row.campaignId,
+    campaignName: row.campaignName,
+    attackId: row.attackId,
+    attackMode: row.attackMode,
+    status: row.status,
+    progress: (row.progress as Record<string, unknown> | null) ?? {},
+    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
+    assignedAt: row.assignedAt ? row.assignedAt.toISOString() : null,
+  }));
 }

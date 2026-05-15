@@ -1,18 +1,41 @@
 import { useParams } from 'react-router';
+import { AgentErrorLog } from '../components/features/agent-error-log';
+import { AgentTasksSection } from '../components/features/agent-tasks-section';
+import { HardwareProfileCard } from '../components/features/hardware-profile-card';
 import { StatusBadge } from '../components/features/status-badge';
 import { EmptyState } from '../components/ui/empty-state';
 import { PageHeader } from '../components/ui/page-header';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
 import { TextLink } from '../components/ui/text-link';
-import { useAgent, useAgentBenchmarks, useAgentErrors } from '../hooks/use-dashboard';
+import {
+  useAgent,
+  useAgentBenchmarks,
+  useAgentErrors,
+  useAgentTasks,
+} from '../hooks/use-dashboard';
+import { useEvents } from '../hooks/use-events';
 import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
+
+function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
+  if (!capabilities) return '—';
+  const modes = capabilities['hashModes'] ?? capabilities['supportedModes'];
+  if (Array.isArray(modes) && modes.length > 0) {
+    return modes.join(', ');
+  }
+  return '—';
+}
 
 export function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const agentId = Number(id);
   const { data: agentData, isLoading } = useAgent(agentId);
   const { data: errorsData } = useAgentErrors(agentId);
+  const { data: tasksData, isLoading: isTasksLoading } = useAgentTasks(agentId);
   const { data: benchmarksData, isLoading: isBenchmarksLoading } = useAgentBenchmarks(agentId);
+
+  // Keep detail page reactive to real-time updates. useEvents handles
+  // invalidation of agent / agent-errors / agent-tasks keys.
+  useEvents({ types: ['agent_status', 'task_update'] });
 
   if (isLoading) {
     return <EmptyState message="Loading agent..." />;
@@ -36,10 +59,13 @@ export function AgentDetailPage() {
         <TextLink to="/agents" back>
           Back to agents
         </TextLink>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <PageHeader>{agent.name}</PageHeader>
           <StatusBadge status={agent.status} />
         </div>
+        <p className="text-xs text-muted-foreground">
+          Last seen: {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -60,10 +86,10 @@ export function AgentDetailPage() {
                 )}
               </dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Last Seen</dt>
-              <dd className="text-xs">
-                {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
+            <div className="flex justify-between gap-3">
+              <dt className="text-muted-foreground">Supported modes</dt>
+              <dd className="text-right font-mono text-xs">
+                {formatHashcatModes(agent.capabilities)}
               </dd>
             </div>
             <div className="flex justify-between">
@@ -73,52 +99,14 @@ export function AgentDetailPage() {
           </dl>
         </div>
 
-        {agent.hardwareProfile && (
-          <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Hardware
-            </h3>
-            <pre className="overflow-auto font-mono text-xs leading-relaxed text-muted-foreground">
-              {JSON.stringify(agent.hardwareProfile, null, 2)}
-            </pre>
-          </div>
-        )}
-
-        {agent.capabilities && (
-          <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Capabilities
-            </h3>
-            <pre className="overflow-auto font-mono text-xs leading-relaxed text-muted-foreground">
-              {JSON.stringify(agent.capabilities, null, 2)}
-            </pre>
-          </div>
-        )}
+        <HardwareProfileCard profile={agent.hardwareProfile} />
       </div>
 
-      {errorsData?.errors && errorsData.errors.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-medium">Recent Errors</h3>
-          <div className="space-y-2">
-            {errorsData.errors.map((err) => (
-              <div
-                key={err.id}
-                className="rounded-md border border-destructive/20 bg-destructive/5 p-3"
-              >
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-destructive">{err.severity}</span>
-                  <span className="text-muted-foreground">
-                    {new Date(err.createdAt).toLocaleString()}
-                  </span>
-                </div>
-                <p className="mt-1 text-sm text-foreground">{err.message}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <AgentTasksSection tasks={tasksData?.tasks} isLoading={isTasksLoading} />
 
-      <div className="space-y-3">
+      <AgentErrorLog errors={errorsData?.errors} />
+
+      <section className="space-y-3">
         <h3 className="text-sm font-medium">Benchmarks</h3>
         {isBenchmarksLoading ? (
           <EmptyState message="Loading benchmarks..." />
@@ -148,7 +136,7 @@ export function AgentDetailPage() {
         ) : (
           <EmptyState message="No benchmarks recorded yet." />
         )}
-      </div>
+      </section>
     </div>
   );
 }

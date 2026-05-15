@@ -1,8 +1,42 @@
 import type { SelectAgentBenchmark } from '@hashhive/shared';
-import { agentBenchmarks, agentErrors, agents, tasks } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitAgentStatus } from './events.js';
+
+type WorstSeverity = 'warning' | 'fatal' | null;
+
+interface CurrentTaskSummary {
+  id: number;
+  campaignId: number;
+  campaignName: string;
+  attackId: number;
+  attackMode: number;
+  status: string;
+}
+
+type SelectedAgent = NonNullable<Awaited<ReturnType<typeof getAgentById>>>;
+
+export type AgentListRow = SelectedAgent & {
+  errorCount24h: number;
+  worstSeverity24h: WorstSeverity;
+  currentTask: CurrentTaskSummary | null;
+};
+
+// currentTask on the list response only shows tasks the agent is actively
+// executing — pending tasks (queued for an agent but not yet started) are not
+// surfaced here. The detail page's listTasksByAgent intentionally includes
+// 'pending' so operators can see the full queue for one agent.
+const ACTIVE_TASK_STATUSES = ['assigned', 'running'] as const;
+
+// Severity policy for the 24h error badge:
+//   * fatal = any error severity at or above ordinary "error" (an error worth
+//     paging on — fatal/critical/error).
+//   * warning = explicit warnings only.
+// Lower-importance severities (info/debug/notice/etc.) do not contribute to
+// the count or the badge color.
+const FATAL_SEVERITIES = ['fatal', 'critical', 'error'];
+const WARNING_SEVERITIES = ['warning'];
 
 export async function getAgentById(agentId: number) {
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
@@ -14,7 +48,12 @@ export async function listAgents(filters: {
   status?: string | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
-}) {
+}): Promise<{
+  agents: AgentListRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}> {
   let query = db.select().from(agents).$dynamic();
 
   const conditions = [];
@@ -39,12 +78,115 @@ export async function listAgents(filters: {
       .where(conditions.length > 0 ? and(...conditions) : undefined),
   ]);
 
+  const agentIds = results.map((a) => a.id);
+  const [errorAggregates, currentTasks] = await Promise.all([
+    aggregateRecentErrors(agentIds),
+    fetchCurrentTasks(agentIds),
+  ]);
+
+  const enriched: AgentListRow[] = results.map((agent) => ({
+    ...agent,
+    errorCount24h: errorAggregates.get(agent.id)?.count ?? 0,
+    worstSeverity24h: errorAggregates.get(agent.id)?.worstSeverity ?? null,
+    currentTask: currentTasks.get(agent.id) ?? null,
+  }));
+
   return {
-    agents: results,
+    agents: enriched,
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
   };
+}
+
+async function aggregateRecentErrors(
+  agentIds: number[]
+): Promise<Map<number, { count: number; worstSeverity: WorstSeverity }>> {
+  const map = new Map<number, { count: number; worstSeverity: WorstSeverity }>();
+  if (agentIds.length === 0) {
+    return map;
+  }
+
+  // Server-side aggregation: bounded wire size at one row per agent, regardless
+  // of how many errors a noisy agent emits. Unknown severities (info/debug/...)
+  // are excluded from `count` and from the `has_warning` / `has_fatal` flags.
+  const fatalArray = sql`ARRAY[${sql.raw(FATAL_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
+  const warningArray = sql`ARRAY[${sql.raw(WARNING_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
+
+  const rows = await db
+    .select({
+      agentId: agentErrors.agentId,
+      count: sql<number>`count(*) FILTER (WHERE lower(${agentErrors.severity}) = ANY(${fatalArray}) OR lower(${agentErrors.severity}) = ANY(${warningArray}))`,
+      hasFatal: sql<boolean>`bool_or(lower(${agentErrors.severity}) = ANY(${fatalArray}))`,
+      hasWarning: sql<boolean>`bool_or(lower(${agentErrors.severity}) = ANY(${warningArray}))`,
+    })
+    .from(agentErrors)
+    .where(
+      and(
+        inArray(agentErrors.agentId, agentIds),
+        sql`${agentErrors.createdAt} >= now() - interval '24 hours'`
+      )
+    )
+    .groupBy(agentErrors.agentId);
+
+  for (const row of rows) {
+    const count = Number(row.count ?? 0);
+    if (count === 0) continue;
+    map.set(row.agentId, {
+      count,
+      worstSeverity: row.hasFatal ? 'fatal' : row.hasWarning ? 'warning' : null,
+    });
+  }
+
+  return map;
+}
+
+async function fetchCurrentTasks(
+  agentIds: number[]
+): Promise<Map<number, AgentListRow['currentTask']>> {
+  const map = new Map<number, AgentListRow['currentTask']>();
+  if (agentIds.length === 0) {
+    return map;
+  }
+
+  const rows = await db
+    .select({
+      taskId: tasks.id,
+      agentId: tasks.agentId,
+      status: tasks.status,
+      campaignId: campaigns.id,
+      campaignName: campaigns.name,
+      attackId: attacks.id,
+      attackMode: attacks.mode,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
+    .where(and(inArray(tasks.agentId, agentIds), inArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
+    // Deterministic ordering when an agent has multiple active tasks:
+    // prefer 'running' over 'assigned', then most recently started, then most
+    // recently assigned.
+    .orderBy(
+      sql`CASE WHEN ${tasks.status} = 'running' THEN 0 ELSE 1 END`,
+      desc(tasks.startedAt),
+      desc(tasks.assignedAt)
+    );
+
+  for (const row of rows) {
+    if (row.agentId === null || map.has(row.agentId)) {
+      continue;
+    }
+    map.set(row.agentId, {
+      id: row.taskId,
+      campaignId: row.campaignId,
+      campaignName: row.campaignName,
+      attackId: row.attackId,
+      attackMode: row.attackMode,
+      status: row.status,
+    });
+  }
+
+  return map;
 }
 
 export async function processHeartbeat(

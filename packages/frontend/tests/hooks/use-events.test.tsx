@@ -246,6 +246,47 @@ describe('useEvents', () => {
       const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'agents' && k[1] === 1)).toBe(true);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
+      // Detail-page queries use the agent id as the second positional element,
+      // so they must be invalidated by the broad single-element key.
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent' && k.length === 1)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-errors' && k.length === 1)).toBe(
+        true
+      );
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(true);
+    });
+  });
+
+  it('invalidates agent-tasks on task_update event', async () => {
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    renderEventsHook(qc);
+
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    ws.simulateMessage({
+      type: 'task_update',
+      projectId: 1,
+      data: {},
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      const calls = invalidateSpy.mock.calls;
+      const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'tasks' && k[1] === 1)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k.length === 1)).toBe(true);
     });
   });
 

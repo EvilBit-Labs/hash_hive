@@ -15,6 +15,17 @@ interface DashboardStats {
   cracked: { total: number };
 }
 
+export type AgentWorstSeverity = 'warning' | 'fatal' | null;
+
+export interface AgentCurrentTask {
+  id: number;
+  campaignId: number;
+  campaignName: string;
+  attackId: number;
+  attackMode: number;
+  status: string;
+}
+
 interface Agent {
   id: number;
   name: string;
@@ -24,6 +35,21 @@ interface Agent {
   capabilities: Record<string, unknown> | null;
   hardwareProfile: Record<string, unknown> | null;
   createdAt: string;
+  errorCount24h?: number;
+  worstSeverity24h?: AgentWorstSeverity;
+  currentTask?: AgentCurrentTask | null;
+}
+
+export interface AgentTask {
+  id: number;
+  campaignId: number;
+  campaignName: string;
+  attackId: number;
+  attackMode: number;
+  status: string;
+  progress: Record<string, unknown>;
+  startedAt: string | null;
+  assignedAt: string | null;
 }
 
 interface Campaign {
@@ -112,6 +138,16 @@ export function useAgentBenchmarks(agentId: number) {
     queryKey: ['agent-benchmarks', agentId, selectedProjectId],
     queryFn: () =>
       api.get<{ benchmarks: AgentBenchmarkResponse[] }>(`/dashboard/agents/${agentId}/benchmarks`),
+    enabled: agentId > 0 && !!selectedProjectId,
+  });
+}
+
+export function useAgentTasks(agentId: number) {
+  const { selectedProjectId } = useUiStore();
+
+  return useQuery({
+    queryKey: ['agent-tasks', agentId, selectedProjectId],
+    queryFn: () => api.get<{ tasks: AgentTask[] }>(`/dashboard/agents/${agentId}/tasks`),
     enabled: agentId > 0 && !!selectedProjectId,
   });
 }
