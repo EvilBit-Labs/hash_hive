@@ -136,7 +136,27 @@ mock.module('../../src/services/crackers.js', () => ({
   isKnownEngine: (engine: string) => engine === 'hashcat' || engine === 'john',
   normalizeEngineName: (engine: string | undefined | null) =>
     (engine ?? '').trim().toLowerCase() || 'hashcat',
-  compareCrackerVersions: (a: string, b: string) => a.localeCompare(b),
+  // mock.module is process-global in bun:test, so this replacement leaks into
+  // the rest of the test suite (notably crackers.test.ts which exercises the
+  // real comparator). Use a behaviorally-correct numeric version compare here
+  // instead of localeCompare so the leak does not flip dedicated comparator
+  // tests on CI's full-suite run.
+  compareCrackerVersions: (a: string, b: string): number => {
+    const parts = (s: string): number[] =>
+      s.split('.').map((n) => {
+        const v = Number.parseInt(n, 10);
+        return Number.isFinite(v) ? v : 0;
+      });
+    const pa = parts(a);
+    const pb = parts(b);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const av = pa[i] ?? 0;
+      const bv = pb[i] ?? 0;
+      if (av !== bv) return av - bv;
+    }
+    return 0;
+  },
 }));
 
 // ─── Mock Required Infra ─────────────────────────────────────────────
