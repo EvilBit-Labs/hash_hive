@@ -301,12 +301,32 @@ export async function deleteCrackerBinary(
  * Returns negative if a < b, positive if a > b, 0 if equal.
  */
 export function compareCrackerVersions(a: string, b: string): number {
+  // Walk forward collecting dot-separated numeric components; the first
+  // non-numeric character (or trailing non-numeric run) becomes the suffix.
+  // Implemented without regex backtracking — Bun's regex engine on Linux has
+  // historically been inconsistent about greedy matching inside repeating
+  // non-capturing groups, which caused 6.2.0 to parse as { nums: [6,2], rest:
+  // '.0' } instead of { nums: [6,2,0], rest: '' }.
   const parse = (v: string): { nums: number[]; rest: string } => {
-    const match = v.match(/^(\d+(?:\.\d+)*)([\s\S]*)$/);
-    if (!match) return { nums: [], rest: v };
-    const numericPart = match[1] ?? '';
-    const nums = numericPart.split('.').map((n) => Number.parseInt(n, 10));
-    return { nums, rest: match[2] ?? '' };
+    const nums: number[] = [];
+    let i = 0;
+    while (i < v.length) {
+      const start = i;
+      while (i < v.length && v.charCodeAt(i) >= 0x30 && v.charCodeAt(i) <= 0x39) {
+        i++;
+      }
+      if (i === start) break; // Current position is not a digit.
+      nums.push(Number.parseInt(v.slice(start, i), 10));
+      // Continue only when the next char is '.' followed by another digit.
+      const nextIsDot = v[i] === '.';
+      const charAfterDot = nextIsDot ? v.charCodeAt(i + 1) : Number.NaN;
+      if (nextIsDot && charAfterDot >= 0x30 && charAfterDot <= 0x39) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    return { nums, rest: v.slice(i) };
   };
 
   const pa = parse(a);
