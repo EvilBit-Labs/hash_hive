@@ -332,7 +332,39 @@ export const agentTaskSummarySchema = z.object({
   assignedAt: z.string().nullable(),
 });
 
+/**
+ * Heartbeat-only error severity. Narrower than the standalone
+ * `POST /api/v1/agent/errors` endpoint (which accepts
+ * `warning | error | fatal` for back-compat with agents posting generic
+ * errors): heartbeats classify into the explicit `warning | fatal` split
+ * the Agent Heartbeat ticket mandates.
+ */
+export const agentHeartbeatErrorSchema = z.object({
+  severity: z.enum(['warning', 'fatal']),
+  message: z.string().min(1),
+  context: z.record(z.string(), z.unknown()).optional(),
+});
+
+/**
+ * Telemetry view of the task the agent is currently executing. Accepted by
+ * the heartbeat endpoint so a fatal heartbeat error can be attributed to a
+ * specific task, but progress/speed/temperature are informational only —
+ * canonical task progress flows through `POST /agent/tasks/:id/report` and
+ * is not written back to the `tasks` table from heartbeat handling.
+ */
+export const agentHeartbeatCurrentTaskSchema = z.object({
+  taskId: z.number().int().positive(),
+  progress: z.number().min(0),
+  speed: z.number(),
+  temperature: z.number().optional(),
+});
+
 export const agentHeartbeatSchema = z.object({
+  // The Agent Heartbeat ticket samples `status: 'online' | 'error'` but the
+  // wider system already depends on `busy` and `benchmarked` transitions
+  // (assignments, benchmark submission), so the enum stays a superset. The
+  // service layer treats anything other than a fatal-error heartbeat as
+  // "agent is reachable" regardless of which non-error literal arrives.
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
     .object({
@@ -348,6 +380,8 @@ export const agentHeartbeatSchema = z.object({
     })
     .optional(),
   deviceInfo: agentHardwareProfileSchema.optional(),
+  currentTask: agentHeartbeatCurrentTaskSchema.optional(),
+  error: agentHeartbeatErrorSchema.optional(),
 });
 
 // ─── Cracker Check-Update API ───────────────────────────────────────

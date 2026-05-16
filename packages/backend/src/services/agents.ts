@@ -1,6 +1,12 @@
-import type { AgentCurrentTask, AgentWorstSeverity, SelectAgentBenchmark } from '@hashhive/shared';
+import type {
+  AgentCurrentTask,
+  AgentHeartbeat,
+  AgentWorstSeverity,
+  SelectAgentBenchmark,
+} from '@hashhive/shared';
 import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { emitAgentError, emitAgentStatus } from './events.js';
 
@@ -265,20 +271,111 @@ async function fetchCurrentTasks(
   return map;
 }
 
-export async function processHeartbeat(
-  agentId: number,
-  data: {
-    status: string;
-    capabilities?: Record<string, unknown> | undefined;
-    deviceInfo?: Record<string, unknown> | undefined;
-    error?: { severity?: string; message?: string } | undefined;
-  }
-) {
-  // Determine effective status from heartbeat payload
-  let effectiveStatus = data.status;
-  const isFatalError = data.error?.severity === 'fatal';
-  if (isFatalError) {
-    effectiveStatus = 'error';
+/**
+ * Reason carried on the structured status-transition log line. Kept as a
+ * narrow literal union so a typo at a call site is a type error, and so
+ * downstream log queries have a stable enum to filter on.
+ *
+ * - `'fatal_error'`: heartbeat reported `error.severity='fatal'`; status
+ *   forced to `'error'`.
+ * - `'heartbeat_status'`: heartbeat carried a non-fatal status literal
+ *   different from the agent's current row (e.g., `'offline' -> 'online'`
+ *   when the agent comes back from the heartbeat-monitor sweep).
+ */
+export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status';
+
+export interface HeartbeatTransition {
+  effectiveStatus: string;
+  isFatalError: boolean;
+  shouldLogTransition: boolean;
+  reason: StatusTransitionReason | null;
+}
+
+/**
+ * Pure decision: given the payload status, optional error severity, and
+ * the agent's current persisted status, decide the effective status the
+ * row will be updated to, whether the heartbeat is a fatal-error path,
+ * and whether a status-transition audit log line should fire.
+ *
+ * Exported so the policy can be pinned by unit tests without a database
+ * (mirrors the `classifyWorstSeverity` pattern). The DB-bound caller in
+ * `processHeartbeat` is just the wiring around this decision.
+ */
+export function decideHeartbeatTransition(input: {
+  payloadStatus: string;
+  errorSeverity?: 'warning' | 'fatal' | undefined;
+  priorStatus: string | null;
+}): HeartbeatTransition {
+  const isFatalError = input.errorSeverity === 'fatal';
+  const effectiveStatus = isFatalError ? 'error' : input.payloadStatus;
+
+  // Audit-log only real transitions. No-op heartbeats (status unchanged)
+  // happen every ~30s per agent — logging them would dominate volume.
+  // A null priorStatus (agent row missing) is treated as no-op since the
+  // update will fail anyway.
+  const shouldLogTransition = input.priorStatus !== null && input.priorStatus !== effectiveStatus;
+
+  const reason: StatusTransitionReason | null = !shouldLogTransition
+    ? null
+    : isFatalError
+      ? 'fatal_error'
+      : 'heartbeat_status';
+
+  return { effectiveStatus, isFatalError, shouldLogTransition, reason };
+}
+
+function logStatusTransition(opts: {
+  agentId: number;
+  projectId: number;
+  fromStatus: string;
+  toStatus: string;
+  reason: StatusTransitionReason;
+}): void {
+  logger.info(
+    {
+      agentId: opts.agentId,
+      projectId: opts.projectId,
+      fromStatus: opts.fromStatus,
+      toStatus: opts.toStatus,
+      reason: opts.reason,
+    },
+    'Agent status transition'
+  );
+}
+
+export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
+  // Read the prior status before we mutate the row so the audit log can
+  // record the actual transition (the UPDATE ... RETURNING below only
+  // exposes the post-update state).
+  const [priorRow] = await db
+    .select({ status: agents.status, projectId: agents.projectId })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  const priorStatus = priorRow?.status ?? null;
+
+  const transition = decideHeartbeatTransition({
+    payloadStatus: data.status,
+    errorSeverity: data.error?.severity,
+    priorStatus,
+  });
+  const { effectiveStatus, isFatalError } = transition;
+
+  // Persist heartbeat-borne errors to agent_errors regardless of severity.
+  // Warnings are recorded but do not change status or fail the running
+  // task; fatals are recorded AND drive the status/task transitions
+  // below. Heartbeats and the standalone POST /errors endpoint are
+  // intentionally non-redundant channels — an agent posts via one or the
+  // other for a given event, never both, because the server has no
+  // idempotency key to dedupe across channels.
+  if (data.error) {
+    await logAgentError({
+      agentId,
+      severity: data.error.severity,
+      message: data.error.message,
+      context: data.error.context,
+      taskId: data.currentTask?.taskId,
+    });
   }
 
   const updates: Record<string, unknown> = {
@@ -298,9 +395,22 @@ export async function processHeartbeat(
 
   if (updated) {
     emitAgentStatus(updated.projectId, updated.id, effectiveStatus);
+
+    if (transition.shouldLogTransition && transition.reason && priorStatus) {
+      logStatusTransition({
+        agentId: updated.id,
+        projectId: updated.projectId,
+        fromStatus: priorStatus,
+        toStatus: effectiveStatus,
+        reason: transition.reason,
+      });
+    }
   }
 
-  // On fatal error, fail the agent's current tasks
+  // On fatal error, fail the agent's current tasks. `handleTaskFailure`
+  // applies the up-to-3-retry policy defined in the ticket; rolling a
+  // parallel path here would diverge. Dynamic import preserves the
+  // existing tasks.ts <-> agents.ts circular-import workaround.
   if (isFatalError) {
     const activeTasks = await db
       .select({ id: tasks.id })

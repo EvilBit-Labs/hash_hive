@@ -159,6 +159,87 @@ describe('Agent API: POST /heartbeat', () => {
 
     expect(res.status).toBe(400);
   });
+
+  it('accepts a heartbeat with currentTask and warning error', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        currentTask: { taskId: 42, progress: 0.5, speed: 12345, temperature: 72 },
+        error: { severity: 'warning', message: 'temperature spike', context: { gpuId: 0 } },
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('accepts a heartbeat with a fatal error and no currentTask', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'error',
+        error: { severity: 'fatal', message: 'hashcat crashed' },
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects an error.severity outside the warning|fatal enum', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'info', message: 'just a note' },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an empty error.message', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'warning', message: '' },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-positive currentTask.taskId', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        currentTask: { taskId: 0, progress: 0, speed: 0 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 // ─── POST /tasks/next — Request Next Task ───────────────────────────

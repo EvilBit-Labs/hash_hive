@@ -14,6 +14,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   classifyRecentErrors,
   classifyWorstSeverity,
+  decideHeartbeatTransition,
   pickCurrentTaskByAgent,
 } from '../../src/services/agents.js';
 import { AGENT_TASK_ACTIVE_STATUSES, projectAgentTaskRows } from '../../src/services/tasks.js';
@@ -265,5 +266,72 @@ describe('AGENT_TASK_ACTIVE_STATUSES', () => {
     // (which shows the agent's full active queue) from the list-page
     // currentTask column (running/assigned only).
     expect([...AGENT_TASK_ACTIVE_STATUSES]).toEqual(['pending', 'assigned', 'running']);
+  });
+});
+
+describe('decideHeartbeatTransition', () => {
+  it('forces effective status to "error" and flags fatal when severity is fatal', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      errorSeverity: 'fatal',
+      priorStatus: 'online',
+    });
+    expect(result.effectiveStatus).toBe('error');
+    expect(result.isFatalError).toBe(true);
+    expect(result.shouldLogTransition).toBe(true);
+    expect(result.reason).toBe('fatal_error');
+  });
+
+  it('keeps the payload status and does not flag fatal on a warning-severity error', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      errorSeverity: 'warning',
+      priorStatus: 'online',
+    });
+    expect(result.effectiveStatus).toBe('online');
+    expect(result.isFatalError).toBe(false);
+    // online -> online is a no-op transition; the warning is persisted
+    // by the caller via logAgentError, but it does not move the agent
+    // and therefore does not emit a status-transition audit line.
+    expect(result.shouldLogTransition).toBe(false);
+    expect(result.reason).toBeNull();
+  });
+
+  it('suppresses the audit log on a no-op transition (status unchanged)', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      priorStatus: 'online',
+    });
+    expect(result.shouldLogTransition).toBe(false);
+    expect(result.reason).toBeNull();
+  });
+
+  it('emits a heartbeat_status transition when the payload changes the status', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      priorStatus: 'offline',
+    });
+    expect(result.effectiveStatus).toBe('online');
+    expect(result.shouldLogTransition).toBe(true);
+    expect(result.reason).toBe('heartbeat_status');
+  });
+
+  it('emits a fatal_error transition when fatal flips an agent from online', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      errorSeverity: 'fatal',
+      priorStatus: 'online',
+    });
+    expect(result.shouldLogTransition).toBe(true);
+    expect(result.reason).toBe('fatal_error');
+  });
+
+  it('suppresses the audit log when priorStatus is null (agent row missing)', () => {
+    const result = decideHeartbeatTransition({
+      payloadStatus: 'online',
+      priorStatus: null,
+    });
+    expect(result.shouldLogTransition).toBe(false);
+    expect(result.reason).toBeNull();
   });
 });
