@@ -415,7 +415,10 @@ export const updateCrackerBinaryRequestSchema = z.object({
  * before arithmetic.
  */
 export const keyspaceCoordSchema = z.union([
-  z.number().int().nonnegative(),
+  // Cap the number branch at Number.MAX_SAFE_INTEGER. Values above 2^53 - 1
+  // have already lost precision by the time Zod sees them - they must
+  // travel as decimal strings to round-trip safely.
+  z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   z
     .string()
     .regex(/^[0-9]+$/, 'keyspace coord must be a non-negative decimal string')

@@ -222,6 +222,65 @@ if (isIsolated) {
       }
     });
 
+    // diagnoseAssignmentSkip helper - covers the skip-reason path that fires
+    // when the atomic CTE returns no rows. The helper queries the count of
+    // matching tasks twice (any-pending, capability-matching) to decide
+    // between no_pending_tasks / no_matching_capability / claim_race_lost.
+    // Each test seeds the eligible-agent row, an empty execute() result, then
+    // the two count queries that decide the reason.
+    test('skip-diagnosis: no_pending_tasks when project has no pending tasks', async () => {
+      mockLimit.mockResolvedValueOnce([
+        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+      ]);
+      mockExecute.mockResolvedValueOnce([]); // CTE returns no claim
+      // Diagnostic count #1 (any pending in project): 0 -> no_pending_tasks.
+      mockLimit.mockResolvedValueOnce([{ n: 0 }]);
+
+      const result = await assignNextTask(1);
+      expect(result).toBeNull();
+    });
+
+    test('skip-diagnosis: no_matching_capability when pending tasks exist but capabilities mismatch', async () => {
+      mockLimit.mockResolvedValueOnce([
+        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+      ]);
+      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
+      // Diagnostic #1: 5 pending; diagnostic #2: 0 matching.
+      mockLimit.mockResolvedValueOnce([{ n: 5 }]);
+      mockLimit.mockResolvedValueOnce([{ n: 0 }]);
+
+      const result = await assignNextTask(1);
+      expect(result).toBeNull();
+    });
+
+    test('skip-diagnosis: claim_race_lost when matching tasks exist but were locked', async () => {
+      mockLimit.mockResolvedValueOnce([
+        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+      ]);
+      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
+      mockLimit.mockResolvedValueOnce([{ n: 5 }]); // any-pending: 5
+      mockLimit.mockResolvedValueOnce([{ n: 3 }]); // matching: 3 -> race lost
+
+      const result = await assignNextTask(1);
+      expect(result).toBeNull();
+    });
+
+    test('skip-diagnosis: diagnostic failure falls back to claim_race_lost', async () => {
+      // The diagnostic is wrapped in try/catch so a DB blip during the
+      // skip-reason lookup doesn't introduce a new failure mode in the
+      // claim path. Simulate the diagnostic blowing up - assignNextTask
+      // must still return null cleanly.
+      mockLimit.mockResolvedValueOnce([
+        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+      ]);
+      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
+      // Diagnostic query rejects -> caught, fallback to claim_race_lost log.
+      mockLimit.mockImplementationOnce(() => Promise.reject(new Error('db blip')));
+
+      const result = await assignNextTask(1);
+      expect(result).toBeNull();
+    });
+
     test('uses benchmark speed when available', async () => {
       const now = new Date();
       const rawDbRow = {
@@ -316,7 +375,9 @@ if (isIsolated) {
   // ─── reassignStaleTasks ───────────────────────────────────────────
   //
   // The new rebalance policy (U5) emits three outcomes per stale task:
-  //   1. failed-overrun     - keyspaceProgress > total -> mark failed
+  //   1. failed-overrun     - keyspaceProgress >= total -> mark failed
+  //                          (covers both true overrun and un-acked
+  //                          completion at exact-equal-total)
   //   2. rebalanced         - 0 < keyspaceProgress < total -> trim workRange.start
   //   3. reassigned (reset) - 0% progress -> existing reset-to-pending path
   // These tests assert the SET payload routed to each outcome branch.
@@ -570,6 +631,45 @@ if (isIsolated) {
       expect(range['start']).toBe(0);
       expect(range['end']).toBe(10000);
       expect(range['total']).toBe(10000);
+    });
+
+    test('non-empty fleet benchmarks size the chunks (fleet-aware path)', async () => {
+      // attack row: mode 3 mask `?d?d?d?d?d?d` = 10^6 = 1_000_000 keyspace.
+      mockLimit.mockResolvedValueOnce([
+        {
+          id: 11,
+          campaignId: 3,
+          projectId: 1,
+          mode: 3,
+          wordlistId: null,
+          rulelistId: null,
+          masklistId: null,
+          keyspace: null,
+          advancedConfiguration: { mask: '?d?d?d?d?d?d' },
+        },
+      ]);
+      // Fleet benchmark: single agent at 1000 H/s. pickChunkSize -> 1000 * 60 =
+      // 60_000 per chunk. Total = 1_000_000 -> 17 chunks (16 full + 1 trailing
+      // 40_000-unit chunk).
+      const benchmarkWhereReturning = mock(() => Promise.resolve([{ speedHs: 1000 }]));
+      mockFrom.mockImplementationOnce(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockFrom.mockImplementationOnce(() => ({
+        innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
+      }));
+
+      const result = await generateTasksForAttack(11);
+
+      expect(result).toMatchObject({ count: 17 });
+      const rows = insertValuesArg as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(17);
+      // Each full chunk is exactly speedHs * targetSeconds = 60_000.
+      const firstChunk = rows[0]?.['workRange'] as Record<string, unknown>;
+      expect(firstChunk['start']).toBe(0);
+      expect(firstChunk['end']).toBe(60_000);
+      expect(firstChunk['total']).toBe(60_000);
+      // Last chunk holds the trailing remainder, capped at totalKeyspace.
+      const lastChunk = rows[16]?.['workRange'] as Record<string, unknown>;
+      expect(lastChunk['end']).toBe(1_000_000);
     });
 
     test('returns single placeholder task when keyspace cannot be computed', async () => {

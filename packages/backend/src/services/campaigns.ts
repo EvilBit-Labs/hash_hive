@@ -1,12 +1,19 @@
 import { attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
+import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
-const CHUNK_SIZE = 10_000_000;
+// Use the smallest possible runtime chunk size as the estimator's basis so
+// the chunk-count estimate is an upper bound on what generateTasksForAttack
+// will actually emit. pickChunkSize can clamp as low as MIN_CHUNK_SIZE for
+// slow fleets, so using the legacy 10M constant would let attacks slip
+// through the inline gate and then materialize 4 orders of magnitude more
+// rows in the request path.
+const CHUNK_SIZE = Number(MIN_CHUNK_SIZE);
 
 // Dynamic import getters — break circular dependency (campaigns ↔ tasks) while
 // remaining testable. bun:test's mock.module cannot override already-cached
@@ -497,23 +504,31 @@ export async function updateCampaignProgress(campaignId: number) {
       // letting that flow into the division produces NULL, which
       // `LEAST(NULL, 1) = 1` would silently count as a 100%-complete task.
       // Default to 0 progress for any task with total <= 0.
-      runningProgress: sql<number>`COALESCE(
+      //
+      // Use ::numeric (arbitrary-precision) instead of ::float for the
+      // division: mask-attack keyspaces routinely exceed 2^53 - 1, and
+      // ::float would round large numerators / denominators to the
+      // nearest 64-bit double - a near-complete task could appear as
+      // 1.0 long before the agent actually finished. We cast back to
+      // double precision at the outermost boundary so the result still
+      // fits the `runningProgress: number` JS field.
+      runningProgress: sql<number>`(COALESCE(
         SUM(
           CASE
-            WHEN COALESCE((${tasks.workRange}->>'total')::float, 0) > 0 THEN
+            WHEN COALESCE((${tasks.workRange}->>'total')::numeric, 0) > 0 THEN
               GREATEST(
-                0,
+                0::numeric,
                 LEAST(
-                  COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0)
-                    / (${tasks.workRange}->>'total')::float,
-                  1
+                  COALESCE((${tasks.progress}->>'keyspaceProgress')::numeric, 0)
+                    / (${tasks.workRange}->>'total')::numeric,
+                  1::numeric
                 )
               )
-            ELSE 0
+            ELSE 0::numeric
           END
         ) FILTER (WHERE ${tasks.status} = 'running'),
-        0
-      )`,
+        0::numeric
+      ))::double precision`,
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId));

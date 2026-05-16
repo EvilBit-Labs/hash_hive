@@ -147,7 +147,12 @@ import {
   resolveGenerationStrategy,
 } from '../../src/services/campaigns.js';
 
-const CHUNK_SIZE = 10_000_000;
+// resolveGenerationStrategy estimates with MIN_CHUNK_SIZE so its task count
+// is an upper bound on what generateTasksForAttack will actually emit at
+// runtime (pickChunkSize can clamp as low as 1000 for slow fleets). The old
+// 10M constant under-counted by 4 orders of magnitude when fleet benchmarks
+// pushed chunkSize toward the floor.
+const CHUNK_SIZE = 1000;
 
 describe('Task generation threshold (99/100 split)', () => {
   test('uses inline generation at 1 estimated task', () => {
@@ -162,8 +167,8 @@ describe('Task generation threshold (99/100 split)', () => {
   });
 
   test('uses inline generation at 99 estimated tasks from keyspace', () => {
-    // Single attack with keyspace that produces exactly 99 chunks
-    // 99 * 10M = 990M keyspace
+    // Single attack with keyspace that produces exactly 99 chunks at
+    // worst-case (MIN_CHUNK_SIZE-basis) sizing.
     const keyspace = String(99 * CHUNK_SIZE);
     expect(resolveGenerationStrategy([{ keyspace }])).toBe('inline');
   });
@@ -175,8 +180,8 @@ describe('Task generation threshold (99/100 split)', () => {
   });
 
   test('uses async enqueue at exactly 100 estimated tasks from keyspace', () => {
-    // Single attack with keyspace that produces exactly 100 chunks
-    // 100 * 10M = 1B keyspace
+    // Single attack with keyspace that produces exactly 100 chunks at
+    // worst-case (MIN_CHUNK_SIZE-basis) sizing.
     const keyspace = String(100 * CHUNK_SIZE);
     expect(resolveGenerationStrategy([{ keyspace }])).toBe('async');
   });

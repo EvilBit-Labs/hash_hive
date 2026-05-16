@@ -65,10 +65,13 @@ const taskReportSchema = z.object({
       // Absolute keyspace units cracked within the task's workRange.total.
       // Must be a non-negative whole number. Numbers go through .int() so
       // fractional reports (legacy fraction-mode agents) and negatives are
-      // rejected; decimal strings cover the bigint-overflow path.
+      // rejected. The number branch caps at Number.MAX_SAFE_INTEGER so
+      // unsafe-size reports are forced through the decimal-string branch
+      // instead of arriving here already-rounded. Decimal strings cover
+      // the bigint-overflow path.
       keyspaceProgress: z
         .union([
-          z.number().int().nonnegative(),
+          z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
           z
             .string()
             .regex(/^[0-9]+$/)

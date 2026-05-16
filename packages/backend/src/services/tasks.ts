@@ -224,7 +224,13 @@ export async function generateTasksForAttack(
   // oversized task that the heartbeat-monitor rebalance branch will split
   // further as agents make progress against it.
   const MAX_CHUNKS_PER_ATTACK = 100_000n;
-  if (totalKeyspace / chunkSize > MAX_CHUNKS_PER_ATTACK) {
+  // Ceiling-div: the actual loop emits `ceil(totalKeyspace / chunkSize)`
+  // chunks, so the comparison must use the same ceiling. With plain floor
+  // div, `totalKeyspace = MAX*chunkSize + 1` would test as `> MAX_CHUNKS`
+  // false (floor div gives exactly MAX) but the loop would emit MAX+1
+  // chunks, blowing past the documented cap.
+  const projectedChunks = totalKeyspace / chunkSize + (totalKeyspace % chunkSize === 0n ? 0n : 1n);
+  if (projectedChunks > MAX_CHUNKS_PER_ATTACK) {
     chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK;
     if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n;
   }
