@@ -1,6 +1,16 @@
+import type {
+  AgentCurrentTask,
+  AgentTaskSummary,
+  AgentWorstSeverity,
+  SelectAgentError,
+} from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useUiStore } from '../stores/ui';
+
+// Re-export so existing component imports keep working without forcing every
+// caller to switch to the shared package directly.
+export type { AgentCurrentTask, AgentWorstSeverity } from '@hashhive/shared';
 
 interface DashboardStats {
   agents: { total: number; online: number; offline: number; error: number };
@@ -24,7 +34,14 @@ interface Agent {
   capabilities: Record<string, unknown> | null;
   hardwareProfile: Record<string, unknown> | null;
   createdAt: string;
+  errorCount24h?: number;
+  worstSeverity24h?: AgentWorstSeverity;
+  currentTask?: AgentCurrentTask | null;
 }
+
+// Frontend alias for the shared task-detail shape — keeps existing component
+// imports stable while pointing at the shared source of truth.
+export type AgentTask = AgentTaskSummary;
 
 interface Campaign {
   id: number;
@@ -37,14 +54,10 @@ interface Campaign {
   completedAt: string | null;
 }
 
-interface AgentError {
-  id: number;
-  agentId: number;
-  severity: string;
-  message: string;
-  metadata: Record<string, unknown> | null;
-  createdAt: string;
-}
+// SelectAgentError has `createdAt: Date` (Drizzle row shape) but the wire
+// shape serializes it as an ISO string. Map at the boundary so consumers
+// stay typed without re-declaring the row shape locally.
+export type AgentError = Omit<SelectAgentError, 'createdAt'> & { createdAt: string };
 
 export function useDashboardStats() {
   const { selectedProjectId } = useUiStore();
@@ -112,6 +125,16 @@ export function useAgentBenchmarks(agentId: number) {
     queryKey: ['agent-benchmarks', agentId, selectedProjectId],
     queryFn: () =>
       api.get<{ benchmarks: AgentBenchmarkResponse[] }>(`/dashboard/agents/${agentId}/benchmarks`),
+    enabled: agentId > 0 && !!selectedProjectId,
+  });
+}
+
+export function useAgentTasks(agentId: number) {
+  const { selectedProjectId } = useUiStore();
+
+  return useQuery({
+    queryKey: ['agent-tasks', agentId, selectedProjectId],
+    queryFn: () => api.get<{ tasks: AgentTask[] }>(`/dashboard/agents/${agentId}/tasks`),
     enabled: agentId > 0 && !!selectedProjectId,
   });
 }

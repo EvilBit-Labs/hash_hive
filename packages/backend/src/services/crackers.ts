@@ -301,12 +301,40 @@ export async function deleteCrackerBinary(
  * Returns negative if a < b, positive if a > b, 0 if equal.
  */
 export function compareCrackerVersions(a: string, b: string): number {
+  // Find the end of the longest leading numeric prefix matching
+  // [0-9]+(\.[0-9]+)*. The first character that doesn't fit becomes the start
+  // of the suffix. Implemented as a forward scan rather than a regex so the
+  // parsing decision is obviously linear-time and the trailing-suffix
+  // semantics are easy to read at a glance.
   const parse = (v: string): { nums: number[]; rest: string } => {
-    const match = v.match(/^(\d+(?:\.\d+)*)([\s\S]*)$/);
-    if (!match) return { nums: [], rest: v };
-    const numericPart = match[1] ?? '';
-    const nums = numericPart.split('.').map((n) => Number.parseInt(n, 10));
-    return { nums, rest: match[2] ?? '' };
+    let lastNumericEnd = 0;
+    let inNumber = false;
+    for (let i = 0; i < v.length; i++) {
+      const ch = v.charCodeAt(i);
+      const isDigit = ch >= 48 && ch <= 57;
+      const isDot = ch === 46;
+      if (isDigit) {
+        inNumber = true;
+        lastNumericEnd = i + 1;
+      } else if (isDot && inNumber) {
+        // A dot inside the numeric prefix is consumed but doesn't extend
+        // lastNumericEnd — if the next char isn't a digit, the dot becomes
+        // part of the suffix (so '6.2.' parses as nums=[6,2], rest='.').
+        inNumber = false;
+      } else {
+        break;
+      }
+    }
+    const numericPart = v.slice(0, lastNumericEnd);
+    const rest = v.slice(lastNumericEnd);
+    const nums =
+      numericPart.length === 0
+        ? []
+        : numericPart
+            .split('.')
+            .filter((s) => s.length > 0)
+            .map((s) => Number.parseInt(s, 10));
+    return { nums, rest };
   };
 
   const pa = parse(a);

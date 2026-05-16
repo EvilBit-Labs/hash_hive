@@ -1,8 +1,17 @@
-import { Cpu, Crosshair, Layers, LayoutDashboard, Monitor, Package, Trophy, X } from 'lucide-react';
+import {
+  Cpu,
+  Crosshair,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  Monitor,
+  Package,
+  Trophy,
+  X,
+} from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router';
 import logoSvg from '../../assets/logo.svg';
-import { useEvents } from '../../hooks/use-events';
 import { usePermissions } from '../../hooks/use-permissions';
 import { authClient } from '../../lib/auth-client';
 import { Permission, type PermissionKey } from '../../lib/permissions';
@@ -11,6 +20,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useUiStore } from '../../stores/ui';
 import { Select } from '../ui/select';
 import { ConnectionIndicator } from './connection-indicator';
+import { useEventsConnection } from './events-provider';
 
 const ICON_CLASS = 'h-4 w-4';
 
@@ -55,6 +65,11 @@ const navItems: readonly NavItem[] = [
     icon: <Cpu className={ICON_CLASS} aria-hidden="true" />,
     permission: Permission.CRACKER_MANAGE,
   },
+  {
+    label: 'Account',
+    href: '/account',
+    icon: <KeyRound className={ICON_CLASS} aria-hidden="true" />,
+  },
 ];
 
 /** Shared sidebar content used by both desktop and mobile variants. */
@@ -63,7 +78,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { projects, clearAuth } = useAuthStore();
   const { data: session } = authClient.useSession();
   const { selectedProjectId, setSelectedProject } = useUiStore();
-  const { connected } = useEvents();
+  const { connected } = useEventsConnection();
   const { can } = usePermissions();
 
   const visibleNavItems = useMemo(

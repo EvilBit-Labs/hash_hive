@@ -25,6 +25,13 @@ const envSchema = z.object({
   // BetterAuth (generate with: openssl rand -base64 32)
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.string().url().optional(),
+
+  // System health monitoring (issue #109)
+  HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  HEALTH_QUEUE_WARN_DEPTH: z.coerce.number().int().nonnegative().default(10_000),
+  HEALTH_QUEUE_WARN_FAILED: z.coerce.number().int().nonnegative().default(100),
+  HEALTH_DB_CONNECTION_WARN_PCT: z.coerce.number().min(0).max(100).default(80),
+  HEALTH_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

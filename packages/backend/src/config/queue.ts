@@ -8,6 +8,7 @@ export const QUEUE_NAMES = {
   HASH_LIST_PARSING: 'jobs-hash-list-parsing',
   TASK_GENERATION: 'jobs-task-generation',
   HEARTBEAT_MONITOR: 'jobs-heartbeat-monitor',
+  HEALTH_MONITOR: 'jobs-health-monitor',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

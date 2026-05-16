@@ -12,6 +12,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from './env.js';
+import { logger } from './logger.js';
 
 export const s3 = new S3Client({
   endpoint: env.S3_ENDPOINT,
@@ -80,14 +81,26 @@ export async function getPresignedUrl(
   );
 }
 
-export async function checkMinioHealth(): Promise<{
+export async function checkMinioHealth(signal?: AbortSignal): Promise<{
   status: 'connected' | 'disconnected';
   bucket: string;
 }> {
   try {
-    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }));
+    // Only attach `abortSignal` when actually provided —
+    // exactOptionalPropertyTypes refuses `{ abortSignal: undefined }`.
+    const opts = signal ? { abortSignal: signal } : undefined;
+    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }), opts);
     return { status: 'connected', bucket: env.S3_BUCKET };
-  } catch {
+  } catch (err) {
+    // Suppress noisy timeout aborts (the probe wrapper already logs and
+    // marks the component unhealthy). Log everything else server-side
+    // so a persistent S3/auth/bucket regression is visible in
+    // production logs, not silently masked behind a 'disconnected'
+    // reading.
+    const isAbort = err instanceof Error && err.name === 'AbortError';
+    if (!isAbort) {
+      logger.warn({ err, bucket: env.S3_BUCKET }, 'minio health check failed');
+    }
     return { status: 'disconnected', bucket: env.S3_BUCKET };
   }
 }

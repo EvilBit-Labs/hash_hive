@@ -1,0 +1,934 @@
+openapi: 3.1.0
+info:
+  title: HashHive Control API
+  description: |
+    Machine-readable REST API for CLI tooling, automation platforms, and CI
+    integrations. Authenticated by per-user API keys (format `cst_*`),
+    paginated with `offset`/`limit`, and emits RFC 9457 problem-details on
+    errors.
+
+    ## Changelog
+
+    ### 1.1.0 (issue #109)
+
+    Breaking change to `GET /health`:
+    - Top-level `status` enum widened from `[ok, degraded]` to
+      `[healthy, degraded, unhealthy]`.
+    - `services` field replaced with `components` (rich `SystemHealth`
+      shape including per-component `message`, `detail`, and
+      `durationMs`).
+    - New `queues` component added.
+
+    Consumers that pinned the old envelope must update before upgrading.
+    No deprecation window: this surface was introduced in 1.0.0 and has
+    no known external automation consumers yet.
+  version: 1.1.0
+
+servers:
+  - url: /api/v1/control
+    description: Control API base path
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health probe (authenticated)
+      description: |
+        Reports the unified system-health snapshot. Issue #109 introduced
+        a single `getSystemHealth()` service that backs three endpoints,
+        but they expose two different envelope shapes:
+
+        - `/api/v1/control/health` (this endpoint) and
+          `/api/v1/dashboard/health` return the rich `SystemHealth`
+          shape — three-tier `status`, `components` map, per-component
+          `message`, `detail`, and `durationMs`.
+        - The public `/health` returns a backward-compatible legacy
+          envelope: two-tier `status: ok | degraded`, a `services` map,
+          and an additive `aggregateStatus` field carrying the full
+          three-tier signal. This shape exists so older load-balancer
+          probes that read `services.{database,redis,minio}.status`
+          keep working.
+
+        Authenticated control consumers receive the full shape including
+        connection counts, queue depths, and probe durations.
+      tags: [Health]
+      security:
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: System health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemHealth"
+        "401":
+          $ref: "#/components/responses/AuthError"
+
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List projects the user belongs to
+      tags: [Projects]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedProjects"
+        "401":
+          $ref: "#/components/responses/AuthError"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      summary: Get a single project
+      description: |
+        Returns the project record when the caller is a member.
+        Non-members get `404 not_found` (not 403) so the existence of
+        project ids is not enumerable through this endpoint.
+      tags: [Projects]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Project record
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users/me:
+    get:
+      operationId: getMe
+      summary: Authenticated user's profile
+      tags: [Users]
+      security:
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: User record
+        "401":
+          $ref: "#/components/responses/AuthError"
+
+  /users:
+    get:
+      operationId: listUsers
+      summary: List users (admin on active project)
+      tags: [Users]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated users
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: Get a single user
+      tags: [Users]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: User record
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /hashlists:
+    get:
+      operationId: listHashLists
+      summary: List hash lists in the active project
+      tags: [HashLists]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated hash lists
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /hashlists/{id}:
+    get:
+      operationId: getHashList
+      summary: Get a hash list
+      tags: [HashLists]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Hash list record
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /hashlists/{id}/stats:
+    get:
+      operationId: getHashListStats
+      summary: Crack statistics for a hash list
+      tags: [HashLists]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Stats payload
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /stats:
+    get:
+      operationId: getStats
+      summary: Aggregate dashboard stats for the active project
+      tags: [Stats]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Stats payload
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /resources/{kind}:
+    get:
+      operationId: listResources
+      summary: List resources of a given kind
+      tags: [Resources]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [wordlists, rulelists, masklists]
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated resources
+
+  /resources/{kind}/{id}:
+    get:
+      operationId: getResource
+      summary: Get a single resource
+      tags: [Resources]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [wordlists, rulelists, masklists]
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Resource record
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      summary: List campaigns
+      tags: [Campaigns]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [draft, running, paused, completed, cancelled]
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated campaigns
+    post:
+      operationId: createCampaign
+      summary: Create a campaign
+      tags: [Campaigns]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, hashListId]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                hashListId:
+                  type: integer
+                priority:
+                  type: integer
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "201":
+          description: Created campaign
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      summary: Get a campaign
+      tags: [Campaigns]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Campaign record
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateCampaign
+      summary: Update a campaign
+      tags: [Campaigns]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: integer
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Updated campaign
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /campaigns/{id}/transition:
+    post:
+      operationId: transitionCampaign
+      summary: Transition a campaign to a new status
+      tags: [Campaigns]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetStatus]
+              properties:
+                targetStatus:
+                  type: string
+                  enum: [draft, running, paused, completed, cancelled]
+      responses:
+        "200":
+          description: Updated campaign
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /attacks:
+    get:
+      operationId: listAttacks
+      summary: List attacks within a campaign
+      tags: [Attacks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - in: query
+          name: campaignId
+          required: true
+          schema:
+            type: integer
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated attacks for the named campaign
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, offset, limit]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+                  offset:
+                    type: integer
+                  limit:
+                    type: integer
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createAttack
+      summary: Create an attack on a campaign
+      tags: [Attacks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [campaignId, mode]
+              properties:
+                campaignId:
+                  type: integer
+                mode:
+                  type: integer
+                hashTypeId:
+                  type: integer
+                wordlistId:
+                  type: integer
+                rulelistId:
+                  type: integer
+                masklistId:
+                  type: integer
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "201":
+          description: Created attack
+
+  /attacks/{id}:
+    get:
+      operationId: getAttack
+      summary: Get an attack
+      tags: [Attacks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Attack record
+    patch:
+      operationId: updateAttack
+      summary: Update an attack
+      tags: [Attacks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Updated attack
+    delete:
+      operationId: deleteAttack
+      summary: Delete an attack
+      tags: [Attacks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "204":
+          description: Deleted
+
+  /agents:
+    get:
+      operationId: listAgents
+      summary: List agents in the active project
+      tags: [Agents]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [online, offline, busy, error, benchmarked]
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated agents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAgents"
+
+  /agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get an agent
+      tags: [Agents]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Agent record
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateAgent
+      summary: Update an agent (admin only)
+      tags: [Agents]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Updated agent
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks for a given campaign
+      tags: [Tasks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdHeader"
+        - in: query
+          name: campaignId
+          required: true
+          schema:
+            type: integer
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "401":
+          $ref: "#/components/responses/AuthError"
+        "200":
+          description: Paginated tasks
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get a task
+      tags: [Tasks]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/ProjectIdHeader"
+      responses:
+        "200":
+          description: Task record
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    BearerApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: cst_<userId>_<random>
+
+  parameters:
+    Offset:
+      in: query
+      name: offset
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Limit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    ProjectIdHeader:
+      in: header
+      name: X-Project-Id
+      description: Active project the request operates against
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    PaginatedAgents:
+      description: |
+        Matches the flat `{ items, total, offset, limit }` envelope produced
+        by `paginate()` in packages/backend/src/lib/pagination.ts. The Control
+        API intentionally uses offset/limit (not page/pageSize) because it
+        composes more naturally with scripted automation.
+      type: object
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentListItem"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    AgentListItem:
+      description: |
+        Agent row enriched with dashboard summary fields. `errorCount24h`,
+        `worstSeverity24h`, and `currentTask` are computed server-side from
+        `agent_errors` rows in the last 24 hours and the agent's active task
+        assignment. Producers may also surface these fields through other
+        surfaces (notably the dashboard) — the shape is intentionally
+        identical across surfaces.
+      type: object
+      required:
+        [
+          id,
+          name,
+          status,
+          projectId,
+          createdAt,
+          errorCount24h,
+          worstSeverity24h,
+          currentTask,
+        ]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+        lastSeenAt:
+          # OpenAPI 3.1 — `nullable: true` is dropped from the vocabulary;
+          # use JSON Schema type-array unions instead so generated clients
+          # see the null possibility.
+          type: [string, "null"]
+          format: date-time
+        projectId:
+          type: integer
+        capabilities:
+          type: [object, "null"]
+          additionalProperties: true
+        hardwareProfile:
+          type: [object, "null"]
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        errorCount24h:
+          type: integer
+          description: Count of warning+fatal severities in the last 24 hours.
+        worstSeverity24h:
+          type: [string, "null"]
+          enum: [warning, fatal, null]
+          description: |
+            Highest severity tier observed in the last 24 hours, mapped to the
+            dashboard's three-state badge. Lower-importance severities
+            (info/debug/notice/...) are excluded.
+        currentTask:
+          description: |
+            Active task assignment for the agent, if any. `null` when the
+            agent has no `assigned` or `running` task — pending tasks are
+            intentionally not surfaced here (they appear on the detail-page
+            tasks endpoint).
+          type: [object, "null"]
+          required: [id, campaignId, campaignName, attackId, attackMode, status]
+          properties:
+            id:
+              type: integer
+            campaignId:
+              type: integer
+            campaignName:
+              type: string
+            attackId:
+              type: integer
+            attackMode:
+              type: integer
+            status:
+              type: string
+
+    SystemHealth:
+      type: object
+      description: |
+        Unified system-health snapshot returned by all three health surfaces
+        (issue #109). Aggregate `status` follows worst-of: `unhealthy` if any
+        component is unhealthy, else `degraded` if any is degraded, else
+        `healthy`.
+      required: [status, timestamp, version, components]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+        components:
+          type: object
+          required: [database, redis, minio, queues]
+          properties:
+            database:
+              $ref: "#/components/schemas/ComponentHealth"
+            redis:
+              $ref: "#/components/schemas/ComponentHealth"
+            minio:
+              $ref: "#/components/schemas/ComponentHealth"
+            queues:
+              $ref: "#/components/schemas/ComponentHealth"
+
+    ComponentHealth:
+      description: |
+        Discriminated by `status`. Healthy components may omit `message`;
+        degraded and unhealthy components must include one. Mirrors the
+        `ProbeResult` discriminated union in `services/health.ts`.
+      oneOf:
+        - $ref: "#/components/schemas/HealthyComponent"
+        - $ref: "#/components/schemas/NonHealthyComponent"
+      discriminator:
+        propertyName: status
+        mapping:
+          healthy: "#/components/schemas/HealthyComponent"
+          degraded: "#/components/schemas/NonHealthyComponent"
+          unhealthy: "#/components/schemas/NonHealthyComponent"
+
+    HealthyComponent:
+      type: object
+      required: [status, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        message:
+          type: string
+          description: Optional note from the probe; usually omitted.
+        detail:
+          type: object
+          description: Probe-specific structured detail (shape varies per component).
+        durationMs:
+          type: integer
+          description: Probe execution time in milliseconds.
+
+    NonHealthyComponent:
+      type: object
+      required: [status, message, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [degraded, unhealthy]
+        message:
+          type: string
+          description: |
+            Human-readable summary of why this component is not healthy.
+            Required for degraded/unhealthy so consumers always have a
+            useful error string to render.
+        detail:
+          type: object
+          description: |
+            Probe-specific structured detail (e.g., `{connectionsUsed,
+            connectionsMax, connectionsPct}` for database, `{queues}` map
+            for queues). Shape varies per component.
+        durationMs:
+          type: integer
+          description: Probe execution time in milliseconds.
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details envelope
+      required: [type, title, status, detail, instance]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            required: [path, code, message]
+            properties:
+              path:
+                type: string
+              code:
+                type: string
+              message:
+                type: string
+
+    PaginatedProjects:
+      type: object
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+  responses:
+    AuthError:
+      description: Authentication failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Caller lacks permission
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Target resource was not found or is not visible to the caller
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ValidationError:
+      description: Request body or query parameters failed validation
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: Operation conflicts with current resource state
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Server-side failure that is not the caller's fault (e.g., downstream task generation failed)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: Transient infrastructure issue (e.g., queue down); the operation is safe to retry
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"

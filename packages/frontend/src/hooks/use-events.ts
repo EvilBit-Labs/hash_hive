@@ -5,10 +5,12 @@ import { useUiStore } from '../stores/ui';
 
 export type EventType =
   | 'agent_status'
+  | 'agent_error'
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
-  | 'resource_update';
+  | 'resource_update'
+  | 'system_health';
 
 export interface AppEvent {
   type: EventType;
@@ -66,6 +68,7 @@ export function useEvents(options: UseEventsOptions = {}) {
         reconnectAttemptsRef.current = 0;
       };
 
+      // Project-scoped query keys: invalidated with [key, selectedProjectId].
       const invalidationKeys: Record<string, string[]> = {
         agent_status: ['agents', 'dashboard-stats'],
         campaign_status: ['campaigns', 'dashboard-stats'],
@@ -80,21 +83,118 @@ export function useEvents(options: UseEventsOptions = {}) {
         resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
       };
 
+      // Per-agent query key prefixes. We invalidate `[prefix, agentId]`
+      // so only the affected agent's caches refresh — a fleet-wide event
+      // stream doesn't fan out into every detail tab. The exact cache
+      // shape lives in use-dashboard.ts (`useAgent`, `useAgentErrors`,
+      // `useAgentTasks`).
+      const agentScopedKeysByEvent: Record<string, string[]> = {
+        agent_status: ['agent', 'agent-errors', 'agent-tasks'],
+        agent_error: ['agent-errors', 'agent'],
+        task_update: ['agent-tasks', 'agent'],
+      };
+
+      // System-scoped query keys: invalidated with just [key], no project.
+      // Issue #109: system_health is system-wide; the query key has no
+      // projectId component, so the project-scoped invalidation path
+      // would never match it.
+      const systemInvalidationKeys: Record<string, string[]> = {
+        system_health: ['system-health'],
+      };
+
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as Record<string, unknown>;
+          // Validate envelope shape before any cast or invalidation.
+          // Without this guard, a non-object payload or one missing a
+          // string `type` would still flow through the casts below and
+          // hit invalidateQueries / onEvent with malformed data.
+          const parsed: unknown = JSON.parse(event.data);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            typeof (parsed as Record<string, unknown>)['type'] !== 'string'
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid envelope');
+            return;
+          }
+          const data = parsed as Record<string, unknown>;
           if (data['type'] === 'connected' || data['type'] === 'pong') return;
 
-          const keys = invalidationKeys[data['type'] as string];
-          if (keys) {
-            for (const key of keys) {
+          // Validate the rest of the envelope before invalidation /
+          // callback dispatch. The type guard above only pinned `type`;
+          // a frame with `type: 'agent_status'` but missing
+          // `projectId`/`timestamp`/`data` would still cast through to
+          // AppEvent without these checks.
+          if (
+            typeof data['projectId'] !== 'number' ||
+            typeof data['timestamp'] !== 'string' ||
+            typeof data['data'] !== 'object' ||
+            data['data'] === null
+          ) {
+            // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+            console.warn('[useEvents] dropped malformed WS frame: invalid event payload');
+            return;
+          }
+
+          const eventType = data['type'] as string;
+          const projectKeys = invalidationKeys[eventType];
+          if (projectKeys) {
+            for (const key of projectKeys) {
               queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] });
             }
           }
+          const agentScopedKeys = agentScopedKeysByEvent[eventType];
+          if (agentScopedKeys) {
+            const payload = data['data'] as Record<string, unknown>;
+            const rawAgentId = payload['agentId'];
+            const agentId = typeof rawAgentId === 'number' ? rawAgentId : null;
+            if (agentId !== null) {
+              for (const key of agentScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key, agentId] });
+              }
+            } else {
+              // No agentId on the payload — fall back to prefix invalidation
+              // so we still refresh, but log so we know the producer should
+              // be carrying agentId.
+              //
+              // Constraint the event-type value before logging: WS payload is
+              // attacker-influenced, so we treat eventType as data (not part
+              // of the format string) and only log a known-shape allowlist of
+              // characters to avoid log-injection vectors flagged by CodeQL.
+              const safeEventType =
+                typeof eventType === 'string'
+                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                  : 'unknown';
+              // biome-ignore lint/suspicious/noConsole: protocol drift signal
+              console.warn(
+                '[useEvents] event missing agentId; falling back to broad invalidation',
+                { eventType: safeEventType }
+              );
+              for (const key of agentScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key] });
+              }
+            }
+          }
+          const systemKeys = systemInvalidationKeys[eventType];
+          if (systemKeys) {
+            for (const key of systemKeys) {
+              queryClient.invalidateQueries({ queryKey: [key] });
+            }
+          }
 
-          onEventRef.current?.(data as unknown as AppEvent);
-        } catch {
-          // Ignore malformed messages
+          onEventRef.current?.({
+            type: data['type'] as EventType,
+            projectId: data['projectId'] as number,
+            data: data['data'] as Record<string, unknown>,
+            timestamp: data['timestamp'] as string,
+          });
+        } catch (err) {
+          // Surface schema drift between server and client to console.
+          // Silently dropping the frame would mask backend events from
+          // the dashboard with no diagnostic signal.
+          // biome-ignore lint/suspicious/noConsole: client-side observability has no structured logger
+          console.warn('[useEvents] dropped malformed WS frame', err);
         }
       };
 
@@ -128,6 +228,10 @@ export function useEvents(options: UseEventsOptions = {}) {
   }, [session, selectedProjectId, stableTypes, queryClient]);
 
   // Polling fallback: invalidate queries every 30s when disconnected
+  // from the WebSocket. Includes the agent-detail keys (broadly, since
+  // no event payload is available during polling) so a disconnected
+  // detail page still refreshes its tasks/errors/agent caches instead
+  // of going stale until the WS reconnects.
   useEffect(() => {
     if (!polling) return;
 
@@ -135,6 +239,9 @@ export function useEvents(options: UseEventsOptions = {}) {
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats', selectedProjectId] });
       queryClient.invalidateQueries({ queryKey: ['agents', selectedProjectId] });
       queryClient.invalidateQueries({ queryKey: ['campaigns', selectedProjectId] });
+      queryClient.invalidateQueries({ queryKey: ['agent'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-errors'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-tasks'] });
     }, 30_000);
 
     return () => clearInterval(interval);

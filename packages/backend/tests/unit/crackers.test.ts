@@ -60,6 +60,26 @@ describe('compareCrackerVersions', () => {
     expect(compareCrackerVersions('6.2.7', '6.2.6+125')).toBeGreaterThan(0);
   });
 
+  test('parser edge: trailing dot is moved to suffix, not consumed as numeric', () => {
+    // '6.2.' should parse as nums=[6,2], suffix='.'. Compared against '6.2'
+    // (nums=[6,2], suffix=''), the empty-suffix wins per the comparator's
+    // tiebreak policy.
+    expect(compareCrackerVersions('6.2', '6.2.')).toBeLessThan(0);
+    expect(compareCrackerVersions('6.2.', '6.2')).toBeGreaterThan(0);
+  });
+
+  test('parser edge: non-digit suffix after a numeric dot does not bleed into nums', () => {
+    // '6.2.6.beta' must parse the numeric prefix as [6,2,6] with '.beta' as
+    // suffix; the comparator should rank '6.2.6.beta' above plain '6.2.6'
+    // because non-empty suffixes lose tiebreaks (`if pa.rest === '' return -1`).
+    expect(compareCrackerVersions('6.2.6', '6.2.6.beta')).toBeLessThan(0);
+  });
+
+  test('parser edge: leading zeros do not alter numeric ordering', () => {
+    expect(compareCrackerVersions('06.02', '6.2')).toBe(0);
+    expect(compareCrackerVersions('06.02', '6.3')).toBeLessThan(0);
+  });
+
   test('reverse-argument sort produces highest-version-first ordering', () => {
     // This mirrors getLatestCracker: rows.sort((a, b) => compareCrackerVersions(b.version, a.version)).
     // A regression that swapped the argument order would always return the oldest binary.

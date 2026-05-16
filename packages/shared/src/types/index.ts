@@ -1,7 +1,11 @@
 import type { z } from 'zod';
 import type {
+  agentCurrentTaskSchema,
+  agentHardwareProfileSchema,
   agentHeartbeatSchema,
   agentStatusSchema,
+  agentTaskSummarySchema,
+  agentWorstSeveritySchema,
   benchmarkSubmissionSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
@@ -184,8 +188,41 @@ export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>;
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>;
 export type HashCandidate = z.infer<typeof hashCandidateSchema>;
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>;
+export type AgentHardwareProfile = z.infer<typeof agentHardwareProfileSchema>;
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>;
 export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>;
 export type InstantiateAttackTemplateResponse = z.infer<
   typeof instantiateAttackTemplateResponseSchema
 >;
+
+// ─── Control API ────────────────────────────────────────────────────
+
+/**
+ * Metadata for a user's Control API key. Discriminated on `hasKey` so an
+ * inconsistent value (`hasKey: true` with `prefix: null`) cannot be
+ * constructed at compile time. Backend issues this from `services/auth`;
+ * frontend reads it via `use-api-key`.
+ */
+export type ApiKeyMetadata =
+  | { readonly hasKey: false }
+  | { readonly hasKey: true; readonly prefix: string; readonly lastUsedAt: string | null };
+
+/**
+ * Response from `POST /api/v1/dashboard/auth/me/api-key` (issue/rotate).
+ * The raw `token` is shown to the user exactly once and is never
+ * persisted server-side; only `metadata` is durable.
+ */
+export interface IssueApiKeyResponse {
+  readonly token: string;
+  readonly metadata: Extract<ApiKeyMetadata, { hasKey: true }>;
+}
+
+// ─── Agent List / Detail UI shared shapes ───────────────────────────
+// All three shapes below are derived from the Zod schemas in
+// `schemas/index.ts` per the project's "no manual interfaces" rule —
+// backend and frontend share the same inferred types so the wire
+// contract is enforceable end-to-end.
+
+export type AgentWorstSeverity = z.infer<typeof agentWorstSeveritySchema>;
+export type AgentCurrentTask = z.infer<typeof agentCurrentTaskSchema>;
+export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>;

@@ -1,5 +1,5 @@
 import { attacks, campaigns, tasks } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
@@ -303,6 +303,29 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
 
 export async function listAttacks(campaignId: number) {
   return db.select().from(attacks).where(eq(attacks.campaignId, campaignId)).orderBy(attacks.id);
+}
+
+/**
+ * Paginated variant of `listAttacks` for the Control API. Same shape
+ * as the other paginated services (`{ items, total }` via `LIMIT/
+ * OFFSET` + `count(*)`). Deterministic order by `attacks.id` ascending.
+ */
+export async function listAttacksPaginated(
+  campaignId: number,
+  opts: { limit: number; offset: number }
+) {
+  const whereClause = eq(attacks.campaignId, campaignId);
+  const [items, countResult] = await Promise.all([
+    db
+      .select()
+      .from(attacks)
+      .where(whereClause)
+      .orderBy(asc(attacks.id))
+      .limit(opts.limit)
+      .offset(opts.offset),
+    db.select({ value: count() }).from(attacks).where(whereClause),
+  ]);
+  return { items, total: Number(countResult[0]?.value ?? 0) };
 }
 
 export async function getAttackById(id: number) {

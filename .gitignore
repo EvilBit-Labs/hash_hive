@@ -52,7 +52,6 @@ CLAUDE.md
 .claude/
 .cursor/
 .codex/
-.impeccable.md
 .kiro/hooks/
 .kiro/specs/mern-migration/.config.kiro
 .augment/

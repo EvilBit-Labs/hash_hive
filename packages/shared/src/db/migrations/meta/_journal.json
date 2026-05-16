@@ -36,6 +36,20 @@
       "when": 1777985687524,
       "tag": "0004_cynical_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1778070485311,
+      "tag": "0005_regular_gressill",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779066400000,
+      "tag": "0006_agent_errors_composite_index",
+      "breakpoints": true
     }
   ]
 }
