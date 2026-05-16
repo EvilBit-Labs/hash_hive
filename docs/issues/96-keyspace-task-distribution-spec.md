@@ -138,7 +138,8 @@ When `reassignStaleTasks` finds a stale task with non-zero
 
 1. Read the reported `keyspaceProgress` (units already completed).
 2. Trim the task's `workRange.start` to `start + keyspaceProgress`
-   (or move to `failed` if progress is suspect — > 100%).
+   (or move to `failed` when `keyspaceProgress >= workRange.total`,
+   covering both the un-acked completion case and true overruns).
 3. If the remaining range is still larger than the fleet's median
    benchmark × 60s, split it into smaller follow-up tasks. Otherwise
    leave it as one re-pending task.
@@ -195,7 +196,7 @@ TDD throughout. Tests first, implementation second.
 1. Extend `reassignStaleTasks` tests to cover:
    - Stale task with 0% progress → reset to pending unchanged
    - Stale task with 40% progress → workRange trimmed
-   - Stale task with > 100% progress → marked `failed`
+   - Stale task with progress `>= workRange.total` → marked `failed`
    - Long remaining range → re-chunked into multiple pending tasks
 2. Implement the rebalance branch in `reassignStaleTasks`.
 
