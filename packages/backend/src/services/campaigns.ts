@@ -1,12 +1,19 @@
 import { attacks, campaigns, tasks } from '@hashhive/shared';
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
+import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
-const CHUNK_SIZE = 10_000_000;
+// Use the smallest possible runtime chunk size as the estimator's basis so
+// the chunk-count estimate is an upper bound on what generateTasksForAttack
+// will actually emit. pickChunkSize can clamp as low as MIN_CHUNK_SIZE for
+// slow fleets, so using the legacy 10M constant would let attacks slip
+// through the inline gate and then materialize 4 orders of magnitude more
+// rows in the request path.
+const CHUNK_SIZE = Number(MIN_CHUNK_SIZE);
 
 // Dynamic import getters — break circular dependency (campaigns ↔ tasks) while
 // remaining testable. bun:test's mock.module cannot override already-cached
@@ -19,16 +26,103 @@ export const _deps = {
 };
 
 /**
+ * Decide whether an attack with a null `keyspace` is *computable* by
+ * `generateTasksForAttack` at generation time. The keyspace calculator
+ * needs mode-specific inputs:
+ *   - mode 0 (straight): wordlist (rules optional)
+ *   - mode 1 (combination): two wordlists — schema only has one, so
+ *     this mode is never auto-computable today
+ *   - mode 3 (mask): a mask string in advancedConfiguration
+ *   - modes 6 / 7 (hybrid): wordlist + mask
+ *
+ * When the inputs are present, the computed keyspace may dwarf the
+ * stored "1 task" estimate (e.g., `?a^12` ~ 5.4e23, lifted by
+ * `MAX_CHUNKS_PER_ATTACK = 100_000` chunks). Routing such attacks to
+ * async generation keeps the request path from blocking on 100k+
+ * inline INSERTs.
+ */
+function isAttackKeyspaceComputable(atk: {
+  mode?: number | null | undefined;
+  wordlistId?: number | null | undefined;
+  masklistId?: number | null | undefined;
+  advancedConfiguration?: unknown;
+}): boolean {
+  if (atk.mode === undefined || atk.mode === null) return false;
+  const mask =
+    atk.advancedConfiguration &&
+    typeof atk.advancedConfiguration === 'object' &&
+    typeof (atk.advancedConfiguration as Record<string, unknown>)['mask'] === 'string'
+      ? ((atk.advancedConfiguration as Record<string, unknown>)['mask'] as string)
+      : null;
+  switch (atk.mode) {
+    case 0:
+      return atk.wordlistId != null;
+    case 3:
+      return mask !== null && mask.length > 0;
+    case 6:
+    case 7:
+      return atk.wordlistId != null && mask !== null && mask.length > 0;
+    default:
+      return false;
+  }
+}
+
+/**
  * Estimates total task count and returns the generation strategy.
  * Exported for direct unit testing of the threshold boundary.
+ *
+ * Keyspaces are parsed via BigInt so mask-attack values past
+ * `Number.MAX_SAFE_INTEGER` (e.g., `?a^12` is ~5.4e23) don't lose
+ * precision before the chunk-count division.
+ *
+ * Null/empty keyspaces are routed by `isAttackKeyspaceComputable`:
+ * computable attacks force async (they may generate up to
+ * MAX_CHUNKS_PER_ATTACK chunks at run time), and the legacy "treat
+ * as 1 task" behavior is preserved only for attacks where the
+ * calculator would also fall through to a single-placeholder task.
  */
 export function resolveGenerationStrategy(
-  attackList: ReadonlyArray<{ keyspace: string | null }>
+  attackList: ReadonlyArray<{
+    keyspace: string | null;
+    mode?: number | null | undefined;
+    wordlistId?: number | null | undefined;
+    masklistId?: number | null | undefined;
+    advancedConfiguration?: unknown;
+  }>
 ): 'inline' | 'async' {
   let estimatedTasks = 0;
+  const chunkSize = BigInt(CHUNK_SIZE);
   for (const atk of attackList) {
-    const keyspace = Number.parseInt(atk.keyspace ?? '0', 10);
-    estimatedTasks += keyspace <= 0 ? 1 : Math.ceil(keyspace / CHUNK_SIZE);
+    const raw = atk.keyspace?.trim();
+    if (!raw || raw === '0') {
+      // Null / zero / blank keyspace.
+      if (isAttackKeyspaceComputable(atk)) {
+        // generateTasksForAttack will compute the real keyspace and
+        // may generate up to MAX_CHUNKS_PER_ATTACK chunks inline.
+        // Force async so the request path doesn't block on the burst.
+        return 'async';
+      }
+      // Calculator will fall through to a single placeholder task.
+      estimatedTasks += 1;
+      continue;
+    }
+    let bigKs: bigint;
+    try {
+      bigKs = BigInt(raw);
+    } catch {
+      estimatedTasks += 1;
+      continue;
+    }
+    if (bigKs <= 0n) {
+      estimatedTasks += 1;
+      continue;
+    }
+    const chunks = bigKs / chunkSize + (bigKs % chunkSize === 0n ? 0n : 1n);
+    // Saturate at INLINE_GENERATION_THRESHOLD so the comparison stays
+    // within safe-Number range even for astronomical keyspaces.
+    estimatedTasks +=
+      chunks > BigInt(INLINE_GENERATION_THRESHOLD) ? INLINE_GENERATION_THRESHOLD : Number(chunks);
+    if (estimatedTasks >= INLINE_GENERATION_THRESHOLD) return 'async';
   }
   return estimatedTasks < INLINE_GENERATION_THRESHOLD ? 'inline' : 'async';
 }
@@ -393,11 +487,48 @@ export async function deleteAttack(id: number) {
 
 export async function updateCampaignProgress(campaignId: number) {
   // Single aggregation query: total tasks, completed count, and clamped running progress.
+  //
+  // `progress.keyspaceProgress` is the agent-reported count of keyspace units
+  // already cracked within a task's `workRange.total`. We divide to get a
+  // fraction in [0, 1] (LEAST clamps reports that overrun the chunk to 1.0),
+  // then SUM the fractions across running tasks for the campaign's running
+  // contribution. The earlier `LEAST(keyspaceProgress, 1)` formulation
+  // misread the field as already-a-fraction; the spec at
+  // docs/issues/96-keyspace-task-distribution-spec.md is the contract.
   const [agg] = await db
     .select({
       totalTasks: sql<number>`count(*)`,
       completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
-      runningProgress: sql<number>`COALESCE(SUM(GREATEST(0, LEAST(COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0), 1))) FILTER (WHERE ${tasks.status} = 'running'), 0)`,
+      // CASE WHEN guards the divide-by-zero case explicitly: a placeholder
+      // task created without a real keyspace has `workRange.total = 0`, and
+      // letting that flow into the division produces NULL, which
+      // `LEAST(NULL, 1) = 1` would silently count as a 100%-complete task.
+      // Default to 0 progress for any task with total <= 0.
+      //
+      // Use ::numeric (arbitrary-precision) instead of ::float for the
+      // division: mask-attack keyspaces routinely exceed 2^53 - 1, and
+      // ::float would round large numerators / denominators to the
+      // nearest 64-bit double - a near-complete task could appear as
+      // 1.0 long before the agent actually finished. We cast back to
+      // double precision at the outermost boundary so the result still
+      // fits the `runningProgress: number` JS field.
+      runningProgress: sql<number>`(COALESCE(
+        SUM(
+          CASE
+            WHEN COALESCE((${tasks.workRange}->>'total')::numeric, 0) > 0 THEN
+              GREATEST(
+                0::numeric,
+                LEAST(
+                  COALESCE((${tasks.progress}->>'keyspaceProgress')::numeric, 0)
+                    / (${tasks.workRange}->>'total')::numeric,
+                  1::numeric
+                )
+              )
+            ELSE 0::numeric
+          END
+        ) FILTER (WHERE ${tasks.status} = 'running'),
+        0::numeric
+      ))::double precision`,
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId));

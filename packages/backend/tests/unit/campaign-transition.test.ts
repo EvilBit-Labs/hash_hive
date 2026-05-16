@@ -10,7 +10,11 @@
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 
-const CHUNK_SIZE = 10_000_000;
+// Matches resolveGenerationStrategy's worst-case estimator basis
+// (MIN_CHUNK_SIZE). The estimator switched from a 10M legacy constant to
+// MIN_CHUNK_SIZE = 1000 so the chunk-count estimate is an upper bound on
+// what generateTasksForAttack actually emits at runtime.
+const CHUNK_SIZE = 1000;
 
 // ─── Spies ──────────────────────────────────────────────────────────
 

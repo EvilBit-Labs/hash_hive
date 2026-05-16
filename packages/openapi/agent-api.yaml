@@ -374,9 +374,32 @@ components:
           type: object
           properties:
             start:
-              type: integer
+              oneOf:
+                - type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                - type: string
+                  pattern: '^[0-9]+$'
+                  maxLength: 64
+              description: Keyspace start position. Non-negative integer in JS-safe range (max 2^53 - 1 = 9007199254740991); decimal-string when the value exceeds that (mask attacks with large keyspaces). Clients must accept either form and coerce to a bigint-equivalent before arithmetic; integer values above the safe-integer maximum are forbidden because precision would already be lost.
             end:
-              type: integer
+              oneOf:
+                - type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                - type: string
+                  pattern: '^[0-9]+$'
+                  maxLength: 64
+              description: Keyspace end position. Same number-or-string rule as start.
+            total:
+              oneOf:
+                - type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                - type: string
+                  pattern: '^[0-9]+$'
+                  maxLength: 64
+              description: Total keyspace units in this chunk (end - start). Same number-or-string rule as start.
             agentSpeedHs:
               type: integer
               minimum: 0
@@ -408,7 +431,14 @@ components:
           type: object
           properties:
             keyspaceProgress:
-              type: number
+              oneOf:
+                - type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                - type: string
+                  pattern: '^[0-9]+$'
+                  maxLength: 64
+              description: Absolute count of keyspace units already cracked within the task's `workRange.total`. Non-negative integer in JS-safe range (max 2^53 - 1 = 9007199254740991); decimal-string of digits only when the value exceeds that. Clients must NOT send integer values above the safe-integer maximum - precision is already lost by the time they cross the wire. Server divides by `workRange.total` to derive the [0, 1] fraction the campaign aggregate consumes.
             speed:
               type: number
             temperature:
