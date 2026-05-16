@@ -338,11 +338,34 @@ export const agentTaskSummarySchema = z.object({
  * `warning | error | fatal` for back-compat with agents posting generic
  * errors): heartbeats classify into the explicit `warning | fatal` split
  * the Agent Heartbeat ticket mandates.
+ *
+ * Size caps are enforced at the boundary: a compromised agent token
+ * would otherwise let an attacker bloat `agent_errors` with multi-MB
+ * rows every ~30s. The caps mirror similar bounded payloads elsewhere
+ * in the agent API surface.
+ *
+ * `HEARTBEAT_ERROR_CONTEXT_MAX_CHARS` bounds the JSON-serialized
+ * `context` field in *characters* (not bytes) because `TextEncoder`
+ * isn't part of the ES2022 lib the shared package targets. Worst-case
+ * UTF-8 expansion is ~4x, so a 16 K-char cap still keeps row sizes
+ * well under jsonb-friendly limits.
  */
+export const HEARTBEAT_ERROR_MESSAGE_MAX = 4096;
+export const HEARTBEAT_ERROR_CONTEXT_MAX_CHARS = 16 * 1024;
+
 export const agentHeartbeatErrorSchema = z.object({
   severity: z.enum(['warning', 'fatal']),
-  message: z.string().min(1),
-  context: z.record(z.string(), z.unknown()).optional(),
+  message: z.string().min(1).max(HEARTBEAT_ERROR_MESSAGE_MAX),
+  context: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .refine(
+      (value) =>
+        value === undefined || JSON.stringify(value).length <= HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+      {
+        message: `context exceeds ${HEARTBEAT_ERROR_CONTEXT_MAX_CHARS} characters when serialized`,
+      }
+    ),
 });
 
 /**

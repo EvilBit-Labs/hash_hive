@@ -284,6 +284,61 @@ components:
               type: number
             temperature:
               type: number
+        currentTask:
+          type: object
+          description: |
+            Telemetry view of the task the agent is currently executing.
+            Accepted so a fatal heartbeat can attribute the failure to a
+            specific task, but `progress`, `speed`, and `temperature` are
+            informational only — canonical task progress is reported via
+            `POST /api/v1/agent/tasks/{id}/report` and is not written back
+            to the `tasks` table from heartbeat handling.
+          required: [taskId, progress, speed]
+          properties:
+            taskId:
+              type: integer
+              minimum: 1
+            progress:
+              type: number
+              minimum: 0
+            speed:
+              type: number
+            temperature:
+              type: number
+        error:
+          type: object
+          description: |
+            Optional heartbeat-borne error. **Important contract**: the
+            heartbeat `error` block and the standalone `POST /errors`
+            endpoint are non-redundant channels — agents post a given
+            error event via one channel OR the other, never both. The
+            server has no idempotency key and cannot dedupe across
+            channels, so double-posting produces duplicate `agent_errors`
+            rows. A fatal-severity heartbeat error also forces the agent
+            into `status='error'` and fails the agent's active tasks.
+          required: [severity, message]
+          properties:
+            severity:
+              type: string
+              enum: [warning, fatal]
+              description: |
+                Narrower than `POST /errors`, which accepts
+                `warning|error|fatal` for back-compat. Heartbeats classify
+                strictly into warning (logged, task continues) or fatal
+                (logged, task failed, agent status='error').
+            message:
+              type: string
+              minLength: 1
+              maxLength: 4096
+            context:
+              type: object
+              additionalProperties: true
+              description: |
+                Free-form JSON context (stack trace, hashcat output,
+                system metrics). Capped at 16 KiB characters when
+                serialized — payloads larger than that are rejected with
+                400. Do not include secrets (tokens, passwords) —
+                operators with project access can read this field.
 
     EngineDescriptor:
       type: object
@@ -462,17 +517,27 @@ components:
     AgentError:
       type: object
       required: [severity, message]
+      description: |
+        Standalone error payload for `POST /api/v1/agent/errors`. Accepts
+        the wider `warning|error|fatal` severity enum (for back-compat
+        with agents that have not adopted the heartbeat-borne error
+        block), but the same per-field size caps apply on both channels.
       properties:
         severity:
           type: string
           enum: [warning, error, fatal]
         message:
           type: string
+          minLength: 1
+          maxLength: 4096
         context:
           type: object
           additionalProperties: true
+          description: |
+            Capped at 16 KiB characters when serialized.
         taskId:
           type: integer
+          minimum: 1
 
     ZapResponse:
       type: object

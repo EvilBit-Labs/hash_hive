@@ -284,8 +284,15 @@ async function fetchCurrentTasks(
  */
 export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status';
 
+// Mirrors the `agentHeartbeatSchema.status` enum so the service layer
+// cannot drift from the zod boundary. If the schema gains a new literal,
+// this union has to widen too — a typo at a call site is a compile error
+// instead of a runtime artifact.
+type HeartbeatStatusLiteral = AgentHeartbeat['status'];
+type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
+
 export interface HeartbeatTransition {
-  effectiveStatus: string;
+  effectiveStatus: ResolvedStatusLiteral;
   isFatalError: boolean;
   shouldLogTransition: boolean;
   reason: StatusTransitionReason | null;
@@ -302,12 +309,12 @@ export interface HeartbeatTransition {
  * `processHeartbeat` is just the wiring around this decision.
  */
 export function decideHeartbeatTransition(input: {
-  payloadStatus: string;
+  payloadStatus: HeartbeatStatusLiteral;
   errorSeverity?: 'warning' | 'fatal' | undefined;
   priorStatus: string | null;
 }): HeartbeatTransition {
   const isFatalError = input.errorSeverity === 'fatal';
-  const effectiveStatus = isFatalError ? 'error' : input.payloadStatus;
+  const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus;
 
   // Audit-log only real transitions. No-op heartbeats (status unchanged)
   // happen every ~30s per agent — logging them would dominate volume.
@@ -375,6 +382,9 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
       message: data.error.message,
       context: data.error.context,
       taskId: data.currentTask?.taskId,
+      // Skip the redundant SELECT inside logAgentError — we already
+      // have projectId from priorRow.
+      projectId: priorRow?.projectId,
     });
   }
 
@@ -471,6 +481,12 @@ export async function logAgentError(data: {
   message: string;
   context?: Record<string, unknown> | undefined;
   taskId?: number | undefined;
+  // Optional projectId pass-through: hot-path callers (processHeartbeat)
+  // already know it and pass it in to avoid an extra SELECT on every
+  // error-bearing heartbeat. Callers that don't have it (e.g., the
+  // standalone POST /api/v1/agent/errors handler, which only has agentId)
+  // can omit it and the function falls back to a DB lookup.
+  projectId?: number | undefined;
 }) {
   const [error] = await db
     .insert(agentErrors)
@@ -490,13 +506,17 @@ export async function logAgentError(data: {
   // projectId)`, so reusing `agent_status` would silently drop a new
   // error event if a heartbeat just fired for the same project.
   if (error) {
-    const [agent] = await db
-      .select({ projectId: agents.projectId })
-      .from(agents)
-      .where(eq(agents.id, data.agentId))
-      .limit(1);
-    if (agent) {
-      emitAgentError(agent.projectId, data.agentId, data.severity);
+    let projectId = data.projectId;
+    if (projectId === undefined) {
+      const [agent] = await db
+        .select({ projectId: agents.projectId })
+        .from(agents)
+        .where(eq(agents.id, data.agentId))
+        .limit(1);
+      projectId = agent?.projectId;
+    }
+    if (projectId !== undefined) {
+      emitAgentError(projectId, data.agentId, data.severity);
     }
   }
 

@@ -2,6 +2,8 @@ import {
   agentHeartbeatSchema,
   benchmarkSubmissionSchema,
   crackerCheckUpdateRequestSchema,
+  HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+  HEARTBEAT_ERROR_MESSAGE_MAX,
 } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
@@ -168,10 +170,23 @@ agentRoutes.get('/tasks/:id/zaps', zValidator('query', zapQuerySchema), async (c
 
 // ─── POST /errors — log an agent error ──────────────────────────────
 
+// Same size caps as agentHeartbeatErrorSchema (in @hashhive/shared) so the
+// standalone error channel can't be used to bypass the bound. severity stays
+// wider (warning|error|fatal) for back-compat with agents that have not
+// adopted the heartbeat-borne error block yet.
 const agentErrorSchema = z.object({
   severity: z.enum(['warning', 'error', 'fatal']),
-  message: z.string().min(1),
-  context: z.record(z.string(), z.unknown()).optional(),
+  message: z.string().min(1).max(HEARTBEAT_ERROR_MESSAGE_MAX),
+  context: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .refine(
+      (value) =>
+        value === undefined || JSON.stringify(value).length <= HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+      {
+        message: `context exceeds ${HEARTBEAT_ERROR_CONTEXT_MAX_CHARS} characters when serialized`,
+      }
+    ),
   taskId: z.number().int().positive().optional(),
 });
 
