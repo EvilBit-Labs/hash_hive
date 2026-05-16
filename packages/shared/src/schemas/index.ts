@@ -404,3 +404,33 @@ export const createCrackerBinaryRequestSchema = z.object({
 export const updateCrackerBinaryRequestSchema = z.object({
   isActive: z.boolean().optional(),
 });
+
+// ─── Work Range / Progress ──────────────────────────────────────────
+
+/**
+ * Keyspace coordinate carried in `tasks.work_range` jsonb. Mask attacks
+ * routinely exceed `Number.MAX_SAFE_INTEGER` (e.g. `?a^12` is ~5.4e23),
+ * so the value is a JS Number when it fits in the safe-integer range
+ * and a decimal string otherwise. Consumers coerce via `BigInt(...)`
+ * before arithmetic.
+ */
+export const keyspaceCoordSchema = z.union([
+  z.number().int().nonnegative(),
+  z
+    .string()
+    .regex(/^[0-9]+$/, 'keyspace coord must be a non-negative decimal string')
+    .max(64),
+]);
+
+/**
+ * Per-task work range surfaced on `AssignedTask`. Start/end/total share
+ * the bigint-safe `keyspaceCoordSchema` shape; `agentSpeedHs` carries
+ * the assigning agent's benchmark speed for the task's hash mode and
+ * is always a finite, non-negative integer.
+ */
+export const workRangeSchema = z.object({
+  start: keyspaceCoordSchema,
+  end: keyspaceCoordSchema,
+  total: keyspaceCoordSchema,
+  agentSpeedHs: z.number().int().nonnegative(),
+});

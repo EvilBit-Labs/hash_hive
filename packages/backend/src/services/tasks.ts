@@ -781,7 +781,17 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
     .from(tasks)
     .innerJoin(agents, eq(tasks.agentId, agents.id))
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
-    .where(and(eq(tasks.status, 'assigned'), sql`${agents.lastSeenAt} < ${threshold}`));
+    .where(
+      and(
+        // Include both 'assigned' (claimed but never reported) and 'running'
+        // (claimed and reporting progress). The original 'assigned' filter
+        // missed the only state that can carry meaningful keyspaceProgress
+        // values from the agent API, leaving stranded in-progress work
+        // un-rebalanced.
+        sql`${tasks.status} IN ('assigned', 'running')`,
+        sql`${agents.lastSeenAt} < ${threshold}`
+      )
+    );
 
   let reassigned = 0;
   let rebalanced = 0;
@@ -819,6 +829,16 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
       // Partial progress - trim workRange.start forward and re-pend.
       const newStart = start + keyspaceProgress;
       const newTotal = end - newStart;
+      // Reset reported keyspaceProgress so the next agent starts from 0
+      // within the trimmed range, but preserve auxiliary samples (speed,
+      // temperature) so the dashboard's per-task telemetry doesn't
+      // momentarily blank out across a rebalance.
+      const priorProgress =
+        staleTask.progress && typeof staleTask.progress === 'object'
+          ? (staleTask.progress as Record<string, unknown>)
+          : {};
+      const carriedProgress: Record<string, unknown> = { ...priorProgress };
+      delete carriedProgress['keyspaceProgress'];
       await db
         .update(tasks)
         .set({
@@ -831,10 +851,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             end: jsonSafeBigint(end),
             total: jsonSafeBigint(newTotal),
           },
-          // Reset reported progress so the next agent starts from 0 within
-          // the trimmed range. Preserve other progress fields (e.g. speed
-          // samples) if a future schema adds them.
-          progress: {},
+          progress: carriedProgress,
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));

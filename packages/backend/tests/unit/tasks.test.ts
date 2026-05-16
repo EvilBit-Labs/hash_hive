@@ -482,6 +482,129 @@ if (isIsolated) {
       expect(setCalls).toHaveLength(0);
     });
   });
+
+  // ─── generateTasksForAttack ───────────────────────────────────────
+  //
+  // Covers the end-to-end wiring: attack row -> resource lookup ->
+  // fleet benchmarks -> pickChunkSize -> bigint chunk walk -> insert.
+  // The pure helpers (`calculateAttackKeyspace`, `pickChunkSize`) have
+  // their own unit tests; these tests exercise the integration glue.
+  const { generateTasksForAttack } = await import('../../src/services/tasks.js');
+
+  describe('generateTasksForAttack', () => {
+    // The select chain we have to satisfy:
+    //   1. db.select().from(attacks).where(...).limit(1)            -> attack row
+    //   2. db.select({lineCount}).from(wordLists).where(...).limit(1) -> wordlist row (optional)
+    //   3. db.select({lineCount}).from(ruleLists).where(...).limit(1) -> rulelist row (optional)
+    //   4. db.select({lineCount}).from(maskLists).where(...).limit(1) -> masklist row (optional)
+    //   5. db.select({speedHs}).from(agentBenchmarks).innerJoin(agents).where(...) -> fleet benchmarks
+    //   6. db.insert(tasks).values([...]).returning()                -> created tasks
+    //
+    // Seed each via `mockLimit.mockResolvedValueOnce` (calls 1-4) and a
+    // dedicated chain for the fleet-benchmark query. Insert returns are
+    // captured via a separate mock so chunk emission can be asserted.
+
+    let insertValuesArg: unknown;
+    let mockInsert: ReturnType<typeof mock>;
+
+    beforeEach(() => {
+      insertValuesArg = undefined;
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }));
+      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }));
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]));
+
+      // Replace db.insert so we can capture the values array.
+      mockInsert = mock((_table: unknown) => ({
+        values: mock((rows: unknown) => {
+          insertValuesArg = rows;
+          // Return a fake .returning() that resolves to the inserted rows
+          // with synthetic ids, matching real drizzle behavior.
+          return {
+            returning: mock(() =>
+              Promise.resolve(
+                Array.isArray(rows)
+                  ? rows.map((r, i) => ({ ...(r as Record<string, unknown>), id: 1000 + i }))
+                  : [{ ...(rows as Record<string, unknown>), id: 1000 }]
+              )
+            ),
+          };
+        }),
+      }));
+      (db as Record<string, unknown>)['insert'] = mockInsert;
+    });
+
+    test('mode 3 mask attack with computed keyspace inserts the right chunks', async () => {
+      // attack row
+      mockLimit.mockResolvedValueOnce([
+        {
+          id: 7,
+          campaignId: 3,
+          projectId: 1,
+          mode: 3,
+          wordlistId: null,
+          rulelistId: null,
+          masklistId: null,
+          keyspace: null,
+          advancedConfiguration: { mask: '?d?d?d?d' }, // 10^4 = 10_000
+        },
+      ]);
+      // No wordlist / rulelist / masklist lookups for mode 3 with no IDs.
+      // Next call is the fleet benchmark query; seed an empty fleet so
+      // pickChunkSize falls back to FALLBACK_CHUNK_SIZE (10_000_000), which
+      // exceeds the 10_000 keyspace - chunks should clamp at totalKeyspace.
+      const benchmarkWhereReturning = mock(() => Promise.resolve([]));
+      mockFrom.mockImplementationOnce(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockFrom.mockImplementationOnce(() => ({
+        innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
+      }));
+
+      const result = await generateTasksForAttack(7);
+
+      // 10_000 keyspace, fallback chunk 10_000_000 -> single chunk.
+      expect(result).toMatchObject({ count: 1 });
+      expect(Array.isArray(insertValuesArg)).toBe(true);
+      const rows = insertValuesArg as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(1);
+      const range = rows[0]?.['workRange'] as Record<string, unknown>;
+      expect(range['start']).toBe(0);
+      expect(range['end']).toBe(10000);
+      expect(range['total']).toBe(10000);
+    });
+
+    test('returns single placeholder task when keyspace cannot be computed', async () => {
+      // Mode 1 (combination) needs secondaryWordlistRows which the schema
+      // doesn't expose, so calculateAttackKeyspace returns null and the
+      // caller emits a single placeholder task with workRange of zeros.
+      mockLimit.mockResolvedValueOnce([
+        {
+          id: 8,
+          campaignId: 3,
+          projectId: 1,
+          mode: 1,
+          wordlistId: 100,
+          rulelistId: null,
+          masklistId: null,
+          keyspace: null,
+          advancedConfiguration: {},
+        },
+      ]);
+      // Wordlist lookup returns a row, but mode 1 still falls through.
+      mockLimit.mockResolvedValueOnce([{ lineCount: 5000 }]);
+
+      const result = await generateTasksForAttack(8);
+      expect(result).toMatchObject({ count: 1 });
+      // Placeholder path passes a single object to .values(...), not an array.
+      const row = (Array.isArray(insertValuesArg) ? insertValuesArg[0] : insertValuesArg) as Record<
+        string,
+        unknown
+      >;
+      const range = row?.['workRange'] as Record<string, unknown>;
+      expect(range['start']).toBe(0);
+      expect(range['end']).toBe(0);
+      expect(range['total']).toBe(0);
+    });
+  });
 } else {
   // Skipped in full suite — already validated in isolated first-phase run.
   // Using describe.skip so bun:test doesn't report zero tests from this file.
@@ -489,6 +612,9 @@ if (isIsolated) {
     test.skip('see isolated run', () => {});
   });
   describe.skip('reassignStaleTasks (skipped — runs in isolated phase)', () => {
+    test.skip('see isolated run', () => {});
+  });
+  describe.skip('generateTasksForAttack (skipped — runs in isolated phase)', () => {
     test.skip('see isolated run', () => {});
   });
 }

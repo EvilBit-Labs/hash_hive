@@ -54,6 +54,7 @@ import type {
   selectUserSchema,
   selectWordListSchema,
   updateCrackerBinaryRequestSchema,
+  workRangeSchema,
 } from '../schemas/index.js';
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -151,18 +152,17 @@ export { KNOWN_ENGINES, KNOWN_PLATFORMS } from '../schemas/index.js';
 
 // ─── Task Assignment Types ──────────────────────────────────────────
 
-export interface WorkRange {
-  /**
-   * Keyspace position. Number when the value fits in JS-safe integer range
-   * (most attacks), decimal string when the value exceeds
-   * `Number.MAX_SAFE_INTEGER` (mask attacks with large character classes).
-   * Consumers must coerce via `BigInt(value)` before arithmetic.
-   */
-  start: number | string;
-  end: number | string;
-  total: number | string;
-  agentSpeedHs: number;
-}
+/**
+ * Per-task work range surfaced on `AssignedTask`. Inferred from the
+ * canonical Zod schema in `packages/shared/src/schemas/index.ts`.
+ *
+ * `start`, `end`, `total` are JS Numbers when the value fits in
+ * `Number.MAX_SAFE_INTEGER` (most attacks) and decimal strings when it
+ * overflows (mask attacks with large character classes, e.g. `?a^12`
+ * is ~5.4e23). Consumers must coerce via `BigInt(value)` before
+ * arithmetic. `agentSpeedHs` is always a finite non-negative integer.
+ */
+export type WorkRange = z.infer<typeof workRangeSchema>;
 
 export interface RequiredCapabilities {
   gpu?: boolean;

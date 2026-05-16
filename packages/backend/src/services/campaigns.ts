@@ -21,14 +21,52 @@ export const _deps = {
 /**
  * Estimates total task count and returns the generation strategy.
  * Exported for direct unit testing of the threshold boundary.
+ *
+ * Keyspaces are parsed via BigInt so mask-attack values past
+ * `Number.MAX_SAFE_INTEGER` (e.g., `?a^12` is ~5.4e23) don't lose
+ * precision before the chunk-count division.
+ *
+ * Known tension: when `attacks.keyspace` is null/empty, this estimator
+ * still treats the attack as ~1 task (the same as legacy behavior).
+ * Post-#96, `generateTasksForAttack` may compute a real (and large)
+ * keyspace from wordlist/rule/mask metadata at generation time, which
+ * could blow past the inline threshold by orders of magnitude. The
+ * MAX_CHUNKS_PER_ATTACK = 100_000 cap inside generateTasksForAttack
+ * bounds the worst case at 100k inline inserts per attack. Properly
+ * routing computable-but-unresolved keyspaces to async generation
+ * requires deeper changes (DB lookup or schema-level prepopulation of
+ * keyspace at attack create) and is tracked as a follow-up.
  */
 export function resolveGenerationStrategy(
   attackList: ReadonlyArray<{ keyspace: string | null }>
 ): 'inline' | 'async' {
   let estimatedTasks = 0;
+  const chunkSize = BigInt(CHUNK_SIZE);
   for (const atk of attackList) {
-    const keyspace = Number.parseInt(atk.keyspace ?? '0', 10);
-    estimatedTasks += keyspace <= 0 ? 1 : Math.ceil(keyspace / CHUNK_SIZE);
+    const raw = atk.keyspace?.trim();
+    if (!raw || raw === '0') {
+      // Null / zero / blank: legacy behavior - treat as 1 task. See the
+      // known-tension note above.
+      estimatedTasks += 1;
+      continue;
+    }
+    let bigKs: bigint;
+    try {
+      bigKs = BigInt(raw);
+    } catch {
+      estimatedTasks += 1;
+      continue;
+    }
+    if (bigKs <= 0n) {
+      estimatedTasks += 1;
+      continue;
+    }
+    const chunks = bigKs / chunkSize + (bigKs % chunkSize === 0n ? 0n : 1n);
+    // Saturate at INLINE_GENERATION_THRESHOLD so the comparison stays
+    // within safe-Number range even for astronomical keyspaces.
+    estimatedTasks +=
+      chunks > BigInt(INLINE_GENERATION_THRESHOLD) ? INLINE_GENERATION_THRESHOLD : Number(chunks);
+    if (estimatedTasks >= INLINE_GENERATION_THRESHOLD) return 'async';
   }
   return estimatedTasks < INLINE_GENERATION_THRESHOLD ? 'inline' : 'async';
 }
@@ -405,16 +443,25 @@ export async function updateCampaignProgress(campaignId: number) {
     .select({
       totalTasks: sql<number>`count(*)`,
       completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
+      // CASE WHEN guards the divide-by-zero case explicitly: a placeholder
+      // task created without a real keyspace has `workRange.total = 0`, and
+      // letting that flow into the division produces NULL, which
+      // `LEAST(NULL, 1) = 1` would silently count as a 100%-complete task.
+      // Default to 0 progress for any task with total <= 0.
       runningProgress: sql<number>`COALESCE(
         SUM(
-          GREATEST(
-            0,
-            LEAST(
-              COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0)
-                / NULLIF(COALESCE((${tasks.workRange}->>'total')::float, 0), 0),
-              1
-            )
-          )
+          CASE
+            WHEN COALESCE((${tasks.workRange}->>'total')::float, 0) > 0 THEN
+              GREATEST(
+                0,
+                LEAST(
+                  COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0)
+                    / (${tasks.workRange}->>'total')::float,
+                  1
+                )
+              )
+            ELSE 0
+          END
         ) FILTER (WHERE ${tasks.status} = 'running'),
         0
       )`,
