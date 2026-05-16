@@ -152,9 +152,15 @@ export { KNOWN_ENGINES, KNOWN_PLATFORMS } from '../schemas/index.js';
 // ─── Task Assignment Types ──────────────────────────────────────────
 
 export interface WorkRange {
-  start: number;
-  end: number;
-  total: number;
+  /**
+   * Keyspace position. Number when the value fits in JS-safe integer range
+   * (most attacks), decimal string when the value exceeds
+   * `Number.MAX_SAFE_INTEGER` (mask attacks with large character classes).
+   * Consumers must coerce via `BigInt(value)` before arithmetic.
+   */
+  start: number | string;
+  end: number | string;
+  total: number | string;
   agentSpeedHs: number;
 }
 

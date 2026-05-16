@@ -13,6 +13,8 @@ let mockWhere: ReturnType<typeof mock>;
 let mockLimit: ReturnType<typeof mock>;
 let mockExecute: ReturnType<typeof mock>;
 let mockGetAgentBenchmarkForMode: ReturnType<typeof mock>;
+let mockUpdateSet: ReturnType<typeof mock>;
+let mockUpdateWhere: ReturnType<typeof mock>;
 
 if (isIsolated) {
   // ─── Config / logger mocks (prevent env validation during import) ──
@@ -44,6 +46,12 @@ if (isIsolated) {
   mockExecute = mock(() => Promise.resolve([]));
   const mockSelect = mock(() => ({ from: mockFrom }));
 
+  // Update-call captures shared with the reassignStaleTasks tests. Default
+  // implementation is a chain that returns nothing; the rebalance tests
+  // override `mockUpdateSet` to record each call's payload.
+  mockUpdateSet = mock(() => ({ where: mockUpdateWhere }));
+  mockUpdateWhere = mock(() => ({ returning: mock(() => Promise.resolve([])) }));
+
   mock.module('../../src/db/index.js', () => ({
     db: {
       select: mockSelect,
@@ -51,11 +59,7 @@ if (isIsolated) {
       insert: mock(() => ({
         values: mock(() => ({ returning: mock(() => Promise.resolve([])) })),
       })),
-      update: mock(() => ({
-        set: mock(() => ({
-          where: mock(() => ({ returning: mock(() => Promise.resolve([])) })),
-        })),
-      })),
+      update: mock(() => ({ set: mockUpdateSet })),
       transaction: mock(),
     },
   }));
@@ -74,7 +78,7 @@ if (isIsolated) {
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
   }));
 
-  const { assignNextTask } = await import('../../src/services/tasks.js');
+  const { assignNextTask, reassignStaleTasks } = await import('../../src/services/tasks.js');
   const { db } = await import('../../src/db/index.js');
 
   describe('assignNextTask', () => {
@@ -308,10 +312,149 @@ if (isIsolated) {
       expect((db as Record<string, unknown>)['transaction']).not.toHaveBeenCalled();
     });
   });
+
+  // ─── reassignStaleTasks ───────────────────────────────────────────
+  //
+  // The new rebalance policy (U5) emits three outcomes per stale task:
+  //   1. failed-overrun     - keyspaceProgress > total -> mark failed
+  //   2. rebalanced         - 0 < keyspaceProgress < total -> trim workRange.start
+  //   3. reassigned (reset) - 0% progress -> existing reset-to-pending path
+  // These tests assert the SET payload routed to each outcome branch.
+  describe('reassignStaleTasks', () => {
+    // The select chain for reassignStaleTasks is .from(tasks).innerJoin(agents).where(...).
+    // The mock above resolves `from -> { where, innerJoin }` and `innerJoin -> {}` per call,
+    // so we wire a dedicated chain that returns our seeded stale-task array from .where().
+    function seedStaleTasks(rows: unknown[]) {
+      const whereReturning = mock(() => Promise.resolve(rows));
+      const innerJoinReturning = mock(() => ({ where: whereReturning }));
+      mockFrom.mockImplementationOnce(() => ({ innerJoin: innerJoinReturning, where: mock() }));
+    }
+
+    // Captures every .set() payload so each test can assert which branch fired.
+    let setCalls: Array<Record<string, unknown>>;
+    beforeEach(() => {
+      setCalls = [];
+      mockUpdateSet.mockReset().mockImplementation((payload: Record<string, unknown>) => {
+        setCalls.push(payload);
+        return { where: mockUpdateWhere };
+      });
+      mockUpdateWhere
+        .mockReset()
+        .mockImplementation(() => ({ returning: mock(() => Promise.resolve([])) }));
+    });
+
+    test('marks task failed when keyspaceProgress overruns total', async () => {
+      seedStaleTasks([
+        {
+          taskId: 42,
+          agentId: 7,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: { keyspaceProgress: 5000 }, // 5x the chunk size
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 1 });
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
+    });
+
+    test('trims workRange.start forward on partial progress', async () => {
+      seedStaleTasks([
+        {
+          taskId: 17,
+          agentId: 3,
+          workRange: { start: 0, end: 1_000_000, total: 1_000_000 },
+          progress: { keyspaceProgress: 250_000 }, // 25% done
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({ reassigned: 0, rebalanced: 1, failedOverrun: 0 });
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0]?.['status']).toBe('pending');
+      expect(setCalls[0]?.['agentId']).toBe(null);
+      expect(setCalls[0]?.['assignedAt']).toBe(null);
+      expect(setCalls[0]?.['startedAt']).toBe(null);
+      // workRange.start advanced from 0 -> 250_000, end unchanged, total recomputed.
+      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
+      expect(wr['start']).toBe(250_000);
+      expect(wr['end']).toBe(1_000_000);
+      expect(wr['total']).toBe(750_000);
+      // Reported progress reset so the next agent starts at 0 within the trimmed range.
+      expect(setCalls[0]?.['progress']).toEqual({});
+    });
+
+    test('falls through to reset-to-pending on 0% progress', async () => {
+      seedStaleTasks([
+        {
+          taskId: 9,
+          agentId: 2,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: {},
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({ reassigned: 1, rebalanced: 0, failedOverrun: 0 });
+      expect(setCalls).toHaveLength(1);
+      // Existing reset path: clear claim metadata but leave workRange/progress alone.
+      expect(setCalls[0]?.['status']).toBe('pending');
+      expect(setCalls[0]?.['agentId']).toBe(null);
+      expect(setCalls[0]?.['assignedAt']).toBe(null);
+      expect(setCalls[0]?.['startedAt']).toBe(null);
+      expect(setCalls[0]?.['workRange']).toBeUndefined();
+      expect(setCalls[0]?.['progress']).toBeUndefined();
+    });
+
+    test('handles string-encoded workRange values (bigint overflow case)', async () => {
+      // Mask attack: keyspace is 10^20, agent reported 10^18 progress.
+      // Both values overflow Number.MAX_SAFE_INTEGER (~9e15) and arrive as decimal strings.
+      seedStaleTasks([
+        {
+          taskId: 99,
+          agentId: 11,
+          workRange: {
+            start: '0',
+            end: '100000000000000000000', // 1e20
+            total: '100000000000000000000',
+          },
+          progress: { keyspaceProgress: '1000000000000000000' }, // 1e18
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({ reassigned: 0, rebalanced: 1, failedOverrun: 0 });
+      expect(setCalls).toHaveLength(1);
+      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
+      // New start = 0 + 1e18 = "1000000000000000000" (decimal string, bigint-safe).
+      expect(wr['start']).toBe('1000000000000000000');
+      // End unchanged.
+      expect(wr['end']).toBe('100000000000000000000');
+      // Total = 1e20 - 1e18, still well above MAX_SAFE_INTEGER -> string.
+      expect(wr['total']).toBe('99000000000000000000');
+    });
+
+    test('emits zero counts when no stale tasks exist', async () => {
+      seedStaleTasks([]);
+      const result = await reassignStaleTasks();
+      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 0 });
+      expect(setCalls).toHaveLength(0);
+    });
+  });
 } else {
   // Skipped in full suite — already validated in isolated first-phase run.
   // Using describe.skip so bun:test doesn't report zero tests from this file.
   describe.skip('assignNextTask (skipped — runs in isolated phase)', () => {
+    test.skip('see isolated run', () => {});
+  });
+  describe.skip('reassignStaleTasks (skipped — runs in isolated phase)', () => {
     test.skip('see isolated run', () => {});
   });
 }

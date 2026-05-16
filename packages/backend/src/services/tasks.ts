@@ -1,15 +1,30 @@
 import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared';
-import { agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
+import { agentBenchmarks, agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
 import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { getAgentBenchmarkForMode } from './agents.js';
 import { updateCampaignProgress } from './campaigns.js';
+import { pickChunkSize } from './chunk-sizing.js';
 import { emitCrackResult, emitTaskUpdate } from './events.js';
+import { calculateAttackKeyspace } from './keyspace.js';
 
 // ─── Task Generation ────────────────────────────────────────────────
 
-const DEFAULT_CHUNK_SIZE = 10_000_000; // 10M keyspace units per task
+// Below this threshold, workRange fields can be stored as JS Number safely
+// without losing precision (Number.MAX_SAFE_INTEGER = 2^53 - 1).
+const SAFE_NUMBER_THRESHOLD = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Pick the JSON representation of a bigint value: a JS Number when the value
+ * fits in JS-safe integer range, otherwise a decimal string. Keeps existing
+ * `tasks.workRange` consumers (which read fields as numbers) working for
+ * realistic-sized attacks while preserving precision for mask keyspaces that
+ * overflow Number.MAX_SAFE_INTEGER.
+ */
+function jsonSafeBigint(value: bigint): number | string {
+  return value <= SAFE_NUMBER_THRESHOLD ? Number(value) : value.toString();
+}
 
 /**
  * Derives required capabilities from an attack's configuration.
@@ -34,8 +49,48 @@ function deriveRequiredCapabilities(attack: {
 }
 
 /**
+ * Look up benchmarks recorded for the attack's hashcat mode across the
+ * project's active agents. Used at generation time to size chunks against
+ * the fleet's median throughput rather than a flat constant.
+ *
+ * The status filter intentionally includes 'busy' agents even though
+ * `assignNextTask` only assigns work to 'online' / 'benchmarked' agents.
+ * Busy agents are still part of the fleet's throughput profile - excluding
+ * them would skew chunk sizing toward an artificially idle fleet right when
+ * load is highest.
+ *
+ * Returns an empty array when no benchmarks are available - callers fall
+ * back to the legacy FALLBACK_CHUNK_SIZE so fresh fleets don't regress.
+ */
+async function getFleetBenchmarksForMode(
+  projectId: number,
+  hashcatMode: number
+): Promise<{ speedHs: number }[]> {
+  return db
+    .select({ speedHs: agentBenchmarks.speedHs })
+    .from(agentBenchmarks)
+    .innerJoin(agents, eq(agentBenchmarks.agentId, agents.id))
+    .where(
+      and(
+        eq(agentBenchmarks.hashcatMode, hashcatMode),
+        eq(agents.projectId, projectId),
+        sql`${agents.status} IN ('online', 'benchmarked', 'busy')`
+      )
+    );
+}
+
+/**
  * Generates tasks for an attack by partitioning its keyspace into chunks.
- * Each chunk becomes a task that can be assigned to an agent.
+ *
+ * Chunking strategy:
+ *   1. If `attack.keyspace` is missing, attempt to compute it from the
+ *      attack's mode + wordlist/rule/mask metadata. If computation fails
+ *      (unknown mode, missing required input), create a single placeholder
+ *      task so the existing assignment path can still progress.
+ *   2. Look up the project's fleet benchmarks for the attack's hashcat
+ *      mode and pass the median to `pickChunkSize`. Empty fleet falls
+ *      back to FALLBACK_CHUNK_SIZE.
+ *   3. Walk the keyspace in bigint and emit one task per chunk.
  */
 export async function generateTasksForAttack(
   attackId: number,
@@ -47,9 +102,24 @@ export async function generateTasksForAttack(
   }
 
   const requiredCapabilities = deriveRequiredCapabilities(attack);
-  const totalKeyspace = Number.parseInt(attack.keyspace ?? '0', 10);
-  if (totalKeyspace <= 0) {
-    // For attacks without a pre-calculated keyspace, create a single task
+
+  // Resolve total keyspace: prefer the stored value; compute when missing.
+  let totalKeyspaceStr = attack.keyspace?.trim() ?? '';
+  if (!totalKeyspaceStr || totalKeyspaceStr === '0') {
+    const computed = calculateAttackKeyspace({
+      mode: attack.mode,
+      // The wordlist/rulelist/mask row-count lookups aren't wired yet - that's
+      // a deferred follow-up on word_lists.line_count plumbing. Until those
+      // counts are reliably populated by ingest, fall through to the
+      // single-task path for attacks that arrive without a keyspace.
+    });
+    totalKeyspaceStr = computed ?? '';
+  }
+
+  const totalKeyspace = totalKeyspaceStr ? BigInt(totalKeyspaceStr) : 0n;
+  if (totalKeyspace <= 0n) {
+    // No keyspace available - emit a single placeholder task so downstream
+    // assignment / progress / failure paths still have a row to operate on.
     const [task] = await db
       .insert(tasks)
       .values({
@@ -64,12 +134,27 @@ export async function generateTasksForAttack(
     return { tasks: [task], count: 1 };
   }
 
-  const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK_SIZE;
-  const chunks: Array<{ start: number; end: number; total: number }> = [];
+  // Decide chunk size - caller override beats fleet-aware sizing for tests.
+  let chunkSize: bigint;
+  if (opts.chunkSize !== undefined) {
+    chunkSize = BigInt(opts.chunkSize);
+  } else {
+    const benchmarks = await getFleetBenchmarksForMode(attack.projectId, attack.mode);
+    chunkSize = BigInt(pickChunkSize({ totalKeyspace: totalKeyspaceStr, benchmarks }));
+  }
 
-  for (let start = 0; start < totalKeyspace; start += chunkSize) {
-    const end = Math.min(start + chunkSize, totalKeyspace);
-    chunks.push({ start, end, total: end - start });
+  const chunks: Array<{
+    start: number | string;
+    end: number | string;
+    total: number | string;
+  }> = [];
+  for (let start = 0n; start < totalKeyspace; start += chunkSize) {
+    const end = start + chunkSize > totalKeyspace ? totalKeyspace : start + chunkSize;
+    chunks.push({
+      start: jsonSafeBigint(start),
+      end: jsonSafeBigint(end),
+      total: jsonSafeBigint(end - start),
+    });
   }
 
   const createdTasks = await db
@@ -128,17 +213,102 @@ function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
 const DEFAULT_AGENT_SPEED_HS = 1_000_000; // 1 MH/s fallback when no benchmark exists
 
 /**
+ * When `assignNextTask`'s atomic claim returns no rows, decide why so the
+ * structured log entry carries actionable signal. Three possible reasons:
+ *   - `no_pending_tasks`: project has zero pending+unassigned tasks at all
+ *   - `no_matching_capability`: pending tasks exist but none satisfy the
+ *     agent's capability predicate
+ *   - `claim_race_lost`: matching tasks exist but every candidate was locked
+ *     by a peer claimant via SKIP LOCKED in the same tick
+ */
+async function diagnoseAssignmentSkip(
+  projectId: number,
+  capabilityPredicate: SQL
+): Promise<'no_pending_tasks' | 'no_matching_capability' | 'claim_race_lost'> {
+  // Count pending+unassigned tasks for the project regardless of capability.
+  const [pendingTotal] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(
+        eq(tasks.status, 'pending'),
+        sql`${tasks.agentId} IS NULL`,
+        eq(campaigns.projectId, projectId)
+      )
+    );
+  if (!pendingTotal || pendingTotal.n === 0) {
+    return 'no_pending_tasks';
+  }
+
+  // Count pending+unassigned tasks the agent's capabilities actually match.
+  const [matching] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(
+        eq(tasks.status, 'pending'),
+        sql`${tasks.agentId} IS NULL`,
+        eq(campaigns.projectId, projectId),
+        capabilityPredicate
+      )
+    );
+  if (!matching || matching.n === 0) {
+    return 'no_matching_capability';
+  }
+
+  // Matching candidates exist but the CTE returned zero rows - every
+  // candidate must have been locked by a concurrent claimant.
+  return 'claim_race_lost';
+}
+
+/**
+ * Skip reasons emitted by `assignNextTask` when no task is assigned. Each one
+ * appears in the structured `task_assignment` log so operators can debug
+ * fleet utilization without reading the DB by hand.
+ */
+type AssignmentSkipReason =
+  | 'agent_not_eligible' // agent missing, offline, or status outside the eligible set
+  | 'no_pending_tasks' // project has no pending tasks at all
+  | 'no_matching_capability' // pending tasks exist but none match the agent's caps
+  | 'claim_race_lost'; // candidate locked by another claimant via SKIP LOCKED
+
+function logAssignmentSkip(
+  agentId: number,
+  projectId: number | null,
+  reason: AssignmentSkipReason
+): void {
+  logger.info(
+    { event: 'task_assignment', kind: 'skipped', agentId, projectId, reason },
+    'task assignment skipped'
+  );
+}
+
+function logAssignmentSuccess(agentId: number, projectId: number, taskId: number): void {
+  logger.info(
+    { event: 'task_assignment', kind: 'assigned', agentId, projectId, taskId },
+    'task assigned'
+  );
+}
+
+/**
  * Assigns the next available pending task to an agent.
  *
  * All eligibility filters (project scope, capability match) are enforced
  * in the SQL predicate. Uses `FOR UPDATE SKIP LOCKED` to guarantee only
  * one claimant atomically selects and claims a task row, even under
  * concurrent access from multiple agents.
+ *
+ * Returns `null` for every non-assignment outcome (no agent, no work,
+ * race lost). The public return contract is unchanged; the operator-
+ * facing diagnostic is the structured `task_assignment` info log.
  */
 export async function assignNextTask(agentId: number): Promise<AssignedTask | null> {
   // Verify agent exists and is online or benchmarked
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent || (agent.status !== 'online' && agent.status !== 'benchmarked')) {
+    logAssignmentSkip(agentId, agent?.projectId ?? null, 'agent_not_eligible');
     return null;
   }
 
@@ -175,7 +345,28 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   `);
 
   const row = result[0] as Record<string, unknown> | undefined;
-  if (!row) return null;
+  if (!row) {
+    // Distinguish "nothing pending in this project" from "pending exists
+    // but none match this agent" from "candidate locked by a peer". The
+    // additional queries are cheap (one index hit per skip event) and
+    // give operators the signal they need to debug fleet utilization.
+    //
+    // Best-effort: if the diagnostic itself errors (e.g. a transient DB
+    // issue), still emit a skip log with a generic reason rather than
+    // turning the diagnostic into a new failure mode.
+    let reason: AssignmentSkipReason = 'claim_race_lost';
+    try {
+      reason = await diagnoseAssignmentSkip(projectId, capabilityPredicate);
+    } catch (err: unknown) {
+      logger.warn(
+        { err, agentId, projectId },
+        'assignment skip diagnosis failed; logging claim_race_lost as best guess'
+      );
+    }
+    logAssignmentSkip(agentId, projectId, reason);
+    return null;
+  }
+  logAssignmentSuccess(agentId, projectId, row['id'] as number);
 
   // Extract hashcatMode from the task's required capabilities for benchmark lookup
   // Accept both numeric and numeric-string values (legacy/external inserts may store as string)
@@ -216,7 +407,11 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     agentId: row['agent_id'] as number,
     status: row['status'] as string,
     workRange: {
-      ...((row['work_range'] as { start: number; end: number; total: number } | null) ?? {
+      ...((row['work_range'] as {
+        start: number | string;
+        end: number | string;
+        total: number | string;
+      } | null) ?? {
         start: 0,
         end: 0,
         total: 0,
@@ -426,34 +621,144 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
 }
 
 /**
- * Reassigns tasks from agents that have gone offline.
- * Called periodically by a background job.
+ * Read the keyspace-progress value from a task's `progress` jsonb. Accepts
+ * either a number or a numeric string (older agents may emit either).
+ * Returns 0 for missing / unparseable values so the caller can treat the
+ * task as "fresh" rather than fail noisily.
+ */
+function readKeyspaceProgress(progress: unknown): bigint {
+  if (progress === null || typeof progress !== 'object') return 0n;
+  const raw = (progress as Record<string, unknown>)['keyspaceProgress'];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw));
+  if (typeof raw === 'string') {
+    try {
+      return BigInt(raw);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
+/**
+ * Read a numeric field from a task's `work_range` jsonb. Accepts either a
+ * JS Number (used for in-safe-range chunks) or a decimal string (used for
+ * mask-attack chunks beyond Number.MAX_SAFE_INTEGER).
+ */
+function readWorkRangeField(workRange: unknown, key: string): bigint {
+  if (workRange === null || typeof workRange !== 'object') return 0n;
+  const raw = (workRange as Record<string, unknown>)[key];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw));
+  if (typeof raw === 'string') {
+    try {
+      return BigInt(raw);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
+/**
+ * Reassigns tasks from agents that have gone offline. Called periodically
+ * by a background job (every 2 minutes via BullMQ).
+ *
+ * Rebalance policy when a stale task carries non-zero
+ * `progress.keyspaceProgress`:
+ *
+ *   - If progress exceeds the task's total keyspace, the agent reported a
+ *     value the implementation cannot produce - mark the task `failed`
+ *     immediately (data corruption, not a retryable agent failure).
+ *   - Otherwise trim `workRange.start` forward by the reported progress so
+ *     the next claimant doesn't re-execute the already-cracked range.
+ *     `workRange.total` is recomputed from the new start/end.
+ *
+ * 0% progress falls through to the existing reset-to-pending behavior
+ * unchanged.
  */
 export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
   const threshold = new Date(Date.now() - staleThresholdMs);
 
-  // Find tasks assigned to agents that haven't checked in
+  // Find tasks assigned to agents that haven't checked in. Carry workRange
+  // and progress along so the rebalance branch doesn't need a second query.
   const staleTasks = await db
-    .select({ taskId: tasks.id, agentId: tasks.agentId })
+    .select({
+      taskId: tasks.id,
+      agentId: tasks.agentId,
+      workRange: tasks.workRange,
+      progress: tasks.progress,
+    })
     .from(tasks)
     .innerJoin(agents, eq(tasks.agentId, agents.id))
     .where(and(eq(tasks.status, 'assigned'), sql`${agents.lastSeenAt} < ${threshold}`));
 
   let reassigned = 0;
+  let rebalanced = 0;
+  let failedOverrun = 0;
   for (const staleTask of staleTasks) {
+    const start = readWorkRangeField(staleTask.workRange, 'start');
+    const end = readWorkRangeField(staleTask.workRange, 'end');
+    const total = end > start ? end - start : 0n;
+    const keyspaceProgress = readKeyspaceProgress(staleTask.progress);
+
+    if (keyspaceProgress > total && total > 0n) {
+      // Data corruption: agent reported more work than the chunk contains.
+      // Don't requeue - mark failed and let the campaign aggregate handle it.
+      await db
+        .update(tasks)
+        .set({
+          status: 'failed',
+          failureReason: 'keyspace_progress_overrun',
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, staleTask.taskId));
+      failedOverrun++;
+      continue;
+    }
+
+    if (keyspaceProgress > 0n && keyspaceProgress < total) {
+      // Partial progress - trim workRange.start forward and re-pend.
+      const newStart = start + keyspaceProgress;
+      const newTotal = end - newStart;
+      await db
+        .update(tasks)
+        .set({
+          status: 'pending',
+          agentId: null,
+          assignedAt: null,
+          startedAt: null,
+          workRange: {
+            start: jsonSafeBigint(newStart),
+            end: jsonSafeBigint(end),
+            total: jsonSafeBigint(newTotal),
+          },
+          // Reset reported progress so the next agent starts from 0 within
+          // the trimmed range. Preserve other progress fields (e.g. speed
+          // samples) if a future schema adds them.
+          progress: {},
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, staleTask.taskId));
+      rebalanced++;
+      continue;
+    }
+
+    // 0% progress or unreadable range - reset to pending unchanged.
     await db
       .update(tasks)
       .set({
         status: 'pending',
         agentId: null,
         assignedAt: null,
+        startedAt: null,
         updatedAt: new Date(),
       })
       .where(eq(tasks.id, staleTask.taskId));
     reassigned++;
   }
 
-  return { reassigned };
+  return { reassigned, rebalanced, failedOverrun };
 }
 
 // ─── Task Queries ───────────────────────────────────────────────────

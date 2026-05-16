@@ -44,6 +44,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - **Scoping a polluted migration**: To isolate only intended changes: (1) backup `schema.ts`, (2) temporarily revert unrelated schema changes, (3) delete the migration SQL + snapshot + journal entry, (4) run `drizzle-kit generate`, (5) restore `schema.ts` from backup.
 - **Atomic status guards**: Never read-then-write agent/task status in separate queries -- fold the guard into the `UPDATE WHERE` clause (e.g., `` sql`${agents.status} != 'busy'` ``) to prevent race conditions.
 - **Campaign progress uses SQL aggregation**: Use `COUNT(*) FILTER (WHERE status IN (...))` and `SUM(...) FILTER (WHERE status = 'running')` instead of loading all tasks into memory. Clamp keyspace progress with `GREATEST(0, LEAST(..., 1))`.
+- **Attack keyspaces must round-trip as strings, not numbers**: `attacks.keyspace varchar(255)` is sized for bigint values - mask attacks routinely exceed `Number.MAX_SAFE_INTEGER` (e.g. `?a^12` ~ 5.4e23). `Number.parseInt(keyspace)` silently loses precision above 2^53. Use `BigInt(keyspace)` for arithmetic and stringify before persisting to jsonb. Reference: `packages/backend/src/services/keyspace.ts` for the canonical bigint-string boundary. The same applies to `tasks.workRange` start/end/total fields when an attack's keyspace overflows the JS-safe range; see `jsonSafeBigint` in `packages/backend/src/services/tasks.ts`.
 
 ## Authentication (BetterAuth)
 
