@@ -268,11 +268,11 @@ Mapped 1:1 to the issue's acceptance criteria:
   - Already shipped (`FOR UPDATE SKIP LOCKED` via raw SQL CTE).
     Verified by existing tests.
 - Progress tracked as keyspace units
-  - `tasks.progress.keyspaceProgress` is the source of truth for the
-    assignment + rebalance paths. Note: the existing campaign progress
-    aggregation in `updateCampaignProgress` reads the same field as a
-    [0, 1] fraction and clamps with LEAST(..., 1); reconciling these
-    two interpretations is a follow-up tracked in residuals.
+  - `tasks.progress.keyspaceProgress` is the source of truth across the
+    assignment, rebalance, and campaign-aggregate paths. The value is
+    absolute keyspace units cracked within the task's
+    `workRange.total`; `updateCampaignProgress` divides by total to
+    derive the [0, 1] fraction the dashboard consumes.
 - Remaining keyspace redistributable on fleet changes
   - `reassignStaleTasks` rebalance branch trims `workRange.start`
     forward by reported progress (single-task re-pend). The

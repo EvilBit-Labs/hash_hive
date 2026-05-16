@@ -62,7 +62,7 @@ const taskReportSchema = z.object({
   status: z.enum(['running', 'completed', 'failed', 'exhausted']),
   progress: z
     .object({
-      keyspaceProgress: z.number().optional(),
+      keyspaceProgress: z.union([z.number(), z.string().regex(/^[0-9]+$/)]).optional(),
       speed: z.number().optional(),
       temperature: z.number().optional(),
     })

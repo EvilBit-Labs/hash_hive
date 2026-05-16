@@ -526,7 +526,7 @@ export async function updateTaskProgress(
     status: string;
     progress?:
       | {
-          keyspaceProgress?: number | undefined;
+          keyspaceProgress?: number | string | undefined;
           speed?: number | undefined;
           temperature?: number | undefined;
         }
@@ -766,12 +766,14 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
   const threshold = new Date(Date.now() - staleThresholdMs);
 
   // Find tasks assigned to agents that haven't checked in. Carry workRange,
-  // progress, and the campaign's projectId so the rebalance branches don't
-  // need extra queries to publish task_update events.
+  // progress, projectId, and campaignId so the rebalance branches don't
+  // need extra queries to publish task_update events or update the
+  // campaign progress aggregate.
   const staleTasks = await db
     .select({
       taskId: tasks.id,
       agentId: tasks.agentId,
+      campaignId: tasks.campaignId,
       workRange: tasks.workRange,
       progress: tasks.progress,
       projectId: campaigns.projectId,
@@ -808,6 +810,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         })
         .where(eq(tasks.id, staleTask.taskId));
       emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed');
+      await updateCampaignProgress(staleTask.campaignId);
       failedOverrun++;
       continue;
     }
@@ -836,6 +839,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         })
         .where(eq(tasks.id, staleTask.taskId));
       emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
+      await updateCampaignProgress(staleTask.campaignId);
       rebalanced++;
       continue;
     }
@@ -852,6 +856,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
       })
       .where(eq(tasks.id, staleTask.taskId));
     emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
+    await updateCampaignProgress(staleTask.campaignId);
     reassigned++;
   }
 

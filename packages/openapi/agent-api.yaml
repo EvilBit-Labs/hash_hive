@@ -422,7 +422,11 @@ components:
           type: object
           properties:
             keyspaceProgress:
-              type: number
+              oneOf:
+                - type: number
+                - type: string
+                  pattern: '^[0-9]+$'
+              description: Absolute count of keyspace units already cracked within the task's `workRange.total`. Integer when in JS-safe range; decimal-string when the value exceeds 2^53 - 1. Server divides by `workRange.total` to derive the [0, 1] fraction the campaign aggregate consumes.
             speed:
               type: number
             temperature:

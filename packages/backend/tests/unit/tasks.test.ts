@@ -355,6 +355,7 @@ if (isIsolated) {
           taskId: 50,
           agentId: 8,
           projectId: 1,
+          campaignId: 1,
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: { keyspaceProgress: 1000 }, // exactly equals total
         },
@@ -374,6 +375,7 @@ if (isIsolated) {
           taskId: 42,
           agentId: 7,
           projectId: 1,
+          campaignId: 1,
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: { keyspaceProgress: 5000 }, // 5x the chunk size
         },
@@ -394,6 +396,7 @@ if (isIsolated) {
           taskId: 17,
           agentId: 3,
           projectId: 1,
+          campaignId: 1,
           workRange: { start: 0, end: 1_000_000, total: 1_000_000 },
           progress: { keyspaceProgress: 250_000 }, // 25% done
         },
@@ -422,6 +425,7 @@ if (isIsolated) {
           taskId: 9,
           agentId: 2,
           projectId: 1,
+          campaignId: 1,
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: {},
         },
@@ -448,6 +452,7 @@ if (isIsolated) {
           taskId: 99,
           agentId: 11,
           projectId: 1,
+          campaignId: 1,
           workRange: {
             start: '0',
             end: '100000000000000000000', // 1e20
