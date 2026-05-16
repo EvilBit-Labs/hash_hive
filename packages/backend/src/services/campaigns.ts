@@ -19,6 +19,48 @@ export const _deps = {
 };
 
 /**
+ * Decide whether an attack with a null `keyspace` is *computable* by
+ * `generateTasksForAttack` at generation time. The keyspace calculator
+ * needs mode-specific inputs:
+ *   - mode 0 (straight): wordlist (rules optional)
+ *   - mode 1 (combination): two wordlists — schema only has one, so
+ *     this mode is never auto-computable today
+ *   - mode 3 (mask): a mask string in advancedConfiguration
+ *   - modes 6 / 7 (hybrid): wordlist + mask
+ *
+ * When the inputs are present, the computed keyspace may dwarf the
+ * stored "1 task" estimate (e.g., `?a^12` ~ 5.4e23, lifted by
+ * `MAX_CHUNKS_PER_ATTACK = 100_000` chunks). Routing such attacks to
+ * async generation keeps the request path from blocking on 100k+
+ * inline INSERTs.
+ */
+function isAttackKeyspaceComputable(atk: {
+  mode?: number | null | undefined;
+  wordlistId?: number | null | undefined;
+  masklistId?: number | null | undefined;
+  advancedConfiguration?: unknown;
+}): boolean {
+  if (atk.mode === undefined || atk.mode === null) return false;
+  const mask =
+    atk.advancedConfiguration &&
+    typeof atk.advancedConfiguration === 'object' &&
+    typeof (atk.advancedConfiguration as Record<string, unknown>)['mask'] === 'string'
+      ? ((atk.advancedConfiguration as Record<string, unknown>)['mask'] as string)
+      : null;
+  switch (atk.mode) {
+    case 0:
+      return atk.wordlistId != null;
+    case 3:
+      return mask !== null && mask.length > 0;
+    case 6:
+    case 7:
+      return atk.wordlistId != null && mask !== null && mask.length > 0;
+    default:
+      return false;
+  }
+}
+
+/**
  * Estimates total task count and returns the generation strategy.
  * Exported for direct unit testing of the threshold boundary.
  *
@@ -26,27 +68,34 @@ export const _deps = {
  * `Number.MAX_SAFE_INTEGER` (e.g., `?a^12` is ~5.4e23) don't lose
  * precision before the chunk-count division.
  *
- * Known tension: when `attacks.keyspace` is null/empty, this estimator
- * still treats the attack as ~1 task (the same as legacy behavior).
- * Post-#96, `generateTasksForAttack` may compute a real (and large)
- * keyspace from wordlist/rule/mask metadata at generation time, which
- * could blow past the inline threshold by orders of magnitude. The
- * MAX_CHUNKS_PER_ATTACK = 100_000 cap inside generateTasksForAttack
- * bounds the worst case at 100k inline inserts per attack. Properly
- * routing computable-but-unresolved keyspaces to async generation
- * requires deeper changes (DB lookup or schema-level prepopulation of
- * keyspace at attack create) and is tracked as a follow-up.
+ * Null/empty keyspaces are routed by `isAttackKeyspaceComputable`:
+ * computable attacks force async (they may generate up to
+ * MAX_CHUNKS_PER_ATTACK chunks at run time), and the legacy "treat
+ * as 1 task" behavior is preserved only for attacks where the
+ * calculator would also fall through to a single-placeholder task.
  */
 export function resolveGenerationStrategy(
-  attackList: ReadonlyArray<{ keyspace: string | null }>
+  attackList: ReadonlyArray<{
+    keyspace: string | null;
+    mode?: number | null | undefined;
+    wordlistId?: number | null | undefined;
+    masklistId?: number | null | undefined;
+    advancedConfiguration?: unknown;
+  }>
 ): 'inline' | 'async' {
   let estimatedTasks = 0;
   const chunkSize = BigInt(CHUNK_SIZE);
   for (const atk of attackList) {
     const raw = atk.keyspace?.trim();
     if (!raw || raw === '0') {
-      // Null / zero / blank: legacy behavior - treat as 1 task. See the
-      // known-tension note above.
+      // Null / zero / blank keyspace.
+      if (isAttackKeyspaceComputable(atk)) {
+        // generateTasksForAttack will compute the real keyspace and
+        // may generate up to MAX_CHUNKS_PER_ATTACK chunks inline.
+        // Force async so the request path doesn't block on the burst.
+        return 'async';
+      }
+      // Calculator will fall through to a single placeholder task.
       estimatedTasks += 1;
       continue;
     }

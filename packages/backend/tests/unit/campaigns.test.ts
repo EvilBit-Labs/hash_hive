@@ -208,4 +208,56 @@ describe('Task generation threshold (99/100 split)', () => {
     }));
     expect(resolveGenerationStrategy(attacks)).toBe('async');
   });
+
+  // ─── Computable-keyspace routing (post-#96) ─────────────────────────
+
+  test('null keyspace + computable mask attack forces async', () => {
+    // generateTasksForAttack will compute ?a^7 ~ 6.98e13 keyspace and may
+    // emit up to MAX_CHUNKS_PER_ATTACK chunks - far past the inline cap.
+    expect(
+      resolveGenerationStrategy([
+        {
+          keyspace: null,
+          mode: 3,
+          advancedConfiguration: { mask: '?a?a?a?a?a?a?a' },
+        },
+      ])
+    ).toBe('async');
+  });
+
+  test('null keyspace + computable straight attack forces async', () => {
+    // Mode 0 with wordlistId set is computable - the calculator will fetch
+    // wordlist.lineCount and emit a real keyspace. Force async.
+    expect(
+      resolveGenerationStrategy([
+        { keyspace: null, mode: 0, wordlistId: 42, advancedConfiguration: {} },
+      ])
+    ).toBe('async');
+  });
+
+  test('null keyspace + non-computable mode stays inline (legacy single-placeholder)', () => {
+    // Mode 1 (combination) has no second-wordlist field; calculator falls
+    // through and emits a single placeholder task. Inline is fine.
+    expect(
+      resolveGenerationStrategy([
+        { keyspace: null, mode: 1, wordlistId: 42, advancedConfiguration: {} },
+      ])
+    ).toBe('inline');
+  });
+
+  test('null keyspace + mode without resource refs stays inline', () => {
+    // Mode 0 with no wordlistId - calculator returns null, single placeholder.
+    expect(
+      resolveGenerationStrategy([
+        { keyspace: null, mode: 0, wordlistId: null, advancedConfiguration: {} },
+      ])
+    ).toBe('inline');
+  });
+
+  test('legacy stub without mode info preserves inline-single-placeholder behavior', () => {
+    // Existing callers that pass minimal { keyspace: null } stubs (e.g. older
+    // tests, queue handlers that haven't been threaded the resource fields)
+    // continue to see "1 task -> inline" since mode is undefined.
+    expect(resolveGenerationStrategy([{ keyspace: null }])).toBe('inline');
+  });
 });
