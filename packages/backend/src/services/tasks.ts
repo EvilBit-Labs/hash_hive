@@ -1,5 +1,15 @@
 import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared';
-import { agentBenchmarks, agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared';
+import {
+  agentBenchmarks,
+  agents,
+  attacks,
+  campaigns,
+  hashItems,
+  maskLists,
+  ruleLists,
+  tasks,
+  wordLists,
+} from '@hashhive/shared';
 import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
@@ -80,6 +90,74 @@ async function getFleetBenchmarksForMode(
 }
 
 /**
+ * Resolve the keyspace inputs for an attack by joining its wordlist /
+ * rulelist / masklist references and reading the mask string from
+ * `advancedConfiguration.mask` when present.
+ *
+ * Mode 1 (combination) currently has no schema field for a second
+ * wordlist, so secondaryWordlistRows stays undefined and combination
+ * attacks fall through to the single-task path until that field exists.
+ */
+async function loadKeyspaceInputs(attack: {
+  mode: number;
+  wordlistId: number | null;
+  rulelistId: number | null;
+  masklistId: number | null;
+  advancedConfiguration: unknown;
+}): Promise<{
+  mode: number;
+  wordlistRows?: number;
+  rulelistRows?: number;
+  secondaryWordlistRows?: number;
+  mask?: string;
+}> {
+  const inputs: {
+    mode: number;
+    wordlistRows?: number;
+    rulelistRows?: number;
+    secondaryWordlistRows?: number;
+    mask?: string;
+  } = { mode: attack.mode };
+
+  if (attack.wordlistId !== null) {
+    const [row] = await db
+      .select({ lineCount: wordLists.lineCount })
+      .from(wordLists)
+      .where(eq(wordLists.id, attack.wordlistId))
+      .limit(1);
+    if (row?.lineCount !== null && row?.lineCount !== undefined)
+      inputs.wordlistRows = row.lineCount;
+  }
+  if (attack.rulelistId !== null) {
+    const [row] = await db
+      .select({ lineCount: ruleLists.lineCount })
+      .from(ruleLists)
+      .where(eq(ruleLists.id, attack.rulelistId))
+      .limit(1);
+    if (row?.lineCount !== null && row?.lineCount !== undefined)
+      inputs.rulelistRows = row.lineCount;
+  }
+  if (attack.masklistId !== null) {
+    // Masklist line count isn't the same as a mask string keyspace - a
+    // masklist file contains one mask per line. Skipping for now; mode 3
+    // attacks should set `advancedConfiguration.mask` directly.
+    const [row] = await db
+      .select({ id: maskLists.id })
+      .from(maskLists)
+      .where(eq(maskLists.id, attack.masklistId))
+      .limit(1);
+    if (row) {
+      // No mask string here yet - masklist parsing is a follow-up.
+    }
+  }
+  if (attack.advancedConfiguration && typeof attack.advancedConfiguration === 'object') {
+    const cfg = attack.advancedConfiguration as Record<string, unknown>;
+    if (typeof cfg['mask'] === 'string') inputs.mask = cfg['mask'];
+  }
+  return inputs;
+}
+
+/**
  * Generates tasks for an attack by partitioning its keyspace into chunks.
  *
  * Chunking strategy:
@@ -106,13 +184,8 @@ export async function generateTasksForAttack(
   // Resolve total keyspace: prefer the stored value; compute when missing.
   let totalKeyspaceStr = attack.keyspace?.trim() ?? '';
   if (!totalKeyspaceStr || totalKeyspaceStr === '0') {
-    const computed = calculateAttackKeyspace({
-      mode: attack.mode,
-      // The wordlist/rulelist/mask row-count lookups aren't wired yet - that's
-      // a deferred follow-up on word_lists.line_count plumbing. Until those
-      // counts are reliably populated by ingest, fall through to the
-      // single-task path for attacks that arrive without a keyspace.
-    });
+    const inputs = await loadKeyspaceInputs(attack);
+    const computed = calculateAttackKeyspace(inputs);
     totalKeyspaceStr = computed ?? '';
   }
 
@@ -141,6 +214,19 @@ export async function generateTasksForAttack(
   } else {
     const benchmarks = await getFleetBenchmarksForMode(attack.projectId, attack.mode);
     chunkSize = BigInt(pickChunkSize({ totalKeyspace: totalKeyspaceStr, benchmarks }));
+  }
+
+  // Cap chunk count to bound memory + DB-row inserts. A `?a^12` mask attack
+  // (~5.4e23 keyspace) at MAX_CHUNK_SIZE (1e9) would otherwise materialize
+  // ~5.4e14 task rows and OOM the process. When the floor lifts chunkSize
+  // past MAX_CHUNK_SIZE, the caller-visible truncation is the only way to
+  // keep generation finite - the trailing remainder becomes a single
+  // oversized task that the heartbeat-monitor rebalance branch will split
+  // further as agents make progress against it.
+  const MAX_CHUNKS_PER_ATTACK = 100_000n;
+  if (totalKeyspace / chunkSize > MAX_CHUNKS_PER_ATTACK) {
+    chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK;
+    if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n;
   }
 
   const chunks: Array<{
@@ -679,17 +765,20 @@ function readWorkRangeField(workRange: unknown, key: string): bigint {
 export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
   const threshold = new Date(Date.now() - staleThresholdMs);
 
-  // Find tasks assigned to agents that haven't checked in. Carry workRange
-  // and progress along so the rebalance branch doesn't need a second query.
+  // Find tasks assigned to agents that haven't checked in. Carry workRange,
+  // progress, and the campaign's projectId so the rebalance branches don't
+  // need extra queries to publish task_update events.
   const staleTasks = await db
     .select({
       taskId: tasks.id,
       agentId: tasks.agentId,
       workRange: tasks.workRange,
       progress: tasks.progress,
+      projectId: campaigns.projectId,
     })
     .from(tasks)
     .innerJoin(agents, eq(tasks.agentId, agents.id))
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .where(and(eq(tasks.status, 'assigned'), sql`${agents.lastSeenAt} < ${threshold}`));
 
   let reassigned = 0;
@@ -701,8 +790,13 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
     const total = end > start ? end - start : 0n;
     const keyspaceProgress = readKeyspaceProgress(staleTask.progress);
 
-    if (keyspaceProgress > total && total > 0n) {
-      // Data corruption: agent reported more work than the chunk contains.
+    if (keyspaceProgress >= total && total > 0n) {
+      // Agent reported as-much-or-more work than the chunk contains. Either
+      // the agent finished the entire range but died before sending the
+      // completion message, or its report is malformed. Either way, the
+      // chunk did not flow through the normal completion path - mark
+      // failed so a fresh agent reruns the range rather than silently
+      // trusting an un-acked completion.
       // Don't requeue - mark failed and let the campaign aggregate handle it.
       await db
         .update(tasks)
@@ -713,6 +807,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));
+      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed');
       failedOverrun++;
       continue;
     }
@@ -740,6 +835,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));
+      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
       rebalanced++;
       continue;
     }
@@ -755,6 +851,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         updatedAt: new Date(),
       })
       .where(eq(tasks.id, staleTask.taskId));
+    emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
     reassigned++;
   }
 

@@ -393,11 +393,31 @@ export async function deleteAttack(id: number) {
 
 export async function updateCampaignProgress(campaignId: number) {
   // Single aggregation query: total tasks, completed count, and clamped running progress.
+  //
+  // `progress.keyspaceProgress` is the agent-reported count of keyspace units
+  // already cracked within a task's `workRange.total`. We divide to get a
+  // fraction in [0, 1] (LEAST clamps reports that overrun the chunk to 1.0),
+  // then SUM the fractions across running tasks for the campaign's running
+  // contribution. The earlier `LEAST(keyspaceProgress, 1)` formulation
+  // misread the field as already-a-fraction; the spec at
+  // docs/issues/96-keyspace-task-distribution-spec.md is the contract.
   const [agg] = await db
     .select({
       totalTasks: sql<number>`count(*)`,
       completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
-      runningProgress: sql<number>`COALESCE(SUM(GREATEST(0, LEAST(COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0), 1))) FILTER (WHERE ${tasks.status} = 'running'), 0)`,
+      runningProgress: sql<number>`COALESCE(
+        SUM(
+          GREATEST(
+            0,
+            LEAST(
+              COALESCE((${tasks.progress}->>'keyspaceProgress')::float, 0)
+                / NULLIF(COALESCE((${tasks.workRange}->>'total')::float, 0), 0),
+              1
+            )
+          )
+        ) FILTER (WHERE ${tasks.status} = 'running'),
+        0
+      )`,
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId));

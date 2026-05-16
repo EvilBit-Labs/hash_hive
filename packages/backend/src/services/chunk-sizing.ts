@@ -1,15 +1,19 @@
 /**
- * Benchmark-aware chunk sizing for task generation and rebalancing.
+ * Benchmark-aware chunk sizing for task generation.
  *
- * `pickChunkSize` is used at generation time and picks a chunk size based on
- * the median speed of the fleet's benchmarks for the attack's hashcat mode.
- * `pickRebalanceChunkSize` is used when an offline agent's stranded task is
- * being re-chunked and uses the claiming agent's own benchmark.
- *
- * Both helpers carry keyspace values as bigint-decimal strings to preserve
+ * `pickChunkSize` is used at generation time and picks a chunk size based
+ * on the median speed of the fleet's benchmarks for the attack's hashcat
+ * mode. Keyspace values are carried as bigint-decimal strings to preserve
  * precision past `Number.MAX_SAFE_INTEGER`.
  *
  * Pure - no DB access, no I/O. Test in `tests/unit/chunk-sizing.test.ts`.
+ *
+ * Note: an earlier draft also exported `pickRebalanceChunkSize` for a
+ * per-agent rebalance path. That helper was removed because the actual
+ * rebalance call site doesn't know which agent will claim the trimmed
+ * task next - the right policy is the fleet median, which is already
+ * what `pickChunkSize` provides. The split-on-rebalance enhancement
+ * (spec requirement) will reuse `pickChunkSize` directly when it lands.
  */
 
 /** Wall-time target per chunk. Roughly amortizes claim overhead while keeping
@@ -35,15 +39,6 @@ export interface PickChunkSizeInput {
   totalKeyspace: string;
   /** Fleet benchmarks for the attack's hashcat mode. */
   benchmarks: ReadonlyArray<Benchmark>;
-  /** Override wall-time target (testing knob). */
-  targetSeconds?: number;
-}
-
-export interface PickRebalanceChunkSizeInput {
-  /** Remaining keyspace of the stale task, bigint-decimal string. */
-  remaining: string;
-  /** The claiming agent's benchmark, or null if not benchmarked. */
-  benchmark: Benchmark | null;
   /** Override wall-time target (testing knob). */
   targetSeconds?: number;
 }
@@ -97,18 +92,4 @@ export function pickChunkSize(input: PickChunkSizeInput): string {
   // to an integer before converting, since speed * time is integer keyspace.
   const candidate = BigInt(Math.floor(median * target));
   return clampChunkSize(candidate, BigInt(input.totalKeyspace)).toString();
-}
-
-export function pickRebalanceChunkSize(input: PickRebalanceChunkSizeInput): string {
-  if (input.benchmark === null) {
-    // Without a benchmark, the legacy fallback is the safest choice - but
-    // still cap at remaining so we don't generate an over-sized chunk for
-    // a tiny remainder.
-    const fallback = BigInt(FALLBACK_CHUNK_SIZE);
-    const remaining = BigInt(input.remaining);
-    return (fallback > remaining ? remaining : fallback).toString();
-  }
-  const target = input.targetSeconds ?? TARGET_CHUNK_SECONDS;
-  const candidate = BigInt(Math.floor(input.benchmark.speedHs * target));
-  return clampChunkSize(candidate, BigInt(input.remaining)).toString();
 }

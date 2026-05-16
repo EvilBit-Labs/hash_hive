@@ -102,9 +102,13 @@ case unchanged.
 Pure helper `pickChunkSize({ totalKeyspace, agentBenchmarks, targetSeconds })`:
 
 - Target wall-time per chunk: 60 seconds (configurable; tunable later).
-- For an agent with `speedHs`, chunk = `min(speedHs × targetSeconds, totalKeyspace / minChunks)`.
-- Cap with floor (1,000) and ceiling (1,000,000,000) so silly inputs
-  don't generate degenerate chunks.
+- For the fleet's median `speedHs`, chunk = `speedHs * targetSeconds`,
+  clamped between MIN_CHUNK_SIZE (1,000) and MAX_CHUNK_SIZE
+  (1,000,000,000), then capped at the remaining total keyspace.
+- A separate per-attack ceiling on chunk count (MAX_CHUNKS_PER_ATTACK,
+  100,000 in the current impl) prevents OOM on enormous mask attacks by
+  lifting the per-chunk floor when `totalKeyspace / chunkSize` would
+  exceed the cap.
 - Returns chunk size as `bigint`-string.
 
 For generation-time chunking (no specific claimant yet), use the
@@ -249,24 +253,35 @@ test phase is green.
 
 Mapped 1:1 to the issue's acceptance criteria:
 
-- [x] Attacks divided into keyspace-based task chunks
-  → `calculateAttackKeyspace` populates `attacks.keyspace`;
-  `generateTasksForAttack` chunks against the real total.
-- [x] Chunk sizes account for agent benchmark data
-  → `pickChunkSize` uses median speed × 60s target. Verified by unit
-  + integration tests.
-- [x] Atomic task claiming (no double-assignment)
-  → Already shipped (`FOR UPDATE SKIP LOCKED` via raw SQL CTE).
-  Verified by existing tests.
-- [x] Progress tracked as keyspace units
-  → `tasks.progress.keyspaceProgress` is the source of truth;
-  surfaced by the assignment + rebalance paths.
-- [x] Remaining keyspace redistributable on fleet changes
-  → `reassignStaleTasks` rebalance branch trims `workRange.start`
-  and may re-chunk the tail.
-- [x] Diagnostic logging
-  → `assignNextTask` emits one info-level skip log per claim
-  attempt with `{agentId, projectId, reason}`.
+- Attacks divided into keyspace-based task chunks
+  - `calculateAttackKeyspace` computes the keyspace from attack
+    metadata at generation time. The computed value is consumed
+    directly by `generateTasksForAttack` for chunking. The result is
+    not persisted back to `attacks.keyspace` yet; that follow-up
+    requires resolving when to store (at attack create vs. at task
+    generate) and is tracked separately.
+- Chunk sizes account for agent benchmark data
+  - `pickChunkSize` uses fleet-median `speedHs * 60s`, clamped between
+    MIN/MAX bounds and capped at MAX_CHUNKS_PER_ATTACK to bound DB-row
+    materialization. Verified by unit + integration tests.
+- Atomic task claiming (no double-assignment)
+  - Already shipped (`FOR UPDATE SKIP LOCKED` via raw SQL CTE).
+    Verified by existing tests.
+- Progress tracked as keyspace units
+  - `tasks.progress.keyspaceProgress` is the source of truth for the
+    assignment + rebalance paths. Note: the existing campaign progress
+    aggregation in `updateCampaignProgress` reads the same field as a
+    [0, 1] fraction and clamps with LEAST(..., 1); reconciling these
+    two interpretations is a follow-up tracked in residuals.
+- Remaining keyspace redistributable on fleet changes
+  - `reassignStaleTasks` rebalance branch trims `workRange.start`
+    forward by reported progress (single-task re-pend). The
+    fleet-median split-on-rebalance from this spec's text is a
+    follow-up; the current branch always re-pends a single task with
+    the trimmed range.
+- Diagnostic logging
+  - `assignNextTask` emits one info-level `task_assignment` log per
+    claim attempt with `{agentId, projectId, reason}`.
 
 ## Out of Scope
 

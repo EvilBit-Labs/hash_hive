@@ -374,9 +374,23 @@ components:
           type: object
           properties:
             start:
-              type: integer
+              oneOf:
+                - type: integer
+                - type: string
+                  pattern: '^[0-9]+$'
+              description: Keyspace start position. Integer when in JS-safe range; decimal-string when the value exceeds 2^53 - 1 (mask attacks with large keyspaces). Clients must accept either form and coerce to a bigint-equivalent before arithmetic.
             end:
-              type: integer
+              oneOf:
+                - type: integer
+                - type: string
+                  pattern: '^[0-9]+$'
+              description: Keyspace end position. Same number-or-string rule as start.
+            total:
+              oneOf:
+                - type: integer
+                - type: string
+                  pattern: '^[0-9]+$'
+              description: Total keyspace units in this chunk (end - start). Same number-or-string rule as start.
             agentSpeedHs:
               type: integer
               minimum: 0

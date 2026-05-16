@@ -1,13 +1,10 @@
 /**
  * Unit tests for benchmark-aware chunk sizing.
  *
- * Two pure helpers live here:
- *   - `pickChunkSize` - generation time, median of fleet benchmarks
- *   - `pickRebalanceChunkSize` - rebalance time, single claiming-agent benchmark
- *
- * Both return chunk sizes as bigint-decimal strings. Empty/missing
- * benchmarks fall back to FALLBACK_CHUNK_SIZE (matches today's
- * DEFAULT_CHUNK_SIZE = 10_000_000) so a fresh fleet doesn't regress.
+ * `pickChunkSize` is used at generation time and picks a chunk size based
+ * on the median speed of the fleet's benchmarks. Empty/missing benchmarks
+ * fall back to FALLBACK_CHUNK_SIZE (matches today's DEFAULT_CHUNK_SIZE =
+ * 10_000_000) so a fresh fleet doesn't regress.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -15,7 +12,6 @@ import {
   MAX_CHUNK_SIZE,
   MIN_CHUNK_SIZE,
   pickChunkSize,
-  pickRebalanceChunkSize,
   TARGET_CHUNK_SECONDS,
 } from '../../src/services/chunk-sizing.js';
 
@@ -60,7 +56,7 @@ describe('pickChunkSize', () => {
 
   test('odd-length median is the middle value', () => {
     // Median of [10, 20, 30, 40, 50] (sorted) = 30.
-    // 30 * 60 = 1800 -> below MIN (1000) -> returns MIN_CHUNK_SIZE.
+    // 30 * 60 = 1800 - above MIN (1000) and below MAX, not clamped.
     const out = pickChunkSize({
       totalKeyspace: '1000000000',
       benchmarks: [
@@ -71,7 +67,6 @@ describe('pickChunkSize', () => {
         { speedHs: 40 },
       ],
     });
-    // 30*60 = 1800 - between MIN and MAX, not clamped.
     expect(out).toBe('1800');
   });
 
@@ -119,51 +114,5 @@ describe('pickChunkSize', () => {
       benchmarks: [{ speedHs: 100_000_000 }],
     });
     expect(out).toBe(MAX_CHUNK_SIZE);
-  });
-});
-
-describe('pickRebalanceChunkSize', () => {
-  test('null benchmark falls back to FALLBACK_CHUNK_SIZE', () => {
-    expect(pickRebalanceChunkSize({ remaining: '6000000000', benchmark: null })).toBe(
-      FALLBACK_CHUNK_SIZE
-    );
-  });
-
-  test('uses the supplied benchmark directly (no median)', () => {
-    // 1MH/s * 60s = 60M.
-    expect(
-      pickRebalanceChunkSize({ remaining: '1000000000', benchmark: { speedHs: 1_000_000 } })
-    ).toBe('60000000');
-  });
-
-  test('clamps to MAX when speed * target overflows MAX', () => {
-    expect(
-      pickRebalanceChunkSize({
-        remaining: '10000000000',
-        benchmark: { speedHs: 100_000_000_000 },
-      })
-    ).toBe(MAX_CHUNK_SIZE);
-  });
-
-  test('clamps to remaining when remaining is the smallest cap', () => {
-    expect(
-      pickRebalanceChunkSize({ remaining: '500', benchmark: { speedHs: 1_000_000_000 } })
-    ).toBe('500');
-  });
-
-  test('clamps to MIN when speed * target < MIN', () => {
-    expect(pickRebalanceChunkSize({ remaining: '100000', benchmark: { speedHs: 1 } })).toBe(
-      MIN_CHUNK_SIZE
-    );
-  });
-
-  test('honors custom targetSeconds', () => {
-    expect(
-      pickRebalanceChunkSize({
-        remaining: '1000000000',
-        benchmark: { speedHs: 1000 },
-        targetSeconds: 10,
-      })
-    ).toBe('10000');
   });
 });

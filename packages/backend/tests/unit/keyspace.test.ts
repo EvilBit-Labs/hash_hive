@@ -65,6 +65,15 @@ describe('calculateAttackKeyspace - mode 3 (mask)', () => {
     expect(calculateAttackKeyspace({ mode: 3, mask: '?z' })).toBe(null);
   });
 
+  test('?? is a literal question mark (hashcat escape), contributes 1', () => {
+    // `??` -> single literal `?`. `?d` -> 10 candidates. Total: 1 * 10 = 10.
+    expect(calculateAttackKeyspace({ mode: 3, mask: '???d' })).toBe('10');
+  });
+
+  test('?? at end of mask is accepted as a literal', () => {
+    expect(calculateAttackKeyspace({ mode: 3, mask: 'pw??' })).toBe('1');
+  });
+
   test('returns null when mask is missing', () => {
     expect(calculateAttackKeyspace({ mode: 3 })).toBe(null);
   });

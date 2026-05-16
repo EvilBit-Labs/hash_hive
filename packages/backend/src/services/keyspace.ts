@@ -45,6 +45,9 @@ const MASK_CHARSETS: Record<string, number> = {
  * Parse a mask string into the product of its per-position charset sizes.
  * Returns `null` for missing/empty masks and for masks containing unknown
  * `?` tokens - caller must decide whether to fall back or fail loudly.
+ *
+ * Per hashcat mask syntax, `??` is the escape sequence for a literal `?`
+ * character (contributes 1, like any other literal).
  */
 function calculateMaskKeyspace(mask: string): bigint | null {
   if (mask.length === 0) return null;
@@ -54,13 +57,17 @@ function calculateMaskKeyspace(mask: string): bigint | null {
     if (ch === '?') {
       const token = mask[i + 1];
       if (token === undefined) return null;
+      if (token === '?') {
+        // `??` is a literal `?` - contributes 1, like any fixed character.
+        i += 1;
+        continue;
+      }
       const size = MASK_CHARSETS[token];
       if (size === undefined) return null;
       product *= BigInt(size);
       i += 1; // skip the token char
     } else {
       // Literal character contributes 1 (fixed in that position).
-      product *= 1n;
     }
   }
   return product;

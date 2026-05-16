@@ -321,13 +321,16 @@ if (isIsolated) {
   //   3. reassigned (reset) - 0% progress -> existing reset-to-pending path
   // These tests assert the SET payload routed to each outcome branch.
   describe('reassignStaleTasks', () => {
-    // The select chain for reassignStaleTasks is .from(tasks).innerJoin(agents).where(...).
-    // The mock above resolves `from -> { where, innerJoin }` and `innerJoin -> {}` per call,
-    // so we wire a dedicated chain that returns our seeded stale-task array from .where().
+    // The select chain for reassignStaleTasks is
+    //   .from(tasks).innerJoin(agents, ...).innerJoin(campaigns, ...).where(...)
+    // The default mock above only handles a single innerJoin, so we wire a
+    // two-step chain that returns the seeded stale-task array from the final
+    // .where() call.
     function seedStaleTasks(rows: unknown[]) {
       const whereReturning = mock(() => Promise.resolve(rows));
-      const innerJoinReturning = mock(() => ({ where: whereReturning }));
-      mockFrom.mockImplementationOnce(() => ({ innerJoin: innerJoinReturning, where: mock() }));
+      const secondInnerJoin = mock(() => ({ where: whereReturning }));
+      const firstInnerJoin = mock(() => ({ innerJoin: secondInnerJoin }));
+      mockFrom.mockImplementationOnce(() => ({ innerJoin: firstInnerJoin, where: mock() }));
     }
 
     // Captures every .set() payload so each test can assert which branch fired.
@@ -343,11 +346,34 @@ if (isIsolated) {
         .mockImplementation(() => ({ returning: mock(() => Promise.resolve([])) }));
     });
 
+    test('marks task failed when keyspaceProgress equals total (un-acked completion)', async () => {
+      // Agent reported 100% progress but never sent the explicit completion
+      // message. We can't trust the un-acked report - mark failed so a fresh
+      // agent reruns the chunk.
+      seedStaleTasks([
+        {
+          taskId: 50,
+          agentId: 8,
+          projectId: 1,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: { keyspaceProgress: 1000 }, // exactly equals total
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 1 });
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
+    });
+
     test('marks task failed when keyspaceProgress overruns total', async () => {
       seedStaleTasks([
         {
           taskId: 42,
           agentId: 7,
+          projectId: 1,
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: { keyspaceProgress: 5000 }, // 5x the chunk size
         },
@@ -367,6 +393,7 @@ if (isIsolated) {
         {
           taskId: 17,
           agentId: 3,
+          projectId: 1,
           workRange: { start: 0, end: 1_000_000, total: 1_000_000 },
           progress: { keyspaceProgress: 250_000 }, // 25% done
         },
@@ -394,6 +421,7 @@ if (isIsolated) {
         {
           taskId: 9,
           agentId: 2,
+          projectId: 1,
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: {},
         },
@@ -419,6 +447,7 @@ if (isIsolated) {
         {
           taskId: 99,
           agentId: 11,
+          projectId: 1,
           workRange: {
             start: '0',
             end: '100000000000000000000', // 1e20
