@@ -77,9 +77,8 @@ describe('CampaignsPage', () => {
     selectProject();
     renderWithProviders(<CampaignsPage />);
 
-    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    const select = screen.getByLabelText('Filter by campaign status') as HTMLSelectElement;
     expect(select).toBeDefined();
-    expect(select.value).toBe('');
 
     const options = Array.from(select.querySelectorAll('option'));
     const values = options.map((o) => o.value);
@@ -90,7 +89,48 @@ describe('CampaignsPage', () => {
     expect(values).toContain('cancelled');
   });
 
-  it('triggers new fetch when status filter changes', async () => {
+  it('renders priority filter dropdown with high/normal/low options', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse() },
+    });
+
+    selectProject();
+    renderWithProviders(<CampaignsPage />);
+
+    const select = screen.getByLabelText('Filter by campaign priority') as HTMLSelectElement;
+    expect(select).toBeDefined();
+
+    const values = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(values).toEqual(['', '1', '5', '10']);
+  });
+
+  it('renders sort field dropdown with createdAt/name/priority options', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse() },
+    });
+
+    selectProject();
+    renderWithProviders(<CampaignsPage />);
+
+    const select = screen.getByLabelText('Sort campaigns by') as HTMLSelectElement;
+    expect(select).toBeDefined();
+
+    const values = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(values).toEqual(['createdAt', 'name', 'priority']);
+  });
+
+  function getFetchUrls(mockFn: ReturnType<typeof mockFetch>): string[] {
+    return mockFn.mock.calls.map((args) => {
+      const first = args[0] as unknown;
+      return typeof first === 'string'
+        ? first
+        : first instanceof URL
+          ? first.href
+          : (first as Request).url;
+    });
+  }
+
+  it('passes priority filter through to the API', async () => {
     fetchMock = mockFetch({
       '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse() },
     });
@@ -102,11 +142,36 @@ describe('CampaignsPage', () => {
       expect(screen.getByText('Campaign 1')).toBeDefined();
     });
 
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'running' } });
+    const select = screen.getByLabelText('Filter by campaign priority');
+    fireEvent.change(select, { target: { value: '1' } });
 
     await waitFor(() => {
-      expect((select as HTMLSelectElement).value).toBe('running');
+      expect(getFetchUrls(fetchMock).some((u) => u.includes('priority=1'))).toBe(true);
+    });
+  });
+
+  it('passes sort + order through to the API', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse() },
+    });
+
+    selectProject();
+    renderWithProviders(<CampaignsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Campaign 1')).toBeDefined();
+    });
+
+    const sortSelect = screen.getByLabelText('Sort campaigns by');
+    fireEvent.change(sortSelect, { target: { value: 'name' } });
+
+    const orderButton = screen.getByLabelText(/Toggle sort order/);
+    fireEvent.click(orderButton);
+
+    await waitFor(() => {
+      const urls = getFetchUrls(fetchMock);
+      expect(urls.some((u) => u.includes('sort=name'))).toBe(true);
+      expect(urls.some((u) => u.includes('order=asc'))).toBe(true);
     });
   });
 
@@ -127,7 +192,7 @@ describe('CampaignsPage', () => {
     expect(newLink.closest('a')?.getAttribute('href')).toBe('/campaigns/new');
   });
 
-  it('renders Details link for each campaign', async () => {
+  it('renders the campaign name as a link to its detail page', async () => {
     fetchMock = mockFetch({
       '/dashboard/campaigns': {
         status: 200,
@@ -145,7 +210,86 @@ describe('CampaignsPage', () => {
       expect(screen.getByText('Test Campaign')).toBeDefined();
     });
 
-    const detailsLink = screen.getByText('Details');
-    expect(detailsLink.closest('a')?.getAttribute('href')).toBe('/campaigns/7');
+    const nameLink = screen.getByText('Test Campaign');
+    expect(nameLink.closest('a')?.getAttribute('href')).toBe('/campaigns/7');
+  });
+
+  it('renders an actions menu button on each row', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        status: 200,
+        body: mockCampaignsResponse({
+          count: 1,
+          campaigns: [{ id: 7, name: 'Test Campaign', status: 'draft' }],
+        }),
+      },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithProviders(<CampaignsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Campaign')).toBeDefined();
+    });
+
+    const actionsButton = screen.getByLabelText('Campaign actions');
+    expect(actionsButton).toBeDefined();
+  });
+
+  it('opens the start confirmation modal when the actions menu Start is clicked', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        status: 200,
+        body: mockCampaignsResponse({
+          count: 1,
+          campaigns: [{ id: 7, name: 'Test Campaign', status: 'draft', priority: 5 }],
+        }),
+      },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithProviders(<CampaignsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Campaign')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByLabelText('Campaign actions'));
+    const startItem = await screen.findByRole('menuitem', { name: 'Start' });
+    fireEvent.click(startItem);
+
+    await waitFor(() => {
+      expect(screen.getByText('Start campaign?')).toBeDefined();
+    });
+    // The dialog message contains the campaign name + hash list + priority.
+    expect(screen.getByText(/Hash list #1/)).toBeDefined();
+    expect(screen.getByText('Confirm Start')).toBeDefined();
+  });
+
+  it('renders the priority badge for each row', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        status: 200,
+        body: mockCampaignsResponse({
+          count: 2,
+          campaigns: [
+            { id: 1, name: 'High Pri', status: 'draft', priority: 1 },
+            { id: 2, name: 'Low Pri', status: 'draft', priority: 10 },
+          ],
+        }),
+      },
+    });
+
+    selectProject();
+    renderWithProviders(<CampaignsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('High Pri')).toBeDefined();
+    });
+
+    expect(screen.getByText('high')).toBeDefined();
+    expect(screen.getByText('low')).toBeDefined();
   });
 });
