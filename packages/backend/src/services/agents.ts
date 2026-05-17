@@ -1,6 +1,7 @@
 import type {
   AgentCurrentTask,
   AgentHeartbeat,
+  AgentHeartbeatError,
   AgentWorstSeverity,
   SelectAgentBenchmark,
 } from '@hashhive/shared';
@@ -284,10 +285,8 @@ async function fetchCurrentTasks(
  */
 export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status';
 
-// Mirrors the `agentHeartbeatSchema.status` enum so the service layer
-// cannot drift from the zod boundary. If the schema gains a new literal,
-// this union has to widen too — a typo at a call site is a compile error
-// instead of a runtime artifact.
+// Anchored to `AgentHeartbeat['status']` so the service layer cannot
+// drift from the zod boundary.
 type HeartbeatStatusLiteral = AgentHeartbeat['status'];
 type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
 
@@ -310,16 +309,17 @@ export interface HeartbeatTransition {
  */
 export function decideHeartbeatTransition(input: {
   payloadStatus: HeartbeatStatusLiteral;
-  errorSeverity?: 'warning' | 'fatal' | undefined;
+  errorSeverity?: AgentHeartbeatError['severity'] | undefined;
   priorStatus: string | null;
 }): HeartbeatTransition {
   const isFatalError = input.errorSeverity === 'fatal';
   const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus;
 
   // Audit-log only real transitions. No-op heartbeats (status unchanged)
-  // happen every ~30s per agent — logging them would dominate volume.
-  // A null priorStatus (agent row missing) is treated as no-op since the
-  // update will fail anyway.
+  // happen on every agent heartbeat poll — logging them would dominate
+  // log volume. A null priorStatus (agent row missing) is treated as
+  // no-op since the caller's UPDATE will match zero rows; the
+  // missing-row case is surfaced by processHeartbeat instead.
   const shouldLogTransition = input.priorStatus !== null && input.priorStatus !== effectiveStatus;
 
   const reason: StatusTransitionReason | null = !shouldLogTransition
@@ -371,10 +371,8 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   // Persist heartbeat-borne errors to agent_errors regardless of severity.
   // Warnings are recorded but do not change status or fail the running
   // task; fatals are recorded AND drive the status/task transitions
-  // below. Heartbeats and the standalone POST /errors endpoint are
-  // intentionally non-redundant channels — an agent posts via one or the
-  // other for a given event, never both, because the server has no
-  // idempotency key to dedupe across channels.
+  // below. The non-redundant-channel contract (heartbeat vs POST /errors)
+  // is documented on the Heartbeat schema in packages/openapi/agent-api.yaml.
   if (data.error) {
     await logAgentError({
       agentId,
@@ -406,21 +404,33 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   if (updated) {
     emitAgentStatus(updated.projectId, updated.id, effectiveStatus);
 
-    if (transition.shouldLogTransition && transition.reason && priorStatus) {
+    // `priorStatus` is non-null whenever `shouldLogTransition` is true
+    // (see decideHeartbeatTransition); the assertion below keeps TS happy
+    // without re-checking at runtime.
+    if (transition.shouldLogTransition && transition.reason) {
       logStatusTransition({
         agentId: updated.id,
         projectId: updated.projectId,
-        fromStatus: priorStatus,
+        fromStatus: priorStatus as string,
         toStatus: effectiveStatus,
         reason: transition.reason,
       });
     }
+  } else {
+    // Auth middleware verified the agent's bearer token, so the row was
+    // present a moment ago. A vanishing row mid-heartbeat means it was
+    // deleted concurrently. Surface it so an operator can correlate
+    // bursts of "ghost heartbeat" warnings with cleanup actions.
+    logger.warn(
+      { agentId, status: effectiveStatus },
+      'Heartbeat for an agent row that no longer exists'
+    );
   }
 
   // On fatal error, fail the agent's current tasks. `handleTaskFailure`
-  // applies the up-to-3-retry policy defined in the ticket; rolling a
-  // parallel path here would diverge. Dynamic import preserves the
-  // existing tasks.ts <-> agents.ts circular-import workaround.
+  // owns the retry policy; rolling a parallel path here would diverge.
+  // Dynamic import preserves the existing tasks.ts <-> agents.ts
+  // circular-import workaround.
   if (isFatalError) {
     const activeTasks = await db
       .select({ id: tasks.id })
@@ -517,7 +527,24 @@ export async function logAgentError(data: {
     }
     if (projectId !== undefined) {
       emitAgentError(projectId, data.agentId, data.severity);
+    } else {
+      // The row was persisted but we can't route the SSE event without a
+      // projectId — should only happen if the agent row was deleted
+      // between the insert and the lookup. Log so operators can correlate
+      // missing dashboard events with cleanup activity.
+      logger.warn(
+        { agentId: data.agentId, severity: data.severity },
+        'Agent error persisted but project lookup failed; SSE event skipped'
+      );
     }
+  } else {
+    // An INSERT that returns no row means RETURNING was suppressed —
+    // RLS, a trigger, or a future schema change. The insert may or may
+    // not have succeeded; surface it so a regression isn't silent.
+    logger.error(
+      { agentId: data.agentId, severity: data.severity },
+      'agent_errors insert returned no row; downstream event skipped'
+    );
   }
 
   return error ?? null;

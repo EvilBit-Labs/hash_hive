@@ -271,11 +271,17 @@ describe('AGENT_TASK_ACTIVE_STATUSES', () => {
 
 describe('decideHeartbeatTransition', () => {
   it('forces effective status to "error" and flags fatal when severity is fatal', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      errorSeverity: 'fatal',
+    // Arrange
+    const input = {
+      payloadStatus: 'online' as const,
+      errorSeverity: 'fatal' as const,
       priorStatus: 'online',
-    });
+    };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert
     expect(result.effectiveStatus).toBe('error');
     expect(result.isFatalError).toBe(true);
     expect(result.shouldLogTransition).toBe(true);
@@ -283,54 +289,74 @@ describe('decideHeartbeatTransition', () => {
   });
 
   it('keeps the payload status and does not flag fatal on a warning-severity error', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      errorSeverity: 'warning',
+    // Arrange — online → online with a warning is the typical thermal-spike case.
+    const input = {
+      payloadStatus: 'online' as const,
+      errorSeverity: 'warning' as const,
       priorStatus: 'online',
-    });
+    };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert — warning is persisted by the caller via logAgentError but
+    // does not move the agent, so no status-transition audit line.
     expect(result.effectiveStatus).toBe('online');
     expect(result.isFatalError).toBe(false);
-    // online -> online is a no-op transition; the warning is persisted
-    // by the caller via logAgentError, but it does not move the agent
-    // and therefore does not emit a status-transition audit line.
     expect(result.shouldLogTransition).toBe(false);
     expect(result.reason).toBeNull();
   });
 
   it('suppresses the audit log on a no-op transition (status unchanged)', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      priorStatus: 'online',
-    });
+    // Arrange
+    const input = { payloadStatus: 'online' as const, priorStatus: 'online' };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert
     expect(result.shouldLogTransition).toBe(false);
     expect(result.reason).toBeNull();
   });
 
   it('emits a heartbeat_status transition when the payload changes the status', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      priorStatus: 'offline',
-    });
+    // Arrange — agent comes back online after the heartbeat-monitor marked it offline.
+    const input = { payloadStatus: 'online' as const, priorStatus: 'offline' };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert
     expect(result.effectiveStatus).toBe('online');
     expect(result.shouldLogTransition).toBe(true);
     expect(result.reason).toBe('heartbeat_status');
   });
 
   it('emits a fatal_error transition when fatal flips an agent from online', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      errorSeverity: 'fatal',
+    // Arrange
+    const input = {
+      payloadStatus: 'online' as const,
+      errorSeverity: 'fatal' as const,
       priorStatus: 'online',
-    });
+    };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert
     expect(result.shouldLogTransition).toBe(true);
     expect(result.reason).toBe('fatal_error');
   });
 
   it('suppresses the audit log when priorStatus is null (agent row missing)', () => {
-    const result = decideHeartbeatTransition({
-      payloadStatus: 'online',
-      priorStatus: null,
-    });
+    // Arrange — agent row vanished between auth and heartbeat handling.
+    const input = { payloadStatus: 'online' as const, priorStatus: null };
+
+    // Act
+    const result = decideHeartbeatTransition(input);
+
+    // Assert — processHeartbeat surfaces this case via logger.warn; the
+    // pure decision stays silent.
     expect(result.shouldLogTransition).toBe(false);
     expect(result.reason).toBeNull();
   });

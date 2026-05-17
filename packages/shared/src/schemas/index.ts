@@ -336,19 +336,18 @@ export const agentTaskSummarySchema = z.object({
  * Heartbeat-only error severity. Narrower than the standalone
  * `POST /api/v1/agent/errors` endpoint (which accepts
  * `warning | error | fatal` for back-compat with agents posting generic
- * errors): heartbeats classify into the explicit `warning | fatal` split
- * the Agent Heartbeat ticket mandates.
+ * errors): heartbeats classify strictly into `warning` (logged, task
+ * continues) or `fatal` (logged, task failed, agent status forced to
+ * `error`).
  *
- * Size caps are enforced at the boundary: a compromised agent token
- * would otherwise let an attacker bloat `agent_errors` with multi-MB
- * rows every ~30s. The caps mirror similar bounded payloads elsewhere
- * in the agent API surface.
+ * Size caps live at the schema boundary so a compromised agent token
+ * cannot bloat `agent_errors` with multi-MB rows on every heartbeat.
  *
- * `HEARTBEAT_ERROR_CONTEXT_MAX_CHARS` bounds the JSON-serialized
- * `context` field in *characters* (not bytes) because `TextEncoder`
- * isn't part of the ES2022 lib the shared package targets. Worst-case
- * UTF-8 expansion is ~4x, so a 16 K-char cap still keeps row sizes
- * well under jsonb-friendly limits.
+ * `HEARTBEAT_ERROR_CONTEXT_MAX_CHARS` bounds `context` in JSON-string
+ * *characters*, not bytes. `JSON.stringify().length` is simpler than
+ * encoding-then-measuring and the worst-case UTF-8 expansion is ~4x —
+ * even a fully-multibyte 16K-char payload stays under 64 KB, which is
+ * still safely under jsonb-friendly row limits.
  */
 export const HEARTBEAT_ERROR_MESSAGE_MAX = 4096;
 export const HEARTBEAT_ERROR_CONTEXT_MAX_CHARS = 16 * 1024;
@@ -383,9 +382,8 @@ export const agentHeartbeatCurrentTaskSchema = z.object({
 });
 
 export const agentHeartbeatSchema = z.object({
-  // The Agent Heartbeat ticket samples `status: 'online' | 'error'` but the
-  // wider system already depends on `busy` and `benchmarked` transitions
-  // (assignments, benchmark submission), so the enum stays a superset. The
+  // Status enum is a deliberate superset: `busy` and `benchmarked` are
+  // load-bearing for task assignment and benchmark submission. The
   // service layer treats anything other than a fatal-error heartbeat as
   // "agent is reachable" regardless of which non-error literal arrives.
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
