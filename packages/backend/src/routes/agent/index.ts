@@ -6,12 +6,10 @@ import {
   HEARTBEAT_ERROR_MESSAGE_MAX,
 } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
-import type { Context } from 'hono';
 import { Hono } from 'hono';
-import type { ZodIssue } from 'zod';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
-import { requireAgentToken, requireAgentTokenAllowRecovery } from '../../middleware/auth.js';
+import { requireAgentToken, requireAgentTokenForHeartbeatRecovery } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js';
 import {
   compareCrackerVersions,
@@ -37,15 +35,38 @@ import type { AppEnv } from '../../types.js';
  * `middleware/auth.ts` and AGENTS.md "API Surfaces"). Centralizing the
  * mapping here also gives contract tests a single stable assertion
  * target.
+ *
+ * The hook walks every zod issue, joining each into the response
+ * message so union-refinement failures (which surface in nested
+ * issues, not the top-level issue) are not silently dropped. The
+ * param shape mirrors `@hono/zod-validator` 0.7.6's `Hook<...>`
+ * signature (kept structural so the hook stays reusable across
+ * heterogeneous schemas without re-parameterizing each call site).
  */
+type ZodIssueLite = { path?: ReadonlyArray<PropertyKey>; message?: string };
+type ZodErrorLike = { issues?: ReadonlyArray<ZodIssueLite> };
+
+function formatValidationMessage(error: ZodErrorLike | undefined): string {
+  const issues = error?.issues;
+  if (!issues || issues.length === 0) return 'Invalid request body';
+  return issues
+    .map((issue) => {
+      const path = issue.path && issue.path.length > 0 ? issue.path.map(String).join('.') : 'body';
+      return issue.message ? `${path}: ${issue.message}` : path;
+    })
+    .join('; ');
+}
+
+import type { Context } from 'hono';
+
 function agentValidationHook(
-  result: { success: boolean; error?: { issues?: ZodIssue[] } },
+  result:
+    | { success: true; data: unknown; target: string }
+    | { success: false; error: ZodErrorLike; data: unknown; target: string },
   c: Context
-) {
-  if (result.success) return;
-  const first = result.error?.issues?.[0];
-  const path = first?.path?.length ? first.path.join('.') : 'body';
-  const message = first?.message ? `${path}: ${first.message}` : 'Invalid request body';
+): Response | undefined {
+  if (result.success) return undefined;
+  const message = formatValidationMessage(result.error);
   return c.json({ error: { code: 'VALIDATION_ERROR', message } }, 400);
 }
 
@@ -59,7 +80,7 @@ const agentRoutes = new Hono<AppEnv>();
 // will transition the agent back to 'online'. Every other agent
 // endpoint uses the strict variant — a broken agent must not pick up
 // new work until it has recovered via /heartbeat first.
-agentRoutes.use('/heartbeat', requireAgentTokenAllowRecovery);
+agentRoutes.use('/heartbeat', requireAgentTokenForHeartbeatRecovery);
 agentRoutes.use('/tasks/*', requireAgentToken);
 agentRoutes.use('/errors', requireAgentToken);
 agentRoutes.use('/benchmark', requireAgentToken);

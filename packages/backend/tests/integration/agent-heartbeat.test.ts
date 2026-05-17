@@ -76,14 +76,20 @@ if (!IS_ISOLATED) {
     highPriorityTask: null as { id: number } | null,
   };
 
-  const handleTaskFailureMock = mock(
-    (taskId: number, agentId: number, reason: string): Promise<unknown> => {
-      // Mark the task as failed in our in-memory state so subsequent
-      // active-task queries observe the failure.
-      state.activeTasks = state.activeTasks.filter((t) => t.id !== taskId);
-      return Promise.resolve({ retried: false, taskId, agentId, reason });
-    }
-  );
+  // Default handleTaskFailure implementation reused in beforeEach when
+  // we mockReset the spy. Per GOTCHAS.md, mockClear only resets call
+  // history — queued mockImplementationOnce values from a prior test
+  // would leak across cases otherwise.
+  const defaultHandleTaskFailureImpl = (
+    taskId: number,
+    agentId: number,
+    reason: string
+  ): Promise<unknown> => {
+    state.activeTasks = state.activeTasks.filter((t) => t.id !== taskId);
+    return Promise.resolve({ retried: false, taskId, agentId, reason });
+  };
+
+  const handleTaskFailureMock = mock(defaultHandleTaskFailureImpl);
 
   const loggerMock = {
     info: mock(),
@@ -178,10 +184,15 @@ if (!IS_ISOLATED) {
           if (keys.length === 1 && keys[0] === 'id') {
             const ownedRows = Array.from(state.ownedTaskIds).map((id) => ({ id }));
             const activeRows = state.activeTasks.map((t) => ({ id: t.id }));
+            // verifyTaskOwnership now runs inside the tx with FOR UPDATE:
+            //   select({id}).from(tasks).where(...).for('update').limit(1)
+            // active-task fan-out is still:
+            //   select({id}).from(tasks).where(...)  -- awaited directly
+            // high-priority lookup is:
+            //   select({id}).from(tasks).innerJoin(...).where(...).limit(1)
             const whereChain = {
-              // verifyTaskOwnership calls .limit(1) after .where(...)
+              for: () => ({ limit: () => Promise.resolve(ownedRows) }),
               limit: () => Promise.resolve(ownedRows),
-              // active-task fan-out awaits the .where(...) result directly
               then: (resolve: (v: unknown) => void) => Promise.resolve(activeRows).then(resolve),
             };
             return {
@@ -271,12 +282,17 @@ if (!IS_ISOLATED) {
 
   beforeEach(() => {
     resetState();
-    handleTaskFailureMock.mockClear();
-    loggerMock.info.mockClear();
-    loggerMock.warn.mockClear();
-    loggerMock.error.mockClear();
-    emitAgentErrorMock.mockClear();
-    emitAgentStatusMock.mockClear();
+    // mockReset (not mockClear) clears queued mockImplementationOnce
+    // values too — required per GOTCHAS.md "Use mockReset() not
+    // mockClear() in beforeEach". Reinstall the default impls so the
+    // tests that rely on them keep working.
+    handleTaskFailureMock.mockReset();
+    handleTaskFailureMock.mockImplementation(defaultHandleTaskFailureImpl);
+    loggerMock.info.mockReset();
+    loggerMock.warn.mockReset();
+    loggerMock.error.mockReset();
+    emitAgentErrorMock.mockReset();
+    emitAgentStatusMock.mockReset();
   });
 
   afterEach(() => {

@@ -410,7 +410,7 @@ describe('Agent API: POST /heartbeat', () => {
   });
 
   // ─── Recovery from status='error' via heartbeat ─────────────────────
-  // The heartbeat endpoint uses requireAgentTokenAllowRecovery so an
+  // The heartbeat endpoint uses requireAgentTokenForHeartbeatRecovery so an
   // agent whose row was forced to status='error' by a prior fatal
   // heartbeat can post a clean heartbeat to come back online. Every
   // other agent endpoint stays strict (rejects error-state agents).

@@ -111,6 +111,6 @@ export const requireAgentToken = createAgentTokenMiddleware({ allowErroredAgent:
  * for transitioning the agent back to `online` (or keeping it in
  * `error` if the recovery heartbeat itself reports a fatal error).
  */
-export const requireAgentTokenAllowRecovery = createAgentTokenMiddleware({
+export const requireAgentTokenForHeartbeatRecovery = createAgentTokenMiddleware({
   allowErroredAgent: true,
 });

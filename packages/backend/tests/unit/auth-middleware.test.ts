@@ -47,7 +47,7 @@ mock.module('../../src/lib/auth.js', () => ({
 
 import {
   requireAgentToken,
-  requireAgentTokenAllowRecovery,
+  requireAgentTokenForHeartbeatRecovery,
   requireSession,
 } from '../../src/middleware/auth.js';
 
@@ -95,7 +95,7 @@ function createAgentApp() {
 
 function createAgentRecoveryApp() {
   const app = new Hono<AppEnv>();
-  app.use('*', requireAgentTokenAllowRecovery);
+  app.use('*', requireAgentTokenForHeartbeatRecovery);
   app.get('/agent-endpoint', (c) => {
     const agent = c.get('agent');
     return c.json({ agentId: agent.agentId, projectId: agent.projectId });
@@ -215,7 +215,7 @@ describe('requireAgentToken middleware', () => {
   });
 
   it('should accept a valid active agent pre-shared token', async () => {
-    mockAgentResult = [{ id: 42, projectId: 7, status: 'active', capabilities: { gpu: true } }];
+    mockAgentResult = [{ id: 42, projectId: 7, status: 'online', capabilities: { gpu: true } }];
 
     const res = await app.request('/agent-endpoint', {
       headers: { authorization: 'Bearer valid-agent-token' },
@@ -245,7 +245,7 @@ describe('requireAgentToken middleware', () => {
   });
 });
 
-describe('requireAgentTokenAllowRecovery middleware', () => {
+describe('requireAgentTokenForHeartbeatRecovery middleware', () => {
   const app = createAgentRecoveryApp();
 
   beforeEach(() => {

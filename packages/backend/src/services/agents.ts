@@ -342,6 +342,24 @@ export function decideHeartbeatTransition(input: {
   };
 }
 
+/**
+ * Lazy reference to `handleTaskFailure` from `./tasks.js`. The static
+ * import path is blocked by the circular dependency between
+ * `services/agents.ts` and `services/tasks.ts` (tasks imports
+ * `getAgentBenchmarkForMode` from this module). We resolve the module
+ * once on first use and cache the function reference so every
+ * subsequent fatal heartbeat skips the import-resolution roundtrip.
+ */
+let cachedHandleTaskFailure: typeof import('./tasks.js').handleTaskFailure | null = null;
+
+async function getHandleTaskFailure(): Promise<typeof import('./tasks.js').handleTaskFailure> {
+  if (cachedHandleTaskFailure === null) {
+    const mod = await import('./tasks.js');
+    cachedHandleTaskFailure = mod.handleTaskFailure;
+  }
+  return cachedHandleTaskFailure;
+}
+
 function logStatusTransition(opts: {
   agentId: number;
   projectId: number;
@@ -362,17 +380,72 @@ function logStatusTransition(opts: {
 }
 
 /**
- * Keys whose values should never reach `agent_errors.context`. An agent
- * may inadvertently serialize `process.env`, HTTP headers, or
- * exception-augmented `cause` chains that carry tokens/passwords;
- * scrub them server-side so operators with dashboard access cannot
- * read secrets that should have stayed on the agent host. The match
- * is case-insensitive and substring-based so `API_KEY`, `apiKey`,
- * `x-auth-token`, and `customer_secret` all redact.
+ * Whole-word secret-name set used by `isSecretKey`. Keys that normalize
+ * to one of these names — or that end in `_<secret>` after
+ * normalization — are redacted before persistence. The list covers the
+ * obvious credential-bearing field names and a few common compounds
+ * (e.g., `access_token`, `set_cookie`); add new entries when an agent
+ * is observed to spill a different field shape, but keep the matching
+ * boundary-aware so descriptive names like `tokenCount` or
+ * `cookieDomain` are not falsely redacted.
  */
-const SECRET_KEY_PATTERN = /token|password|secret|api[_-]?key|authorization|cookie|bearer/i;
+const SECRET_KEY_NAMES = new Set([
+  'token',
+  'tokens',
+  'password',
+  'passwords',
+  'passwd',
+  'pwd',
+  'secret',
+  'secrets',
+  'api_key',
+  'api_keys',
+  'apikey',
+  'apikeys',
+  'authorization',
+  'auth',
+  'cookie',
+  'cookies',
+  'set_cookie',
+  'bearer',
+  'credential',
+  'credentials',
+  'access_token',
+  'refresh_token',
+  'id_token',
+  'session_token',
+  'x_auth_token',
+  'x_api_key',
+  'x_access_token',
+]);
 const SCRUBBED_VALUE = '[REDACTED]';
 const SCRUB_MAX_DEPTH = 6;
+
+/**
+ * Decide whether a key carries a secret value and must be redacted.
+ * Normalizes `apiKey` / `API_KEY` / `api-key` / `api_key` to a single
+ * snake_case form, then checks whole-word membership in the set above
+ * or `<...>_<secret>` suffix. The earlier substring-based regex was
+ * too aggressive — descriptive names like `tokenCount`, `cookieDomain`,
+ * and `bearerHostname` were being redacted along with the values
+ * operators actually need for debugging.
+ *
+ * Exported for direct unit testing alongside `scrubAgentErrorContext`.
+ */
+export function isSecretKey(key: string): boolean {
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (SECRET_KEY_NAMES.has(normalized)) return true;
+  // Trailing-secret suffix: `db_password`, `customer_secret`,
+  // `x_auth_token` etc. Match only when the last underscore-separated
+  // word is a known secret name; this keeps `password_age` (a duration
+  // counter, not the password itself) out of scope.
+  const parts = normalized.split('_');
+  const last = parts[parts.length - 1];
+  return !!last && SECRET_KEY_NAMES.has(last);
+}
 
 /**
  * Walk an arbitrary jsonb-compatible value, redacting any object key
@@ -393,7 +466,7 @@ export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
   }
   const out: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (SECRET_KEY_PATTERN.test(key)) {
+    if (isSecretKey(key)) {
       out[key] = SCRUBBED_VALUE;
     } else {
       out[key] = scrubAgentErrorContext(raw, depth + 1);
@@ -409,16 +482,24 @@ export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
  * error without the task linkage instead of attributing it to another
  * agent's task. Emits a `logger.warn` on mismatch so operators can
  * detect compromised tokens trying to corrupt audit trails.
+ *
+ * Accepts a drizzle client so the verification can run inside the same
+ * transaction as the agent_errors insert; the `for: 'update'` lock on
+ * the task row closes the window where a concurrent reassignment
+ * between verify and insert could let an error row reference a task
+ * the agent no longer owns.
  */
 async function verifyTaskOwnership(
+  dbClient: DbClient,
   agentId: number,
   taskId: number | undefined
 ): Promise<number | undefined> {
   if (taskId === undefined) return undefined;
-  const [row] = await db
+  const [row] = await dbClient
     .select({ id: tasks.id })
     .from(tasks)
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+    .for('update')
     .limit(1);
   if (row) return row.id;
   logger.warn(
@@ -429,18 +510,15 @@ async function verifyTaskOwnership(
 }
 
 export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
-  // Verify the agent owns currentTask.taskId before the transaction
-  // opens. Done outside the tx so the read-only check can use the main
-  // pool and not extend lock duration on the agents row below.
-  const ownedTaskId = await verifyTaskOwnership(agentId, data.currentTask?.taskId);
-
-  // Atomic block: lock the agent row, capture the prior status, persist
-  // the heartbeat-borne error row, and update the agent's status in a
-  // single transaction. The FOR UPDATE lock closes the TOCTOU race
-  // where two concurrent heartbeats would both observe the same prior
-  // status (per GOTCHAS.md "atomic status guards"). Emits and the
-  // fatal-task-failure loop are deferred until after commit so SSE
-  // clients never see a status that was rolled back.
+  // Atomic block: lock the agent row, capture the prior status, verify
+  // `currentTask.taskId` ownership (with a row lock so a concurrent
+  // reassignment cannot land between the verify and the insert),
+  // persist the heartbeat-borne error row, and update the agent's
+  // status in a single transaction. The FOR UPDATE locks close the
+  // TOCTOU race where two concurrent heartbeats would both observe
+  // the same prior status (per GOTCHAS.md "atomic status guards").
+  // Emits and the fatal-task-failure loop are deferred until after
+  // commit so SSE clients never see a status that was rolled back.
   const txResult = await db.transaction(async (tx) => {
     const [priorRow] = await tx
       .select({ status: agents.status, projectId: agents.projectId })
@@ -456,6 +534,8 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
       errorSeverity: data.error?.severity,
       priorStatus,
     });
+
+    const ownedTaskId = await verifyTaskOwnership(tx, agentId, data.currentTask?.taskId);
 
     if (data.error) {
       await logAgentError(
@@ -539,7 +619,7 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
       .from(tasks)
       .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`));
 
-    const { handleTaskFailure } = await import('./tasks.js');
+    const handleTaskFailure = await getHandleTaskFailure();
     let failed = 0;
     for (const activeTask of activeTasks) {
       try {
@@ -558,7 +638,6 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   // Check if there are high-priority pending tasks for this agent's project
   let hasHighPriorityTasks = false;
   if (updated) {
-    const { campaigns } = await import('@hashhive/shared');
     const [highPriority] = await db
       .select({ id: tasks.id })
       .from(tasks)

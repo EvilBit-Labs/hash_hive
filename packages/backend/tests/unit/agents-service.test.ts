@@ -339,22 +339,25 @@ describe('decideHeartbeatTransition', () => {
     }
   });
 
-  it('returns kind=transition with fatal_error reason when fatal flips from online', () => {
-    // Arrange
+  it('returns kind=noop on a fatal heartbeat when the agent is already in error state', () => {
+    // Arrange — repeated fatal heartbeats from an already-errored agent
+    // should not emit an audit-log line on every poll. effectiveStatus
+    // stays 'error', prior is already 'error', so the transition
+    // collapses to a no-op even though the heartbeat carries fatal
+    // severity. The error itself is still persisted by the caller.
     const input = {
-      payloadStatus: 'online' as const,
+      payloadStatus: 'error' as const,
       errorSeverity: 'fatal' as const,
-      priorStatus: 'online',
+      priorStatus: 'error',
     };
 
     // Act
     const result = decideHeartbeatTransition(input);
 
     // Assert
-    expect(result.kind).toBe('transition');
-    if (result.kind === 'transition') {
-      expect(result.reason).toBe('fatal_error');
-    }
+    expect(result.kind).toBe('noop');
+    expect(result.effectiveStatus).toBe('error');
+    expect(result.isFatalError).toBe(true);
   });
 
   it('returns kind=noop when priorStatus is null (agent row missing)', () => {
@@ -465,6 +468,56 @@ describe('scrubAgentErrorContext', () => {
     // Act + Assert — must not throw, and the scrubber substitutes the
     // sentinel beyond the depth cap.
     expect(() => scrubAgentErrorContext(deep)).not.toThrow();
+  });
+
+  it('preserves descriptive keys that only contain a secret-name as a prefix', () => {
+    // Arrange — these names reference a secret (or count them) but do
+    // not carry the secret value itself. The earlier substring-based
+    // pattern over-redacted them, hiding useful debugging info from
+    // operators.
+    const input = {
+      tokenCount: 42,
+      cookieDomain: 'example.com',
+      bearerHostname: 'api.example.com',
+      apiKeyName: 'production',
+      secretsManagerEnabled: true,
+      passwordAge: 60,
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+
+    // Assert — values pass through unchanged.
+    expect(out['tokenCount']).toBe(42);
+    expect(out['cookieDomain']).toBe('example.com');
+    expect(out['bearerHostname']).toBe('api.example.com');
+    expect(out['apiKeyName']).toBe('production');
+    expect(out['secretsManagerEnabled']).toBe(true);
+    expect(out['passwordAge']).toBe(60);
+  });
+
+  it('redacts trailing-secret compound keys (e.g., customer_secret, db_password)', () => {
+    // Arrange — common pattern where a prefix scopes a secret-bearing
+    // field.
+    const input = {
+      customer_secret: 'cs_xxx',
+      db_password: 'pw',
+      access_token: 'at',
+      refresh_token: 'rt',
+      x_api_key: 'k',
+      legitimate_count: 3,
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+
+    // Assert
+    expect(out['customer_secret']).toBe('[REDACTED]');
+    expect(out['db_password']).toBe('[REDACTED]');
+    expect(out['access_token']).toBe('[REDACTED]');
+    expect(out['refresh_token']).toBe('[REDACTED]');
+    expect(out['x_api_key']).toBe('[REDACTED]');
+    expect(out['legitimate_count']).toBe(3);
   });
 
   it('returns primitives unchanged', () => {
