@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CampaignTaskStats } from '../components/features/campaign-task-stats';
 import { PermissionGuard } from '../components/features/permission-guard';
@@ -16,6 +16,14 @@ import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
 import { useCampaignDetail } from '../hooks/use-dashboard';
 import { computeEta } from '../lib/campaign-eta';
 import { Permission } from '../lib/permissions';
+
+// Lazy-load the DAG view so reactflow's bundle weight is only paid when
+// the detail page is actually visited.
+const CampaignDagView = lazy(() =>
+  import('../components/features/campaign-dag-view').then((m) => ({
+    default: m.CampaignDagView,
+  }))
+);
 
 type ConfirmAction = 'stop' | 'delete' | null;
 
@@ -245,6 +253,16 @@ export function CampaignDetailPage() {
             </TableBody>
           </Table>
         )}
+      </section>
+
+      {/* DAG visualization */}
+      <section aria-labelledby="dag-heading" className="space-y-3">
+        <h3 id="dag-heading" className="text-sm font-medium">
+          Attack dependencies
+        </h3>
+        <Suspense fallback={<EmptyState message="Loading graph..." />}>
+          <CampaignDagView attacks={attacks} />
+        </Suspense>
       </section>
 
       {/* Attacks section */}
