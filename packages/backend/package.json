@@ -10,7 +10,7 @@
     "start": "bun dist/index.js",
     "worker:tasks": "bun src/worker-task-generation.ts",
     "worker:jobs": "bun src/worker-jobs.ts",
-    "test": "TASKS_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/tasks.test.ts && QUEUE_MANAGER_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/queue-manager.test.ts && CONTROL_RBAC_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/control-routes-rbac.test.ts && HEALTH_DETERMINISTIC_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/integration/health-deterministic.test.ts && bun test --preload ./tests/preload.ts",
+    "test": "TASKS_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/tasks.test.ts && QUEUE_MANAGER_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/queue-manager.test.ts && CONTROL_RBAC_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/unit/control-routes-rbac.test.ts && HEALTH_DETERMINISTIC_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/integration/health-deterministic.test.ts && AGENT_HEARTBEAT_TEST_ISOLATED=1 bun test --preload ./tests/preload.ts tests/integration/agent-heartbeat.test.ts && bun test --preload ./tests/preload.ts",
     "lint": "biome check ./src",
     "type-check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",

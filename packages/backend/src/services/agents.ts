@@ -290,12 +290,21 @@ export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status';
 type HeartbeatStatusLiteral = AgentHeartbeat['status'];
 type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
 
-export interface HeartbeatTransition {
-  effectiveStatus: ResolvedStatusLiteral;
-  isFatalError: boolean;
-  shouldLogTransition: boolean;
-  reason: StatusTransitionReason | null;
-}
+/**
+ * Discriminated union: a heartbeat either resolves to a no-op transition
+ * (status unchanged) or a real transition that needs an audit-log line.
+ * Using a `kind` discriminant forces call sites to handle both arms and
+ * makes `fromStatus` / `reason` available only when they're meaningful.
+ */
+export type HeartbeatTransition =
+  | { kind: 'noop'; effectiveStatus: ResolvedStatusLiteral; isFatalError: boolean }
+  | {
+      kind: 'transition';
+      effectiveStatus: ResolvedStatusLiteral;
+      isFatalError: boolean;
+      reason: StatusTransitionReason;
+      fromStatus: string;
+    };
 
 /**
  * Pure decision: given the payload status, optional error severity, and
@@ -320,15 +329,17 @@ export function decideHeartbeatTransition(input: {
   // log volume. A null priorStatus (agent row missing) is treated as
   // no-op since the caller's UPDATE will match zero rows; the
   // missing-row case is surfaced by processHeartbeat instead.
-  const shouldLogTransition = input.priorStatus !== null && input.priorStatus !== effectiveStatus;
+  if (input.priorStatus === null || input.priorStatus === effectiveStatus) {
+    return { kind: 'noop', effectiveStatus, isFatalError };
+  }
 
-  const reason: StatusTransitionReason | null = !shouldLogTransition
-    ? null
-    : isFatalError
-      ? 'fatal_error'
-      : 'heartbeat_status';
-
-  return { effectiveStatus, isFatalError, shouldLogTransition, reason };
+  return {
+    kind: 'transition',
+    effectiveStatus,
+    isFatalError,
+    reason: isFatalError ? 'fatal_error' : 'heartbeat_status',
+    fromStatus: input.priorStatus,
+  };
 }
 
 function logStatusTransition(opts: {
@@ -350,97 +361,198 @@ function logStatusTransition(opts: {
   );
 }
 
-export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
-  // Read the prior status before we mutate the row so the audit log can
-  // record the actual transition (the UPDATE ... RETURNING below only
-  // exposes the post-update state).
-  const [priorRow] = await db
-    .select({ status: agents.status, projectId: agents.projectId })
-    .from(agents)
-    .where(eq(agents.id, agentId))
+/**
+ * Keys whose values should never reach `agent_errors.context`. An agent
+ * may inadvertently serialize `process.env`, HTTP headers, or
+ * exception-augmented `cause` chains that carry tokens/passwords;
+ * scrub them server-side so operators with dashboard access cannot
+ * read secrets that should have stayed on the agent host. The match
+ * is case-insensitive and substring-based so `API_KEY`, `apiKey`,
+ * `x-auth-token`, and `customer_secret` all redact.
+ */
+const SECRET_KEY_PATTERN = /token|password|secret|api[_-]?key|authorization|cookie|bearer/i;
+const SCRUBBED_VALUE = '[REDACTED]';
+const SCRUB_MAX_DEPTH = 6;
+
+/**
+ * Walk an arbitrary jsonb-compatible value, redacting any object key
+ * whose name matches the secret pattern. Returns a deep copy so the
+ * caller's object is not mutated. Depth-capped to defend against
+ * pathological agent payloads (the schema already caps overall
+ * serialized size, but a deeply-nested cycle would still be expensive
+ * to walk).
+ *
+ * Exported so unit tests can pin the policy without staging a real
+ * agent_errors row.
+ */
+export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
+  if (depth > SCRUB_MAX_DEPTH) return SCRUBBED_VALUE;
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubAgentErrorContext(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (SECRET_KEY_PATTERN.test(key)) {
+      out[key] = SCRUBBED_VALUE;
+    } else {
+      out[key] = scrubAgentErrorContext(raw, depth + 1);
+    }
+  }
+  return out;
+}
+
+/**
+ * Verify that a heartbeat-supplied `currentTask.taskId` belongs to the
+ * calling agent. Returns the taskId when ownership checks out,
+ * `undefined` when it doesn't — `processHeartbeat` then persists the
+ * error without the task linkage instead of attributing it to another
+ * agent's task. Emits a `logger.warn` on mismatch so operators can
+ * detect compromised tokens trying to corrupt audit trails.
+ */
+async function verifyTaskOwnership(
+  agentId: number,
+  taskId: number | undefined
+): Promise<number | undefined> {
+  if (taskId === undefined) return undefined;
+  const [row] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
     .limit(1);
-  const priorStatus = priorRow?.status ?? null;
+  if (row) return row.id;
+  logger.warn(
+    { agentId, taskId },
+    'Heartbeat referenced currentTask.taskId not owned by this agent; dropping task linkage'
+  );
+  return undefined;
+}
 
-  const transition = decideHeartbeatTransition({
-    payloadStatus: data.status,
-    errorSeverity: data.error?.severity,
-    priorStatus,
-  });
-  const { effectiveStatus, isFatalError } = transition;
+export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
+  // Verify the agent owns currentTask.taskId before the transaction
+  // opens. Done outside the tx so the read-only check can use the main
+  // pool and not extend lock duration on the agents row below.
+  const ownedTaskId = await verifyTaskOwnership(agentId, data.currentTask?.taskId);
 
-  // Persist heartbeat-borne errors to agent_errors regardless of severity.
-  // Warnings are recorded but do not change status or fail the running
-  // task; fatals are recorded AND drive the status/task transitions
-  // below. The non-redundant-channel contract (heartbeat vs POST /errors)
-  // is documented on the Heartbeat schema in packages/openapi/agent-api.yaml.
-  if (data.error) {
-    await logAgentError({
-      agentId,
-      severity: data.error.severity,
-      message: data.error.message,
-      context: data.error.context,
-      taskId: data.currentTask?.taskId,
-      // Skip the redundant SELECT inside logAgentError — we already
-      // have projectId from priorRow.
-      projectId: priorRow?.projectId,
+  // Atomic block: lock the agent row, capture the prior status, persist
+  // the heartbeat-borne error row, and update the agent's status in a
+  // single transaction. The FOR UPDATE lock closes the TOCTOU race
+  // where two concurrent heartbeats would both observe the same prior
+  // status (per GOTCHAS.md "atomic status guards"). Emits and the
+  // fatal-task-failure loop are deferred until after commit so SSE
+  // clients never see a status that was rolled back.
+  const txResult = await db.transaction(async (tx) => {
+    const [priorRow] = await tx
+      .select({ status: agents.status, projectId: agents.projectId })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .for('update')
+      .limit(1);
+
+    const priorStatus = priorRow?.status ?? null;
+
+    const transition = decideHeartbeatTransition({
+      payloadStatus: data.status,
+      errorSeverity: data.error?.severity,
+      priorStatus,
     });
-  }
 
-  const updates: Record<string, unknown> = {
-    status: effectiveStatus,
-    lastSeenAt: new Date(),
-    updatedAt: new Date(),
-  };
+    if (data.error) {
+      await logAgentError(
+        {
+          agentId,
+          severity: data.error.severity,
+          message: data.error.message,
+          context: scrubAgentErrorContext(data.error.context) as
+            | Record<string, unknown>
+            | undefined,
+          taskId: ownedTaskId,
+          // Skip the redundant SELECT inside logAgentError — priorRow
+          // already has projectId.
+          projectId: priorRow?.projectId,
+          // emitAgentError defers until after commit; suppress here.
+          suppressEvent: true,
+        },
+        tx
+      );
+    }
 
-  if (data.capabilities) {
-    updates['capabilities'] = data.capabilities;
-  }
-  if (data.deviceInfo) {
-    updates['hardwareProfile'] = data.deviceInfo;
-  }
+    const updates: Record<string, unknown> = {
+      status: transition.effectiveStatus,
+      lastSeenAt: new Date(),
+      updatedAt: new Date(),
+    };
+    if (data.capabilities) updates['capabilities'] = data.capabilities;
+    if (data.deviceInfo) updates['hardwareProfile'] = data.deviceInfo;
 
-  const [updated] = await db.update(agents).set(updates).where(eq(agents.id, agentId)).returning();
+    const [updated] = await tx
+      .update(agents)
+      .set(updates)
+      .where(eq(agents.id, agentId))
+      .returning();
 
+    return { updated, transition, priorStatus };
+  });
+
+  const { updated, transition } = txResult;
+
+  // Post-commit emits + audit log. If the transaction rolled back,
+  // none of these fire and SSE listeners stay consistent.
   if (updated) {
-    emitAgentStatus(updated.projectId, updated.id, effectiveStatus);
+    if (data.error) {
+      emitAgentError(updated.projectId, updated.id, data.error.severity);
+    }
+    emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus);
 
-    // `priorStatus` is non-null whenever `shouldLogTransition` is true
-    // (see decideHeartbeatTransition); the assertion below keeps TS happy
-    // without re-checking at runtime.
-    if (transition.shouldLogTransition && transition.reason) {
+    if (transition.kind === 'transition') {
       logStatusTransition({
         agentId: updated.id,
         projectId: updated.projectId,
-        fromStatus: priorStatus as string,
-        toStatus: effectiveStatus,
+        fromStatus: transition.fromStatus,
+        toStatus: transition.effectiveStatus,
         reason: transition.reason,
       });
     }
   } else {
     // Auth middleware verified the agent's bearer token, so the row was
     // present a moment ago. A vanishing row mid-heartbeat means it was
-    // deleted concurrently. Surface it so an operator can correlate
+    // deleted concurrently — surface it so an operator can correlate
     // bursts of "ghost heartbeat" warnings with cleanup actions.
     logger.warn(
-      { agentId, status: effectiveStatus },
+      { agentId, status: transition.effectiveStatus },
       'Heartbeat for an agent row that no longer exists'
     );
   }
 
-  // On fatal error, fail the agent's current tasks. `handleTaskFailure`
-  // owns the retry policy; rolling a parallel path here would diverge.
-  // Dynamic import preserves the existing tasks.ts <-> agents.ts
-  // circular-import workaround.
-  if (isFatalError) {
+  // Fail the agent's active tasks on fatal-error heartbeats. Each task
+  // runs in its own try/catch so a single failure does not strand
+  // sibling tasks; partial failures are logged and surfaced in the
+  // return shape so callers / monitoring can detect them. Runs AFTER
+  // the agent-row tx commits because handleTaskFailure does its own
+  // DB work (including transactional retries) and nesting drizzle
+  // transactions inside the same connection produces savepoint churn
+  // we don't need here.
+  let taskFailureSummary: { attempted: number; failed: number } | undefined;
+  if (transition.isFatalError) {
     const activeTasks = await db
       .select({ id: tasks.id })
       .from(tasks)
       .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`));
 
     const { handleTaskFailure } = await import('./tasks.js');
+    let failed = 0;
     for (const activeTask of activeTasks) {
-      await handleTaskFailure(activeTask.id, agentId, data.error?.message ?? 'Agent fatal error');
+      try {
+        await handleTaskFailure(activeTask.id, agentId, data.error?.message ?? 'Agent fatal error');
+      } catch (err) {
+        failed += 1;
+        logger.error(
+          { err, agentId, taskId: activeTask.id },
+          'handleTaskFailure threw during fatal-heartbeat fan-out; sibling tasks continue'
+        );
+      }
     }
+    taskFailureSummary = { attempted: activeTasks.length, failed };
   }
 
   // Check if there are high-priority pending tasks for this agent's project
@@ -462,7 +574,11 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
     hasHighPriorityTasks = !!highPriority;
   }
 
-  return { agent: updated ?? null, hasHighPriorityTasks };
+  return {
+    agent: updated ?? null,
+    hasHighPriorityTasks,
+    ...(taskFailureSummary ? { taskFailureSummary } : {}),
+  };
 }
 
 export async function updateAgent(
@@ -485,20 +601,39 @@ export async function updateAgent(
   return updated ?? null;
 }
 
-export async function logAgentError(data: {
-  agentId: number;
-  severity: string;
-  message: string;
-  context?: Record<string, unknown> | undefined;
-  taskId?: number | undefined;
-  // Optional projectId pass-through: hot-path callers (processHeartbeat)
-  // already know it and pass it in to avoid an extra SELECT on every
-  // error-bearing heartbeat. Callers that don't have it (e.g., the
-  // standalone POST /api/v1/agent/errors handler, which only has agentId)
-  // can omit it and the function falls back to a DB lookup.
-  projectId?: number | undefined;
-}) {
-  const [error] = await db
+/**
+ * Narrow drizzle client surface shared by both the global `db` and the
+ * `tx` argument of `db.transaction((tx) => ...)`. The full
+ * `PostgresJsDatabase` type carries a `$client` property that the
+ * transactional client doesn't, so we project to the query-builder
+ * operations both clients actually share. Lets `logAgentError`
+ * participate in an outer transaction (`processHeartbeat`) without
+ * widening to `any`.
+ */
+type DbClient = Pick<typeof db, 'insert' | 'select' | 'update' | 'delete'>;
+
+export async function logAgentError(
+  data: {
+    agentId: number;
+    severity: string;
+    message: string;
+    context?: Record<string, unknown> | undefined;
+    taskId?: number | undefined;
+    // Optional projectId pass-through: hot-path callers (processHeartbeat)
+    // already know it and pass it in to avoid an extra SELECT on every
+    // error-bearing heartbeat. Callers that don't have it (e.g., the
+    // standalone POST /api/v1/agent/errors handler, which only has agentId)
+    // can omit it and the function falls back to a DB lookup.
+    projectId?: number | undefined;
+    // When true, the SSE `emitAgentError` is skipped. processHeartbeat
+    // sets this so the event fires AFTER the outer transaction commits,
+    // preventing listeners from reacting to a state the DB later rolls
+    // back. Standalone callers (POST /errors) leave it false.
+    suppressEvent?: boolean | undefined;
+  },
+  dbClient: DbClient = db
+) {
+  const [error] = await dbClient
     .insert(agentErrors)
     .values({
       agentId: data.agentId,
@@ -516,9 +651,10 @@ export async function logAgentError(data: {
   // projectId)`, so reusing `agent_status` would silently drop a new
   // error event if a heartbeat just fired for the same project.
   if (error) {
+    if (data.suppressEvent) return error;
     let projectId = data.projectId;
     if (projectId === undefined) {
-      const [agent] = await db
+      const [agent] = await dbClient
         .select({ projectId: agents.projectId })
         .from(agents)
         .where(eq(agents.id, data.agentId))

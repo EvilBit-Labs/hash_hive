@@ -50,6 +50,13 @@
       "when": 1779066400000,
       "tag": "0006_agent_errors_composite_index",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779052939557,
+      "tag": "0007_light_ulik",
+      "breakpoints": true
     }
   ]
 }

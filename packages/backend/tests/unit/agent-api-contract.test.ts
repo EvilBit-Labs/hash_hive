@@ -66,6 +66,7 @@ import {
   classifyWorstSeverity as realClassifyWorstSeverity,
   decideHeartbeatTransition as realDecideHeartbeatTransition,
   pickCurrentTaskByAgent as realPickCurrentTaskByAgent,
+  scrubAgentErrorContext as realScrubAgentErrorContext,
 } from '../../src/services/agents.js';
 
 mock.module('../../src/services/agents.js', () => ({
@@ -77,6 +78,7 @@ mock.module('../../src/services/agents.js', () => ({
   classifyWorstSeverity: realClassifyWorstSeverity,
   decideHeartbeatTransition: realDecideHeartbeatTransition,
   pickCurrentTaskByAgent: realPickCurrentTaskByAgent,
+  scrubAgentErrorContext: realScrubAgentErrorContext,
 }));
 
 // Mock events and tasks to prevent real modules from entering the shared bun

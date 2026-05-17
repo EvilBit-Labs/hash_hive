@@ -16,6 +16,7 @@ import {
   classifyWorstSeverity,
   decideHeartbeatTransition,
   pickCurrentTaskByAgent,
+  scrubAgentErrorContext,
 } from '../../src/services/agents.js';
 import { AGENT_TASK_ACTIVE_STATUSES, projectAgentTaskRows } from '../../src/services/tasks.js';
 
@@ -270,7 +271,7 @@ describe('AGENT_TASK_ACTIVE_STATUSES', () => {
 });
 
 describe('decideHeartbeatTransition', () => {
-  it('forces effective status to "error" and flags fatal when severity is fatal', () => {
+  it('returns kind=transition with fatal_error reason when severity is fatal and prior differs', () => {
     // Arrange
     const input = {
       payloadStatus: 'online' as const,
@@ -281,14 +282,18 @@ describe('decideHeartbeatTransition', () => {
     // Act
     const result = decideHeartbeatTransition(input);
 
-    // Assert
+    // Assert — fatal flips effectiveStatus to 'error', which differs
+    // from prior 'online' and so emits a transition.
+    expect(result.kind).toBe('transition');
     expect(result.effectiveStatus).toBe('error');
     expect(result.isFatalError).toBe(true);
-    expect(result.shouldLogTransition).toBe(true);
-    expect(result.reason).toBe('fatal_error');
+    if (result.kind === 'transition') {
+      expect(result.reason).toBe('fatal_error');
+      expect(result.fromStatus).toBe('online');
+    }
   });
 
-  it('keeps the payload status and does not flag fatal on a warning-severity error', () => {
+  it('returns kind=noop on a warning-severity error when status would not change', () => {
     // Arrange — online → online with a warning is the typical thermal-spike case.
     const input = {
       payloadStatus: 'online' as const,
@@ -300,14 +305,14 @@ describe('decideHeartbeatTransition', () => {
     const result = decideHeartbeatTransition(input);
 
     // Assert — warning is persisted by the caller via logAgentError but
-    // does not move the agent, so no status-transition audit line.
+    // does not move the agent, so the decision collapses to a no-op
+    // (no audit-log line, no fromStatus exposed).
+    expect(result.kind).toBe('noop');
     expect(result.effectiveStatus).toBe('online');
     expect(result.isFatalError).toBe(false);
-    expect(result.shouldLogTransition).toBe(false);
-    expect(result.reason).toBeNull();
   });
 
-  it('suppresses the audit log on a no-op transition (status unchanged)', () => {
+  it('returns kind=noop on a heartbeat that does not change status', () => {
     // Arrange
     const input = { payloadStatus: 'online' as const, priorStatus: 'online' };
 
@@ -315,11 +320,10 @@ describe('decideHeartbeatTransition', () => {
     const result = decideHeartbeatTransition(input);
 
     // Assert
-    expect(result.shouldLogTransition).toBe(false);
-    expect(result.reason).toBeNull();
+    expect(result.kind).toBe('noop');
   });
 
-  it('emits a heartbeat_status transition when the payload changes the status', () => {
+  it('returns kind=transition with heartbeat_status reason when payload changes the status', () => {
     // Arrange — agent comes back online after the heartbeat-monitor marked it offline.
     const input = { payloadStatus: 'online' as const, priorStatus: 'offline' };
 
@@ -327,12 +331,15 @@ describe('decideHeartbeatTransition', () => {
     const result = decideHeartbeatTransition(input);
 
     // Assert
+    expect(result.kind).toBe('transition');
     expect(result.effectiveStatus).toBe('online');
-    expect(result.shouldLogTransition).toBe(true);
-    expect(result.reason).toBe('heartbeat_status');
+    if (result.kind === 'transition') {
+      expect(result.reason).toBe('heartbeat_status');
+      expect(result.fromStatus).toBe('offline');
+    }
   });
 
-  it('emits a fatal_error transition when fatal flips an agent from online', () => {
+  it('returns kind=transition with fatal_error reason when fatal flips from online', () => {
     // Arrange
     const input = {
       payloadStatus: 'online' as const,
@@ -344,11 +351,13 @@ describe('decideHeartbeatTransition', () => {
     const result = decideHeartbeatTransition(input);
 
     // Assert
-    expect(result.shouldLogTransition).toBe(true);
-    expect(result.reason).toBe('fatal_error');
+    expect(result.kind).toBe('transition');
+    if (result.kind === 'transition') {
+      expect(result.reason).toBe('fatal_error');
+    }
   });
 
-  it('suppresses the audit log when priorStatus is null (agent row missing)', () => {
+  it('returns kind=noop when priorStatus is null (agent row missing)', () => {
     // Arrange — agent row vanished between auth and heartbeat handling.
     const input = { payloadStatus: 'online' as const, priorStatus: null };
 
@@ -357,7 +366,112 @@ describe('decideHeartbeatTransition', () => {
 
     // Assert — processHeartbeat surfaces this case via logger.warn; the
     // pure decision stays silent.
-    expect(result.shouldLogTransition).toBe(false);
-    expect(result.reason).toBeNull();
+    expect(result.kind).toBe('noop');
+  });
+});
+
+describe('scrubAgentErrorContext', () => {
+  it('redacts secret-shaped keys at the top level', () => {
+    // Arrange — operator-readable rows must not carry credentials.
+    const input = {
+      stack: 'Error at line 42',
+      api_key: 'sk-prod-xxx',
+      authorization: 'Bearer abc123',
+      gpuId: 0,
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+
+    // Assert
+    expect(out['stack']).toBe('Error at line 42');
+    expect(out['gpuId']).toBe(0);
+    expect(out['api_key']).toBe('[REDACTED]');
+    expect(out['authorization']).toBe('[REDACTED]');
+  });
+
+  it('redacts secret-shaped keys nested deeper in the payload', () => {
+    // Arrange — error.context.cause.headers shape is common when an
+    // agent serializes a fetch failure with a stack trace.
+    const input = {
+      cause: {
+        headers: {
+          'x-auth-token': 'secret-token',
+          'content-type': 'application/json',
+        },
+        statusCode: 500,
+      },
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+    const cause = out['cause'] as Record<string, unknown>;
+    const headers = cause['headers'] as Record<string, unknown>;
+
+    // Assert
+    expect(headers['x-auth-token']).toBe('[REDACTED]');
+    expect(headers['content-type']).toBe('application/json');
+    expect(cause['statusCode']).toBe(500);
+  });
+
+  it('redacts case-insensitively across naming conventions', () => {
+    // Arrange — apiKey, API_KEY, Authorization, COOKIE all match.
+    const input = {
+      apiKey: 'a',
+      API_KEY: 'b',
+      Authorization: 'c',
+      COOKIE: 'd',
+      Bearer: 'e',
+      customer_secret: 'f',
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+
+    // Assert
+    for (const value of Object.values(out)) {
+      expect(value).toBe('[REDACTED]');
+    }
+  });
+
+  it('walks arrays without dropping non-object entries', () => {
+    // Arrange
+    const input = {
+      events: [{ password: 'p', code: 1 }, 'plain string', 42, null],
+    };
+
+    // Act
+    const out = scrubAgentErrorContext(input) as Record<string, unknown>;
+    const events = out['events'] as unknown[];
+
+    // Assert
+    expect((events[0] as Record<string, unknown>)['password']).toBe('[REDACTED]');
+    expect((events[0] as Record<string, unknown>)['code']).toBe(1);
+    expect(events[1]).toBe('plain string');
+    expect(events[2]).toBe(42);
+    expect(events[3]).toBeNull();
+  });
+
+  it('caps recursion depth so cyclic-shaped payloads cannot exhaust the stack', () => {
+    // Arrange — build a payload deeper than SCRUB_MAX_DEPTH (6).
+    type Nested = { next: Nested | Record<string, never> };
+    const deep: Nested = { next: {} };
+    let cursor: Nested = deep;
+    for (let i = 0; i < 20; i++) {
+      cursor.next = { next: {} };
+      cursor = cursor.next as Nested;
+    }
+
+    // Act + Assert — must not throw, and the scrubber substitutes the
+    // sentinel beyond the depth cap.
+    expect(() => scrubAgentErrorContext(deep)).not.toThrow();
+  });
+
+  it('returns primitives unchanged', () => {
+    // Arrange + Act + Assert
+    expect(scrubAgentErrorContext('hello')).toBe('hello');
+    expect(scrubAgentErrorContext(42)).toBe(42);
+    expect(scrubAgentErrorContext(null)).toBeNull();
+    expect(scrubAgentErrorContext(undefined)).toBeUndefined();
   });
 });
