@@ -272,9 +272,29 @@ interface MockAttack {
   dependencies: number[] | null;
 }
 
+interface MockCampaignTaskStats {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+interface MockCampaignActiveAgent {
+  agentId: number;
+  agentName: string;
+  taskId: number;
+  attackId: number;
+  attackMode: number;
+  progress: Record<string, unknown> | null;
+  speedHs: number | null;
+}
+
 interface MockCampaignDetailResponseOptions {
   campaign?: Partial<MockCampaign>;
   attacks?: Array<Partial<MockAttack>>;
+  taskStats?: Partial<MockCampaignTaskStats>;
+  activeAgents?: Array<Partial<MockCampaignActiveAgent>>;
 }
 
 export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOptions = {}) {
@@ -317,7 +337,27 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
         },
       ];
 
-  return { campaign, attacks };
+  const taskStats: MockCampaignTaskStats = {
+    total: 0,
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    ...options.taskStats,
+  };
+
+  const activeAgents = (options.activeAgents ?? []).map((agent, i) => ({
+    agentId: i + 1,
+    agentName: `Rig ${i + 1}`,
+    taskId: i + 1,
+    attackId: 1,
+    attackMode: 0,
+    progress: null,
+    speedHs: null,
+    ...agent,
+  }));
+
+  return { campaign, attacks, taskStats, activeAgents };
 }
 
 // --- Resource fixtures ---

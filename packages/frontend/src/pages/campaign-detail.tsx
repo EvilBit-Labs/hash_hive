@@ -1,90 +1,86 @@
-import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router';
+import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router';
+import { CampaignTaskStats } from '../components/features/campaign-task-stats';
 import { PermissionGuard } from '../components/features/permission-guard';
+import { PriorityBadge } from '../components/features/priority-badge';
 import { StatusBadge } from '../components/features/status-badge';
 import { Button } from '../components/ui/button';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorBanner } from '../components/ui/error-banner';
 import { PageHeader } from '../components/ui/page-header';
+import { ProgressBar } from '../components/ui/progress-bar';
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
 import { TextLink } from '../components/ui/text-link';
-import { useCampaignLifecycle } from '../hooks/use-campaigns';
-import { api } from '../lib/api';
+import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns';
+import { useCampaignDetail } from '../hooks/use-dashboard';
+import { computeEta } from '../lib/campaign-eta';
 import { Permission } from '../lib/permissions';
 
-interface HashProgress {
-  total: number;
-  cracked: number;
-  remaining: number;
-  percentage: number;
+type ConfirmAction = 'stop' | 'delete' | null;
+
+function readPercentage(progress: unknown): number {
+  if (!progress || typeof progress !== 'object') return 0;
+  const p = progress as Record<string, unknown>;
+  if (typeof p['percentage'] === 'number') return p['percentage'];
+  if (typeof p['overallProgress'] === 'number') return p['overallProgress'];
+  const hash = p['hashProgress'] as Record<string, unknown> | undefined;
+  if (hash && typeof hash['percentage'] === 'number') return hash['percentage'];
+  return 0;
 }
-
-interface CampaignProgress {
-  totalTasks?: number;
-  completedTasks?: number;
-  overallProgress?: number;
-  hashProgress?: HashProgress;
-}
-
-interface Campaign {
-  id: number;
-  name: string;
-  description: string | null;
-  status: string;
-  projectId: number;
-  hashListId: number;
-  priority: number;
-  progress: CampaignProgress | null;
-  createdAt: string;
-  startedAt: string | null;
-  completedAt: string | null;
-}
-
-interface Attack {
-  id: number;
-  campaignId: number;
-  mode: number;
-  status: string;
-  wordlistId: number | null;
-  rulelistId: number | null;
-  masklistId: number | null;
-  dependencies: number[] | null;
-}
-
-function useCampaignDetail(campaignId: number) {
-  return useQuery({
-    queryKey: ['campaign', campaignId],
-    queryFn: () =>
-      api.get<{ campaign: Campaign; attacks: Attack[] }>(`/dashboard/campaigns/${campaignId}`),
-    enabled: campaignId > 0,
-  });
-}
-
-type LifecycleAction = 'start' | 'pause' | 'stop' | 'cancel';
-type ButtonVariant = 'primary' | 'secondary' | 'destructive';
-
-const LIFECYCLE_ACTIONS: Record<
-  string,
-  Array<{ action: LifecycleAction; label: string; variant: ButtonVariant }>
-> = {
-  draft: [{ action: 'start', label: 'Start', variant: 'primary' }],
-  running: [
-    { action: 'pause', label: 'Pause', variant: 'secondary' },
-    { action: 'stop', label: 'Stop', variant: 'secondary' },
-    { action: 'cancel', label: 'Cancel', variant: 'destructive' },
-  ],
-  paused: [
-    { action: 'start', label: 'Resume', variant: 'primary' },
-    { action: 'stop', label: 'Stop', variant: 'secondary' },
-    { action: 'cancel', label: 'Cancel', variant: 'destructive' },
-  ],
-};
 
 export function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
   const campaignId = Number(id);
+  const navigate = useNavigate();
+
   const { data, isLoading, isError, error } = useCampaignDetail(campaignId);
   const lifecycle = useCampaignLifecycle(campaignId);
+  const del = useCampaignDelete(campaignId);
+
+  const [confirm, setConfirm] = useState<ConfirmAction>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+
+  function handleStart() {
+    setErrorBanner(null);
+    // Start fires without confirmation on the detail page per spec.
+    lifecycle.mutate('start', {
+      onError: (err) =>
+        setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign'),
+    });
+  }
+
+  function handlePause() {
+    setErrorBanner(null);
+    lifecycle.mutate('pause', {
+      onError: (err) =>
+        setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
+    });
+  }
+
+  async function confirmStop() {
+    try {
+      await lifecycle.mutateAsync('stop');
+      setConfirm(null);
+    } catch (err) {
+      setErrorBanner(err instanceof Error ? err.message : 'Failed to stop campaign');
+    }
+  }
+
+  async function confirmDelete() {
+    try {
+      await del.mutateAsync();
+      setConfirm(null);
+      navigate('/campaigns');
+    } catch (err) {
+      setErrorBanner(err instanceof Error ? err.message : 'Failed to delete campaign');
+    }
+  }
+
+  function cancelConfirm() {
+    if (lifecycle.isPending || del.isPending) return;
+    setConfirm(null);
+  }
 
   if (isLoading) {
     return <EmptyState message="Loading campaign..." />;
@@ -112,8 +108,14 @@ export function CampaignDetailPage() {
     );
   }
 
-  const { campaign, attacks } = data;
-  const actions = LIFECYCLE_ACTIONS[campaign.status] ?? [];
+  const { campaign, attacks, taskStats, activeAgents } = data;
+  const percentage = readPercentage(campaign.progress);
+  const eta = computeEta(taskStats, activeAgents);
+
+  const canStart = campaign.status === 'draft' || campaign.status === 'paused';
+  const canPause = campaign.status === 'running';
+  const canStop = campaign.status === 'running' || campaign.status === 'paused';
+  const canDelete = campaign.status === 'draft';
 
   return (
     <div className="space-y-6">
@@ -122,24 +124,54 @@ export function CampaignDetailPage() {
           Back to campaigns
         </TextLink>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <PageHeader>{campaign.name}</PageHeader>
             <StatusBadge status={campaign.status} />
+            <PriorityBadge priority={campaign.priority} />
           </div>
           <PermissionGuard permission={Permission.CAMPAIGN_EDIT}>
-            <div className="flex gap-2">
-              {actions.map(({ action, label, variant }) => (
+            <div className="flex flex-wrap gap-2">
+              {canStart && (
                 <Button
-                  key={action}
-                  variant={variant}
+                  variant="primary"
                   size="sm"
-                  onClick={() => lifecycle.mutate(action)}
+                  onClick={handleStart}
                   disabled={lifecycle.isPending}
                 >
-                  {label}
+                  {campaign.status === 'paused' ? 'Resume' : 'Start'}
                 </Button>
-              ))}
+              )}
+              {canPause && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handlePause}
+                  disabled={lifecycle.isPending}
+                >
+                  Pause
+                </Button>
+              )}
+              {canStop && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConfirm('stop')}
+                  disabled={lifecycle.isPending}
+                >
+                  Stop
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setConfirm('delete')}
+                  disabled={del.isPending}
+                >
+                  Delete
+                </Button>
+              )}
             </div>
           </PermissionGuard>
         </div>
@@ -149,87 +181,77 @@ export function CampaignDetailPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div
-          style={{ borderLeftColor: 'hsl(var(--warning))' }}
-          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
-        >
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Priority
-          </p>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{campaign.priority}</p>
-        </div>
-        <div
-          style={{ borderLeftColor: 'hsl(var(--info))' }}
-          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
-        >
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Attacks
-          </p>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{attacks.length}</p>
-        </div>
-        <div
-          style={{ borderLeftColor: 'hsl(var(--ctp-lavender))' }}
-          className="rounded-md border border-l-2 border-surface-0 bg-surface-0/40 p-4"
-        >
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Hash List
-          </p>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums">#{campaign.hashListId}</p>
-        </div>
-      </div>
+      {errorBanner && <ErrorBanner message={errorBanner} />}
 
-      {/* Hash-based progress section */}
-      {campaign.progress?.hashProgress && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-medium">Crack Progress</h3>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Cracked
-              </p>
-              <p className="mt-1 font-mono text-lg font-bold tabular-nums text-success">
-                {campaign.progress.hashProgress.cracked.toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Remaining
-              </p>
-              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
-                {campaign.progress.hashProgress.remaining.toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Total
-              </p>
-              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
-                {campaign.progress.hashProgress.total.toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Progress
-              </p>
-              <p className="mt-1 font-mono text-lg font-bold tabular-nums">
-                {(campaign.progress.hashProgress.percentage * 100).toFixed(1)}%
-              </p>
-            </div>
-          </div>
-          <div className="h-2 w-full rounded-full bg-surface-1">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{
-                width: `${Math.min(campaign.progress.hashProgress.percentage * 100, 100)}%`,
-              }}
-            />
-          </div>
+      {/* Progress section */}
+      <section aria-labelledby="progress-heading" className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h3 id="progress-heading" className="text-sm font-medium">
+            Progress
+          </h3>
+          <p className="font-mono text-xs tabular-nums text-muted-foreground">
+            ETA: <span data-testid="campaign-eta">{eta}</span>
+          </p>
         </div>
-      )}
+        <ProgressBar
+          value={percentage}
+          ariaLabel="Campaign overall progress"
+          label={`${(percentage <= 1 ? percentage * 100 : percentage).toFixed(1)}% complete`}
+        />
+        <CampaignTaskStats stats={taskStats} />
+      </section>
 
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium">Attacks</h3>
+      {/* Active agents section */}
+      <section aria-labelledby="active-agents-heading" className="space-y-3">
+        <h3 id="active-agents-heading" className="text-sm font-medium">
+          Active agents
+        </h3>
+        {activeAgents.length === 0 ? (
+          <EmptyState message="No agents currently working on this campaign." />
+        ) : (
+          <Table>
+            <TableHead>
+              <tr>
+                <Th>Agent</Th>
+                <Th>Current Attack</Th>
+                <Th>Progress</Th>
+                <Th>Speed</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {activeAgents.map((agent) => {
+                const taskPct = readPercentage(agent.progress);
+                return (
+                  <TableRow key={`${agent.agentId}-${agent.taskId}`}>
+                    <Td className="text-sm">{agent.agentName}</Td>
+                    <Td className="font-mono text-xs text-muted-foreground">
+                      Attack #{agent.attackId} - mode {agent.attackMode}
+                    </Td>
+                    <Td className="min-w-[120px]">
+                      <ProgressBar
+                        value={taskPct}
+                        size="thin"
+                        ariaLabel={`${agent.agentName} task progress`}
+                      />
+                    </Td>
+                    <Td className="font-mono text-xs text-muted-foreground">
+                      {agent.speedHs !== null
+                        ? `${Math.round(agent.speedHs).toLocaleString()} H/s`
+                        : '--'}
+                    </Td>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </section>
+
+      {/* Attacks section */}
+      <section aria-labelledby="attacks-heading" className="space-y-3">
+        <h3 id="attacks-heading" className="text-sm font-medium">
+          Attacks
+        </h3>
         {attacks.length === 0 ? (
           <EmptyState message="No attacks configured." />
         ) : (
@@ -262,13 +284,35 @@ export function CampaignDetailPage() {
             </TableBody>
           </Table>
         )}
-      </div>
+      </section>
 
-      <div className="border-t border-surface-0/50 pt-4 space-y-1 text-xs text-muted-foreground">
+      <div className="space-y-1 border-t border-surface-0/50 pt-4 text-xs text-muted-foreground">
         <p>Created {new Date(campaign.createdAt).toLocaleString()}</p>
         {campaign.startedAt && <p>Started {new Date(campaign.startedAt).toLocaleString()}</p>}
         {campaign.completedAt && <p>Completed {new Date(campaign.completedAt).toLocaleString()}</p>}
       </div>
+
+      <ConfirmDialog
+        open={confirm === 'stop'}
+        title="Stop campaign?"
+        message="This will cancel all running tasks and reset the campaign to draft status. In-flight work cannot be resumed."
+        confirmLabel="Confirm Stop"
+        destructive
+        busy={lifecycle.isPending}
+        onConfirm={confirmStop}
+        onCancel={cancelConfirm}
+      />
+
+      <ConfirmDialog
+        open={confirm === 'delete'}
+        title="Delete campaign?"
+        message={`Permanently remove "${campaign.name}" and its attacks. This cannot be undone.`}
+        confirmLabel="Delete"
+        destructive
+        busy={del.isPending}
+        onConfirm={confirmDelete}
+        onCancel={cancelConfirm}
+      />
     </div>
   );
 }

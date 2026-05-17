@@ -57,10 +57,9 @@ describe('CampaignDetailPage', () => {
     });
   });
 
-  it('renders campaign details when data is available', async () => {
+  it('renders header with name, status badge, and priority badge', async () => {
     const data = mockCampaignDetailResponse({
-      campaign: { id: 1, name: 'NTLM Campaign', status: 'draft', priority: 10 },
-      attacks: [{ id: 1, mode: 0, status: 'pending', wordlistId: 1 }],
+      campaign: { id: 1, name: 'NTLM Campaign', status: 'draft', priority: 1 },
     });
 
     fetchMock = mockFetch({
@@ -77,15 +76,112 @@ describe('CampaignDetailPage', () => {
     });
 
     expect(screen.getByText('draft')).toBeDefined();
-    expect(screen.getByText('10')).toBeDefined();
-    // "Attacks" appears in both the stat card and section heading
-    expect(screen.getAllByText('Attacks').length).toBeGreaterThanOrEqual(1);
+    // Priority=1 renders as the "high" priority badge.
+    expect(screen.getByText('high')).toBeDefined();
+  });
+
+  it('renders the task stats tiles for Total/Pending/Running/Completed/Failed', async () => {
+    const data = mockCampaignDetailResponse({
+      taskStats: { total: 10, pending: 2, running: 3, completed: 4, failed: 1 },
+    });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('NTLM Campaign')).toBeDefined();
+    });
+
+    const total = screen.getByTestId('task-stat-total');
+    const pending = screen.getByTestId('task-stat-pending');
+    const running = screen.getByTestId('task-stat-running');
+    const completed = screen.getByTestId('task-stat-completed');
+    const failed = screen.getByTestId('task-stat-failed');
+
+    expect(total.textContent).toContain('10');
+    expect(pending.textContent).toContain('2');
+    expect(running.textContent).toContain('3');
+    expect(completed.textContent).toContain('4');
+    expect(failed.textContent).toContain('1');
+  });
+
+  it('renders ETA "--" when no agents are reporting speed', async () => {
+    const data = mockCampaignDetailResponse({
+      taskStats: { total: 10, pending: 10, running: 0, completed: 0, failed: 0 },
+    });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('NTLM Campaign')).toBeDefined();
+    });
+
+    expect(screen.getByTestId('campaign-eta').textContent).toBe('--');
+  });
+
+  it('renders the active agents table when agents are active', async () => {
+    const data = mockCampaignDetailResponse({
+      activeAgents: [
+        {
+          agentId: 11,
+          agentName: 'Rig Alpha',
+          taskId: 99,
+          attackId: 5,
+          attackMode: 3,
+          speedHs: 1500,
+        },
+      ],
+    });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Rig Alpha')).toBeDefined();
+    });
+
+    expect(screen.getByText('Attack #5 - mode 3')).toBeDefined();
+    expect(screen.getByText('1,500 H/s')).toBeDefined();
+  });
+
+  it('renders the empty state when no agents are active', async () => {
+    const data = mockCampaignDetailResponse({ activeAgents: [] });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('No agents currently working on this campaign.')).toBeDefined();
+    });
   });
 
   it('renders Start button for draft campaigns', async () => {
-    const data = mockCampaignDetailResponse({
-      campaign: { status: 'draft' },
-    });
+    const data = mockCampaignDetailResponse({ campaign: { status: 'draft' } });
 
     fetchMock = mockFetch({
       '/dashboard/campaigns/1': { status: 200, body: data },
@@ -100,9 +196,11 @@ describe('CampaignDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Start')).toBeDefined();
     });
+    // Delete is only visible in draft status.
+    expect(screen.getByText('Delete')).toBeDefined();
   });
 
-  it('renders Pause, Stop, Cancel buttons for running campaigns', async () => {
+  it('renders Pause + Stop for running campaigns; no Delete', async () => {
     const data = mockCampaignDetailResponse({
       campaign: { status: 'running', startedAt: new Date().toISOString() },
     });
@@ -122,13 +220,11 @@ describe('CampaignDetailPage', () => {
     });
 
     expect(screen.getByText('Stop')).toBeDefined();
-    expect(screen.getByText('Cancel')).toBeDefined();
+    expect(screen.queryByText('Delete')).toBeNull();
   });
 
-  it('renders Resume, Stop, Cancel buttons for paused campaigns', async () => {
-    const data = mockCampaignDetailResponse({
-      campaign: { status: 'paused' },
-    });
+  it('renders Resume + Stop for paused campaigns', async () => {
+    const data = mockCampaignDetailResponse({ campaign: { status: 'paused' } });
 
     fetchMock = mockFetch({
       '/dashboard/campaigns/1': { status: 200, body: data },
@@ -145,13 +241,61 @@ describe('CampaignDetailPage', () => {
     });
 
     expect(screen.getByText('Stop')).toBeDefined();
-    expect(screen.getByText('Cancel')).toBeDefined();
   });
 
-  it('calls lifecycle mutation when clicking a lifecycle button', async () => {
+  it('opens the stop confirmation modal when Stop is clicked', async () => {
     const data = mockCampaignDetailResponse({
-      campaign: { status: 'draft' },
+      campaign: { status: 'running', startedAt: new Date().toISOString() },
     });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Stop')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Stop'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Stop campaign?')).toBeDefined();
+    });
+    expect(screen.getByText(/cancel all running tasks/i)).toBeDefined();
+  });
+
+  it('opens the delete confirmation modal when Delete is clicked on a draft campaign', async () => {
+    const data = mockCampaignDetailResponse({ campaign: { status: 'draft' } });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Delete')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Delete'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Delete campaign?')).toBeDefined();
+    });
+  });
+
+  it('fires the start lifecycle mutation without confirmation', async () => {
+    const data = mockCampaignDetailResponse({ campaign: { status: 'draft' } });
 
     fetchMock = mockFetch({
       '/dashboard/campaigns/1/lifecycle': {
@@ -170,12 +314,10 @@ describe('CampaignDetailPage', () => {
       expect(screen.getByText('Start')).toBeDefined();
     });
 
-    const startButton = screen.getByText('Start');
-    fireEvent.click(startButton);
+    fireEvent.click(screen.getByText('Start'));
 
-    // Verify the lifecycle endpoint was called
     await waitFor(() => {
-      const calls = (fetchMock as ReturnType<typeof mockFetch>).mock.calls;
+      const calls = fetchMock.mock.calls;
       const lifecycleCalls = calls.filter(
         (call) => typeof call[0] === 'string' && call[0].includes('/lifecycle')
       );
@@ -231,6 +373,5 @@ describe('CampaignDetailPage', () => {
     expect(screen.getByText('running')).toBeDefined();
     expect(screen.getByText('#5')).toBeDefined();
     expect(screen.getByText('2, 3')).toBeDefined();
-    expect(screen.getByText('-')).toBeDefined();
   });
 });
