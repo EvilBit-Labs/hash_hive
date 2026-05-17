@@ -94,6 +94,17 @@ export function useEvents(options: UseEventsOptions = {}) {
         task_update: ['agent-tasks', 'agent'],
       };
 
+      // Per-campaign query key prefixes. Invalidated as `[prefix, campaignId]`
+      // so the detail page refreshes only when the event concerns *its*
+      // campaign — fleet-wide task churn doesn't fan out into every cached
+      // campaign detail. `task_update` carries `campaignId` so the detail
+      // page's `useCampaignDetail` cache (key: `['campaign', id]`) refreshes
+      // its taskStats / activeAgents block without a manual reload.
+      const campaignScopedKeysByEvent: Record<string, string[]> = {
+        campaign_status: ['campaign'],
+        task_update: ['campaign'],
+      };
+
       // System-scoped query keys: invalidated with just [key], no project.
       // Issue #109: system_health is system-wide; the query key has no
       // projectId component, so the project-scoped invalidation path
@@ -176,6 +187,33 @@ export function useEvents(options: UseEventsOptions = {}) {
               }
             }
           }
+          const campaignScopedKeys = campaignScopedKeysByEvent[eventType];
+          if (campaignScopedKeys) {
+            const payload = data['data'] as Record<string, unknown>;
+            const rawCampaignId = payload['campaignId'];
+            const campaignId = typeof rawCampaignId === 'number' ? rawCampaignId : null;
+            if (campaignId !== null) {
+              for (const key of campaignScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key, campaignId] });
+              }
+            } else {
+              // No campaignId on the payload — fall back to prefix invalidation
+              // so the detail page still refreshes, but record the drift.
+              const safeEventType =
+                typeof eventType === 'string'
+                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                  : 'unknown';
+              // biome-ignore lint/suspicious/noConsole: protocol drift signal
+              console.warn(
+                '[useEvents] event missing campaignId; falling back to broad invalidation',
+                { eventType: safeEventType }
+              );
+              for (const key of campaignScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key] });
+              }
+            }
+          }
+
           const systemKeys = systemInvalidationKeys[eventType];
           if (systemKeys) {
             for (const key of systemKeys) {

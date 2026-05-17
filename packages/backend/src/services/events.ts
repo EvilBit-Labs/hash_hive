@@ -274,6 +274,7 @@ export function emitTaskUpdate(
   status: string,
   options?: {
     agentId?: number | null | undefined;
+    campaignId?: number | null | undefined;
     progress?: Record<string, unknown> | undefined;
   }
 ) {
@@ -285,6 +286,9 @@ export function emitTaskUpdate(
       status,
       ...(options?.agentId !== undefined && options.agentId !== null
         ? { agentId: options.agentId }
+        : {}),
+      ...(options?.campaignId !== undefined && options.campaignId !== null
+        ? { campaignId: options.campaignId }
         : {}),
       ...(options?.progress ? { progress: options.progress } : {}),
     },

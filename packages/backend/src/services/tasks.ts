@@ -636,6 +636,7 @@ export async function updateTaskProgress(
   // Emit events and update campaign progress (no duplicate campaign fetch)
   emitTaskUpdate(taskRow.projectId, taskId, data.status, {
     agentId,
+    campaignId: taskRow.campaignId,
     progress: data.progress,
   });
   await updateCampaignProgress(taskRow.campaignId);
@@ -686,7 +687,10 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     if (updated && campaign) {
       // Surface the agent that was just freed so listeners can refresh that
       // agent's caches; the row itself no longer holds agentId after retry.
-      emitTaskUpdate(campaign.projectId, taskId, 'pending', { agentId });
+      emitTaskUpdate(campaign.projectId, taskId, 'pending', {
+        agentId,
+        campaignId: task.campaignId,
+      });
     }
 
     return { task: updated, retried: true };
@@ -706,7 +710,10 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     .returning();
 
   if (updated && campaign) {
-    emitTaskUpdate(campaign.projectId, taskId, 'failed', { agentId });
+    emitTaskUpdate(campaign.projectId, taskId, 'failed', {
+      agentId,
+      campaignId: task.campaignId,
+    });
   }
 
   return { task: updated, retried: false };
@@ -825,7 +832,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));
-      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed');
+      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed', {
+        campaignId: staleTask.campaignId,
+      });
       await updateCampaignProgress(staleTask.campaignId);
       failedOverrun++;
       continue;
@@ -861,7 +870,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));
-      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
+      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
+        campaignId: staleTask.campaignId,
+      });
       await updateCampaignProgress(staleTask.campaignId);
       rebalanced++;
       continue;

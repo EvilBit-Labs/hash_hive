@@ -43,12 +43,28 @@ interface Agent {
 // imports stable while pointing at the shared source of truth.
 export type AgentTask = AgentTaskSummary;
 
+interface CampaignProgressShape {
+  totalTasks?: number;
+  completedTasks?: number;
+  overallProgress?: number;
+  percentage?: number;
+  hashProgress?: {
+    total: number;
+    cracked: number;
+    remaining: number;
+    percentage: number;
+  };
+}
+
 interface Campaign {
   id: number;
   name: string;
   status: string;
   projectId: number;
   priority: number;
+  hashListId: number;
+  description: string | null;
+  progress?: CampaignProgressShape | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -139,7 +155,19 @@ export function useAgentTasks(agentId: number) {
   });
 }
 
-export function useCampaigns(options?: { status?: string; limit?: number; offset?: number }) {
+export type CampaignSortField = 'name' | 'createdAt' | 'priority';
+export type CampaignSortOrder = 'asc' | 'desc';
+
+export interface UseCampaignsOptions {
+  status?: string;
+  priority?: number;
+  sort?: CampaignSortField;
+  order?: CampaignSortOrder;
+  limit?: number;
+  offset?: number;
+}
+
+export function useCampaigns(options?: UseCampaignsOptions) {
   const { selectedProjectId } = useUiStore();
 
   return useQuery({
@@ -147,6 +175,9 @@ export function useCampaigns(options?: { status?: string; limit?: number; offset
     queryFn: async () => {
       const params = new URLSearchParams();
       if (options?.status) params.set('status', options.status);
+      if (options?.priority !== undefined) params.set('priority', String(options.priority));
+      if (options?.sort) params.set('sort', options.sort);
+      if (options?.order) params.set('order', options.order);
       if (options?.limit !== undefined) params.set('limit', String(options.limit));
       if (options?.offset !== undefined) params.set('offset', String(options.offset));
 
@@ -156,5 +187,55 @@ export function useCampaigns(options?: { status?: string; limit?: number; offset
       );
     },
     enabled: !!selectedProjectId,
+  });
+}
+
+export interface CampaignTaskStats {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+export interface CampaignActiveAgent {
+  agentId: number;
+  agentName: string;
+  taskId: number;
+  attackId: number;
+  attackMode: number;
+  progress: Record<string, unknown> | null;
+  speedHs: number | null;
+}
+
+export interface CampaignAttackRow {
+  id: number;
+  campaignId: number;
+  mode: number;
+  status: string;
+  wordlistId: number | null;
+  rulelistId: number | null;
+  masklistId: number | null;
+  dependencies: number[] | null;
+}
+
+export interface CampaignDetailPayload {
+  campaign: Campaign;
+  attacks: CampaignAttackRow[];
+  taskStats: CampaignTaskStats;
+  activeAgents: CampaignActiveAgent[];
+}
+
+/**
+ * Loads the enriched campaign detail payload from
+ * `GET /dashboard/campaigns/:id`. Cache key is `['campaign', id]`; the
+ * useEvents invalidation map refreshes this on `campaign_status` and
+ * `task_update` events for the displayed campaign.
+ */
+export function useCampaignDetail(campaignId: number) {
+  return useQuery({
+    queryKey: ['campaign', campaignId],
+    queryFn: () => api.get<CampaignDetailPayload>(`/dashboard/campaigns/${campaignId}`),
+    enabled: campaignId > 0,
   });
 }

@@ -54,3 +54,22 @@ export function useCampaignLifecycle(campaignId: number) {
     },
   });
 }
+
+/**
+ * Delete a draft campaign. The backend enforces draft-only deletion;
+ * non-draft campaigns surface as 409 NOT_DRAFT, which is propagated to
+ * the caller so the UI can render a banner without rolling back any
+ * cached state. Successful deletion invalidates the campaigns list.
+ */
+export function useCampaignDelete(campaignId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      api.delete<{ deleted: boolean; id: number }>(`/dashboard/campaigns/${campaignId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      queryClient.removeQueries({ queryKey: ['campaign', campaignId] });
+    },
+  });
+}
