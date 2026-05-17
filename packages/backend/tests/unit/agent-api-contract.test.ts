@@ -136,6 +136,22 @@ import { agentToken } from '../fixtures.js';
 
 const AGENT_BASE = '/api/v1/agent';
 
+/**
+ * Assert the documented Agent API validation-error envelope
+ * (`{error: {code: 'VALIDATION_ERROR', message}}`). This is the contract
+ * shape the route-level `agentValidationHook` produces; testing for it
+ * (rather than the bare 400) catches regressions where the hook is
+ * dropped and zValidator falls back to its `{success, error: ZodError}`
+ * default.
+ */
+async function expectAgentValidationError(res: Response): Promise<void> {
+  const body = (await res.json()) as Record<string, unknown>;
+  expect(body).toHaveProperty('error');
+  const err = body['error'] as Record<string, unknown>;
+  expect(err['code']).toBe('VALIDATION_ERROR');
+  expect(typeof err['message']).toBe('string');
+}
+
 // ─── POST /sessions — removed (should 404) ──────────────────────────
 
 describe('Agent API: POST /sessions (removed)', () => {
@@ -263,6 +279,7 @@ describe('Agent API: POST /heartbeat', () => {
       }),
     });
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 
   it('rejects an empty error.message', async () => {
@@ -279,6 +296,7 @@ describe('Agent API: POST /heartbeat', () => {
       }),
     });
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 
   it('rejects a non-positive currentTask.taskId', async () => {
@@ -295,6 +313,7 @@ describe('Agent API: POST /heartbeat', () => {
       }),
     });
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 
   it('rejects a negative currentTask.progress', async () => {
@@ -311,6 +330,7 @@ describe('Agent API: POST /heartbeat', () => {
       }),
     });
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 
   // ─── Size-cap boundaries on error.message and error.context ─────────
@@ -360,6 +380,7 @@ describe('Agent API: POST /heartbeat', () => {
 
     // Assert
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 
   it('rejects an error.context whose JSON serialization exceeds 16K characters', async () => {
@@ -383,6 +404,7 @@ describe('Agent API: POST /heartbeat', () => {
 
     // Assert
     expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
   });
 });
 
