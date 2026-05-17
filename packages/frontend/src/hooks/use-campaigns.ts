@@ -40,15 +40,30 @@ export function useCreateAttack(campaignId: number) {
   });
 }
 
-export function useCampaignLifecycle(campaignId: number) {
+export type CampaignLifecycleAction = 'start' | 'pause' | 'stop' | 'cancel';
+
+interface LifecycleVariables {
+  campaignId: number;
+  action: CampaignLifecycleAction;
+}
+
+/**
+ * Lifecycle mutation for campaigns. Takes the campaign id at mutate-time
+ * rather than hook-bind-time so the caller can fire actions against any
+ * row without a rerender. The list page in particular needs this: Pause
+ * fires immediately on click without an interstitial confirm modal, so
+ * the previous render-bound hook would have sent the request to
+ * `/campaigns/0/lifecycle` when no campaign was yet "selected".
+ */
+export function useCampaignLifecycle() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (action: 'start' | 'pause' | 'stop' | 'cancel') =>
+    mutationFn: ({ campaignId, action }: LifecycleVariables) =>
       api.post<{ campaign: Campaign }>(`/dashboard/campaigns/${campaignId}/lifecycle`, {
         action,
       }),
-    onSuccess: () => {
+    onSuccess: (_data, { campaignId }) => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
     },
@@ -59,15 +74,16 @@ export function useCampaignLifecycle(campaignId: number) {
  * Delete a draft campaign. The backend enforces draft-only deletion;
  * non-draft campaigns surface as 409 NOT_DRAFT, which is propagated to
  * the caller so the UI can render a banner without rolling back any
- * cached state. Successful deletion invalidates the campaigns list.
+ * cached state. Takes the campaign id at mutate-time so the list page
+ * can target any row.
  */
-export function useCampaignDelete(campaignId: number) {
+export function useCampaignDelete() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () =>
+    mutationFn: ({ campaignId }: { campaignId: number }) =>
       api.delete<{ deleted: boolean; id: number }>(`/dashboard/campaigns/${campaignId}`),
-    onSuccess: () => {
+    onSuccess: (_data, { campaignId }) => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       queryClient.removeQueries({ queryKey: ['campaign', campaignId] });
     },

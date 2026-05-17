@@ -295,6 +295,10 @@ export async function listActiveAgentsByCampaign(
         inArray(tasks.status, ['pending', 'assigned', 'running'])
       )
     )
+    // Stable order so the LIMIT 50 returns a deterministic subset across
+    // refreshes instead of Postgres's heap-scan order, which would otherwise
+    // shuffle the visible agents in fleets larger than the cap.
+    .orderBy(asc(tasks.id))
     .limit(ACTIVE_AGENTS_LIMIT);
 
   return rows.map((row) => {

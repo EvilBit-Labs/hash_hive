@@ -44,8 +44,8 @@ export function CampaignDetailPage() {
   const navigate = useNavigate();
 
   const { data, isLoading, isError, error } = useCampaignDetail(campaignId);
-  const lifecycle = useCampaignLifecycle(campaignId);
-  const del = useCampaignDelete(campaignId);
+  const lifecycle = useCampaignLifecycle();
+  const del = useCampaignDelete();
 
   const [confirm, setConfirm] = useState<ConfirmAction>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -53,23 +53,29 @@ export function CampaignDetailPage() {
   function handleStart() {
     setErrorBanner(null);
     // Start fires without confirmation on the detail page per spec.
-    lifecycle.mutate('start', {
-      onError: (err) =>
-        setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign'),
-    });
+    lifecycle.mutate(
+      { campaignId, action: 'start' },
+      {
+        onError: (err) =>
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign'),
+      }
+    );
   }
 
   function handlePause() {
     setErrorBanner(null);
-    lifecycle.mutate('pause', {
-      onError: (err) =>
-        setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
-    });
+    lifecycle.mutate(
+      { campaignId, action: 'pause' },
+      {
+        onError: (err) =>
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
+      }
+    );
   }
 
   async function confirmStop() {
     try {
-      await lifecycle.mutateAsync('stop');
+      await lifecycle.mutateAsync({ campaignId, action: 'stop' });
       setConfirm(null);
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : 'Failed to stop campaign');
@@ -78,7 +84,7 @@ export function CampaignDetailPage() {
 
   async function confirmDelete() {
     try {
-      await del.mutateAsync();
+      await del.mutateAsync({ campaignId });
       setConfirm(null);
       navigate('/campaigns');
     } catch (err) {

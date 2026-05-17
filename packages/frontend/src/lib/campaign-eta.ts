@@ -5,16 +5,26 @@ const MINUTES_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;
 
 /**
+ * Hashes-per-task floor used by the client-side ETA approximation. The
+ * dashboard does not have access to per-attack keyspace in this payload,
+ * so we treat each remaining task as a fixed-size unit and divide by the
+ * aggregate hash-rate. Tuned so the rendered ETA stays on the same order
+ * of magnitude as observed completion cadence for typical chunked attacks
+ * (~1B hashes per chunk at hashcat defaults). Underestimates short-mode
+ * attacks and overestimates very long ones — acceptable for v1 since the
+ * UI labels the value as a "~" approximation.
+ */
+const HASHES_PER_TASK_PROXY = 1_000_000_000;
+
+/**
  * Approximate the remaining time for a campaign from task counts and the
  * aggregate hash-rate of agents currently working on it. This is a
  * client-side estimate; the backend has no ETA model in v1.
  *
- * Approximation: `remaining tasks * avg-chunk-keyspace / aggregate-speed`.
- * The "avg chunk keyspace" is unknown client-side, so we substitute a
- * conservative proxy — assume each remaining task represents one
- * average-completion-time slot. If no agent reports a speed, return `--`.
+ * Formula: `(remaining tasks * HASHES_PER_TASK_PROXY) / aggregate H/s`.
+ * If no agent reports a positive speed, return `--`.
  *
- * @returns "Nh Mm" / "Md Nh" / "Mm Ns" formatted estimate, or `'--'`
+ * @returns "Nh Mm" / "Md Nh" / "Mm" formatted estimate, or `'--'`
  *          when the inputs do not support a meaningful estimate.
  */
 export function computeEta(
@@ -32,13 +42,8 @@ export function computeEta(
 
   if (aggregateSpeed <= 0) return '--';
 
-  // Use the average completed-task-rate as a coarse proxy for the per-task
-  // wall-clock cost. When no completions exist yet, fall back to a flat
-  // estimate of 1 task per second per active agent — enough to render
-  // something rather than `--` once work is moving.
-  const activeAgentCount = (agents ?? []).filter((a) => a.speedHs && a.speedHs > 0).length;
-  const tasksPerSecond = Math.max(activeAgentCount / SECONDS_PER_MINUTE, 0.01);
-  const remainingSeconds = remaining / tasksPerSecond;
+  const remainingHashes = remaining * HASHES_PER_TASK_PROXY;
+  const remainingSeconds = remainingHashes / aggregateSpeed;
   return formatDuration(remainingSeconds);
 }
 

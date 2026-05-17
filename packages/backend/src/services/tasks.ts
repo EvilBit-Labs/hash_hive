@@ -889,7 +889,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         updatedAt: new Date(),
       })
       .where(eq(tasks.id, staleTask.taskId));
-    emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending');
+    emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
+      campaignId: staleTask.campaignId,
+    });
     await updateCampaignProgress(staleTask.campaignId);
     reassigned++;
   }

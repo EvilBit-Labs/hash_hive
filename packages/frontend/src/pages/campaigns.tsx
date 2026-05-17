@@ -88,8 +88,8 @@ export function CampaignsPage() {
   });
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
-  const lifecycle = useCampaignLifecycle(confirm.campaign?.id ?? 0);
-  const del = useCampaignDelete(confirm.campaign?.id ?? 0);
+  const lifecycle = useCampaignLifecycle();
+  const del = useCampaignDelete();
 
   function updateParam(key: string, value: string) {
     const next = new URLSearchParams(searchParams);
@@ -106,7 +106,16 @@ export function CampaignsPage() {
     }
     if (action === 'pause') {
       // Pause does not need confirmation per spec — fire immediately.
-      lifecycle.mutate('pause');
+      // Pass campaign id inline so the mutation targets THIS row, not a
+      // stale render-bound id (previously this fired against id=0
+      // because no setConfirm rerender preceded the click).
+      lifecycle.mutate(
+        { campaignId: campaign.id, action: 'pause' },
+        {
+          onError: (err) =>
+            setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
+        }
+      );
       return;
     }
     if (action === 'start' || action === 'stop' || action === 'delete') {
@@ -118,10 +127,13 @@ export function CampaignsPage() {
     if (!confirm.action || !confirm.campaign) return;
     try {
       if (confirm.action === 'delete') {
-        await del.mutateAsync();
+        await del.mutateAsync({ campaignId: confirm.campaign.id });
       } else {
         const lifecycleAction: LifecycleAction = confirm.action;
-        await lifecycle.mutateAsync(lifecycleAction);
+        await lifecycle.mutateAsync({
+          campaignId: confirm.campaign.id,
+          action: lifecycleAction,
+        });
       }
       setConfirm({ action: null, campaign: null });
     } catch (err) {
