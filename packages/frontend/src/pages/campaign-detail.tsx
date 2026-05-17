@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
+import { CampaignAgentsSection } from '../components/features/campaign-agents-section';
 import { CampaignTaskStats } from '../components/features/campaign-task-stats';
 import { PermissionGuard } from '../components/features/permission-guard';
 import { PriorityBadge } from '../components/features/priority-badge';
@@ -214,45 +215,7 @@ export function CampaignDetailPage() {
         <h3 id="active-agents-heading" className="text-sm font-medium">
           Active agents
         </h3>
-        {activeAgents.length === 0 ? (
-          <EmptyState message="No agents currently working on this campaign." />
-        ) : (
-          <Table>
-            <TableHead>
-              <tr>
-                <Th>Agent</Th>
-                <Th>Current Attack</Th>
-                <Th>Progress</Th>
-                <Th>Speed</Th>
-              </tr>
-            </TableHead>
-            <TableBody>
-              {activeAgents.map((agent) => {
-                const taskPct = readPercentage(agent.progress);
-                return (
-                  <TableRow key={`${agent.agentId}-${agent.taskId}`}>
-                    <Td className="text-sm">{agent.agentName}</Td>
-                    <Td className="font-mono text-xs text-muted-foreground">
-                      Attack #{agent.attackId} - mode {agent.attackMode}
-                    </Td>
-                    <Td className="min-w-[120px]">
-                      <ProgressBar
-                        value={taskPct}
-                        size="thin"
-                        ariaLabel={`${agent.agentName} task progress`}
-                      />
-                    </Td>
-                    <Td className="font-mono text-xs text-muted-foreground">
-                      {agent.speedHs !== null
-                        ? `${Math.round(agent.speedHs).toLocaleString()} H/s`
-                        : '--'}
-                    </Td>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
+        <CampaignAgentsSection agents={activeAgents} />
       </section>
 
       {/* DAG visualization */}
