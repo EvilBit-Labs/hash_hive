@@ -50,36 +50,67 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 /**
- * Agent auth middleware — validates pre-shared token from Authorization: Bearer header.
- * Queries the agents table directly and sets agent context (agentId, projectId, capabilities).
+ * Build an agent-token middleware. Validates the `Authorization: Bearer`
+ * pre-shared token against the agents table and sets agent context.
+ *
+ * `allowErroredAgent` controls what happens when the agent's row is in
+ * `status='error'`. Work endpoints (`/tasks/*`, `/errors`, `/benchmark`,
+ * `/resources/*`, `/cracker/*`) keep the default (reject), so a broken
+ * agent can't pick up new tasks. The heartbeat endpoint flips it to
+ * `true` so the agent can announce recovery — a clean heartbeat
+ * transitions the agent back to `online` via `processHeartbeat`, which
+ * is the only programmatic recovery path the agent has.
  */
-export const requireAgentToken = createMiddleware<AppEnv>(async (c, next) => {
-  const authHeader = c.req.header('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw authError('Bearer token required');
-  }
+function createAgentTokenMiddleware(opts: { allowErroredAgent: boolean }) {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const authHeader = c.req.header('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      throw authError('Bearer token required');
+    }
 
-  const token = authHeader.slice(7);
+    const token = authHeader.slice(7);
 
-  const [agent] = await db
-    .select({
-      id: agents.id,
-      projectId: agents.projectId,
-      status: agents.status,
-      capabilities: agents.capabilities,
-    })
-    .from(agents)
-    .where(eq(agents.authToken, token))
-    .limit(1);
+    const [agent] = await db
+      .select({
+        id: agents.id,
+        projectId: agents.projectId,
+        status: agents.status,
+        capabilities: agents.capabilities,
+      })
+      .from(agents)
+      .where(eq(agents.authToken, token))
+      .limit(1);
 
-  if (!agent || agent.status === 'error') {
-    throw authError('Invalid or expired agent token');
-  }
+    if (!agent) {
+      throw authError('Invalid or expired agent token');
+    }
+    if (agent.status === 'error' && !opts.allowErroredAgent) {
+      throw authError('Invalid or expired agent token');
+    }
 
-  c.set('agent', {
-    agentId: agent.id,
-    projectId: agent.projectId,
-    capabilities: (agent.capabilities ?? {}) as Record<string, unknown>,
+    c.set('agent', {
+      agentId: agent.id,
+      projectId: agent.projectId,
+      capabilities: (agent.capabilities ?? {}) as Record<string, unknown>,
+    });
+    await next();
   });
-  await next();
+}
+
+/**
+ * Strict agent auth — rejects agents whose row is in `status='error'`.
+ * Use this on work endpoints; a broken agent should not be picking up
+ * new tasks or posting benchmarks until it sends a recovery heartbeat.
+ */
+export const requireAgentToken = createAgentTokenMiddleware({ allowErroredAgent: false });
+
+/**
+ * Recovery-friendly agent auth — accepts agents whose row is in
+ * `status='error'` so they can post a recovery heartbeat. Use ONLY on
+ * `POST /api/v1/agent/heartbeat`; the heartbeat handler is responsible
+ * for transitioning the agent back to `online` (or keeping it in
+ * `error` if the recovery heartbeat itself reports a fatal error).
+ */
+export const requireAgentTokenAllowRecovery = createAgentTokenMiddleware({
+  allowErroredAgent: true,
 });

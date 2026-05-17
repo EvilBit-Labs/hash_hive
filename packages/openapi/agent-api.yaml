@@ -326,6 +326,14 @@ components:
                 `warning|error|fatal` for back-compat. Heartbeats classify
                 strictly into warning (logged, task continues) or fatal
                 (logged, task failed, agent status='error').
+
+                **Recovery from status='error'**: an agent forced into
+                `status='error'` by a prior fatal heartbeat can post a
+                clean heartbeat (status='online' with no error block) to
+                this endpoint to return to service — the agent token
+                stays valid for `POST /heartbeat` regardless of status.
+                Every other agent endpoint rejects the token while the
+                agent is in `error` until a recovery heartbeat lands.
             message:
               type: string
               minLength: 1

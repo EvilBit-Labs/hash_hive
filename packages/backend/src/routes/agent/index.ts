@@ -11,7 +11,7 @@ import { Hono } from 'hono';
 import type { ZodIssue } from 'zod';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
-import { requireAgentToken } from '../../middleware/auth.js';
+import { requireAgentToken, requireAgentTokenAllowRecovery } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js';
 import {
   compareCrackerVersions,
@@ -53,7 +53,13 @@ const agentRoutes = new Hono<AppEnv>();
 
 // ─── Authenticated agent endpoints ──────────────────────────────────
 
-agentRoutes.use('/heartbeat', requireAgentToken);
+// /heartbeat uses the recovery-friendly variant so an agent whose row
+// is in status='error' (set by a prior fatal-error heartbeat) can post
+// a clean heartbeat to announce it's healthy again. processHeartbeat
+// will transition the agent back to 'online'. Every other agent
+// endpoint uses the strict variant — a broken agent must not pick up
+// new work until it has recovered via /heartbeat first.
+agentRoutes.use('/heartbeat', requireAgentTokenAllowRecovery);
 agentRoutes.use('/tasks/*', requireAgentToken);
 agentRoutes.use('/errors', requireAgentToken);
 agentRoutes.use('/benchmark', requireAgentToken);

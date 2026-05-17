@@ -406,6 +406,66 @@ describe('Agent API: POST /heartbeat', () => {
     expect(res.status).toBe(400);
     await expectAgentValidationError(res);
   });
+
+  // ─── Recovery from status='error' via heartbeat ─────────────────────
+  // The heartbeat endpoint uses requireAgentTokenAllowRecovery so an
+  // agent whose row was forced to status='error' by a prior fatal
+  // heartbeat can post a clean heartbeat to come back online. Every
+  // other agent endpoint stays strict (rejects error-state agents).
+
+  it('allows an errored agent to post a recovery heartbeat', async () => {
+    // Arrange — simulate an agent that was previously forced to
+    // status='error' by a fatal heartbeat. The strict middleware would
+    // reject this token; the recovery variant on /heartbeat admits it
+    // so processHeartbeat can transition it back to 'online'.
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const priorStatus = mockAgent.status;
+    mockAgent.status = 'error';
+
+    try {
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert — the middleware admits the errored agent (200, not 401)
+      // and the handler acknowledges.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['acknowledged']).toBe(true);
+    } finally {
+      mockAgent.status = priorStatus;
+    }
+  });
+
+  it('still rejects errored agents on work endpoints (strict middleware)', async () => {
+    // Arrange — same errored row, but posting to /tasks/next (which
+    // uses the strict requireAgentToken middleware). Confirms the
+    // recovery exemption is heartbeat-only.
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const priorStatus = mockAgent.status;
+    mockAgent.status = 'error';
+
+    try {
+      // Act
+      const res = await app.request(`${AGENT_BASE}/tasks/next`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      // Assert
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('AUTH_TOKEN_INVALID');
+    } finally {
+      mockAgent.status = priorStatus;
+    }
+  });
 });
 
 // ─── POST /tasks/next — Request Next Task ───────────────────────────
