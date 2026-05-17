@@ -45,7 +45,11 @@ mock.module('../../src/lib/auth.js', () => ({
   },
 }));
 
-import { requireAgentToken, requireSession } from '../../src/middleware/auth.js';
+import {
+  requireAgentToken,
+  requireAgentTokenForHeartbeatRecovery,
+  requireSession,
+} from '../../src/middleware/auth.js';
 
 /** Build a valid mock session for the given user id and email. */
 function buildMockSession(
@@ -82,6 +86,16 @@ function createSessionApp() {
 function createAgentApp() {
   const app = new Hono<AppEnv>();
   app.use('*', requireAgentToken);
+  app.get('/agent-endpoint', (c) => {
+    const agent = c.get('agent');
+    return c.json({ agentId: agent.agentId, projectId: agent.projectId });
+  });
+  return app;
+}
+
+function createAgentRecoveryApp() {
+  const app = new Hono<AppEnv>();
+  app.use('*', requireAgentTokenForHeartbeatRecovery);
   app.get('/agent-endpoint', (c) => {
     const agent = c.get('agent');
     return c.json({ agentId: agent.agentId, projectId: agent.projectId });
@@ -201,7 +215,7 @@ describe('requireAgentToken middleware', () => {
   });
 
   it('should accept a valid active agent pre-shared token', async () => {
-    mockAgentResult = [{ id: 42, projectId: 7, status: 'active', capabilities: { gpu: true } }];
+    mockAgentResult = [{ id: 42, projectId: 7, status: 'online', capabilities: { gpu: true } }];
 
     const res = await app.request('/agent-endpoint', {
       headers: { authorization: 'Bearer valid-agent-token' },
@@ -227,6 +241,58 @@ describe('requireAgentToken middleware', () => {
     const res = await app.request('/agent-endpoint', {
       headers: { authorization: 'Bearer error-agent-token' },
     });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('requireAgentTokenForHeartbeatRecovery middleware', () => {
+  const app = createAgentRecoveryApp();
+
+  beforeEach(() => {
+    mockAgentResult = [];
+  });
+
+  it('should accept a valid active agent (same path as the strict middleware)', async () => {
+    // Arrange
+    mockAgentResult = [{ id: 42, projectId: 7, status: 'online', capabilities: { gpu: true } }];
+
+    // Act
+    const res = await app.request('/agent-endpoint', {
+      headers: { authorization: 'Bearer valid-agent-token' },
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+  });
+
+  it('should accept agents in error state so they can post a recovery heartbeat', async () => {
+    // Arrange — this is the difference from the strict variant. The
+    // recovery middleware is only mounted on /heartbeat; the heartbeat
+    // handler transitions the agent back to `online` on a clean payload.
+    mockAgentResult = [{ id: 99, projectId: 7, status: 'error', capabilities: {} }];
+
+    // Act
+    const res = await app.request('/agent-endpoint', {
+      headers: { authorization: 'Bearer recovering-agent-token' },
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body['agentId']).toBe(99);
+  });
+
+  it('should still reject an unknown token', async () => {
+    // Arrange
+    mockAgentResult = [];
+
+    // Act
+    const res = await app.request('/agent-endpoint', {
+      headers: { authorization: 'Bearer unknown-token' },
+    });
+
+    // Assert — the recovery middleware allows error-state agents, not
+    // anonymous callers. Bearer validation still applies.
     expect(res.status).toBe(401);
   });
 });

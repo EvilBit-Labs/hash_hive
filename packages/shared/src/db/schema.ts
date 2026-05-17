@@ -168,7 +168,12 @@ export const agentErrors = pgTable(
     severity: varchar('severity', { length: 20 }).notNull().default('error'),
     message: text('message').notNull(),
     context: jsonb('context').default({}),
-    taskId: integer('task_id'),
+    // FK with ON DELETE SET NULL: when a task is deleted, the audit row
+    // is retained but its task linkage is cleared. Service-side ownership
+    // checks (services/agents.ts `processHeartbeat`) prevent agents from
+    // attributing errors to tasks they don't own; the FK is the
+    // last-line guard so dangling task_ids cannot accumulate.
+    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

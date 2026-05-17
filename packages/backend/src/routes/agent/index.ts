@@ -2,12 +2,14 @@ import {
   agentHeartbeatSchema,
   benchmarkSubmissionSchema,
   crackerCheckUpdateRequestSchema,
+  HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+  HEARTBEAT_ERROR_MESSAGE_MAX,
 } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
-import { requireAgentToken } from '../../middleware/auth.js';
+import { requireAgentToken, requireAgentTokenForHeartbeatRecovery } from '../../middleware/auth.js';
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js';
 import {
   compareCrackerVersions,
@@ -25,11 +27,60 @@ import {
 } from '../../services/tasks.js';
 import type { AppEnv } from '../../types.js';
 
+/**
+ * Map a zValidator failure to the documented Agent API error envelope
+ * (`{error: {code, message}}`). `@hono/zod-validator` otherwise returns
+ * its own `{success, error, data}` shape, which drifts from the contract
+ * the rest of this surface uses (see the 401 handler in
+ * `middleware/auth.ts` and AGENTS.md "API Surfaces"). Centralizing the
+ * mapping here also gives contract tests a single stable assertion
+ * target.
+ *
+ * The hook walks every zod issue, joining each into the response
+ * message so union-refinement failures (which surface in nested
+ * issues, not the top-level issue) are not silently dropped. The
+ * param shape mirrors `@hono/zod-validator` 0.7.6's `Hook<...>`
+ * signature (kept structural so the hook stays reusable across
+ * heterogeneous schemas without re-parameterizing each call site).
+ */
+type ZodIssueLite = { path?: ReadonlyArray<PropertyKey>; message?: string };
+type ZodErrorLike = { issues?: ReadonlyArray<ZodIssueLite> };
+
+function formatValidationMessage(error: ZodErrorLike | undefined): string {
+  const issues = error?.issues;
+  if (!issues || issues.length === 0) return 'Invalid request body';
+  return issues
+    .map((issue) => {
+      const path = issue.path && issue.path.length > 0 ? issue.path.map(String).join('.') : 'body';
+      return issue.message ? `${path}: ${issue.message}` : path;
+    })
+    .join('; ');
+}
+
+import type { Context } from 'hono';
+
+function agentValidationHook(
+  result:
+    | { success: true; data: unknown; target: string }
+    | { success: false; error: ZodErrorLike; data: unknown; target: string },
+  c: Context
+): Response | undefined {
+  if (result.success) return undefined;
+  const message = formatValidationMessage(result.error);
+  return c.json({ error: { code: 'VALIDATION_ERROR', message } }, 400);
+}
+
 const agentRoutes = new Hono<AppEnv>();
 
 // ─── Authenticated agent endpoints ──────────────────────────────────
 
-agentRoutes.use('/heartbeat', requireAgentToken);
+// /heartbeat uses the recovery-friendly variant so an agent whose row
+// is in status='error' (set by a prior fatal-error heartbeat) can post
+// a clean heartbeat to announce it's healthy again. processHeartbeat
+// will transition the agent back to 'online'. Every other agent
+// endpoint uses the strict variant — a broken agent must not pick up
+// new work until it has recovered via /heartbeat first.
+agentRoutes.use('/heartbeat', requireAgentTokenForHeartbeatRecovery);
 agentRoutes.use('/tasks/*', requireAgentToken);
 agentRoutes.use('/errors', requireAgentToken);
 agentRoutes.use('/benchmark', requireAgentToken);
@@ -38,15 +89,19 @@ agentRoutes.use('/cracker/*', requireAgentToken);
 
 // ─── POST /heartbeat — agent heartbeat ──────────────────────────────
 
-agentRoutes.post('/heartbeat', zValidator('json', agentHeartbeatSchema), async (c) => {
-  const { agentId } = c.get('agent');
-  const data = c.req.valid('json');
-  const result = await processHeartbeat(agentId, data);
-  return c.json({
-    acknowledged: true,
-    ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
-  });
-});
+agentRoutes.post(
+  '/heartbeat',
+  zValidator('json', agentHeartbeatSchema, agentValidationHook),
+  async (c) => {
+    const { agentId } = c.get('agent');
+    const data = c.req.valid('json');
+    const result = await processHeartbeat(agentId, data);
+    return c.json({
+      acknowledged: true,
+      ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
+    });
+  }
+);
 
 // ─── POST /tasks/next — request next task ───────────────────────────
 
@@ -93,50 +148,54 @@ const taskReportSchema = z.object({
   errors: z.array(z.string()).optional(),
 });
 
-agentRoutes.post('/tasks/:id/report', zValidator('json', taskReportSchema), async (c) => {
-  const { agentId } = c.get('agent');
-  const taskId = Number(c.req.param('id'));
+agentRoutes.post(
+  '/tasks/:id/report',
+  zValidator('json', taskReportSchema, agentValidationHook),
+  async (c) => {
+    const { agentId } = c.get('agent');
+    const taskId = Number(c.req.param('id'));
 
-  if (Number.isNaN(taskId) || taskId <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid task ID' } }, 400);
-  }
+    if (Number.isNaN(taskId) || taskId <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid task ID' } }, 400);
+    }
 
-  const data = c.req.valid('json');
+    const data = c.req.valid('json');
 
-  // Log any errors reported by the agent
-  if (data.errors && data.errors.length > 0) {
-    for (const errorMessage of data.errors) {
-      await logAgentError({
-        agentId,
-        severity: 'error',
-        message: errorMessage,
+    // Log any errors reported by the agent
+    if (data.errors && data.errors.length > 0) {
+      for (const errorMessage of data.errors) {
+        await logAgentError({
+          agentId,
+          severity: 'error',
+          message: errorMessage,
+          taskId,
+        });
+      }
+    }
+
+    // Handle failure with retry logic
+    if (data.status === 'failed') {
+      const failResult = await handleTaskFailure(
         taskId,
-      });
+        agentId,
+        data.errors?.[0] ?? 'Unknown failure'
+      );
+      if ('error' in failResult) {
+        return c.json({ error: { code: 'TASK_ERROR', message: failResult.error } }, 400);
+      }
+      return c.json({ acknowledged: true, retried: failResult.retried ?? false });
     }
-  }
 
-  // Handle failure with retry logic
-  if (data.status === 'failed') {
-    const failResult = await handleTaskFailure(
-      taskId,
-      agentId,
-      data.errors?.[0] ?? 'Unknown failure'
-    );
-    if ('error' in failResult) {
-      return c.json({ error: { code: 'TASK_ERROR', message: failResult.error } }, 400);
+    // Update task progress and insert cracked results
+    const result = await updateTaskProgress(taskId, agentId, data);
+
+    if ('error' in result) {
+      return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400);
     }
-    return c.json({ acknowledged: true, retried: failResult.retried ?? false });
+
+    return c.json({ acknowledged: true });
   }
-
-  // Update task progress and insert cracked results
-  const result = await updateTaskProgress(taskId, agentId, data);
-
-  if ('error' in result) {
-    return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400);
-  }
-
-  return c.json({ acknowledged: true });
-});
+);
 
 // ─── GET /tasks/:id/zaps — cracked hashes for a task ────────────────
 
@@ -148,56 +207,84 @@ const zapQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(10_000).default(10_000),
 });
 
-agentRoutes.get('/tasks/:id/zaps', zValidator('query', zapQuerySchema), async (c) => {
-  const { agentId, projectId } = c.get('agent');
-  const taskId = Number(c.req.param('id'));
+agentRoutes.get(
+  '/tasks/:id/zaps',
+  zValidator('query', zapQuerySchema, agentValidationHook),
+  async (c) => {
+    const { agentId, projectId } = c.get('agent');
+    const taskId = Number(c.req.param('id'));
 
-  if (Number.isNaN(taskId) || taskId <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid task ID' } }, 400);
+    if (Number.isNaN(taskId) || taskId <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid task ID' } }, 400);
+    }
+
+    const { since, limit } = c.req.valid('query');
+    const result = await getZapsForTask(taskId, agentId, projectId, { since, limit });
+
+    if ('error' in result) {
+      return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404);
+    }
+
+    return c.json(result);
   }
-
-  const { since, limit } = c.req.valid('query');
-  const result = await getZapsForTask(taskId, agentId, projectId, { since, limit });
-
-  if ('error' in result) {
-    return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404);
-  }
-
-  return c.json(result);
-});
+);
 
 // ─── POST /errors — log an agent error ──────────────────────────────
 
+// Same size caps as agentHeartbeatErrorSchema (in @hashhive/shared) so the
+// standalone error channel can't be used to bypass the bound. severity stays
+// wider (warning|error|fatal) for back-compat with agents that have not
+// adopted the heartbeat-borne error block yet.
 const agentErrorSchema = z.object({
   severity: z.enum(['warning', 'error', 'fatal']),
-  message: z.string().min(1),
-  context: z.record(z.string(), z.unknown()).optional(),
+  message: z.string().min(1).max(HEARTBEAT_ERROR_MESSAGE_MAX),
+  context: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .refine(
+      (value) =>
+        value === undefined || JSON.stringify(value).length <= HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+      {
+        message: `context exceeds ${HEARTBEAT_ERROR_CONTEXT_MAX_CHARS} characters when serialized`,
+      }
+    ),
   taskId: z.number().int().positive().optional(),
 });
 
-agentRoutes.post('/errors', zValidator('json', agentErrorSchema), async (c) => {
-  const { agentId } = c.get('agent');
-  const data = c.req.valid('json');
-  await logAgentError({ ...data, agentId });
-  return c.json({ acknowledged: true });
-});
+agentRoutes.post(
+  '/errors',
+  zValidator('json', agentErrorSchema, agentValidationHook),
+  async (c) => {
+    const { agentId } = c.get('agent');
+    const data = c.req.valid('json');
+    await logAgentError({ ...data, agentId });
+    return c.json({ acknowledged: true });
+  }
+);
 
 // ─── POST /benchmark — submit hashcat benchmark results ─────────────
 
-agentRoutes.post('/benchmark', zValidator('json', benchmarkSubmissionSchema), async (c) => {
-  const { agentId } = c.get('agent');
-  const data = c.req.valid('json');
-  try {
-    await submitBenchmarks(agentId, data.entries, data.crackerVersion);
-    return c.json({ acknowledged: true });
-  } catch (err: unknown) {
-    logger.error({ err, agentId, entryCount: data.entries.length }, 'Benchmark submission failed');
-    return c.json(
-      { error: { code: 'BENCHMARK_ERROR', message: 'Failed to store benchmark results' } },
-      500
-    );
+agentRoutes.post(
+  '/benchmark',
+  zValidator('json', benchmarkSubmissionSchema, agentValidationHook),
+  async (c) => {
+    const { agentId } = c.get('agent');
+    const data = c.req.valid('json');
+    try {
+      await submitBenchmarks(agentId, data.entries, data.crackerVersion);
+      return c.json({ acknowledged: true });
+    } catch (err: unknown) {
+      logger.error(
+        { err, agentId, entryCount: data.entries.length },
+        'Benchmark submission failed'
+      );
+      return c.json(
+        { error: { code: 'BENCHMARK_ERROR', message: 'Failed to store benchmark results' } },
+        500
+      );
+    }
   }
-});
+);
 
 // ─── GET /resources/:type/:id/download-url — presigned download ─────
 
@@ -238,7 +325,7 @@ agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
  */
 agentRoutes.post(
   '/cracker/check-update',
-  zValidator('json', crackerCheckUpdateRequestSchema),
+  zValidator('json', crackerCheckUpdateRequestSchema, agentValidationHook),
   async (c) => {
     const data = c.req.valid('json');
     const engine = normalizeEngineName(data.engine);

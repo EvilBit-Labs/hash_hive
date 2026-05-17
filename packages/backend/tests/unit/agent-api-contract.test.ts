@@ -54,9 +54,31 @@ const mockSelect = mock(() => ({
 
 const mockExecute = mock(() => Promise.resolve([mockSnakeCaseTaskRow]));
 
+// Pull the real pure helpers in BEFORE mock.module runs so the mock
+// factory can re-export them. `mock.module` is process-global in
+// bun:test; without this re-export, `agents-service.test.ts` (which
+// imports these symbols) gets `undefined` for them when its file is
+// loaded *after* this one — a Linux/macOS-load-order CI flake. See
+// GOTCHAS.md "Re-export the real implementation when you must mock
+// siblings" and the crackers-routes.test.ts precedent.
+import {
+  classifyRecentErrors as realClassifyRecentErrors,
+  classifyWorstSeverity as realClassifyWorstSeverity,
+  decideHeartbeatTransition as realDecideHeartbeatTransition,
+  pickCurrentTaskByAgent as realPickCurrentTaskByAgent,
+  scrubAgentErrorContext as realScrubAgentErrorContext,
+} from '../../src/services/agents.js';
+
 mock.module('../../src/services/agents.js', () => ({
   processHeartbeat: mock(() => Promise.resolve({ hasHighPriorityTasks: false })),
   logAgentError: mock(() => Promise.resolve()),
+  // Real impls re-exported so sibling tests see the genuine functions
+  // regardless of which file bun loads first.
+  classifyRecentErrors: realClassifyRecentErrors,
+  classifyWorstSeverity: realClassifyWorstSeverity,
+  decideHeartbeatTransition: realDecideHeartbeatTransition,
+  pickCurrentTaskByAgent: realPickCurrentTaskByAgent,
+  scrubAgentErrorContext: realScrubAgentErrorContext,
 }));
 
 // Mock events and tasks to prevent real modules from entering the shared bun
@@ -116,6 +138,22 @@ import { agentToken } from '../fixtures.js';
 
 const AGENT_BASE = '/api/v1/agent';
 
+/**
+ * Assert the documented Agent API validation-error envelope
+ * (`{error: {code: 'VALIDATION_ERROR', message}}`). This is the contract
+ * shape the route-level `agentValidationHook` produces; testing for it
+ * (rather than the bare 400) catches regressions where the hook is
+ * dropped and zValidator falls back to its `{success, error: ZodError}`
+ * default.
+ */
+async function expectAgentValidationError(res: Response): Promise<void> {
+  const body = (await res.json()) as Record<string, unknown>;
+  expect(body).toHaveProperty('error');
+  const err = body['error'] as Record<string, unknown>;
+  expect(err['code']).toBe('VALIDATION_ERROR');
+  expect(typeof err['message']).toBe('string');
+}
+
 // ─── POST /sessions — removed (should 404) ──────────────────────────
 
 describe('Agent API: POST /sessions (removed)', () => {
@@ -158,6 +196,277 @@ describe('Agent API: POST /heartbeat', () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it('accepts a legacy heartbeat with status only (back-compat baseline)', async () => {
+    // Arrange — locks in lenient policy. Existing agents in the wild
+    // still post `{status: 'online'}` and nothing else; tightening the
+    // schema (e.g., adding .strict()) would silently break them.
+    const token = agentToken(TEST_AGENT_TOKEN);
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'online' }),
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['acknowledged']).toBe(true);
+  });
+
+  it('accepts a heartbeat with currentTask and warning error', async () => {
+    // Arrange
+    const token = agentToken(TEST_AGENT_TOKEN);
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        currentTask: { taskId: 42, progress: 0.5, speed: 12345, temperature: 72 },
+        error: { severity: 'warning', message: 'temperature spike', context: { gpuId: 0 } },
+      }),
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['acknowledged']).toBe(true);
+  });
+
+  it('accepts a heartbeat with a fatal error and no currentTask', async () => {
+    // Arrange
+    const token = agentToken(TEST_AGENT_TOKEN);
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'error',
+        error: { severity: 'fatal', message: 'hashcat crashed' },
+      }),
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['acknowledged']).toBe(true);
+  });
+
+  it('rejects an error.severity outside the warning|fatal enum', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'info', message: 'just a note' },
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  it('rejects an empty error.message', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'warning', message: '' },
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  it('rejects a non-positive currentTask.taskId', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        currentTask: { taskId: 0, progress: 0, speed: 0 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  it('rejects a negative currentTask.progress', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        currentTask: { taskId: 42, progress: -0.1, speed: 0 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  // ─── Size-cap boundaries on error.message and error.context ─────────
+  // These guard the DoS-bound `.max(4096)` and `.refine()` 16K-char cap
+  // on the heartbeat error block. A refactor that drops either would
+  // ship silently without these tests.
+
+  it('accepts an error.message at the 4096-character cap', async () => {
+    // Arrange
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const messageAtCap = 'a'.repeat(4096);
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'warning', message: messageAtCap },
+      }),
+    });
+
+    // Assert
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects an error.message that exceeds the 4096-character cap', async () => {
+    // Arrange
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const messageOverCap = 'a'.repeat(4097);
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'warning', message: messageOverCap },
+      }),
+    });
+
+    // Assert
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  it('rejects an error.context whose JSON serialization exceeds 16K characters', async () => {
+    // Arrange — a single string value just past the 16K-char limit so
+    // `JSON.stringify(context).length` exceeds HEARTBEAT_ERROR_CONTEXT_MAX_CHARS.
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const oversized = { blob: 'x'.repeat(16 * 1024 + 1) };
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'online',
+        error: { severity: 'warning', message: 'big', context: oversized },
+      }),
+    });
+
+    // Assert
+    expect(res.status).toBe(400);
+    await expectAgentValidationError(res);
+  });
+
+  // ─── Recovery from status='error' via heartbeat ─────────────────────
+  // The heartbeat endpoint uses requireAgentTokenForHeartbeatRecovery so an
+  // agent whose row was forced to status='error' by a prior fatal
+  // heartbeat can post a clean heartbeat to come back online. Every
+  // other agent endpoint stays strict (rejects error-state agents).
+
+  it('allows an errored agent to post a recovery heartbeat', async () => {
+    // Arrange — simulate an agent that was previously forced to
+    // status='error' by a fatal heartbeat. The strict middleware would
+    // reject this token; the recovery variant on /heartbeat admits it
+    // so processHeartbeat can transition it back to 'online'.
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const priorStatus = mockAgent.status;
+    mockAgent.status = 'error';
+
+    try {
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert — the middleware admits the errored agent (200, not 401)
+      // and the handler acknowledges.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['acknowledged']).toBe(true);
+    } finally {
+      mockAgent.status = priorStatus;
+    }
+  });
+
+  it('still rejects errored agents on work endpoints (strict middleware)', async () => {
+    // Arrange — same errored row, but posting to /tasks/next (which
+    // uses the strict requireAgentToken middleware). Confirms the
+    // recovery exemption is heartbeat-only.
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const priorStatus = mockAgent.status;
+    mockAgent.status = 'error';
+
+    try {
+      // Act
+      const res = await app.request(`${AGENT_BASE}/tasks/next`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      // Assert
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('AUTH_TOKEN_INVALID');
+    } finally {
+      mockAgent.status = priorStatus;
+    }
   });
 });
 

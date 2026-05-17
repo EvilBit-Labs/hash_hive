@@ -2,6 +2,8 @@ import type { z } from 'zod';
 import type {
   agentCurrentTaskSchema,
   agentHardwareProfileSchema,
+  agentHeartbeatCurrentTaskSchema,
+  agentHeartbeatErrorSchema,
   agentHeartbeatSchema,
   agentStatusSchema,
   agentTaskSummarySchema,
@@ -194,6 +196,8 @@ export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>;
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>;
 export type HashCandidate = z.infer<typeof hashCandidateSchema>;
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>;
+export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>;
+export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>;
 export type AgentHardwareProfile = z.infer<typeof agentHardwareProfileSchema>;
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>;
 export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>;

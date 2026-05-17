@@ -332,7 +332,60 @@ export const agentTaskSummarySchema = z.object({
   assignedAt: z.string().nullable(),
 });
 
+/**
+ * Heartbeat-only error severity. Narrower than the standalone
+ * `POST /api/v1/agent/errors` endpoint (which accepts
+ * `warning | error | fatal` for back-compat with agents posting generic
+ * errors): heartbeats classify strictly into `warning` (logged, task
+ * continues) or `fatal` (logged, task failed, agent status forced to
+ * `error`).
+ *
+ * Size caps live at the schema boundary so a compromised agent token
+ * cannot bloat `agent_errors` with multi-MB rows on every heartbeat.
+ *
+ * `HEARTBEAT_ERROR_CONTEXT_MAX_CHARS` bounds `context` in JSON-string
+ * *characters*, not bytes. `JSON.stringify().length` is simpler than
+ * encoding-then-measuring and the worst-case UTF-8 expansion is ~4x —
+ * even a fully-multibyte 16K-char payload stays under 64 KB, which is
+ * still safely under jsonb-friendly row limits.
+ */
+export const HEARTBEAT_ERROR_MESSAGE_MAX = 4096;
+export const HEARTBEAT_ERROR_CONTEXT_MAX_CHARS = 16 * 1024;
+
+export const agentHeartbeatErrorSchema = z.object({
+  severity: z.enum(['warning', 'fatal']),
+  message: z.string().min(1).max(HEARTBEAT_ERROR_MESSAGE_MAX),
+  context: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .refine(
+      (value) =>
+        value === undefined || JSON.stringify(value).length <= HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
+      {
+        message: `context exceeds ${HEARTBEAT_ERROR_CONTEXT_MAX_CHARS} characters when serialized`,
+      }
+    ),
+});
+
+/**
+ * Telemetry view of the task the agent is currently executing. Accepted by
+ * the heartbeat endpoint so a fatal heartbeat error can be attributed to a
+ * specific task, but progress/speed/temperature are informational only —
+ * canonical task progress flows through `POST /agent/tasks/:id/report` and
+ * is not written back to the `tasks` table from heartbeat handling.
+ */
+export const agentHeartbeatCurrentTaskSchema = z.object({
+  taskId: z.number().int().positive(),
+  progress: z.number().min(0),
+  speed: z.number(),
+  temperature: z.number().optional(),
+});
+
 export const agentHeartbeatSchema = z.object({
+  // Status enum is a deliberate superset: `busy` and `benchmarked` are
+  // load-bearing for task assignment and benchmark submission. The
+  // service layer treats anything other than a fatal-error heartbeat as
+  // "agent is reachable" regardless of which non-error literal arrives.
   status: z.enum(['online', 'busy', 'error', 'benchmarked']),
   capabilities: z
     .object({
@@ -348,6 +401,8 @@ export const agentHeartbeatSchema = z.object({
     })
     .optional(),
   deviceInfo: agentHardwareProfileSchema.optional(),
+  currentTask: agentHeartbeatCurrentTaskSchema.optional(),
+  error: agentHeartbeatErrorSchema.optional(),
 });
 
 // ─── Cracker Check-Update API ───────────────────────────────────────
