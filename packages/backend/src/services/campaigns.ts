@@ -1,5 +1,5 @@
-import { attacks, campaigns, tasks } from '@hashhive/shared';
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
+import { agents, attacks, campaigns, tasks } from '@hashhive/shared';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
@@ -129,9 +129,21 @@ export function resolveGenerationStrategy(
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
+export type CampaignSortField = 'name' | 'createdAt' | 'priority';
+export type CampaignSortOrder = 'asc' | 'desc';
+
+const SORT_COLUMNS = {
+  name: campaigns.name,
+  createdAt: campaigns.createdAt,
+  priority: campaigns.priority,
+} as const;
+
 export async function listCampaigns(filters: {
   projectId?: number | undefined;
   status?: string | undefined;
+  priority?: number | undefined;
+  sort?: CampaignSortField | undefined;
+  order?: CampaignSortOrder | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
 }) {
@@ -144,6 +156,9 @@ export async function listCampaigns(filters: {
   if (filters.status) {
     conditions.push(eq(campaigns.status, filters.status));
   }
+  if (filters.priority !== undefined) {
+    conditions.push(eq(campaigns.priority, filters.priority));
+  }
   if (conditions.length > 0) {
     query = query.where(and(...conditions));
   }
@@ -151,8 +166,13 @@ export async function listCampaigns(filters: {
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
 
+  const sortField = filters.sort ?? 'createdAt';
+  const sortOrder = filters.order ?? 'desc';
+  const sortColumn = SORT_COLUMNS[sortField];
+  const orderClause = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn);
+
   const [results, countResult] = await Promise.all([
-    query.limit(limit).offset(offset).orderBy(desc(campaigns.createdAt)),
+    query.limit(limit).offset(offset).orderBy(orderClause),
     db
       .select({ count: sql<number>`count(*)` })
       .from(campaigns)
@@ -170,6 +190,160 @@ export async function listCampaigns(filters: {
 export async function getCampaignById(id: number) {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
   return campaign ?? null;
+}
+
+// ─── Campaign Stats & Active Agents ─────────────────────────────────
+
+export interface CampaignTaskStats {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+/**
+ * Aggregate task counts for a campaign, bucketed into the four operator-facing
+ * states. The data model emits more nuanced statuses ('assigned', 'exhausted');
+ * those are folded into the closest operator bucket:
+ *   - assigned + running -> running (both represent active work)
+ *   - completed + exhausted -> completed (both represent successful end state)
+ *   - pending -> pending
+ *   - failed -> failed
+ */
+export async function getCampaignTaskStats(campaignId: number): Promise<CampaignTaskStats> {
+  const rows = await db
+    .select({
+      status: tasks.status,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(tasks)
+    .where(eq(tasks.campaignId, campaignId))
+    .groupBy(tasks.status);
+
+  const stats: CampaignTaskStats = {
+    total: 0,
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+  };
+
+  for (const row of rows) {
+    const n = Number(row.n ?? 0);
+    stats.total += n;
+    switch (row.status) {
+      case 'pending':
+        stats.pending += n;
+        break;
+      case 'assigned':
+      case 'running':
+        stats.running += n;
+        break;
+      case 'completed':
+      case 'exhausted':
+        stats.completed += n;
+        break;
+      case 'failed':
+        stats.failed += n;
+        break;
+      default:
+        // Unknown future status — count toward total only.
+        break;
+    }
+  }
+
+  return stats;
+}
+
+export interface CampaignActiveAgent {
+  agentId: number;
+  agentName: string;
+  taskId: number;
+  attackId: number;
+  attackMode: number;
+  progress: unknown;
+  speedHs: number | null;
+}
+
+const ACTIVE_AGENTS_LIMIT = 50;
+
+/**
+ * Active agents working on a campaign right now. Joins tasks that are pending,
+ * assigned, or running (the {@link AGENT_TASK_ACTIVE_STATUSES} set) and have a
+ * non-null agentId. Speed is extracted from the task's progress jsonb when
+ * available; falls back to null so callers can render a placeholder.
+ */
+export async function listActiveAgentsByCampaign(
+  campaignId: number
+): Promise<CampaignActiveAgent[]> {
+  const rows = await db
+    .select({
+      agentId: agents.id,
+      agentName: agents.name,
+      taskId: tasks.id,
+      attackId: tasks.attackId,
+      attackMode: attacks.mode,
+      progress: tasks.progress,
+    })
+    .from(tasks)
+    .innerJoin(agents, eq(tasks.agentId, agents.id))
+    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
+    .where(
+      and(
+        eq(tasks.campaignId, campaignId),
+        inArray(tasks.status, ['pending', 'assigned', 'running'])
+      )
+    )
+    .limit(ACTIVE_AGENTS_LIMIT);
+
+  return rows.map((row) => {
+    const progress = row.progress as Record<string, unknown> | null;
+    const rawSpeed = progress && typeof progress === 'object' ? progress['speedHs'] : null;
+    const speedHs = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed) ? rawSpeed : null;
+    return {
+      agentId: row.agentId,
+      agentName: row.agentName,
+      taskId: row.taskId,
+      attackId: row.attackId,
+      attackMode: row.attackMode,
+      progress: row.progress,
+      speedHs,
+    };
+  });
+}
+
+// ─── Draft-only delete ──────────────────────────────────────────────
+
+export type DeleteCampaignResult =
+  | { ok: true; campaign: typeof campaigns.$inferSelect }
+  | { error: 'NOT_FOUND' }
+  | { error: 'NOT_DRAFT'; status: string };
+
+/**
+ * Delete a campaign if and only if its status is 'draft'. Attacks and tasks
+ * are removed in the same transaction; FK constraints are not CASCADE in the
+ * current schema, so child rows are deleted explicitly.
+ */
+export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
+    if (!existing) {
+      return { error: 'NOT_FOUND' } as const;
+    }
+    if (existing.status !== 'draft') {
+      return { error: 'NOT_DRAFT', status: existing.status } as const;
+    }
+
+    // Remove child rows (FKs are RESTRICT by default).
+    await tx.delete(tasks).where(eq(tasks.campaignId, id));
+    await tx.delete(attacks).where(eq(attacks.campaignId, id));
+    const [deleted] = await tx.delete(campaigns).where(eq(campaigns.id, id)).returning();
+    if (!deleted) {
+      return { error: 'NOT_FOUND' } as const;
+    }
+    return { ok: true, campaign: deleted } as const;
+  });
 }
 
 export async function createCampaign(data: {

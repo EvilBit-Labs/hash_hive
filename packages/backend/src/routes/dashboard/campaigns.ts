@@ -7,8 +7,11 @@ import {
   createAttack,
   createCampaign,
   deleteAttack,
+  deleteCampaign,
   getAttackById,
   getCampaignById,
+  getCampaignTaskStats,
+  listActiveAgentsByCampaign,
   listAttacks,
   listCampaigns,
   transitionCampaign,
@@ -24,15 +27,52 @@ campaignRoutes.use('*', requireSession);
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
-campaignRoutes.get('/', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser');
-  const status = c.req.query('status') ?? undefined;
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
-
-  const result = await listCampaigns({ projectId: projectId ?? undefined, status, limit, offset });
-  return c.json(result);
+const listCampaignsQuerySchema = z.object({
+  status: z.string().optional(),
+  priority: z.coerce
+    .number()
+    .int()
+    .refine((v) => v === 1 || v === 5 || v === 10, {
+      message: 'priority must be one of 1, 5, 10',
+    })
+    .optional(),
+  sort: z.enum(['name', 'createdAt', 'priority']).optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
 });
+
+campaignRoutes.get(
+  '/',
+  requireProjectAccess(),
+  zValidator('query', listCampaignsQuerySchema, (result, c) => {
+    if (result.success) return;
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: result.error.issues.map((i) => i.message).join('; '),
+        },
+      },
+      400
+    );
+  }),
+  async (c) => {
+    const { projectId } = c.get('currentUser');
+    const { status, priority, sort, order, limit, offset } = c.req.valid('query');
+
+    const result = await listCampaigns({
+      projectId: projectId ?? undefined,
+      status,
+      priority,
+      sort,
+      order,
+      limit,
+      offset,
+    });
+    return c.json(result);
+  }
+);
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(255),
@@ -61,14 +101,62 @@ campaignRoutes.post(
 
 campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
   const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
+  }
+
+  const { projectId } = c.get('currentUser');
   const campaign = await getCampaignById(id);
 
-  if (!campaign) {
+  if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
   }
 
-  const campaignAttacks = await listAttacks(id);
-  return c.json({ campaign, attacks: campaignAttacks });
+  const [campaignAttacks, taskStats, activeAgents] = await Promise.all([
+    listAttacks(id),
+    getCampaignTaskStats(id),
+    listActiveAgentsByCampaign(id),
+  ]);
+
+  return c.json({
+    campaign,
+    attacks: campaignAttacks,
+    taskStats,
+    activeAgents,
+  });
+});
+
+campaignRoutes.delete('/:id', requireRole('admin', 'contributor'), async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
+  }
+
+  const { projectId } = c.get('currentUser');
+  const existing = await getCampaignById(id);
+
+  if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+  }
+
+  const result = await deleteCampaign(id);
+
+  if ('error' in result) {
+    if (result.error === 'NOT_FOUND') {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+    }
+    return c.json(
+      {
+        error: {
+          code: 'NOT_DRAFT',
+          message: `Campaign cannot be deleted in status "${result.status}". Only draft campaigns are deletable.`,
+        },
+      },
+      409
+    );
+  }
+
+  return c.json({ deleted: true, id });
 });
 
 const updateCampaignSchema = z.object({
