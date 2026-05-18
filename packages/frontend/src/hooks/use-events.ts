@@ -12,6 +12,26 @@ export type EventType =
   | 'resource_update'
   | 'system_health';
 
+/**
+ * Throttle the protocol-drift warnings emitted when a WS event arrives
+ * without its expected scoping id (`agentId` or `campaignId`). A
+ * misbehaving backend that emits a thousand malformed events in a row
+ * would otherwise produce a thousand console warnings; the first warn
+ * per `(scope, eventType)` key per cooldown is enough signal.
+ */
+const DRIFT_WARN_COOLDOWN_MS = 60_000;
+const driftWarnTimestamps = new Map<string, number>();
+
+function warnDriftOnce(scope: 'agent' | 'campaign', eventType: string): boolean {
+  const safeType = eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64);
+  const key = `${scope}:${safeType}`;
+  const last = driftWarnTimestamps.get(key) ?? 0;
+  const now = Date.now();
+  if (now - last < DRIFT_WARN_COOLDOWN_MS) return false;
+  driftWarnTimestamps.set(key, now);
+  return true;
+}
+
 export interface AppEvent {
   type: EventType;
   projectId: number;
@@ -94,6 +114,17 @@ export function useEvents(options: UseEventsOptions = {}) {
         task_update: ['agent-tasks', 'agent'],
       };
 
+      // Per-campaign query key prefixes. Invalidated as `[prefix, campaignId]`
+      // so the detail page refreshes only when the event concerns *its*
+      // campaign — fleet-wide task churn doesn't fan out into every cached
+      // campaign detail. `task_update` carries `campaignId` so the detail
+      // page's `useCampaignDetail` cache (key: `['campaign', id]`) refreshes
+      // its taskStats / activeAgents block without a manual reload.
+      const campaignScopedKeysByEvent: Record<string, string[]> = {
+        campaign_status: ['campaign'],
+        task_update: ['campaign'],
+      };
+
       // System-scoped query keys: invalidated with just [key], no project.
       // Issue #109: system_health is system-wide; the query key has no
       // projectId component, so the project-scoped invalidation path
@@ -156,26 +187,55 @@ export function useEvents(options: UseEventsOptions = {}) {
             } else {
               // No agentId on the payload — fall back to prefix invalidation
               // so we still refresh, but log so we know the producer should
-              // be carrying agentId.
-              //
-              // Constraint the event-type value before logging: WS payload is
-              // attacker-influenced, so we treat eventType as data (not part
-              // of the format string) and only log a known-shape allowlist of
-              // characters to avoid log-injection vectors flagged by CodeQL.
-              const safeEventType =
-                typeof eventType === 'string'
-                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
-                  : 'unknown';
-              // biome-ignore lint/suspicious/noConsole: protocol drift signal
-              console.warn(
-                '[useEvents] event missing agentId; falling back to broad invalidation',
-                { eventType: safeEventType }
-              );
+              // be carrying agentId. Throttled to one warn per (scope,
+              // event type) per cooldown so a misbehaving backend cannot
+              // flood the console.
+              if (warnDriftOnce('agent', eventType)) {
+                const safeEventType =
+                  typeof eventType === 'string'
+                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                    : 'unknown';
+                // biome-ignore lint/suspicious/noConsole: protocol drift signal
+                console.warn(
+                  '[useEvents] event missing agentId; falling back to broad invalidation',
+                  { eventType: safeEventType }
+                );
+              }
               for (const key of agentScopedKeys) {
                 queryClient.invalidateQueries({ queryKey: [key] });
               }
             }
           }
+          const campaignScopedKeys = campaignScopedKeysByEvent[eventType];
+          if (campaignScopedKeys) {
+            const payload = data['data'] as Record<string, unknown>;
+            const rawCampaignId = payload['campaignId'];
+            const campaignId = typeof rawCampaignId === 'number' ? rawCampaignId : null;
+            if (campaignId !== null) {
+              for (const key of campaignScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key, campaignId] });
+              }
+            } else {
+              // No campaignId on the payload — fall back to prefix invalidation
+              // so the detail page still refreshes, but record the drift.
+              // Throttled to one warn per (scope, event type) per cooldown.
+              if (warnDriftOnce('campaign', eventType)) {
+                const safeEventType =
+                  typeof eventType === 'string'
+                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                    : 'unknown';
+                // biome-ignore lint/suspicious/noConsole: protocol drift signal
+                console.warn(
+                  '[useEvents] event missing campaignId; falling back to broad invalidation',
+                  { eventType: safeEventType }
+                );
+              }
+              for (const key of campaignScopedKeys) {
+                queryClient.invalidateQueries({ queryKey: [key] });
+              }
+            }
+          }
+
           const systemKeys = systemInvalidationKeys[eventType];
           if (systemKeys) {
             for (const key of systemKeys) {
@@ -242,6 +302,10 @@ export function useEvents(options: UseEventsOptions = {}) {
       queryClient.invalidateQueries({ queryKey: ['agent'] });
       queryClient.invalidateQueries({ queryKey: ['agent-errors'] });
       queryClient.invalidateQueries({ queryKey: ['agent-tasks'] });
+      // Symmetric to the agent-detail keys above — without this a
+      // disconnected user sitting on /campaigns/:id sees frozen
+      // taskStats and activeAgents until the WS reconnects.
+      queryClient.invalidateQueries({ queryKey: ['campaign'] });
     }, 30_000);
 
     return () => clearInterval(interval);

@@ -1,9 +1,25 @@
-import { attacks, campaigns, tasks } from '@hashhive/shared';
+import {
+  attacks,
+  type CampaignSortField,
+  type CampaignSortOrder,
+  campaigns,
+  tasks,
+} from '@hashhive/shared';
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
+
+// Re-export the dashboard-surface functions from the sibling module so
+// existing callers (route handlers, tests) keep working through the
+// `services/campaigns` import path until the next refactor sweep.
+export {
+  type DeleteCampaignResult,
+  deleteCampaign,
+  getCampaignTaskStats,
+  listActiveAgentsByCampaign,
+} from './campaign-dashboard.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
@@ -129,9 +145,18 @@ export function resolveGenerationStrategy(
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
+const SORT_COLUMNS = {
+  name: campaigns.name,
+  createdAt: campaigns.createdAt,
+  priority: campaigns.priority,
+} as const;
+
 export async function listCampaigns(filters: {
   projectId?: number | undefined;
   status?: string | undefined;
+  priority?: number | undefined;
+  sort?: CampaignSortField | undefined;
+  order?: CampaignSortOrder | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
 }) {
@@ -144,6 +169,9 @@ export async function listCampaigns(filters: {
   if (filters.status) {
     conditions.push(eq(campaigns.status, filters.status));
   }
+  if (filters.priority !== undefined) {
+    conditions.push(eq(campaigns.priority, filters.priority));
+  }
   if (conditions.length > 0) {
     query = query.where(and(...conditions));
   }
@@ -151,8 +179,13 @@ export async function listCampaigns(filters: {
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
 
+  const sortField = filters.sort ?? 'createdAt';
+  const sortOrder = filters.order ?? 'desc';
+  const sortColumn = SORT_COLUMNS[sortField];
+  const orderClause = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn);
+
   const [results, countResult] = await Promise.all([
-    query.limit(limit).offset(offset).orderBy(desc(campaigns.createdAt)),
+    query.limit(limit).offset(offset).orderBy(orderClause),
     db
       .select({ count: sql<number>`count(*)` })
       .from(campaigns)

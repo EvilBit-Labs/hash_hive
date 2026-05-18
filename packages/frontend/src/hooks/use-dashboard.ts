@@ -2,7 +2,9 @@ import type {
   AgentCurrentTask,
   AgentTaskSummary,
   AgentWorstSeverity,
+  CampaignDetailPayload,
   SelectAgentError,
+  UseCampaignsOptions,
 } from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -10,7 +12,18 @@ import { useUiStore } from '../stores/ui';
 
 // Re-export so existing component imports keep working without forcing every
 // caller to switch to the shared package directly.
-export type { AgentCurrentTask, AgentWorstSeverity } from '@hashhive/shared';
+export type {
+  AgentCurrentTask,
+  AgentWorstSeverity,
+  CampaignActiveAgent,
+  CampaignAttackRow,
+  CampaignDetailPayload,
+  CampaignLifecycleAction,
+  CampaignSortField,
+  CampaignSortOrder,
+  CampaignTaskStats,
+  UseCampaignsOptions,
+} from '@hashhive/shared';
 
 interface DashboardStats {
   agents: { total: number; online: number; offline: number; error: number };
@@ -43,12 +56,28 @@ interface Agent {
 // imports stable while pointing at the shared source of truth.
 export type AgentTask = AgentTaskSummary;
 
+interface CampaignProgressShape {
+  totalTasks?: number;
+  completedTasks?: number;
+  overallProgress?: number;
+  percentage?: number;
+  hashProgress?: {
+    total: number;
+    cracked: number;
+    remaining: number;
+    percentage: number;
+  };
+}
+
 interface Campaign {
   id: number;
   name: string;
   status: string;
   projectId: number;
   priority: number;
+  hashListId: number;
+  description: string | null;
+  progress?: CampaignProgressShape | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -139,7 +168,7 @@ export function useAgentTasks(agentId: number) {
   });
 }
 
-export function useCampaigns(options?: { status?: string; limit?: number; offset?: number }) {
+export function useCampaigns(options?: UseCampaignsOptions) {
   const { selectedProjectId } = useUiStore();
 
   return useQuery({
@@ -147,6 +176,9 @@ export function useCampaigns(options?: { status?: string; limit?: number; offset
     queryFn: async () => {
       const params = new URLSearchParams();
       if (options?.status) params.set('status', options.status);
+      if (options?.priority !== undefined) params.set('priority', String(options.priority));
+      if (options?.sort) params.set('sort', options.sort);
+      if (options?.order) params.set('order', options.order);
       if (options?.limit !== undefined) params.set('limit', String(options.limit));
       if (options?.offset !== undefined) params.set('offset', String(options.offset));
 
@@ -156,5 +188,24 @@ export function useCampaigns(options?: { status?: string; limit?: number; offset
       );
     },
     enabled: !!selectedProjectId,
+  });
+}
+
+/**
+ * Loads the enriched campaign detail payload from
+ * `GET /dashboard/campaigns/:id`. Cache key includes `selectedProjectId`
+ * to prevent cross-project leakage when a user switches projects and
+ * navigates to a campaign id that exists in both. Mirrors the
+ * `useAgent` / `useAgentErrors` scoping pattern. The useEvents
+ * invalidation map refreshes this key on `campaign_status` and
+ * `task_update` events that carry the matching `campaignId`.
+ */
+export function useCampaignDetail(campaignId: number) {
+  const { selectedProjectId } = useUiStore();
+
+  return useQuery({
+    queryKey: ['campaign', campaignId, selectedProjectId],
+    queryFn: () => api.get<CampaignDetailPayload>(`/dashboard/campaigns/${campaignId}`),
+    enabled: Number.isInteger(campaignId) && campaignId > 0 && !!selectedProjectId,
   });
 }

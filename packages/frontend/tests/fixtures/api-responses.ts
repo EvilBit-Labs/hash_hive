@@ -3,6 +3,8 @@
  * All factories return plain objects matching backend response shapes.
  */
 
+import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared';
+
 interface MockUser {
   id: number;
   email: string;
@@ -272,9 +274,15 @@ interface MockAttack {
   dependencies: number[] | null;
 }
 
+// Fixture shapes derive from the shared Zod-inferred wire types so test
+// data cannot drift from runtime contracts. The shared types come from
+// `@hashhive/shared`'s campaign-dashboard schemas.
+
 interface MockCampaignDetailResponseOptions {
   campaign?: Partial<MockCampaign>;
   attacks?: Array<Partial<MockAttack>>;
+  taskStats?: Partial<CampaignTaskStats>;
+  activeAgents?: Array<Partial<CampaignActiveAgent>>;
 }
 
 export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOptions = {}) {
@@ -317,7 +325,27 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
         },
       ];
 
-  return { campaign, attacks };
+  const taskStats: CampaignTaskStats = {
+    total: 0,
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    ...options.taskStats,
+  };
+
+  const activeAgents = (options.activeAgents ?? []).map((agent, i) => ({
+    agentId: i + 1,
+    agentName: `Rig ${i + 1}`,
+    taskId: i + 1,
+    attackId: 1,
+    attackMode: 0,
+    progress: null,
+    speedHs: null,
+    ...agent,
+  }));
+
+  return { campaign, attacks, taskStats, activeAgents };
 }
 
 // --- Resource fixtures ---

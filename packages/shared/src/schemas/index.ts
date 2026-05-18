@@ -492,3 +492,117 @@ export const workRangeSchema = z.object({
   total: keyspaceCoordSchema,
   agentSpeedHs: z.number().int().nonnegative(),
 });
+
+// ─── Campaign Dashboard Surface ─────────────────────────────────────
+
+/**
+ * Bucketed task statuses surfaced on the campaign detail page. The
+ * five operator-facing buckets coalesce the data-model statuses:
+ * `assigned` and `running` both count as `running`; `exhausted` counts
+ * as `completed`. Unknown future statuses count only toward `total`.
+ */
+export const campaignTaskStatsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+});
+
+/**
+ * An agent currently assigned to an active task on a campaign. `progress`
+ * is the raw jsonb payload from the task row; consumers should treat it
+ * as opaque and prefer the extracted `speedHs` field. `speedHs` is null
+ * when the agent has not yet reported a finite, positive speed.
+ */
+export const campaignActiveAgentSchema = z.object({
+  agentId: z.number().int().positive(),
+  agentName: z.string(),
+  taskId: z.number().int().positive(),
+  attackId: z.number().int().positive(),
+  attackMode: z.number().int().nonnegative(),
+  progress: z.unknown(),
+  // Matches the backend extractor: only finite, positive speeds carry
+  // through. Zero / negative / NaN / Infinity become null so the ETA
+  // computation cannot be poisoned by malformed agent payloads.
+  speedHs: z.number().finite().positive().nullable(),
+});
+
+/**
+ * Sort fields and order accepted by `GET /dashboard/campaigns`. The
+ * allowlist mirrors `SORT_COLUMNS` in `services/campaigns.ts` so the
+ * route validator, service, and dashboard hook all share one source
+ * of truth.
+ */
+export const campaignSortFieldSchema = z.enum(['name', 'createdAt', 'priority']);
+export const campaignSortOrderSchema = z.enum(['asc', 'desc']);
+
+/**
+ * Lifecycle actions the dashboard can fire against
+ * `POST /dashboard/campaigns/:id/lifecycle`.
+ */
+export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'stop', 'cancel']);
+
+/**
+ * Canonical priority buckets. Backend pegs three integer values
+ * (1 = HIGH, 5 = NORMAL, 10 = LOW) via `priorityMap` in
+ * `services/campaigns.ts`; any other integer falls back to NORMAL.
+ */
+export const CAMPAIGN_PRIORITY = { HIGH: 1, NORMAL: 5, LOW: 10 } as const;
+export const campaignPriorityBucketSchema = z.enum(['high', 'normal', 'low']);
+
+/** Bucket an arbitrary integer priority into the canonical three buckets. */
+export function priorityBucket(priority: number): 'high' | 'normal' | 'low' {
+  if (priority === CAMPAIGN_PRIORITY.HIGH) return 'high';
+  if (priority === CAMPAIGN_PRIORITY.LOW) return 'low';
+  return 'normal';
+}
+
+/**
+ * Query options accepted by `GET /dashboard/campaigns` and consumed by
+ * the dashboard's `useCampaigns` hook. Schema-derived so the hook and
+ * the route's Zod validator share one source of truth.
+ */
+export const useCampaignsOptionsSchema = z.object({
+  status: z.string().optional(),
+  // Allowlist matches the backend route validator so the client cannot
+  // accept values that will 400 at the API boundary.
+  priority: z
+    .union([
+      z.literal(CAMPAIGN_PRIORITY.HIGH),
+      z.literal(CAMPAIGN_PRIORITY.NORMAL),
+      z.literal(CAMPAIGN_PRIORITY.LOW),
+    ])
+    .optional(),
+  sort: campaignSortFieldSchema.optional(),
+  order: campaignSortOrderSchema.optional(),
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Per-attack row returned by the campaign detail payload. Scoped to
+ * the fields the dashboard renders.
+ */
+export const campaignAttackRowSchema = z.object({
+  id: z.number().int().positive(),
+  campaignId: z.number().int().positive(),
+  mode: z.number().int().nonnegative(),
+  status: z.string(),
+  wordlistId: z.number().int().positive().nullable(),
+  rulelistId: z.number().int().positive().nullable(),
+  masklistId: z.number().int().positive().nullable(),
+  dependencies: z.array(z.number().int().positive()).nullable(),
+});
+
+/**
+ * Full response shape of `GET /dashboard/campaigns/:id`. Single
+ * authoritative contract that both the route handler and the
+ * `useCampaignDetail` hook validate against.
+ */
+export const campaignDetailPayloadSchema = z.object({
+  campaign: selectCampaignSchema,
+  attacks: z.array(campaignAttackRowSchema),
+  taskStats: campaignTaskStatsSchema,
+  activeAgents: z.array(campaignActiveAgentSchema),
+});
