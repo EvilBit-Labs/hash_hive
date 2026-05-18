@@ -29,10 +29,8 @@ const MENU_ITEMS: MenuItemSpec[] = [
  * Per-row dropdown for the campaign list. Items disable themselves based
  * on the campaign's current lifecycle status so a viewer cannot, for
  * example, click "Start" on a running campaign. The dropdown does not
- * own the confirmation flow — `onAction` is fired immediately on click,
- * and the parent decides whether to open a modal or call the API
- * directly (Start/Stop/Delete are spec'd to confirm; Pause and View are
- * not).
+ * own the confirmation flow — `onAction` fires immediately on click,
+ * and the parent decides whether to open a modal or call the API.
  */
 export function CampaignActionsMenu({ status, onAction, disabled }: CampaignActionsMenuProps) {
   const [open, setOpen] = useState(false);

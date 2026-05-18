@@ -1,9 +1,7 @@
 /**
- * Dashboard campaigns route contract tests.
- *
- * Covers the list endpoint's new query-param surface (priority, sort, order)
- * added by U1 and the enriched detail / draft-only DELETE added by U2
- * of docs/plans/2026-05-17-001-feat-campaign-list-detail-ui-plan.md.
+ * Dashboard campaigns route contract tests. Covers the list endpoint
+ * query params (priority, sort, order), the enriched detail payload
+ * (taskStats + activeAgents), and the draft-only DELETE.
  *
  * Runs in an isolated test phase via the `DASHBOARD_CAMPAIGNS_TEST_ISOLATED`
  * env gate because this file mocks `services/campaigns.js` wholesale, and
@@ -124,13 +122,13 @@ if (!IS_ISOLATED) {
     async (
       id: number
     ): Promise<
-      | { ok: true; campaign: CampaignRow }
-      | { error: 'NOT_FOUND' }
-      | { error: 'NOT_DRAFT'; status: string }
+      | { kind: 'deleted'; id: number; projectId: number }
+      | { kind: 'not_found' }
+      | { kind: 'not_draft'; status: string }
     > => {
-      if (id === 100) return { ok: true, campaign: makeCampaign() };
-      if (id === 101) return { error: 'NOT_DRAFT', status: 'running' };
-      return { error: 'NOT_FOUND' };
+      if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 };
+      if (id === 101) return { kind: 'not_draft', status: 'running' };
+      return { kind: 'not_found' };
     }
   );
 

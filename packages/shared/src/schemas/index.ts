@@ -492,3 +492,65 @@ export const workRangeSchema = z.object({
   total: keyspaceCoordSchema,
   agentSpeedHs: z.number().int().nonnegative(),
 });
+
+// ─── Campaign Dashboard Surface ─────────────────────────────────────
+
+/**
+ * Bucketed task statuses surfaced on the campaign detail page. The
+ * five operator-facing buckets coalesce the data-model statuses:
+ * `assigned` and `running` both count as `running`; `exhausted` counts
+ * as `completed`. Unknown future statuses count only toward `total`.
+ */
+export const campaignTaskStatsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+});
+
+/**
+ * An agent currently assigned to an active task on a campaign. `progress`
+ * is the raw jsonb payload from the task row; consumers should treat it
+ * as opaque and prefer the extracted `speedHs` field. `speedHs` is null
+ * when the agent has not yet reported a finite, positive speed.
+ */
+export const campaignActiveAgentSchema = z.object({
+  agentId: z.number().int().positive(),
+  agentName: z.string(),
+  taskId: z.number().int().positive(),
+  attackId: z.number().int().positive(),
+  attackMode: z.number().int().nonnegative(),
+  progress: z.unknown(),
+  speedHs: z.number().nullable(),
+});
+
+/**
+ * Sort fields and order accepted by `GET /dashboard/campaigns`. The
+ * allowlist mirrors `SORT_COLUMNS` in `services/campaigns.ts` so the
+ * route validator, service, and dashboard hook all share one source
+ * of truth.
+ */
+export const campaignSortFieldSchema = z.enum(['name', 'createdAt', 'priority']);
+export const campaignSortOrderSchema = z.enum(['asc', 'desc']);
+
+/**
+ * Lifecycle actions the dashboard can fire against
+ * `POST /dashboard/campaigns/:id/lifecycle`.
+ */
+export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'stop', 'cancel']);
+
+/**
+ * Canonical priority buckets. Backend pegs three integer values
+ * (1 = HIGH, 5 = NORMAL, 10 = LOW) via `priorityMap` in
+ * `services/campaigns.ts`; any other integer falls back to NORMAL.
+ */
+export const CAMPAIGN_PRIORITY = { HIGH: 1, NORMAL: 5, LOW: 10 } as const;
+export const campaignPriorityBucketSchema = z.enum(['high', 'normal', 'low']);
+
+/** Bucket an arbitrary integer priority into the canonical three buckets. */
+export function priorityBucket(priority: number): 'high' | 'normal' | 'low' {
+  if (priority === CAMPAIGN_PRIORITY.HIGH) return 'high';
+  if (priority === CAMPAIGN_PRIORITY.LOW) return 'low';
+  return 'normal';
+}

@@ -280,6 +280,10 @@ export function useEvents(options: UseEventsOptions = {}) {
       queryClient.invalidateQueries({ queryKey: ['agent'] });
       queryClient.invalidateQueries({ queryKey: ['agent-errors'] });
       queryClient.invalidateQueries({ queryKey: ['agent-tasks'] });
+      // Symmetric to the agent-detail keys above — without this a
+      // disconnected user sitting on /campaigns/:id sees frozen
+      // taskStats and activeAgents until the WS reconnects.
+      queryClient.invalidateQueries({ queryKey: ['campaign'] });
     }, 30_000);
 
     return () => clearInterval(interval);

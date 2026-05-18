@@ -325,6 +325,44 @@ describe('CampaignDetailPage', () => {
     });
   });
 
+  it('renders an error banner when start mutation fails', async () => {
+    const data = mockCampaignDetailResponse({ campaign: { status: 'draft' } });
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1/lifecycle': {
+        POST: { status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'boom' } } },
+      },
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Start')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Start'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeDefined();
+    });
+  });
+
+  it('renders an invalid-id error when the route param is not numeric', async () => {
+    selectProject();
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/not-a-number',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid campaign id in URL.')).toBeDefined();
+    });
+  });
+
   it('renders Back to campaigns link', async () => {
     const data = mockCampaignDetailResponse();
 

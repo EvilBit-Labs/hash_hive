@@ -141,22 +141,22 @@ campaignRoutes.delete('/:id', requireRole('admin', 'contributor'), async (c) => 
 
   const result = await deleteCampaign(id);
 
-  if ('error' in result) {
-    if (result.error === 'NOT_FOUND') {
+  switch (result.kind) {
+    case 'not_found':
       return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
-    }
-    return c.json(
-      {
-        error: {
-          code: 'NOT_DRAFT',
-          message: `Campaign cannot be deleted in status "${result.status}". Only draft campaigns are deletable.`,
+    case 'not_draft':
+      return c.json(
+        {
+          error: {
+            code: 'NOT_DRAFT',
+            message: `Campaign cannot be deleted in status "${result.status}". Only draft campaigns are deletable.`,
+          },
         },
-      },
-      409
-    );
+        409
+      );
+    case 'deleted':
+      return c.json({ deleted: true, id: result.id });
   }
-
-  return c.json({ deleted: true, id });
 });
 
 const updateCampaignSchema = z.object({

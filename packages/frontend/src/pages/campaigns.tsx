@@ -22,6 +22,7 @@ import {
   type UseCampaignsOptions,
   useCampaigns,
 } from '../hooks/use-dashboard';
+import { readCampaignPercentage } from '../lib/campaign-progress';
 import { Permission } from '../lib/permissions';
 import { useUiStore } from '../stores/ui';
 
@@ -54,14 +55,6 @@ const SORT_FIELD_OPTIONS: Array<{ label: string; value: CampaignSortField }> = [
   { label: 'Name', value: 'name' },
   { label: 'Priority', value: 'priority' },
 ];
-
-function readProgress(progress: CampaignRow['progress']): number {
-  if (!progress) return 0;
-  if (typeof progress.percentage === 'number') return progress.percentage;
-  if (typeof progress.overallProgress === 'number') return progress.overallProgress;
-  if (progress.hashProgress?.percentage !== undefined) return progress.hashProgress.percentage;
-  return 0;
-}
 
 export function CampaignsPage() {
   const { selectedProjectId } = useUiStore();
@@ -105,15 +98,16 @@ export function CampaignsPage() {
       return;
     }
     if (action === 'pause') {
-      // Pause does not need confirmation per spec — fire immediately.
-      // Pass campaign id inline so the mutation targets THIS row, not a
-      // stale render-bound id (previously this fired against id=0
-      // because no setConfirm rerender preceded the click).
+      // Pause is spec'd to fire without a confirmation modal. Pass the
+      // campaign id inline so the mutation targets this row directly.
       lifecycle.mutate(
         { campaignId: campaign.id, action: 'pause' },
         {
-          onError: (err) =>
-            setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
+          onError: (err) => {
+            // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+            console.error('[campaigns] pause failed', { campaignId: campaign.id, err });
+            setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign');
+          },
         }
       );
       return;
@@ -125,19 +119,22 @@ export function CampaignsPage() {
 
   async function confirmAction() {
     if (!confirm.action || !confirm.campaign) return;
+    const { action, campaign } = confirm;
     try {
-      if (confirm.action === 'delete') {
-        await del.mutateAsync({ campaignId: confirm.campaign.id });
+      if (action === 'delete') {
+        await del.mutateAsync({ campaignId: campaign.id });
       } else {
-        const lifecycleAction: LifecycleAction = confirm.action;
+        const lifecycleAction: LifecycleAction = action;
         await lifecycle.mutateAsync({
-          campaignId: confirm.campaign.id,
+          campaignId: campaign.id,
           action: lifecycleAction,
         });
       }
       setConfirm({ action: null, campaign: null });
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Action failed');
+      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+      console.error('[campaigns] action failed', { action, campaignId: campaign.id, err });
+      setErrorBanner(err instanceof Error ? err.message : `Failed to ${action} campaign`);
     }
   }
 
@@ -237,7 +234,7 @@ export function CampaignsPage() {
             </TableHead>
             <TableBody>
               {campaigns.map((campaign) => {
-                const percentage = readProgress(campaign.progress);
+                const percentage = readCampaignPercentage(campaign.progress);
                 return (
                   <TableRow key={campaign.id}>
                     <Td className="text-sm font-medium text-foreground">

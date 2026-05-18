@@ -2,6 +2,10 @@ import type {
   AgentCurrentTask,
   AgentTaskSummary,
   AgentWorstSeverity,
+  CampaignActiveAgent,
+  CampaignSortField,
+  CampaignSortOrder,
+  CampaignTaskStats,
   SelectAgentError,
 } from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
@@ -10,7 +14,15 @@ import { useUiStore } from '../stores/ui';
 
 // Re-export so existing component imports keep working without forcing every
 // caller to switch to the shared package directly.
-export type { AgentCurrentTask, AgentWorstSeverity } from '@hashhive/shared';
+export type {
+  AgentCurrentTask,
+  AgentWorstSeverity,
+  CampaignActiveAgent,
+  CampaignLifecycleAction,
+  CampaignSortField,
+  CampaignSortOrder,
+  CampaignTaskStats,
+} from '@hashhive/shared';
 
 interface DashboardStats {
   agents: { total: number; online: number; offline: number; error: number };
@@ -155,9 +167,6 @@ export function useAgentTasks(agentId: number) {
   });
 }
 
-export type CampaignSortField = 'name' | 'createdAt' | 'priority';
-export type CampaignSortOrder = 'asc' | 'desc';
-
 export interface UseCampaignsOptions {
   status?: string;
   priority?: number;
@@ -190,24 +199,6 @@ export function useCampaigns(options?: UseCampaignsOptions) {
   });
 }
 
-export interface CampaignTaskStats {
-  total: number;
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-}
-
-export interface CampaignActiveAgent {
-  agentId: number;
-  agentName: string;
-  taskId: number;
-  attackId: number;
-  attackMode: number;
-  progress: Record<string, unknown> | null;
-  speedHs: number | null;
-}
-
 export interface CampaignAttackRow {
   id: number;
   campaignId: number;
@@ -228,14 +219,19 @@ export interface CampaignDetailPayload {
 
 /**
  * Loads the enriched campaign detail payload from
- * `GET /dashboard/campaigns/:id`. Cache key is `['campaign', id]`; the
- * useEvents invalidation map refreshes this on `campaign_status` and
- * `task_update` events for the displayed campaign.
+ * `GET /dashboard/campaigns/:id`. Cache key includes `selectedProjectId`
+ * to prevent cross-project leakage when a user switches projects and
+ * navigates to a campaign id that exists in both. Mirrors the
+ * `useAgent` / `useAgentErrors` scoping pattern. The useEvents
+ * invalidation map refreshes this key on `campaign_status` and
+ * `task_update` events that carry the matching `campaignId`.
  */
 export function useCampaignDetail(campaignId: number) {
+  const { selectedProjectId } = useUiStore();
+
   return useQuery({
-    queryKey: ['campaign', campaignId],
+    queryKey: ['campaign', campaignId, selectedProjectId],
     queryFn: () => api.get<CampaignDetailPayload>(`/dashboard/campaigns/${campaignId}`),
-    enabled: campaignId > 0,
+    enabled: Number.isInteger(campaignId) && campaignId > 0 && !!selectedProjectId,
   });
 }

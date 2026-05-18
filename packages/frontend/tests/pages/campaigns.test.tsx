@@ -268,6 +268,44 @@ describe('CampaignsPage', () => {
     expect(screen.getByText('Confirm Start')).toBeDefined();
   });
 
+  it('renders an error banner when the delete mutation returns 409 NOT_DRAFT', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/7': {
+        DELETE: {
+          status: 409,
+          body: { error: { code: 'NOT_DRAFT', message: 'running' } },
+        },
+      },
+      '/dashboard/campaigns': {
+        status: 200,
+        body: mockCampaignsResponse({
+          count: 1,
+          campaigns: [{ id: 7, name: 'Test Campaign', status: 'draft', priority: 5 }],
+        }),
+      },
+    });
+
+    selectProject();
+    setAuthUser();
+    renderWithProviders(<CampaignsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Campaign')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByLabelText('Campaign actions'));
+    const deleteItem = await screen.findByRole('menuitem', { name: 'Delete' });
+    fireEvent.click(deleteItem);
+    const confirmButton = await screen.findByText('Delete', { selector: 'button' });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeDefined();
+    });
+    // The modal stays open so the user can see why it failed.
+    expect(screen.getByText('Delete campaign?')).toBeDefined();
+  });
+
   it('renders the priority badge for each row', async () => {
     fetchMock = mockFetch({
       '/dashboard/campaigns': {

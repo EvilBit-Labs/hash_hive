@@ -1,4 +1,13 @@
-import { agents, attacks, campaigns, tasks } from '@hashhive/shared';
+import {
+  agents,
+  attacks,
+  type CampaignActiveAgent,
+  type CampaignSortField,
+  type CampaignSortOrder,
+  type CampaignTaskStats,
+  campaigns,
+  tasks,
+} from '@hashhive/shared';
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
@@ -129,9 +138,6 @@ export function resolveGenerationStrategy(
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
-export type CampaignSortField = 'name' | 'createdAt' | 'priority';
-export type CampaignSortOrder = 'asc' | 'desc';
-
 const SORT_COLUMNS = {
   name: campaigns.name,
   createdAt: campaigns.createdAt,
@@ -194,16 +200,8 @@ export async function getCampaignById(id: number) {
 
 // ─── Campaign Stats & Active Agents ─────────────────────────────────
 
-export interface CampaignTaskStats {
-  total: number;
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-}
-
 /**
- * Aggregate task counts for a campaign, bucketed into the four operator-facing
+ * Aggregate task counts for a campaign, bucketed into the operator-facing
  * states. The data model emits more nuanced statuses ('assigned', 'exhausted');
  * those are folded into the closest operator bucket:
  *   - assigned + running -> running (both represent active work)
@@ -245,25 +243,21 @@ export async function getCampaignTaskStats(campaignId: number): Promise<Campaign
         stats.completed += n;
         break;
       case 'failed':
+      case 'cancelled':
+        // Cancelled tasks count toward `failed` so ETA's
+        // remaining = total - completed - failed math stays correct.
+        // Operators see cancelled tasks as "not coming back" in the
+        // same way failed tasks are.
         stats.failed += n;
         break;
       default:
-        // Unknown future status — count toward total only.
+        // Unknown statuses count only toward `total`; add explicit
+        // folding here when the schema grows.
         break;
     }
   }
 
   return stats;
-}
-
-export interface CampaignActiveAgent {
-  agentId: number;
-  agentName: string;
-  taskId: number;
-  attackId: number;
-  attackMode: number;
-  progress: unknown;
-  speedHs: number | null;
 }
 
 const ACTIVE_AGENTS_LIMIT = 50;
@@ -320,9 +314,9 @@ export async function listActiveAgentsByCampaign(
 // ─── Draft-only delete ──────────────────────────────────────────────
 
 export type DeleteCampaignResult =
-  | { ok: true; campaign: typeof campaigns.$inferSelect }
-  | { error: 'NOT_FOUND' }
-  | { error: 'NOT_DRAFT'; status: string };
+  | { kind: 'deleted'; id: number; projectId: number }
+  | { kind: 'not_found' }
+  | { kind: 'not_draft'; status: string };
 
 /**
  * Delete a campaign if and only if its status is 'draft'. Attacks and tasks
@@ -330,13 +324,13 @@ export type DeleteCampaignResult =
  * current schema, so child rows are deleted explicitly.
  */
 export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [existing] = await tx.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
     if (!existing) {
-      return { error: 'NOT_FOUND' } as const;
+      return { kind: 'not_found' } as const;
     }
     if (existing.status !== 'draft') {
-      return { error: 'NOT_DRAFT', status: existing.status } as const;
+      return { kind: 'not_draft', status: existing.status } as const;
     }
 
     // Remove child rows (FKs are RESTRICT by default).
@@ -344,10 +338,19 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
     await tx.delete(attacks).where(eq(attacks.campaignId, id));
     const [deleted] = await tx.delete(campaigns).where(eq(campaigns.id, id)).returning();
     if (!deleted) {
-      return { error: 'NOT_FOUND' } as const;
+      return { kind: 'not_found' } as const;
     }
-    return { ok: true, campaign: deleted } as const;
+    return { kind: 'deleted', id: deleted.id, projectId: deleted.projectId } as const;
   });
+
+  // Emit a status event so other connected clients (and the originating
+  // dashboard's stats card) drop the deleted campaign without waiting
+  // for the next poll cycle. Frontend `use-events.ts` invalidates the
+  // `['campaigns', projectId]` and `dashboard-stats` keys on this event.
+  if (result.kind === 'deleted') {
+    emitCampaignStatus(result.projectId, result.id, 'deleted');
+  }
+  return result;
 }
 
 export async function createCampaign(data: {

@@ -67,10 +67,12 @@ const H_GAP = 200;
 const V_GAP = 96;
 
 /**
- * Compute a depth for each attack via BFS from roots (attacks with no
- * dependencies). Nodes that aren't reachable from any root (e.g. cycles,
- * malformed deps) still get a depth equal to their original index so
- * they render somewhere rather than overlapping the origin.
+ * Compute a depth per attack via iterative relaxation: roots start at 0;
+ * each pass sets a node's depth to max(dep depths) + 1 once all its
+ * deps are resolved. The safety counter bounds the loop in case the
+ * dependency graph contains a cycle. Unreachable nodes (cycles, deps
+ * outside the campaign) get a synthetic fallback depth so they still
+ * render somewhere visible.
  */
 function computeDepths(attacks: ReadonlyArray<AttackInput>): Map<number, number> {
   const depths = new Map<number, number>();

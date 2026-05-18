@@ -129,4 +129,37 @@ describe('CampaignDagView', () => {
     expect(screen.getByText(/Attack #42/)).toBeDefined();
     expect(screen.getByText(/mode 3/)).toBeDefined();
   });
+
+  it('still renders all nodes when the dependency graph contains a cycle', () => {
+    // Two nodes that depend on each other — no root exists. The
+    // iterative-relaxation depth assignment must fall back to synthetic
+    // depths instead of dropping nodes or hanging.
+    renderWithProviders(
+      <CampaignDagView
+        attacks={[
+          { id: 1, mode: 0, status: 'pending', dependencies: [2] },
+          { id: 2, mode: 0, status: 'pending', dependencies: [1] },
+        ]}
+      />
+    );
+
+    const nodes = screen.getByTestId('dag-nodes').querySelectorAll('li');
+    expect(nodes).toHaveLength(2);
+  });
+
+  it('renders an orphan that depends on a non-existent attack id', () => {
+    // Orphan + valid root in the same graph. Should not hang the safety
+    // counter or drop the orphan.
+    renderWithProviders(
+      <CampaignDagView
+        attacks={[
+          { id: 1, mode: 0, status: 'pending', dependencies: null },
+          { id: 2, mode: 0, status: 'pending', dependencies: [999] },
+        ]}
+      />
+    );
+
+    const nodes = screen.getByTestId('dag-nodes').querySelectorAll('li');
+    expect(nodes).toHaveLength(2);
+  });
 });

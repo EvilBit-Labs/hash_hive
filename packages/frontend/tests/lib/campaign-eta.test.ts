@@ -76,6 +76,35 @@ describe('computeEta', () => {
     expect(result).not.toBe('--');
     expect(typeof result).toBe('string');
   });
+
+  it('pins the exact formatted output for a known-magnitude scenario', () => {
+    // 100 remaining * 1e9 hashes/task = 1e11 hashes
+    // aggregate speed = 1e9 H/s
+    // remainingSeconds = 1e11 / 1e9 = 100s -> rounds to 2m
+    const stats: CampaignTaskStats = {
+      total: 100,
+      pending: 100,
+      running: 0,
+      completed: 0,
+      failed: 0,
+    };
+    const result = computeEta(stats, [makeAgent(500_000_000), makeAgent(500_000_000)]);
+    expect(result).toBe('2m');
+  });
+
+  it('returns "--" for impossible negative remaining (defensive against bucketing bugs)', () => {
+    // total < completed + failed should never happen, but if a future
+    // bucketing regression produces it, return -- instead of letting
+    // negative durations leak through to formatDuration.
+    const stats: CampaignTaskStats = {
+      total: 10,
+      pending: 0,
+      running: 0,
+      completed: 8,
+      failed: 5,
+    };
+    expect(computeEta(stats, [makeAgent(1000)])).toBe('--');
+  });
 });
 
 describe('formatDuration', () => {

@@ -9,6 +9,12 @@ import type {
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
   benchmarkSubmissionSchema,
+  campaignActiveAgentSchema,
+  campaignLifecycleActionSchema,
+  campaignPriorityBucketSchema,
+  campaignSortFieldSchema,
+  campaignSortOrderSchema,
+  campaignTaskStatsSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
   createAttackRequestSchema,
@@ -121,6 +127,16 @@ export type SelectAttack = z.infer<typeof selectAttackSchema>;
 
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type SelectTask = z.infer<typeof selectTaskSchema>;
+
+// ─── Campaign Dashboard Surface ─────────────────────────────────────
+
+export type CampaignTaskStats = z.infer<typeof campaignTaskStatsSchema>;
+export type CampaignActiveAgent = z.infer<typeof campaignActiveAgentSchema>;
+export type CampaignSortField = z.infer<typeof campaignSortFieldSchema>;
+export type CampaignSortOrder = z.infer<typeof campaignSortOrderSchema>;
+export type CampaignLifecycleAction = z.infer<typeof campaignLifecycleActionSchema>;
+export type CampaignPriorityBucket = z.infer<typeof campaignPriorityBucketSchema>;
+export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js';
 
 // ─── Cracker Binaries ───────────────────────────────────────────────
 

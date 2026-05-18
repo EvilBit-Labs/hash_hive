@@ -16,6 +16,7 @@ import { TextLink } from '../components/ui/text-link';
 import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns';
 import { useCampaignDetail } from '../hooks/use-dashboard';
 import { computeEta } from '../lib/campaign-eta';
+import { readCampaignPercentage } from '../lib/campaign-progress';
 import { Permission } from '../lib/permissions';
 
 // Lazy-load the DAG view so reactflow's bundle weight is only paid when
@@ -27,16 +28,6 @@ const CampaignDagView = lazy(() =>
 );
 
 type ConfirmAction = 'stop' | 'delete' | null;
-
-function readPercentage(progress: unknown): number {
-  if (!progress || typeof progress !== 'object') return 0;
-  const p = progress as Record<string, unknown>;
-  if (typeof p['percentage'] === 'number') return p['percentage'];
-  if (typeof p['overallProgress'] === 'number') return p['overallProgress'];
-  const hash = p['hashProgress'] as Record<string, unknown> | undefined;
-  if (hash && typeof hash['percentage'] === 'number') return hash['percentage'];
-  return 0;
-}
 
 export function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -52,12 +43,16 @@ export function CampaignDetailPage() {
 
   function handleStart() {
     setErrorBanner(null);
-    // Start fires without confirmation on the detail page per spec.
+    // The detail page already shows full campaign context, so Start does
+    // not need an interstitial confirmation modal.
     lifecycle.mutate(
       { campaignId, action: 'start' },
       {
-        onError: (err) =>
-          setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign'),
+        onError: (err) => {
+          // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+          console.error('[campaign-detail] start failed', { campaignId, err });
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign');
+        },
       }
     );
   }
@@ -67,8 +62,11 @@ export function CampaignDetailPage() {
     lifecycle.mutate(
       { campaignId, action: 'pause' },
       {
-        onError: (err) =>
-          setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign'),
+        onError: (err) => {
+          // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+          console.error('[campaign-detail] pause failed', { campaignId, err });
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign');
+        },
       }
     );
   }
@@ -78,6 +76,8 @@ export function CampaignDetailPage() {
       await lifecycle.mutateAsync({ campaignId, action: 'stop' });
       setConfirm(null);
     } catch (err) {
+      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+      console.error('[campaign-detail] stop failed', { campaignId, err });
       setErrorBanner(err instanceof Error ? err.message : 'Failed to stop campaign');
     }
   }
@@ -88,6 +88,8 @@ export function CampaignDetailPage() {
       setConfirm(null);
       navigate('/campaigns');
     } catch (err) {
+      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
+      console.error('[campaign-detail] delete failed', { campaignId, err });
       setErrorBanner(err instanceof Error ? err.message : 'Failed to delete campaign');
     }
   }
@@ -95,6 +97,17 @@ export function CampaignDetailPage() {
   function cancelConfirm() {
     if (lifecycle.isPending || del.isPending) return;
     setConfirm(null);
+  }
+
+  if (!Number.isInteger(campaignId) || campaignId <= 0) {
+    return (
+      <div className="space-y-4">
+        <TextLink to="/campaigns" back>
+          Back to campaigns
+        </TextLink>
+        <ErrorBanner message="Invalid campaign id in URL." />
+      </div>
+    );
   }
 
   if (isLoading) {
@@ -124,7 +137,7 @@ export function CampaignDetailPage() {
   }
 
   const { campaign, attacks, taskStats, activeAgents } = data;
-  const percentage = readPercentage(campaign.progress);
+  const percentage = readCampaignPercentage(campaign.progress);
   const eta = computeEta(taskStats, activeAgents);
 
   const canStart = campaign.status === 'draft' || campaign.status === 'paused';
@@ -198,7 +211,6 @@ export function CampaignDetailPage() {
 
       {errorBanner && <ErrorBanner message={errorBanner} />}
 
-      {/* Progress section */}
       <section aria-labelledby="progress-heading" className="space-y-3">
         <div className="flex items-baseline justify-between">
           <h3 id="progress-heading" className="text-sm font-medium">
@@ -216,7 +228,6 @@ export function CampaignDetailPage() {
         <CampaignTaskStats stats={taskStats} />
       </section>
 
-      {/* Active agents section */}
       <section aria-labelledby="active-agents-heading" className="space-y-3">
         <h3 id="active-agents-heading" className="text-sm font-medium">
           Active agents
@@ -224,7 +235,6 @@ export function CampaignDetailPage() {
         <CampaignAgentsSection agents={activeAgents} />
       </section>
 
-      {/* DAG visualization */}
       <section aria-labelledby="dag-heading" className="space-y-3">
         <h3 id="dag-heading" className="text-sm font-medium">
           Attack dependencies
@@ -234,7 +244,6 @@ export function CampaignDetailPage() {
         </Suspense>
       </section>
 
-      {/* Attacks section */}
       <section aria-labelledby="attacks-heading" className="space-y-3">
         <h3 id="attacks-heading" className="text-sm font-medium">
           Attacks
