@@ -4,6 +4,10 @@ Hard-won lessons, edge cases, and "watch out for" patterns. Organized by domain.
 
 Read the relevant section before working in that area. See also [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Repo Workflow
+
+- **`docs/plans/` is gitignored** (along with `.tessl/`, `.plan/`): plan files written by `/ce-plan` and friends are local artifacts, not tracked in git. Editing them never produces a `git status` diff — don't try to commit a plan's frontmatter `status` flip. `docs/residual-review-findings/` IS tracked and is the right place for review residuals that should persist across machines.
+
 ## TypeScript Strict Mode
 
 - **`exactOptionalPropertyTypes`**: Use `...(val ? { key: val } : {})` spread, never `key: val ?? undefined`
@@ -75,6 +79,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - **Flaky module cache**: Tests relying on `mock.module` can pass in isolation but fail in the full suite non-deterministically. If a test fails in `bun --filter @hashhive/backend test` but passes alone, re-run the full suite once before debugging — bun's module evaluation order across files is not guaranteed.
 - **Separate test files for conflicting mocks**: If a module is already imported at top level in one test file (e.g., `resolveGenerationStrategy` in `campaigns.test.ts`), tests needing full module mocks for the same source must go in a separate test file to avoid import-order conflicts.
 - **Isolated-phase pattern for files needing exclusive `mock.module` ownership**: `mock.module` runs at module load (before `describe.skip` can suppress it) and persists process-wide. Wrap the entire file body in `if (IS_ISOLATED) { ... }` and use `require('../../src/...')` inside to defer ESM resolution past the mocks. Gate via env var (e.g. `CONTROL_RBAC_TEST_ISOLATED=1`) wired through `package.json`'s test script as a separate phase. Existing examples: `tasks.test.ts`, `queue-manager.test.ts`, `control-routes-rbac.test.ts`.
+- **Isolated-phase imports use `await import()`, not `require()`, for async modules**: The gotcha above mentions `require('../../src/...')` for late module resolution, but bun rejects this on modules with top-level `await` (e.g. anything that pulls in `src/index.ts`'s app graph) with `require() async module ... is unsupported. use "await import()" instead`. Use `const { app } = await import('../../src/index.js')` inside the gated branch — the test file is a module so top-level await works. Also surface the skip stub with a `console.warn` + an `expect(process.env['<GATE>']).toBeUndefined()` assertion so a CI misconfig that drops the isolated phase cannot leave the suite silently green. Canonical example: `dashboard-campaigns-routes.test.ts`.
 - **Re-export the real implementation when you must mock siblings but want to preserve one export**: If a route test mocks a whole module but another test file in the same run exercises one of that module's exports for real behavior (e.g., a pure comparator), `import` the real export at the top of the route test and re-export it from the `mock.module` factory rather than inlining a degraded stub. The static import resolves to the real binding before `mock.module` hoists, so the factory can re-publish the genuine function — the process-global leak still happens, but it now installs the real implementation everywhere instead of the stub. Diagnostic signature when this is missing: a test passes locally but fails on Linux CI with a value the real function cannot produce (test-file load order differs between platforms). Canonical example: `crackers-routes.test.ts` re-exports `compareCrackerVersions` so `crackers.test.ts` still sees the real impl when both run in the same `bun test` process. **Symmetric rule:** when a test fails only on CI with a value disconnected from the implementation, search for `mock.module` calls on the affected module before rewriting the implementation — three commits of regex-rewriting on the parser could have been zero if Attempt 1 had run `grep -rn 'mock\.module.*<file>' tests/` first.
 
 **Mock Patterns:**
@@ -98,6 +103,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - Always call `afterEach(cleanup)` in Testing Library tests — DOM persists in happy-dom
 - `@testing-library/user-event` is NOT installed — use `fireEvent` from `@testing-library/react`
 - **Run tests per-package**: Use `bun --filter @hashhive/frontend test` / `bun --filter @hashhive/backend test` — root `bun test` skips per-package `bunfig.toml` (happy-dom), causing `document is not defined`
+- **Tests are NOT in the type-check scope**: `packages/{backend,frontend}/tsconfig.json` includes only `src/**/*`. `just check` / `tsc --noEmit` does not catch type errors in `tests/`. Test fixtures with missing required fields will compile and the bun runtime will accept them. When adding or refactoring shared types via `@hashhive/shared`, also update test factories/fixtures so the test data matches the wire shape — otherwise the drift only surfaces in PR review.
 
 **Test Utilities:**
 
