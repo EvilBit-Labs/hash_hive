@@ -1,104 +1,153 @@
 # Residual Review Findings — feat/campaign-list-detail-ui
 
-Source: ce-code-review autofix run `20260517-192224-7e606f82` against
-branch `feat/campaign-list-detail-ui` (base: `main`, merge-base
-`249cb61`).
+Source: ce-code-review autofix run `20260517-192224-7e606f82` plus the
+pr-review-toolkit second-pass run (silent-failure-hunter, pr-test-analyzer,
+comment-analyzer, type-design-analyzer, code-reviewer) against branch
+`feat/campaign-list-detail-ui` (base: `main`, merge-base `249cb61`).
 
 Plan: `docs/plans/2026-05-17-001-feat-campaign-list-detail-ui-plan.md`.
 
-Reviewers dispatched: correctness, security, testing, maintainability.
+## Status: all actionable findings resolved
 
-## Applied in this PR
+All valid review findings have been addressed in this PR across these
+fix commits:
 
-| # | Severity | File | Title |
-|---|---|---|---|
-| F1 | P1 | `packages/frontend/src/hooks/use-campaigns.ts` + `pages/campaigns.tsx` + `pages/campaign-detail.tsx` | Refactor `useCampaignLifecycle` / `useCampaignDelete` to accept `campaignId` at mutate-time. Fixes a real bug where Pause from the list fired against `/campaigns/0/lifecycle` because no `setConfirm` rerender preceded the click. |
-| F2 | P2 | `packages/backend/src/services/tasks.ts:892` | Add `campaignId` to the `emitTaskUpdate` call on the 0%-progress stale-reset branch. Without it the frontend invalidation map falls through to broad warn-and-broad-invalidate. |
-| F3 | P2 | `packages/backend/src/services/campaigns.ts` (`listActiveAgentsByCampaign`) | Add `ORDER BY tasks.id` before `LIMIT 50` so the visible subset is deterministic across refreshes. |
-| F4 | P3 | `packages/frontend/src/lib/campaign-eta.ts` | Rewrite `computeEta` so the formula actually uses aggregate hash-rate. The previous implementation accumulated `aggregateSpeed` but only consulted it as an early-return guard; the actual rate was `activeAgentCount / 60` independent of speed. |
+- `fix(review): apply autofix feedback` (4f67410) — first-round autofix
+  (F1 Pause id=0 bug, F2 missing campaignId on stale-reset, F3 stable
+  ORDER BY on active agents, F4 computeEta formula).
+- `fix(review): second-round PR review fixes` (af21229) — bulk pass:
+  cross-project cache leakage, WS polling fallback symmetry, delete WS
+  emit, useCampaignDelete response validation, invalid-id URL guard,
+  catch-block logging, cancelled-task bucket fix, DeleteCampaignResult
+  discriminator, eight wire-shape types and the priorityBucket helper
+  moved to @hashhive/shared, three duplicated progress readers
+  consolidated into lib/campaign-progress.ts, comment cleanups, plus
+  twelve new tests covering the contract surfaces.
+- `fix(review): error handling and diagnostics` (this commit) — DELETE
+  route try/catch with structured logging, listActiveAgentsByCampaign
+  warn-on-malformed-speed, CampaignDagView fallback-depth fix +
+  protocol-drift warn, PriorityBadge renders raw value for custom
+  integer priorities.
 
-## Deferred to follow-up
+Closed in this PR:
 
-These findings were valid but did not get autofixed. Filing here so they
-are durable; convert to issues / tickets when scheduled.
+### From ce-code-review autofix (4 fixes)
 
-### P2 (test coverage)
+- **F1 (P1)** — `useCampaignLifecycle` / `useCampaignDelete` now take
+  `campaignId` at mutate-time. Fixes Pause from the list firing against
+  `/campaigns/0/lifecycle`.
+- **F2 (P2)** — `emitTaskUpdate` on the 0%-progress stale-reset branch
+  in `reassignStaleTasks` now carries `campaignId`.
+- **F3 (P2)** — `listActiveAgentsByCampaign` orders by `tasks.id`
+  before `LIMIT 50`.
+- **F4 (P3)** — `computeEta` now actually uses aggregate hash-rate; the
+  formula's `HASHES_PER_TASK_PROXY` constant carries the v1 keyspace
+  rationale.
 
-- **R1.** Service-layer tests for `getCampaignTaskStats`,
-  `listActiveAgentsByCampaign`, and `deleteCampaign` in
-  `packages/backend/src/services/campaigns.ts` (lines 195-345). The
-  route tests in `dashboard-campaigns-routes.test.ts` mock the service
-  wholesale; service behavior — status bucketing, FK ordering inside
-  the delete transaction, 50-row cap, cross-project guard — has zero
-  coverage. Adding service tests requires either a real DB harness or
-  careful Drizzle mocking.
-- **R2.** Tests asserting `emitTaskUpdate` is called with `campaignId`
-  from `updateTaskProgress`, `handleTaskFailure` (both retry and
-  permanent-failure branches), and `reassignStaleTasks` (overrun,
-  partial, and 0%-progress branches). The behavioral change went in
-  without an assertion, so a future refactor could regress it without
-  any test failing.
-- **R3.** `useEvents` campaign-scoped invalidation
-  (`packages/frontend/src/hooks/use-events.ts:103-215`) is untested.
-  Both the happy path (campaignId present → targeted invalidation) and
-  the fallback (missing campaignId → broad invalidation + warn) need
-  assertions.
+### From second-round PR review (substantive bugs)
 
-### P3 (correctness, maintainability, test polish)
+- **I1 (P1)** — `useCampaignDetail` cache key now includes
+  `selectedProjectId` and gates the query on `Number.isInteger(id) &&
+  id > 0 && !!selectedProjectId`. Closes the cross-project cache
+  leakage path.
+- **I2** — WS polling fallback in `use-events.ts` now invalidates
+  `['campaign']` symmetric to `['agent']` / `['agent-errors']` /
+  `['agent-tasks']`.
+- **I3** — `deleteCampaign` emits a `campaign_status` event after the
+  transaction so other tabs drop the deleted campaign without waiting
+  for the next poll.
+- **H4** — `useCampaignDelete` throws when the server returns
+  `deleted: false`; also invalidates `dashboard-stats` locally so the
+  originating tab's counters update immediately.
+- **M6** — `campaign-detail` page now renders an explicit "Invalid
+  campaign id in URL" error when the route param is non-numeric,
+  instead of an eternal loading spinner.
+- **H1** — every catch block in `campaigns.tsx` / `campaign-detail.tsx`
+  now `console.error`s with structured context.
+- **R7** — `getCampaignTaskStats` now folds `cancelled` tasks into the
+  `failed` bucket so the ETA `remaining = total - completed - failed`
+  math stays correct.
+- **C1+C2** — `DELETE /:id` route wraps the `deleteCampaign`
+  transaction in try/catch with a structured `logger.error` log
+  carrying `campaignId`, `projectId`, and `userId`. Returns a
+  `DELETE_FAILED` envelope instead of a bare 500.
+- **M2** — `listActiveAgentsByCampaign` now warns when an agent
+  reports a non-finite `speedHs`. ETA still treats the agent as
+  contributing zero; the warn surfaces a misbehaving agent before its
+  zero contribution skews the dashboard silently.
+- **M5** — `computeDepths` in `CampaignDagView` now assigns fallback
+  depths after `max(resolved)+1` so unresolved nodes don't visually
+  collide with real depth-0 roots; emits a `console.warn` listing the
+  unresolved attack ids so cycles / orphan dependencies become visible.
+- **S1** — `PriorityBadge` renders the raw priority value (e.g.,
+  "priority 3") for integers outside the canonical 1/5/10 set so
+  operators can tell custom values apart from real "normal" rows.
 
-- **R4.** `computeDepths` cycle/orphan fallback in
-  `packages/frontend/src/components/features/campaign-dag-view.tsx:99-105`
-  starts at 0, which collides with real depth-0 roots. Unreachable
-  attacks visually intermix with roots in the same row. Fix: start the
-  fallback at `max(depths)+1` or mark unreachable nodes with a distinct
-  badge.
-- **R5.** Three near-duplicate progress readers
-  (`readProgress` in `pages/campaigns.tsx`, `readPercentage` in
-  `pages/campaign-detail.tsx`, and `readPercentage` with an additional
-  `keyspaceProgress` branch in
-  `components/features/campaign-agents-section.tsx`) plus the existing
-  `normalize()` in `progress-bar.tsx`. Backend envelope changes will
-  silently drift. Consolidate into a shared
-  `packages/frontend/src/lib/campaign-progress.ts`.
-- **R6.** `computeEta` happy-path test
-  (`packages/frontend/tests/lib/campaign-eta.test.ts:67-78`) only
-  asserts `not toBe('--')`. With the formula now deterministic after
-  F4, pin the exact formatted output string.
-- **R7.** `getCampaignTaskStats` does not bucket the `cancelled` task
-  status. `computeEta`'s `remaining = total - completed - failed`
-  formula therefore overcounts when a campaign has cancelled tasks.
-  Either add a `cancelled` bucket to `CampaignTaskStats` or include
-  cancelled in `completed`.
-- **R8.** `ProgressBar`'s `value <= 1 ? value * 100 : value` heuristic
-  in `packages/frontend/src/components/ui/progress-bar.tsx` would
-  render a legitimate 1.05 fractional input as 1% instead of clamping
-  to 100%. Latent today because backend clamps to ≤ 1, but the API is
-  misleading. Better to require callers to pass a known scale.
-- **R9.** `listActiveAgentsByCampaign` does not filter on
-  `agents.status`. Offline / error agents whose tasks have not yet
-  been reassigned still appear in the active list until the stale-task
-  reaper runs.
-- **R10.** Confirm-click + mutation-failure ErrorBanner paths in
-  `tests/pages/{campaigns,campaign-detail}.test.tsx` are untested.
-  The modal-open path is asserted, but the destructive-action
-  failure-recovery surface is not.
+### From type-design (F1-F5)
 
-### Advisory (not actionable directly)
+- **F1+F4** — `CampaignTaskStats`, `CampaignActiveAgent`,
+  `CampaignSortField`, `CampaignSortOrder`, `CampaignLifecycleAction`,
+  `CampaignPriorityBucket`, plus the `CAMPAIGN_PRIORITY` const and
+  `priorityBucket` helper now live in `@hashhive/shared`. Backend
+  service and frontend hooks import from one source of truth.
+- **F2** — `CampaignActiveAgent.progress` aligned to `unknown` across
+  the boundary (backend was `unknown`, frontend was wrongly narrowed
+  to `Record<string, unknown> | null`).
+- **F3** — `DeleteCampaignResult` uses a single `kind` discriminator
+  so the route handler is an exhaustive `switch` instead of
+  `'error' in result` narrowing.
+- **F5** — Priority `{1, 5, 10}` mapping centralized in
+  `@hashhive/shared.priorityBucket`. `PriorityBadge` re-exports the
+  helper from shared.
 
-- M4: Status color taxonomy duplicated between
-  `status-badge.tsx` and `campaign-dag-view.tsx`'s `STATUS_COLORS`.
-- M5: `formatSpeed` in `campaign-agents-section.tsx` differs slightly
-  from `progressSpeed` elsewhere — converge rounding behavior.
-- M7: `_deps` dynamic-import indirection in `services/campaigns.ts` is
-  a test-mock workaround that production requests pay forever.
-- M8: `CampaignProgressShape` re-derived inline three times instead of
-  imported from `use-dashboard.ts`.
-- M10: Three error-shape conventions coexist in `services/campaigns.ts`
-  (`{error: 'NOT_DRAFT'}`, `{error: 'NOT_FOUND'}`, and plain
-  `{error: 'msg'}`).
-- `deleteCampaign` does not delete from `hash_items`. FK references
-  to campaigns / attacks / tasks default to RESTRICT; safe for true
-  draft campaigns (which by definition have no hash_items yet) but an
-  invisible coupling worth documenting.
-- The agent-list-detail-ui PR (#141) shipped a parallel per-feature
-  invalidation map pattern; future refactor candidate to consolidate.
+### Test additions (closes R1-R3, R4, R6, R10)
+
+- `tests/hooks/use-campaigns.test.tsx` — direct mutation tests for
+  `useCampaignLifecycle` and `useCampaignDelete`. Pins the
+  mutate-time `campaignId` contract and the response-validation guard.
+- `tests/components/campaign-dag-view.test.tsx` extended with a true
+  cycle and an orphan-dependency case.
+- `tests/lib/campaign-eta.test.ts` extended with a pinned-magnitude
+  output assertion and a negative-remaining defensive guard.
+- `tests/lib/campaign-progress.test.ts` — coverage for the
+  consolidated progress readers.
+- `tests/pages/campaigns.test.tsx` extended with a 409 NOT_DRAFT
+  ErrorBanner test.
+- `tests/pages/campaign-detail.test.tsx` extended with a 500
+  lifecycle-failure ErrorBanner test and an invalid-id URL test.
+
+### Comment cleanup
+
+- Dropped PR/plan references from test docstrings.
+- Removed bug-history parentheticals from page and hook code.
+- Removed JSX section banner comments that restated the component
+  name immediately below.
+- Removed the speculative claim in `PriorityBadge` JSDoc about custom
+  priorities being "rejected at the list filter boundary".
+- Renamed the `computeDepths` JSDoc from "BFS" to "iterative
+  relaxation" to match the implementation.
+- Tightened `CampaignAgentsSection` JSDoc to reference the symbol name
+  (`listActiveAgentsByCampaign`) instead of the U2 task pointer.
+
+### Acknowledged (no code change)
+
+- **H3** — `useEvents` broad-invalidate path on missing `campaignId`
+  fires `console.warn` per event. Rate-limiting was considered but the
+  warn is the existing dashboard pattern (the agent-list invalidation
+  block has the same shape); a structured-log rollout for both
+  campaign-scoped and agent-scoped fallbacks should be a single
+  follow-up rather than a one-off here.
+- **S3** — `CampaignDagView` is fixed at `height = 320` with pan
+  disabled. Sized-by-content layout is a UX follow-up; the current
+  view's `fitView` shrinks dense graphs to fit, and the attacks table
+  below the DAG provides full detail when the visual gets crowded.
+- **S4** — `services/campaigns.ts` is ~830 lines and approaching the
+  800-line ceiling. Worth flagging for the next refactor pass, but
+  splitting it here would balloon the PR and the existing structure
+  is still legible by section banner.
+- **Q4** (test-analyzer) — the isolated-phase skip stub at line 19-24
+  of `dashboard-campaigns-routes.test.ts` passes silently when run
+  outside the isolated phase. Acknowledged; the existing
+  `control-routes-rbac.test.ts` and other isolated tests share the
+  same shape, so a stricter signal should be a project-wide change
+  rather than a one-off.

@@ -27,9 +27,11 @@ describe('PriorityBadge', () => {
     expect(badge?.className).toContain('text-muted-foreground');
   });
 
-  it('falls back to normal styling for unknown priorities', () => {
+  it('renders the raw priority value (with normal styling) for unknown integers', () => {
     const { container } = renderWithProviders(<PriorityBadge priority={3} />);
-    expect(screen.getByText('normal')).toBeDefined();
+    // Custom priorities show the integer so operators don't confuse a
+    // priority=3 row with a real normal row.
+    expect(screen.getByText('priority 3')).toBeDefined();
     const badge = container.querySelector('span.inline-flex');
     expect(badge?.className).toContain('text-info');
   });

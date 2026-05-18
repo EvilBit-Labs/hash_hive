@@ -1,4 +1,4 @@
-import { type CampaignPriorityBucket, priorityBucket } from '@hashhive/shared';
+import { CAMPAIGN_PRIORITY, type CampaignPriorityBucket, priorityBucket } from '@hashhive/shared';
 import { cn } from '../../lib/utils';
 
 // Re-export so existing test imports (`import { priorityBucket } from
@@ -8,9 +8,10 @@ export { priorityBucket } from '@hashhive/shared';
 /**
  * Maps the backend's integer priority convention into a human-readable
  * label and color token. Backend uses 1/5/10 as canonical buckets via
- * `priorityMap` in `services/campaigns.ts`; any other integer falls
- * back to `normal` styling. Bucket assignment is shared with the
- * backend through `@hashhive/shared.priorityBucket`.
+ * `priorityMap` in `services/campaigns.ts`. Any other integer is shown
+ * with the `normal` bucket's styling but labelled with the raw value
+ * (e.g., `priority 3`) so the operator can tell custom values apart
+ * from real `normal` rows.
  */
 
 interface PriorityBadgeProps {
@@ -24,8 +25,17 @@ const BUCKET_STYLES: Record<CampaignPriorityBucket, string> = {
   low: 'bg-surface-1/50 text-muted-foreground border-surface-1',
 };
 
+function isCanonicalPriority(priority: number): boolean {
+  return (
+    priority === CAMPAIGN_PRIORITY.HIGH ||
+    priority === CAMPAIGN_PRIORITY.NORMAL ||
+    priority === CAMPAIGN_PRIORITY.LOW
+  );
+}
+
 export function PriorityBadge({ priority, className }: PriorityBadgeProps) {
   const bucket = priorityBucket(priority);
+  const label = isCanonicalPriority(priority) ? bucket : `priority ${priority}`;
   return (
     <span
       className={cn(
@@ -35,7 +45,7 @@ export function PriorityBadge({ priority, className }: PriorityBadgeProps) {
       )}
     >
       <span className={cn('h-1.5 w-1.5 rounded-full bg-current')} />
-      {bucket}
+      {label}
     </span>
   );
 }

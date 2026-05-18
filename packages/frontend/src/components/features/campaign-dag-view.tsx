@@ -98,12 +98,29 @@ function computeDepths(attacks: ReadonlyArray<AttackInput>): Map<number, number>
     }
   }
 
-  // Anything still unresolved (cycles, orphans) gets a synthetic depth.
-  let fallback = 0;
+  // Anything still unresolved (cycles, orphans) gets a synthetic depth
+  // that starts after the deepest resolved node so the fallback nodes
+  // don't visually collide with real depth-0 roots.
+  let maxResolvedDepth = -1;
+  for (const d of depths.values()) {
+    if (d > maxResolvedDepth) maxResolvedDepth = d;
+  }
+  const fallbackOrigin = maxResolvedDepth + 1;
+  let fallbackOffset = 0;
+  const unresolved: number[] = [];
   for (const a of attacks) {
     if (!depths.has(a.id)) {
-      depths.set(a.id, fallback++);
+      depths.set(a.id, fallbackOrigin + fallbackOffset);
+      fallbackOffset += 1;
+      unresolved.push(a.id);
     }
+  }
+  if (unresolved.length > 0) {
+    // biome-ignore lint/suspicious/noConsole: protocol drift signal — surface possible cycle / orphan deps
+    console.warn(
+      '[CampaignDagView] depth resolution fell back for attack ids; possible cycle or orphan dependency',
+      { unresolved }
+    );
   }
 
   return depths;

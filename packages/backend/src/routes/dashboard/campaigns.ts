@@ -1,6 +1,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { logger } from '../../config/logger.js';
 import { requireSession } from '../../middleware/auth.js';
 import { requireProjectAccess, requireRole } from '../../middleware/rbac.js';
 import {
@@ -132,14 +133,33 @@ campaignRoutes.delete('/:id', requireRole('admin', 'contributor'), async (c) => 
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
   }
 
-  const { projectId } = c.get('currentUser');
+  const { userId, projectId } = c.get('currentUser');
   const existing = await getCampaignById(id);
 
   if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
   }
 
-  const result = await deleteCampaign(id);
+  let result: Awaited<ReturnType<typeof deleteCampaign>>;
+  try {
+    result = await deleteCampaign(id);
+  } catch (err) {
+    // deleteCampaign runs a multi-statement transaction. Unexpected
+    // failures (FK from a future child table, DB connectivity drop,
+    // deadlock) bubble here as a thrown error rather than the
+    // discriminated `kind` union. Surface them with context so the
+    // destructive-operation audit trail is never empty.
+    logger.error({ err, campaignId: id, projectId, userId }, 'deleteCampaign transaction failed');
+    return c.json(
+      {
+        error: {
+          code: 'DELETE_FAILED',
+          message: 'Campaign deletion failed unexpectedly. Check server logs for details.',
+        },
+      },
+      500
+    );
+  }
 
   switch (result.kind) {
     case 'not_found':

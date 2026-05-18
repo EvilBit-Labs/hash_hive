@@ -9,6 +9,7 @@ import {
   tasks,
 } from '@hashhive/shared';
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
@@ -298,7 +299,17 @@ export async function listActiveAgentsByCampaign(
   return rows.map((row) => {
     const progress = row.progress as Record<string, unknown> | null;
     const rawSpeed = progress && typeof progress === 'object' ? progress['speedHs'] : null;
-    const speedHs = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed) ? rawSpeed : null;
+    const speedHsValid = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed);
+    if (rawSpeed !== undefined && rawSpeed !== null && !speedHsValid) {
+      // Surface protocol drift: agent reported a speed but it wasn't a
+      // finite number. ETA computation will treat it as null; the warn
+      // lets us spot a misbehaving agent before its zero contribution
+      // skews the dashboard.
+      logger.warn(
+        { agentId: row.agentId, taskId: row.taskId, rawSpeed },
+        'listActiveAgentsByCampaign: dropping non-finite speedHs from active agent'
+      );
+    }
     return {
       agentId: row.agentId,
       agentName: row.agentName,
@@ -306,7 +317,7 @@ export async function listActiveAgentsByCampaign(
       attackId: row.attackId,
       attackMode: row.attackMode,
       progress: row.progress,
-      speedHs,
+      speedHs: speedHsValid ? (rawSpeed as number) : null,
     };
   });
 }
