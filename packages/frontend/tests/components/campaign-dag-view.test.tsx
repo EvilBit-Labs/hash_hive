@@ -1,5 +1,25 @@
+import type { CampaignAttackRow } from '@hashhive/shared';
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { cleanupAll, renderWithProviders, screen } from '../test-utils';
+
+/**
+ * Factory for test attack rows. The DAG component reads only id, mode,
+ * status, and dependencies; the other CampaignAttackRow fields are
+ * filled with neutral defaults so the literal matches the wire shape.
+ */
+function makeAttack(overrides: Partial<CampaignAttackRow> = {}): CampaignAttackRow {
+  return {
+    id: 1,
+    campaignId: 1,
+    mode: 0,
+    status: 'pending',
+    wordlistId: null,
+    rulelistId: null,
+    masklistId: null,
+    dependencies: null,
+    ...overrides,
+  };
+}
 
 // ReactFlow needs ResizeObserver and DOMRect APIs happy-dom doesn't ship
 // with. Replace the heavy graph renderer with a deterministic stub that
@@ -59,9 +79,9 @@ describe('CampaignDagView', () => {
     renderWithProviders(
       <CampaignDagView
         attacks={[
-          { id: 1, mode: 0, status: 'pending', dependencies: null },
-          { id: 2, mode: 3, status: 'running', dependencies: [1] },
-          { id: 3, mode: 0, status: 'completed', dependencies: [2] },
+          makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: null }),
+          makeAttack({ id: 2, mode: 3, status: 'running', dependencies: [1] }),
+          makeAttack({ id: 3, mode: 0, status: 'completed', dependencies: [2] }),
         ]}
       />
     );
@@ -74,9 +94,9 @@ describe('CampaignDagView', () => {
     renderWithProviders(
       <CampaignDagView
         attacks={[
-          { id: 1, mode: 0, status: 'pending', dependencies: null },
-          { id: 2, mode: 3, status: 'running', dependencies: [1] },
-          { id: 3, mode: 0, status: 'completed', dependencies: [1, 2] },
+          makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: null }),
+          makeAttack({ id: 2, mode: 3, status: 'running', dependencies: [1] }),
+          makeAttack({ id: 3, mode: 0, status: 'completed', dependencies: [1, 2] }),
         ]}
       />
     );
@@ -93,7 +113,9 @@ describe('CampaignDagView', () => {
 
   it('omits edges that reference a non-existent attack', () => {
     renderWithProviders(
-      <CampaignDagView attacks={[{ id: 1, mode: 0, status: 'pending', dependencies: [999] }]} />
+      <CampaignDagView
+        attacks={[makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: [999] })]}
+      />
     );
 
     const edges = screen.getByTestId('dag-edges').querySelectorAll('li');
@@ -104,10 +126,10 @@ describe('CampaignDagView', () => {
     renderWithProviders(
       <CampaignDagView
         attacks={[
-          { id: 1, mode: 0, status: 'pending', dependencies: null },
-          { id: 2, mode: 0, status: 'running', dependencies: null },
-          { id: 3, mode: 0, status: 'completed', dependencies: null },
-          { id: 4, mode: 0, status: 'failed', dependencies: null },
+          makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: null }),
+          makeAttack({ id: 2, mode: 0, status: 'running', dependencies: null }),
+          makeAttack({ id: 3, mode: 0, status: 'completed', dependencies: null }),
+          makeAttack({ id: 4, mode: 0, status: 'failed', dependencies: null }),
         ]}
       />
     );
@@ -123,7 +145,9 @@ describe('CampaignDagView', () => {
 
   it('renders node labels including attack id and mode', () => {
     renderWithProviders(
-      <CampaignDagView attacks={[{ id: 42, mode: 3, status: 'pending', dependencies: null }]} />
+      <CampaignDagView
+        attacks={[makeAttack({ id: 42, mode: 3, status: 'pending', dependencies: null })]}
+      />
     );
 
     expect(screen.getByText(/Attack #42/)).toBeDefined();
@@ -137,8 +161,8 @@ describe('CampaignDagView', () => {
     renderWithProviders(
       <CampaignDagView
         attacks={[
-          { id: 1, mode: 0, status: 'pending', dependencies: [2] },
-          { id: 2, mode: 0, status: 'pending', dependencies: [1] },
+          makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: [2] }),
+          makeAttack({ id: 2, mode: 0, status: 'pending', dependencies: [1] }),
         ]}
       />
     );
@@ -153,8 +177,8 @@ describe('CampaignDagView', () => {
     renderWithProviders(
       <CampaignDagView
         attacks={[
-          { id: 1, mode: 0, status: 'pending', dependencies: null },
-          { id: 2, mode: 0, status: 'pending', dependencies: [999] },
+          makeAttack({ id: 1, mode: 0, status: 'pending', dependencies: null }),
+          makeAttack({ id: 2, mode: 0, status: 'pending', dependencies: [999] }),
         ]}
       />
     );

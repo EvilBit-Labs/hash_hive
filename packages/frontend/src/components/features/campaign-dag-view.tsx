@@ -1,17 +1,17 @@
+import type { CampaignAttackRow } from '@hashhive/shared';
 import { useMemo } from 'react';
 import ReactFlow, { Background, type Edge, type Node, Position } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { EmptyState } from '../ui/empty-state';
 
-interface AttackInput {
-  id: number;
-  mode: number;
-  status: string;
-  dependencies: number[] | null;
-}
-
 interface CampaignDagViewProps {
-  attacks: ReadonlyArray<AttackInput>;
+  /**
+   * Attacks to render. Uses the shared `CampaignAttackRow` shape so
+   * callers can pass the detail-payload's `attacks` array directly
+   * without coercion. The DAG itself reads only `id`, `mode`, `status`,
+   * and `dependencies`; the other fields are ignored.
+   */
+  attacks: ReadonlyArray<CampaignAttackRow>;
   /**
    * Pixel height of the container. Defaults to a content-aware
    * estimate so deep DAGs do not collapse into an unreadable mass;
@@ -29,7 +29,7 @@ const HEIGHT_PER_DEPTH_LEVEL = 96; // matches V_GAP below
  * detail page absurdly tall. Caps at `MAX_DAG_HEIGHT`; beyond that the
  * panning behavior takes over.
  */
-function estimateHeight(attacks: ReadonlyArray<AttackInput>): number {
+function estimateHeight(attacks: ReadonlyArray<CampaignAttackRow>): number {
   // Rough upper bound on the depth — assumes a worst-case linear chain.
   const depth = Math.min(attacks.length, 8);
   const estimated = MIN_DAG_HEIGHT + depth * HEIGHT_PER_DEPTH_LEVEL;
@@ -94,7 +94,7 @@ const V_GAP = 96;
  * outside the campaign) get a synthetic fallback depth so they still
  * render somewhere visible.
  */
-function computeDepths(attacks: ReadonlyArray<AttackInput>): Map<number, number> {
+function computeDepths(attacks: ReadonlyArray<CampaignAttackRow>): Map<number, number> {
   const depths = new Map<number, number>();
   const idSet = new Set(attacks.map((a) => a.id));
 
@@ -146,11 +146,11 @@ function computeDepths(attacks: ReadonlyArray<AttackInput>): Map<number, number>
   return depths;
 }
 
-function buildGraph(attacks: ReadonlyArray<AttackInput>): { nodes: Node[]; edges: Edge[] } {
+function buildGraph(attacks: ReadonlyArray<CampaignAttackRow>): { nodes: Node[]; edges: Edge[] } {
   const depths = computeDepths(attacks);
 
   // Bucket nodes by depth so we can spread them horizontally per row.
-  const byDepth = new Map<number, AttackInput[]>();
+  const byDepth = new Map<number, CampaignAttackRow[]>();
   for (const a of attacks) {
     const d = depths.get(a.id) ?? 0;
     const bucket = byDepth.get(d);
