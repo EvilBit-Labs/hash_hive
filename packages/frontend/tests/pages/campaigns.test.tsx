@@ -170,8 +170,10 @@ describe('CampaignsPage', () => {
 
     await waitFor(() => {
       const urls = getFetchUrls(fetchMock);
-      expect(urls.some((u) => u.includes('sort=name'))).toBe(true);
-      expect(urls.some((u) => u.includes('order=asc'))).toBe(true);
+      // Assert both params land on the same request — separate
+      // `.some()` checks would pass even if sort and order ended up
+      // in different fetch calls during state transitions.
+      expect(urls.some((u) => u.includes('sort=name') && u.includes('order=asc'))).toBe(true);
     });
   });
 
@@ -327,7 +329,12 @@ describe('CampaignsPage', () => {
       expect(screen.getByText('High Pri')).toBeDefined();
     });
 
-    expect(screen.getByText('high')).toBeDefined();
-    expect(screen.getByText('low')).toBeDefined();
+    // Scope the badge assertions to each campaign's row. Global
+    // `getByText('high')` / `getByText('low')` would also match the
+    // priority filter option labels in the page header.
+    const highRow = screen.getByText('High Pri').closest('tr');
+    const lowRow = screen.getByText('Low Pri').closest('tr');
+    expect(highRow?.textContent).toContain('high');
+    expect(lowRow?.textContent).toContain('low');
   });
 });

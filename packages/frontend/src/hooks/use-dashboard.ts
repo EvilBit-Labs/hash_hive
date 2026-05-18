@@ -2,11 +2,9 @@ import type {
   AgentCurrentTask,
   AgentTaskSummary,
   AgentWorstSeverity,
-  CampaignActiveAgent,
-  CampaignSortField,
-  CampaignSortOrder,
-  CampaignTaskStats,
+  CampaignDetailPayload,
   SelectAgentError,
+  UseCampaignsOptions,
 } from '@hashhive/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -18,10 +16,13 @@ export type {
   AgentCurrentTask,
   AgentWorstSeverity,
   CampaignActiveAgent,
+  CampaignAttackRow,
+  CampaignDetailPayload,
   CampaignLifecycleAction,
   CampaignSortField,
   CampaignSortOrder,
   CampaignTaskStats,
+  UseCampaignsOptions,
 } from '@hashhive/shared';
 
 interface DashboardStats {
@@ -167,15 +168,6 @@ export function useAgentTasks(agentId: number) {
   });
 }
 
-export interface UseCampaignsOptions {
-  status?: string;
-  priority?: number;
-  sort?: CampaignSortField;
-  order?: CampaignSortOrder;
-  limit?: number;
-  offset?: number;
-}
-
 export function useCampaigns(options?: UseCampaignsOptions) {
   const { selectedProjectId } = useUiStore();
 
@@ -197,24 +189,6 @@ export function useCampaigns(options?: UseCampaignsOptions) {
     },
     enabled: !!selectedProjectId,
   });
-}
-
-export interface CampaignAttackRow {
-  id: number;
-  campaignId: number;
-  mode: number;
-  status: string;
-  wordlistId: number | null;
-  rulelistId: number | null;
-  masklistId: number | null;
-  dependencies: number[] | null;
-}
-
-export interface CampaignDetailPayload {
-  campaign: Campaign;
-  attacks: CampaignAttackRow[];
-  taskStats: CampaignTaskStats;
-  activeAgents: CampaignActiveAgent[];
 }
 
 /**

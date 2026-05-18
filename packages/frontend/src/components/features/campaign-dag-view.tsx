@@ -142,10 +142,14 @@ function buildGraph(attacks: ReadonlyArray<AttackInput>): { nodes: Node[]; edges
   for (const [depth, rowAttacks] of byDepth.entries()) {
     rowAttacks.forEach((attack, i) => {
       const colors = STATUS_COLORS[attack.status] ?? DEFAULT_COLORS;
+      // Accessibility: status appears in the label text so the node is
+      // distinguishable without relying on the color encoding alone.
+      // Mirrors the project guideline "Pair every signal with non-color
+      // cues" — colorblind / low-contrast viewers still read the state.
       nodes.push({
         id: String(attack.id),
         position: { x: i * H_GAP, y: depth * V_GAP },
-        data: { label: `Attack #${attack.id} · mode ${attack.mode}` },
+        data: { label: `Attack #${attack.id} · mode ${attack.mode} · ${attack.status}` },
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
         style: {

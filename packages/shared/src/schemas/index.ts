@@ -554,3 +554,44 @@ export function priorityBucket(priority: number): 'high' | 'normal' | 'low' {
   if (priority === CAMPAIGN_PRIORITY.LOW) return 'low';
   return 'normal';
 }
+
+/**
+ * Query options accepted by `GET /dashboard/campaigns` and consumed by
+ * the dashboard's `useCampaigns` hook. Schema-derived so the hook and
+ * the route's Zod validator share one source of truth.
+ */
+export const useCampaignsOptionsSchema = z.object({
+  status: z.string().optional(),
+  priority: z.number().int().optional(),
+  sort: campaignSortFieldSchema.optional(),
+  order: campaignSortOrderSchema.optional(),
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Per-attack row returned by the campaign detail payload. Scoped to
+ * the fields the dashboard renders.
+ */
+export const campaignAttackRowSchema = z.object({
+  id: z.number().int().positive(),
+  campaignId: z.number().int().positive(),
+  mode: z.number().int().nonnegative(),
+  status: z.string(),
+  wordlistId: z.number().int().positive().nullable(),
+  rulelistId: z.number().int().positive().nullable(),
+  masklistId: z.number().int().positive().nullable(),
+  dependencies: z.array(z.number().int().positive()).nullable(),
+});
+
+/**
+ * Full response shape of `GET /dashboard/campaigns/:id`. Single
+ * authoritative contract that both the route handler and the
+ * `useCampaignDetail` hook validate against.
+ */
+export const campaignDetailPayloadSchema = z.object({
+  campaign: selectCampaignSchema,
+  attacks: z.array(campaignAttackRowSchema),
+  taskStats: campaignTaskStatsSchema,
+  activeAgents: z.array(campaignActiveAgentSchema),
+});

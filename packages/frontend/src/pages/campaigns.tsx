@@ -1,3 +1,4 @@
+import { campaignSortFieldSchema, campaignSortOrderSchema } from '@hashhive/shared';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -50,6 +51,32 @@ const PRIORITY_FILTER_OPTIONS = [
   { label: 'Low', value: '10' },
 ] as const;
 
+const ALLOWED_PRIORITIES = new Set<number>([1, 5, 10]);
+
+/**
+ * Clamp the URL search params to the known allowlists before they
+ * shape the API request. A malformed deep link (e.g. `?sort=evil`)
+ * would otherwise reach the backend and return a 400, which the
+ * dashboard renders as an empty state — indistinguishable from a real
+ * empty result. Allowlist validation here lets the page fall back to
+ * a safe default and emit a console warn so protocol drift is visible.
+ */
+function safeSortField(raw: string | null): CampaignSortField {
+  const parsed = campaignSortFieldSchema.safeParse(raw);
+  return parsed.success ? parsed.data : 'createdAt';
+}
+
+function safeSortOrder(raw: string | null): CampaignSortOrder {
+  const parsed = campaignSortOrderSchema.safeParse(raw);
+  return parsed.success ? parsed.data : 'desc';
+}
+
+function safePriority(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && ALLOWED_PRIORITIES.has(n) ? n : undefined;
+}
+
 const SORT_FIELD_OPTIONS: Array<{ label: string; value: CampaignSortField }> = [
   { label: 'Created', value: 'createdAt' },
   { label: 'Name', value: 'name' },
@@ -61,19 +88,25 @@ export function CampaignsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
+  // Read raw params first, then sanitize. The raw values feed the
+  // controlled-select state; the sanitized values feed the API call.
   const status = searchParams.get('status') ?? '';
-  const priorityParam = searchParams.get('priority') ?? '';
-  const sortParam = (searchParams.get('sort') ?? 'createdAt') as CampaignSortField;
-  const orderParam = (searchParams.get('order') ?? 'desc') as CampaignSortOrder;
+  const priorityRaw = searchParams.get('priority') ?? '';
+  const sortRaw = searchParams.get('sort');
+  const orderRaw = searchParams.get('order');
+
+  const sortParam = safeSortField(sortRaw);
+  const orderParam = safeSortOrder(orderRaw);
+  const priorityParam = safePriority(priorityRaw);
 
   const queryOptions = useMemo<UseCampaignsOptions>(() => {
     const opts: UseCampaignsOptions = { sort: sortParam, order: orderParam };
     if (status) opts.status = status;
-    if (priorityParam) opts.priority = Number(priorityParam);
+    if (priorityParam !== undefined) opts.priority = priorityParam;
     return opts;
   }, [status, priorityParam, sortParam, orderParam]);
 
-  const { data, isLoading } = useCampaigns(queryOptions);
+  const { data, isLoading, isError, error } = useCampaigns(queryOptions);
 
   const [confirm, setConfirm] = useState<{ action: ConfirmAction; campaign: CampaignRow | null }>({
     action: null,
@@ -217,6 +250,14 @@ export function CampaignsPage() {
       <div aria-live="polite">
         {isLoading ? (
           <EmptyState message="Loading campaigns..." />
+        ) : isError ? (
+          // Surface the query error distinctly from the "no campaigns
+          // exist yet" empty state. A bad deep link or transient API
+          // failure now reads as the error it is, not a false empty
+          // result that the operator might trust.
+          <ErrorBanner
+            message={error instanceof Error ? error.message : 'Failed to load campaigns'}
+          />
         ) : !campaigns.length ? (
           <EmptyState message="No campaigns found." />
         ) : (

@@ -10,6 +10,8 @@ import type {
   agentWorstSeveritySchema,
   benchmarkSubmissionSchema,
   campaignActiveAgentSchema,
+  campaignAttackRowSchema,
+  campaignDetailPayloadSchema,
   campaignLifecycleActionSchema,
   campaignPriorityBucketSchema,
   campaignSortFieldSchema,
@@ -62,6 +64,7 @@ import type {
   selectUserSchema,
   selectWordListSchema,
   updateCrackerBinaryRequestSchema,
+  useCampaignsOptionsSchema,
   workRangeSchema,
 } from '../schemas/index.js';
 
@@ -136,6 +139,9 @@ export type CampaignSortField = z.infer<typeof campaignSortFieldSchema>;
 export type CampaignSortOrder = z.infer<typeof campaignSortOrderSchema>;
 export type CampaignLifecycleAction = z.infer<typeof campaignLifecycleActionSchema>;
 export type CampaignPriorityBucket = z.infer<typeof campaignPriorityBucketSchema>;
+export type UseCampaignsOptions = z.infer<typeof useCampaignsOptionsSchema>;
+export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>;
+export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>;
 export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js';
 
 // ─── Cracker Binaries ───────────────────────────────────────────────

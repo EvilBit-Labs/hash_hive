@@ -3,6 +3,8 @@
  * All factories return plain objects matching backend response shapes.
  */
 
+import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared';
+
 interface MockUser {
   id: number;
   email: string;
@@ -272,29 +274,15 @@ interface MockAttack {
   dependencies: number[] | null;
 }
 
-interface MockCampaignTaskStats {
-  total: number;
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-}
-
-interface MockCampaignActiveAgent {
-  agentId: number;
-  agentName: string;
-  taskId: number;
-  attackId: number;
-  attackMode: number;
-  progress: Record<string, unknown> | null;
-  speedHs: number | null;
-}
+// Fixture shapes derive from the shared Zod-inferred wire types so test
+// data cannot drift from runtime contracts. The shared types come from
+// `@hashhive/shared`'s campaign-dashboard schemas.
 
 interface MockCampaignDetailResponseOptions {
   campaign?: Partial<MockCampaign>;
   attacks?: Array<Partial<MockAttack>>;
-  taskStats?: Partial<MockCampaignTaskStats>;
-  activeAgents?: Array<Partial<MockCampaignActiveAgent>>;
+  taskStats?: Partial<CampaignTaskStats>;
+  activeAgents?: Array<Partial<CampaignActiveAgent>>;
 }
 
 export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOptions = {}) {
@@ -337,7 +325,7 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
         },
       ];
 
-  const taskStats: MockCampaignTaskStats = {
+  const taskStats: CampaignTaskStats = {
     total: 0,
     pending: 0,
     running: 0,
