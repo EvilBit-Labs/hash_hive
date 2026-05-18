@@ -37,6 +37,7 @@ import {
   getSystemHealth,
 } from '../../services/health.js';
 import type { HealthMonitorJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 const COMPONENTS: ComponentName[] = ['database', 'redis', 'minio', 'queues'];
 const REDIS_KEY_PREFIX = 'health:last-status:';
@@ -196,8 +197,9 @@ export function createHealthMonitorWorker(connection: Redis): Worker<HealthMonit
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'health monitor job failed');
+  attachWorkerMetrics(worker, {
+    queueName: QUEUE_NAMES.HEALTH_MONITOR,
+    failureMessage: 'health monitor job failed',
   });
 
   return worker;

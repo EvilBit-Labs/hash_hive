@@ -3,6 +3,7 @@ import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
 import { generateTasksForAttack } from '../../services/tasks.js';
 import type { TaskGenerationJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 export function createTaskGeneratorWorker(
   connection: Redis,
@@ -37,11 +38,10 @@ export function createTaskGeneratorWorker(
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', (job, err) => {
-    logger.error(
-      { jobId: job?.id, campaignId: job?.data?.campaignId, err },
-      'Task generation job failed'
-    );
+  attachWorkerMetrics(worker, {
+    queueName,
+    failureMessage: 'Task generation job failed',
+    extractContext: (job) => ({ campaignId: job?.data?.campaignId }),
   });
 
   return worker;

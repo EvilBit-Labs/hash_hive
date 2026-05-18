@@ -7,6 +7,7 @@ import { QUEUE_NAMES } from '../../config/queue.js';
 import { downloadFile } from '../../config/storage.js';
 import { db } from '../../db/index.js';
 import type { HashListParseJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 const BATCH_SIZE = 5_000;
 const MAX_LINE_LENGTH = 10_000; // 10 KB — skip malformed/binary lines
@@ -158,18 +159,31 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', async (job, err) => {
-    logger.error(
-      { jobId: job?.id, hashListId: job?.data.hashListId, err },
-      'Hash list parse failed'
-    );
+  attachWorkerMetrics(worker, {
+    queueName: QUEUE_NAMES.HASH_LIST_PARSING,
+    failureMessage: 'Hash list parse failed',
+    extractContext: (job) => ({ hashListId: job?.data?.hashListId }),
+  });
 
-    // Mark hash list as error on final failure
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+  // Mark hash list as error on final failure. Separate listener from the
+  // metrics-logging one so a DB outage during failure-side cleanup cannot
+  // suppress the log line, and so an unhandled rejection inside the cleanup
+  // is contained (BullMQ surfaces listener rejections as uncaughtException
+  // under strict process configs, which would take down the worker).
+  worker.on('failed', async (job, _err) => {
+    if (!job || job.attemptsMade < (job.opts.attempts ?? 3)) return;
+    const hashListId = job.data?.hashListId;
+    if (typeof hashListId !== 'number') return;
+    try {
       await db
         .update(hashLists)
         .set({ status: 'error', updatedAt: new Date() })
-        .where(eq(hashLists.id, job.data.hashListId));
+        .where(eq(hashLists.id, hashListId));
+    } catch (cleanupErr) {
+      logger.error(
+        { jobId: job.id, hashListId, err: cleanupErr },
+        'Hash list parse failed — cleanup db.update also failed'
+      );
     }
   });
 
