@@ -12,6 +12,26 @@ export type EventType =
   | 'resource_update'
   | 'system_health';
 
+/**
+ * Throttle the protocol-drift warnings emitted when a WS event arrives
+ * without its expected scoping id (`agentId` or `campaignId`). A
+ * misbehaving backend that emits a thousand malformed events in a row
+ * would otherwise produce a thousand console warnings; the first warn
+ * per `(scope, eventType)` key per cooldown is enough signal.
+ */
+const DRIFT_WARN_COOLDOWN_MS = 60_000;
+const driftWarnTimestamps = new Map<string, number>();
+
+function warnDriftOnce(scope: 'agent' | 'campaign', eventType: string): boolean {
+  const safeType = eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64);
+  const key = `${scope}:${safeType}`;
+  const last = driftWarnTimestamps.get(key) ?? 0;
+  const now = Date.now();
+  if (now - last < DRIFT_WARN_COOLDOWN_MS) return false;
+  driftWarnTimestamps.set(key, now);
+  return true;
+}
+
 export interface AppEvent {
   type: EventType;
   projectId: number;
@@ -167,21 +187,20 @@ export function useEvents(options: UseEventsOptions = {}) {
             } else {
               // No agentId on the payload — fall back to prefix invalidation
               // so we still refresh, but log so we know the producer should
-              // be carrying agentId.
-              //
-              // Constraint the event-type value before logging: WS payload is
-              // attacker-influenced, so we treat eventType as data (not part
-              // of the format string) and only log a known-shape allowlist of
-              // characters to avoid log-injection vectors flagged by CodeQL.
-              const safeEventType =
-                typeof eventType === 'string'
-                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
-                  : 'unknown';
-              // biome-ignore lint/suspicious/noConsole: protocol drift signal
-              console.warn(
-                '[useEvents] event missing agentId; falling back to broad invalidation',
-                { eventType: safeEventType }
-              );
+              // be carrying agentId. Throttled to one warn per (scope,
+              // event type) per cooldown so a misbehaving backend cannot
+              // flood the console.
+              if (warnDriftOnce('agent', eventType)) {
+                const safeEventType =
+                  typeof eventType === 'string'
+                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                    : 'unknown';
+                // biome-ignore lint/suspicious/noConsole: protocol drift signal
+                console.warn(
+                  '[useEvents] event missing agentId; falling back to broad invalidation',
+                  { eventType: safeEventType }
+                );
+              }
               for (const key of agentScopedKeys) {
                 queryClient.invalidateQueries({ queryKey: [key] });
               }
@@ -199,15 +218,18 @@ export function useEvents(options: UseEventsOptions = {}) {
             } else {
               // No campaignId on the payload — fall back to prefix invalidation
               // so the detail page still refreshes, but record the drift.
-              const safeEventType =
-                typeof eventType === 'string'
-                  ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
-                  : 'unknown';
-              // biome-ignore lint/suspicious/noConsole: protocol drift signal
-              console.warn(
-                '[useEvents] event missing campaignId; falling back to broad invalidation',
-                { eventType: safeEventType }
-              );
+              // Throttled to one warn per (scope, event type) per cooldown.
+              if (warnDriftOnce('campaign', eventType)) {
+                const safeEventType =
+                  typeof eventType === 'string'
+                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
+                    : 'unknown';
+                // biome-ignore lint/suspicious/noConsole: protocol drift signal
+                console.warn(
+                  '[useEvents] event missing campaignId; falling back to broad invalidation',
+                  { eventType: safeEventType }
+                );
+              }
               for (const key of campaignScopedKeys) {
                 queryClient.invalidateQueries({ queryKey: [key] });
               }

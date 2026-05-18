@@ -129,25 +129,24 @@ Closed in this PR:
 - Tightened `CampaignAgentsSection` JSDoc to reference the symbol name
   (`listActiveAgentsByCampaign`) instead of the U2 task pointer.
 
-### Acknowledged (no code change)
+### Closed in third round
 
-- **H3** — `useEvents` broad-invalidate path on missing `campaignId`
-  fires `console.warn` per event. Rate-limiting was considered but the
-  warn is the existing dashboard pattern (the agent-list invalidation
-  block has the same shape); a structured-log rollout for both
-  campaign-scoped and agent-scoped fallbacks should be a single
-  follow-up rather than a one-off here.
-- **S3** — `CampaignDagView` is fixed at `height = 320` with pan
-  disabled. Sized-by-content layout is a UX follow-up; the current
-  view's `fitView` shrinks dense graphs to fit, and the attacks table
-  below the DAG provides full detail when the visual gets crowded.
-- **S4** — `services/campaigns.ts` is ~830 lines and approaching the
-  800-line ceiling. Worth flagging for the next refactor pass, but
-  splitting it here would balloon the PR and the existing structure
-  is still legible by section banner.
-- **Q4** (test-analyzer) — the isolated-phase skip stub at line 19-24
-  of `dashboard-campaigns-routes.test.ts` passes silently when run
-  outside the isolated phase. Acknowledged; the existing
-  `control-routes-rbac.test.ts` and other isolated tests share the
-  same shape, so a stricter signal should be a project-wide change
-  rather than a one-off.
+- **H3** — `use-events.ts` now throttles the missing-`agentId` /
+  missing-`campaignId` warnings via `warnDriftOnce(scope, eventType)`
+  with a 60s cooldown per scope+type. A misbehaving backend can no
+  longer flood the console; the first warn per drift signature still
+  surfaces the problem.
+- **S3** — `CampaignDagView` size is now content-aware
+  (`estimateHeight` between 320px and 640px) and `panOnDrag={true}`
+  so operators can reach nodes that fall outside the initial fitView.
+  Node dragging stays disabled — pan is a viewport-only operation.
+- **S4** — `getCampaignTaskStats`, `listActiveAgentsByCampaign`,
+  `deleteCampaign`, and the `DeleteCampaignResult` type moved into
+  `services/campaign-dashboard.ts`. `services/campaigns.ts` is back
+  under the 800-line guideline (now 686 lines from 892). Re-exports
+  preserve the existing import path for callers and tests.
+- **Q4** — The isolated-phase skip stub in
+  `dashboard-campaigns-routes.test.ts` no longer passes silently when
+  the suite runs outside its phase. It now `console.warn`s and asserts
+  on the env gate so a CI misconfiguration cannot drop the route
+  coverage while still reading green.

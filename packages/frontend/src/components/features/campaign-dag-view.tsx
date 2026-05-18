@@ -12,8 +12,28 @@ interface AttackInput {
 
 interface CampaignDagViewProps {
   attacks: ReadonlyArray<AttackInput>;
-  /** Pixel height of the container. */
+  /**
+   * Pixel height of the container. Defaults to a content-aware
+   * estimate so deep DAGs do not collapse into an unreadable mass;
+   * see `estimateHeight` below.
+   */
   height?: number;
+}
+
+const MIN_DAG_HEIGHT = 320;
+const MAX_DAG_HEIGHT = 640;
+const HEIGHT_PER_DEPTH_LEVEL = 96; // matches V_GAP below
+
+/**
+ * Estimate a viewport height that fits the graph without making the
+ * detail page absurdly tall. Caps at `MAX_DAG_HEIGHT`; beyond that the
+ * panning behavior takes over.
+ */
+function estimateHeight(attacks: ReadonlyArray<AttackInput>): number {
+  // Rough upper bound on the depth — assumes a worst-case linear chain.
+  const depth = Math.min(attacks.length, 8);
+  const estimated = MIN_DAG_HEIGHT + depth * HEIGHT_PER_DEPTH_LEVEL;
+  return Math.min(MAX_DAG_HEIGHT, Math.max(MIN_DAG_HEIGHT, estimated));
 }
 
 /**
@@ -189,8 +209,9 @@ function buildGraph(attacks: ReadonlyArray<AttackInput>): { nodes: Node[]; edges
   return { nodes, edges };
 }
 
-export function CampaignDagView({ attacks, height = 320 }: CampaignDagViewProps) {
+export function CampaignDagView({ attacks, height }: CampaignDagViewProps) {
   const { nodes, edges } = useMemo(() => buildGraph(attacks), [attacks]);
+  const resolvedHeight = height ?? estimateHeight(attacks);
 
   if (attacks.length === 0) {
     return <EmptyState message="No attacks configured." />;
@@ -199,7 +220,7 @@ export function CampaignDagView({ attacks, height = 320 }: CampaignDagViewProps)
   return (
     <div
       data-testid="campaign-dag-view"
-      style={{ height }}
+      style={{ height: resolvedHeight }}
       className="overflow-hidden rounded-md border border-surface-0 bg-surface-0/20"
     >
       <ReactFlow
@@ -210,7 +231,10 @@ export function CampaignDagView({ attacks, height = 320 }: CampaignDagViewProps)
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
-        panOnDrag={false}
+        // Allow panning so operators can reach nodes that fall outside
+        // the initial fitView. Node dragging stays disabled to keep the
+        // graph read-only; pan is a viewport operation, not an edit.
+        panOnDrag
         zoomOnScroll={false}
         zoomOnPinch={false}
         zoomOnDoubleClick={false}

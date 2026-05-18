@@ -1,19 +1,25 @@
 import {
-  agents,
   attacks,
-  type CampaignActiveAgent,
   type CampaignSortField,
   type CampaignSortOrder,
-  type CampaignTaskStats,
   campaigns,
   tasks,
 } from '@hashhive/shared';
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
 import { getHashListStats } from './resources.js';
+
+// Re-export the dashboard-surface functions from the sibling module so
+// existing callers (route handlers, tests) keep working through the
+// `services/campaigns` import path until the next refactor sweep.
+export {
+  type DeleteCampaignResult,
+  deleteCampaign,
+  getCampaignTaskStats,
+  listActiveAgentsByCampaign,
+} from './campaign-dashboard.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
@@ -197,219 +203,6 @@ export async function listCampaigns(filters: {
 export async function getCampaignById(id: number) {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
   return campaign ?? null;
-}
-
-// ─── Campaign Stats & Active Agents ─────────────────────────────────
-
-/**
- * Aggregate task counts for a campaign, bucketed into the operator-facing
- * states. The data model emits more nuanced statuses ('assigned', 'exhausted');
- * those are folded into the closest operator bucket:
- *   - assigned + running -> running (both represent active work)
- *   - completed + exhausted -> completed (both represent successful end state)
- *   - pending -> pending
- *   - failed -> failed
- */
-export async function getCampaignTaskStats(campaignId: number): Promise<CampaignTaskStats> {
-  const rows = await db
-    .select({
-      status: tasks.status,
-      n: sql<number>`count(*)::int`,
-    })
-    .from(tasks)
-    .where(eq(tasks.campaignId, campaignId))
-    .groupBy(tasks.status);
-
-  const stats: CampaignTaskStats = {
-    total: 0,
-    pending: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-  };
-
-  for (const row of rows) {
-    const n = Number(row.n ?? 0);
-    stats.total += n;
-    switch (row.status) {
-      case 'pending':
-        stats.pending += n;
-        break;
-      case 'assigned':
-      case 'running':
-        stats.running += n;
-        break;
-      case 'completed':
-      case 'exhausted':
-        stats.completed += n;
-        break;
-      case 'failed':
-      case 'cancelled':
-        // Cancelled tasks count toward `failed` so ETA's
-        // remaining = total - completed - failed math stays correct.
-        // Operators see cancelled tasks as "not coming back" in the
-        // same way failed tasks are.
-        stats.failed += n;
-        break;
-      default:
-        // Unknown statuses count only toward `total`; add explicit
-        // folding here when the schema grows.
-        break;
-    }
-  }
-
-  return stats;
-}
-
-const ACTIVE_AGENTS_LIMIT = 50;
-
-/**
- * Active agents working on a campaign right now. Joins tasks that are pending,
- * assigned, or running (the {@link AGENT_TASK_ACTIVE_STATUSES} set) and have a
- * non-null agentId. Speed is extracted from the task's progress jsonb when
- * available; falls back to null so callers can render a placeholder.
- */
-export async function listActiveAgentsByCampaign(
-  campaignId: number
-): Promise<CampaignActiveAgent[]> {
-  const rows = await db
-    .select({
-      agentId: agents.id,
-      agentName: agents.name,
-      taskId: tasks.id,
-      attackId: tasks.attackId,
-      attackMode: attacks.mode,
-      progress: tasks.progress,
-    })
-    .from(tasks)
-    .innerJoin(agents, eq(tasks.agentId, agents.id))
-    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
-    .where(
-      and(
-        eq(tasks.campaignId, campaignId),
-        inArray(tasks.status, ['pending', 'assigned', 'running'])
-      )
-    )
-    // Stable order so the LIMIT 50 returns a deterministic subset across
-    // refreshes instead of Postgres's heap-scan order, which would otherwise
-    // shuffle the visible agents in fleets larger than the cap.
-    .orderBy(asc(tasks.id))
-    .limit(ACTIVE_AGENTS_LIMIT);
-
-  return rows.map((row) => {
-    const progress = row.progress as Record<string, unknown> | null;
-    const rawSpeed = progress && typeof progress === 'object' ? progress['speedHs'] : null;
-    const speedHsValid = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed);
-    if (rawSpeed !== undefined && rawSpeed !== null && !speedHsValid) {
-      // Surface protocol drift: agent reported a speed but it wasn't a
-      // finite number. ETA computation will treat it as null; the warn
-      // lets us spot a misbehaving agent before its zero contribution
-      // skews the dashboard.
-      logger.warn(
-        { agentId: row.agentId, taskId: row.taskId, rawSpeed },
-        'listActiveAgentsByCampaign: dropping non-finite speedHs from active agent'
-      );
-    }
-    return {
-      agentId: row.agentId,
-      agentName: row.agentName,
-      taskId: row.taskId,
-      attackId: row.attackId,
-      attackMode: row.attackMode,
-      progress: row.progress,
-      speedHs: speedHsValid ? (rawSpeed as number) : null,
-    };
-  });
-}
-
-// ─── Draft-only delete ──────────────────────────────────────────────
-
-export type DeleteCampaignResult =
-  | { kind: 'deleted'; id: number; projectId: number }
-  | { kind: 'not_found' }
-  | { kind: 'not_draft'; status: string };
-
-/**
- * Delete a campaign if and only if its status is 'draft'. Attacks and tasks
- * are removed in the same transaction; FK constraints are not CASCADE in the
- * current schema, so child rows are deleted explicitly.
- *
- * Race safety: the parent DELETE folds the draft guard into its WHERE
- * clause so a concurrent `transitionCampaign` cannot flip the row out
- * of `draft` between a separate read-time check and the writes below.
- * Child-row deletes run first inside the same transaction; if the
- * parent DELETE returns zero rows we roll back via a thrown sentinel,
- * leaving the child rows intact.
- */
-export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
-  // Sentinel thrown to abort the transaction when the parent delete
-  // does not match (status changed mid-flight). Caught and translated
-  // into the discriminated return value below.
-  class StatusFlippedDuringDelete extends Error {
-    constructor(public readonly observedStatus: string) {
-      super('campaign status flipped before draft-only delete completed');
-    }
-  }
-
-  try {
-    const result = await db.transaction(async (tx) => {
-      // Lookup just to distinguish NOT_FOUND vs NOT_DRAFT in the
-      // return contract. The actual atomicity lives in the DELETE
-      // WHERE clause below.
-      const [existing] = await tx
-        .select({ status: campaigns.status })
-        .from(campaigns)
-        .where(eq(campaigns.id, id))
-        .limit(1);
-      if (!existing) {
-        return { kind: 'not_found' } as const;
-      }
-      if (existing.status !== 'draft') {
-        return { kind: 'not_draft', status: existing.status } as const;
-      }
-
-      // Remove child rows (FKs are RESTRICT by default).
-      await tx.delete(tasks).where(eq(tasks.campaignId, id));
-      await tx.delete(attacks).where(eq(attacks.campaignId, id));
-
-      // Atomic guard: only delete the campaign row if it is *still*
-      // in draft. A concurrent transition that flipped the status
-      // between the pre-check and this statement returns zero rows
-      // and we abort the transaction so the child deletes also
-      // roll back.
-      const deleted = await tx
-        .delete(campaigns)
-        .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
-        .returning();
-      const row = deleted[0];
-      if (!row) {
-        // Status flipped between pre-check and atomic delete. Read
-        // the current status for the error envelope, then throw to
-        // roll back the child deletes performed above.
-        const [current] = await tx
-          .select({ status: campaigns.status })
-          .from(campaigns)
-          .where(eq(campaigns.id, id))
-          .limit(1);
-        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown');
-      }
-      return { kind: 'deleted', id: row.id, projectId: row.projectId } as const;
-    });
-
-    // Emit a status event so other connected clients (and the originating
-    // dashboard's stats card) drop the deleted campaign without waiting
-    // for the next poll cycle. Frontend `use-events.ts` invalidates the
-    // `['campaigns', projectId]` and `dashboard-stats` keys on this event.
-    if (result.kind === 'deleted') {
-      emitCampaignStatus(result.projectId, result.id, 'deleted');
-    }
-    return result;
-  } catch (err) {
-    if (err instanceof StatusFlippedDuringDelete) {
-      return { kind: 'not_draft', status: err.observedStatus };
-    }
-    throw err;
-  }
 }
 
 export async function createCampaign(data: {
