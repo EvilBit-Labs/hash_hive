@@ -1,18 +1,12 @@
 import { cn } from '../../lib/utils';
 
-interface ProgressBarProps {
+interface BaseProgressBarProps {
   /**
    * Completion ratio. Accepts either the canonical 0-1 scale or the 0-100
    * scale; values above 1 are treated as percentage points. Clamped to
    * [0, 100].
    */
   value: number;
-  /**
-   * Optional label rendered below the bar. When omitted, the bar shows
-   * only the visual indicator (`aria-label` should be supplied by the
-   * parent in that case).
-   */
-  label?: string;
   /**
    * `default` is the full detail-page bar; `thin` is the table-row variant.
    */
@@ -21,10 +15,20 @@ interface ProgressBarProps {
    * Override the bar color. Defaults to the primary token.
    */
   tone?: 'primary' | 'success' | 'destructive';
-  /** Accessible label when no visible `label` is provided. */
-  ariaLabel?: string;
   className?: string;
 }
+
+/**
+ * Discriminated prop union: the component must always have an
+ * accessible name. Provide either a visible `label` (rendered below
+ * the bar, also used as the ARIA name) or an `ariaLabel` for the
+ * screen-reader-only case. Allowing both undefined would leave the
+ * `role="progressbar"` element without an accessible name, which fails
+ * automated accessibility audits.
+ */
+type ProgressBarProps =
+  | (BaseProgressBarProps & { label: string; ariaLabel?: string })
+  | (BaseProgressBarProps & { label?: undefined; ariaLabel: string });
 
 const TONE_CLASSES = {
   primary: 'bg-primary',

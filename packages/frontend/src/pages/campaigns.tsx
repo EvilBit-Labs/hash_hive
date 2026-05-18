@@ -51,7 +51,8 @@ const PRIORITY_FILTER_OPTIONS = [
   { label: 'Low', value: '10' },
 ] as const;
 
-const ALLOWED_PRIORITIES = new Set<number>([1, 5, 10]);
+type CampaignPriorityValue = 1 | 5 | 10;
+const ALLOWED_PRIORITIES = new Set<CampaignPriorityValue>([1, 5, 10]);
 
 /**
  * Clamp the URL search params to the known allowlists before they
@@ -71,9 +72,9 @@ function safeSortOrder(raw: string | null): CampaignSortOrder {
   return parsed.success ? parsed.data : 'desc';
 }
 
-function safePriority(raw: string | null): number | undefined {
+function safePriority(raw: string | null): CampaignPriorityValue | undefined {
   if (!raw) return undefined;
-  const n = Number(raw);
+  const n = Number(raw) as CampaignPriorityValue;
   return Number.isInteger(n) && ALLOWED_PRIORITIES.has(n) ? n : undefined;
 }
 

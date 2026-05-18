@@ -28,6 +28,9 @@ campaignRoutes.use('*', requireSession);
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
 
+const CAMPAIGN_LIST_MAX_LIMIT = 200;
+const CAMPAIGN_LIST_DEFAULT_LIMIT = 50;
+
 const listCampaignsQuerySchema = z.object({
   status: z.string().optional(),
   priority: z.coerce
@@ -39,8 +42,17 @@ const listCampaignsQuerySchema = z.object({
     .optional(),
   sort: z.enum(['name', 'createdAt', 'priority']).optional(),
   order: z.enum(['asc', 'desc']).optional(),
-  limit: z.coerce.number().int().positive().max(500).optional(),
-  offset: z.coerce.number().int().nonnegative().optional(),
+  // Coerce-and-clamp pagination at the schema boundary so malformed
+  // URL params fall back to safe defaults instead of 400-ing the
+  // request. Mirrors the agents-list pattern at routes/dashboard/agents.ts.
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(CAMPAIGN_LIST_MAX_LIMIT)
+    .catch(CAMPAIGN_LIST_DEFAULT_LIMIT)
+    .default(CAMPAIGN_LIST_DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).catch(0).default(0),
 });
 
 campaignRoutes.get(

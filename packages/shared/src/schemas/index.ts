@@ -522,7 +522,10 @@ export const campaignActiveAgentSchema = z.object({
   attackId: z.number().int().positive(),
   attackMode: z.number().int().nonnegative(),
   progress: z.unknown(),
-  speedHs: z.number().nullable(),
+  // Matches the backend extractor: only finite, positive speeds carry
+  // through. Zero / negative / NaN / Infinity become null so the ETA
+  // computation cannot be poisoned by malformed agent payloads.
+  speedHs: z.number().finite().positive().nullable(),
 });
 
 /**
@@ -562,7 +565,15 @@ export function priorityBucket(priority: number): 'high' | 'normal' | 'low' {
  */
 export const useCampaignsOptionsSchema = z.object({
   status: z.string().optional(),
-  priority: z.number().int().optional(),
+  // Allowlist matches the backend route validator so the client cannot
+  // accept values that will 400 at the API boundary.
+  priority: z
+    .union([
+      z.literal(CAMPAIGN_PRIORITY.HIGH),
+      z.literal(CAMPAIGN_PRIORITY.NORMAL),
+      z.literal(CAMPAIGN_PRIORITY.LOW),
+    ])
+    .optional(),
   sort: campaignSortFieldSchema.optional(),
   order: campaignSortOrderSchema.optional(),
   limit: z.number().int().positive().optional(),

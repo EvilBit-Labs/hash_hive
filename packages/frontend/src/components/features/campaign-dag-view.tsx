@@ -149,7 +149,7 @@ function buildGraph(attacks: ReadonlyArray<AttackInput>): { nodes: Node[]; edges
       nodes.push({
         id: String(attack.id),
         position: { x: i * H_GAP, y: depth * V_GAP },
-        data: { label: `Attack #${attack.id} · mode ${attack.mode} · ${attack.status}` },
+        data: { label: `Attack #${attack.id} - mode ${attack.mode} - ${attack.status}` },
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
         style: {

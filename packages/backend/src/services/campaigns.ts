@@ -333,35 +333,83 @@ export type DeleteCampaignResult =
  * Delete a campaign if and only if its status is 'draft'. Attacks and tasks
  * are removed in the same transaction; FK constraints are not CASCADE in the
  * current schema, so child rows are deleted explicitly.
+ *
+ * Race safety: the parent DELETE folds the draft guard into its WHERE
+ * clause so a concurrent `transitionCampaign` cannot flip the row out
+ * of `draft` between a separate read-time check and the writes below.
+ * Child-row deletes run first inside the same transaction; if the
+ * parent DELETE returns zero rows we roll back via a thrown sentinel,
+ * leaving the child rows intact.
  */
 export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
-  const result = await db.transaction(async (tx) => {
-    const [existing] = await tx.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
-    if (!existing) {
-      return { kind: 'not_found' } as const;
+  // Sentinel thrown to abort the transaction when the parent delete
+  // does not match (status changed mid-flight). Caught and translated
+  // into the discriminated return value below.
+  class StatusFlippedDuringDelete extends Error {
+    constructor(public readonly observedStatus: string) {
+      super('campaign status flipped before draft-only delete completed');
     }
-    if (existing.status !== 'draft') {
-      return { kind: 'not_draft', status: existing.status } as const;
-    }
-
-    // Remove child rows (FKs are RESTRICT by default).
-    await tx.delete(tasks).where(eq(tasks.campaignId, id));
-    await tx.delete(attacks).where(eq(attacks.campaignId, id));
-    const [deleted] = await tx.delete(campaigns).where(eq(campaigns.id, id)).returning();
-    if (!deleted) {
-      return { kind: 'not_found' } as const;
-    }
-    return { kind: 'deleted', id: deleted.id, projectId: deleted.projectId } as const;
-  });
-
-  // Emit a status event so other connected clients (and the originating
-  // dashboard's stats card) drop the deleted campaign without waiting
-  // for the next poll cycle. Frontend `use-events.ts` invalidates the
-  // `['campaigns', projectId]` and `dashboard-stats` keys on this event.
-  if (result.kind === 'deleted') {
-    emitCampaignStatus(result.projectId, result.id, 'deleted');
   }
-  return result;
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Lookup just to distinguish NOT_FOUND vs NOT_DRAFT in the
+      // return contract. The actual atomicity lives in the DELETE
+      // WHERE clause below.
+      const [existing] = await tx
+        .select({ status: campaigns.status })
+        .from(campaigns)
+        .where(eq(campaigns.id, id))
+        .limit(1);
+      if (!existing) {
+        return { kind: 'not_found' } as const;
+      }
+      if (existing.status !== 'draft') {
+        return { kind: 'not_draft', status: existing.status } as const;
+      }
+
+      // Remove child rows (FKs are RESTRICT by default).
+      await tx.delete(tasks).where(eq(tasks.campaignId, id));
+      await tx.delete(attacks).where(eq(attacks.campaignId, id));
+
+      // Atomic guard: only delete the campaign row if it is *still*
+      // in draft. A concurrent transition that flipped the status
+      // between the pre-check and this statement returns zero rows
+      // and we abort the transaction so the child deletes also
+      // roll back.
+      const deleted = await tx
+        .delete(campaigns)
+        .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
+        .returning();
+      const row = deleted[0];
+      if (!row) {
+        // Status flipped between pre-check and atomic delete. Read
+        // the current status for the error envelope, then throw to
+        // roll back the child deletes performed above.
+        const [current] = await tx
+          .select({ status: campaigns.status })
+          .from(campaigns)
+          .where(eq(campaigns.id, id))
+          .limit(1);
+        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown');
+      }
+      return { kind: 'deleted', id: row.id, projectId: row.projectId } as const;
+    });
+
+    // Emit a status event so other connected clients (and the originating
+    // dashboard's stats card) drop the deleted campaign without waiting
+    // for the next poll cycle. Frontend `use-events.ts` invalidates the
+    // `['campaigns', projectId]` and `dashboard-stats` keys on this event.
+    if (result.kind === 'deleted') {
+      emitCampaignStatus(result.projectId, result.id, 'deleted');
+    }
+    return result;
+  } catch (err) {
+    if (err instanceof StatusFlippedDuringDelete) {
+      return { kind: 'not_draft', status: err.observedStatus };
+    }
+    throw err;
+  }
 }
 
 export async function createCampaign(data: {
