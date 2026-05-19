@@ -8,6 +8,16 @@ interface ValidationResult {
 }
 
 /**
+ * Discriminated union covering both topological-sort outcomes:
+ * - `ok: true` carries the order, every dependency precedes its dependent.
+ * - `ok: false` carries the cycle participants by index.
+ *
+ * Used by `topologicalOrder` so callers don't have to call `validateDAG`
+ * separately to surface a useful error when a cycle is present.
+ */
+export type TopoResult = { ok: true; order: number[] } | { ok: false; cycle: number[] };
+
+/**
  * Builds an index-based in-degree map and adjacency list for the attack
  * dependency graph. Shared by `validateDAG` and `topologicalOrder` so cycle
  * detection and topological sort cannot diverge on edge cases (out-of-range
@@ -34,7 +44,18 @@ function buildGraph(attacks: readonly AttackNode[]): {
     const attack = attacks[i];
     if (!attack) continue;
     for (const depIdx of attack.dependencies) {
-      if (depIdx < 0 || depIdx >= attacks.length) continue;
+      if (depIdx < 0 || depIdx >= attacks.length) {
+        // Stale index — the store's removeAttack shift logic should have
+        // rewritten this. In dev, surface the structural bug loudly so the
+        // root cause gets fixed rather than masked by graceful degradation.
+        if (import.meta.env.DEV) {
+          // biome-ignore lint/suspicious/noConsole: dev-only structural bug surface
+          console.warn(
+            `dag-validation: attack #${i} references missing dep #${depIdx} (total ${attacks.length})`
+          );
+        }
+        continue;
+      }
       adjacency.get(depIdx)?.push(i);
       inDegree.set(i, (inDegree.get(i) ?? 0) + 1);
     }
@@ -98,14 +119,16 @@ export function validateDAG(attacks: readonly AttackNode[]): ValidationResult {
 
 /**
  * Returns attack indices in a valid topological order (every dependency
- * precedes its dependent), or `null` when the graph contains a cycle.
+ * precedes its dependent), or the cycle participants when the graph
+ * contains a cycle. Carries the cycle in the failure shape so callers
+ * don't have to call `validateDAG` separately for a useful error.
  *
  * Used by the create-campaign submit path to issue per-attack POSTs in an
  * order that guarantees each attack's dependency IDs are already known
  * before the dependent attack is created.
  */
-export function topologicalOrder(attacks: readonly AttackNode[]): number[] | null {
-  if (attacks.length === 0) return [];
+export function topologicalOrder(attacks: readonly AttackNode[]): TopoResult {
+  if (attacks.length === 0) return { ok: true, order: [] };
 
   const { inDegree, adjacency } = buildGraph(attacks);
 
@@ -126,5 +149,13 @@ export function topologicalOrder(attacks: readonly AttackNode[]): number[] | nul
     }
   }
 
-  return order.length === attacks.length ? order : null;
+  if (order.length === attacks.length) {
+    return { ok: true, order };
+  }
+
+  const cycle: number[] = [];
+  for (const [idx, degree] of inDegree) {
+    if (degree > 0) cycle.push(idx);
+  }
+  return { ok: false, cycle };
 }

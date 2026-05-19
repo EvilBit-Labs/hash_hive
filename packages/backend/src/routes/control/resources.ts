@@ -16,6 +16,7 @@ import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
 import { problemResponse } from '../../lib/problem-details.js';
 import {
   getResourceById,
+  listHashTypes,
   listResourcesPaginated,
   type ResourceTable,
 } from '../../services/resources.js';
@@ -37,6 +38,27 @@ function resolveKind(c: Context<AppEnv>): ResourceKind | null {
   const parsed = RESOURCE_KIND.safeParse(c.req.param('kind'));
   return parsed.success ? parsed.data : null;
 }
+
+/**
+ * Hash-type catalog. Defined before the `/:kind` route so the literal
+ * path matches first (Hono routes are evaluated in registration order
+ * within a sub-application). Hash types are global lookup data, not
+ * project-scoped resources — automation clients need this endpoint to
+ * resolve a hash-type name into the numeric ID accepted by the
+ * createAttack endpoint without having to authenticate via the
+ * dashboard cookie session.
+ */
+controlResourceRoutes.get('/hash-types', async (c) => {
+  try {
+    // Membership check ensures the caller has a valid API key and at
+    // least one project — the response itself is not project-scoped.
+    await requireProjectMembership(c);
+    const types = await listHashTypes();
+    return c.json({ hashTypes: types });
+  } catch (err) {
+    return controlErrorResponse(c, err);
+  }
+});
 
 controlResourceRoutes.get('/:kind', async (c) => {
   try {

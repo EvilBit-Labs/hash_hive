@@ -392,6 +392,316 @@ describe('CampaignCreatePage edit flow', () => {
   });
 });
 
+describe('CampaignCreatePage Step 0 → Step 1 round-trip', () => {
+  beforeEach(() => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+  });
+
+  it('rehydrates basic-info fields from the wizard store when navigating Back', async () => {
+    useCampaignWizard.setState({
+      step: 0,
+      name: 'Saved Name',
+      description: 'Saved description',
+      priority: 7,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+    });
+    const qc = createTestQueryClient();
+    seedResourceQueries(qc);
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      const nameInput = screen.getByLabelText('Campaign Name') as HTMLInputElement;
+      expect(nameInput.value).toBe('Saved Name');
+    });
+    const priorityInput = screen.getByLabelText('Priority (1-10)') as HTMLInputElement;
+    expect(priorityInput.value).toBe('7');
+  });
+});
+
+describe('CampaignCreatePage hash-type prefill edge cases', () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    qc = createTestQueryClient();
+    seedResourceQueries(qc);
+  });
+
+  it('does not overwrite the user manual hash-type choice on a background data change', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'X',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+    });
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByLabelText('Hash Type')).toBeDefined();
+    });
+
+    const select = screen.getByLabelText('Hash Type') as HTMLSelectElement;
+    // User manually picks MD5 (id=0) instead of the prefilled NTLM (id=1000).
+    // fireEvent.change marks the field as touched in RHF, which is the
+    // signal the prefill effect uses to refuse to overwrite it.
+    fireEvent.change(select, { target: { value: '0' } });
+    fireEvent.blur(select);
+
+    // Trigger a "background refetch" by mutating the cache to a different
+    // (but still valid) hash list. The effect re-runs because
+    // detectedHashTypeId changes. The user's choice must survive.
+    act(() => {
+      qc.setQueryData(['hash-lists', 1], {
+        hashLists: [{ ...HASH_LIST_WITH_TYPE, hashTypeId: 9999 }],
+      });
+    });
+
+    await waitFor(() => {
+      const after = screen.getByLabelText('Hash Type') as HTMLSelectElement;
+      expect(after.value).toBe('0');
+    });
+  });
+
+  it('does not run prefill when starting an Edit on an existing attack', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'X',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      // Existing attack with NO hashTypeId set
+      attacks: [{ mode: 0, dependencies: [] }],
+    });
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Edit'));
+
+    // Inspect the stored attack after a no-op Update — the prefill must NOT
+    // have injected the detected hashTypeId during edit.
+    fireEvent.click(screen.getByRole('button', { name: 'Update Attack' }));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks[0]?.hashTypeId).toBeUndefined();
+    });
+  });
+});
+
+describe('CampaignCreatePage edit-flow invariants', () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    qc = createTestQueryClient();
+    seedResourceQueries(qc);
+  });
+
+  it('preserves an existing attack dependencies array when editing only the mode', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'X',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      attacks: [
+        { mode: 0, dependencies: [] },
+        { mode: 0, dependencies: [0] },
+      ],
+    });
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      // Two Edit buttons render (one per attack); pick the second
+      expect(screen.getAllByText('Edit').length).toBe(2);
+    });
+
+    const editButtons = screen.getAllByText('Edit');
+    const secondEdit = editButtons[1];
+    expect(secondEdit).toBeDefined();
+    if (!secondEdit) return;
+    fireEvent.click(secondEdit);
+
+    const modeSelect = screen.getByLabelText('Attack Mode') as HTMLSelectElement;
+    fireEvent.change(modeSelect, { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update Attack' }));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks[1]?.mode).toBe(3);
+    });
+    // Dependencies preserved
+    expect(useCampaignWizard.getState().attacks[1]?.dependencies).toEqual([0]);
+  });
+
+  it('round-trips advancedConfiguration through Edit -> no-op Update', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'X',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      attacks: [{ mode: 0, dependencies: [], advancedConfiguration: { 'workload-profile': 3 } }],
+    });
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Edit'));
+
+    const textarea = screen.getByLabelText(/Advanced Configuration/) as HTMLTextAreaElement;
+    // seedFormFromAttack serialised the object to a JSON string; the
+    // textarea must show that string back so a no-op Update preserves it.
+    expect(JSON.parse(textarea.value)).toEqual({ 'workload-profile': 3 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update Attack' }));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks[0]?.advancedConfiguration).toEqual({
+        'workload-profile': 3,
+      });
+    });
+  });
+});
+
+describe('CampaignCreatePage cycle short-circuit', () => {
+  it('does not call createCampaign when a cycle is present at submit time', async () => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    const qc = createTestQueryClient();
+    seedResourceQueries(qc);
+
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'Cyclic',
+      description: '',
+      priority: 5,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      attacks: [
+        { mode: 0, dependencies: [1] },
+        { mode: 3, dependencies: [0] },
+      ],
+    });
+
+    let campaignPostCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (method === 'POST' && url.endsWith('/dashboard/campaigns')) {
+        campaignPostCount++;
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/dependency cycle/)).toBeDefined();
+      });
+      expect(campaignPostCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('CampaignCreatePage partial-failure rollback', () => {
+  it('issues a compensating DELETE when an attack POST fails mid-loop', async () => {
+    setAdminWithProject();
+    const qc = createTestQueryClient();
+    seedResourceQueries(qc);
+
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'Will Fail',
+      description: '',
+      priority: 5,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      attacks: [
+        { mode: 0, dependencies: [] },
+        { mode: 0, dependencies: [] },
+      ],
+    });
+
+    const requests: { method: string; url: string }[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      requests.push({ method, url });
+
+      if (method === 'POST' && url.endsWith('/dashboard/campaigns')) {
+        return new Response(JSON.stringify({ campaign: { id: 77 } }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // First attack succeeds, second attack fails with 500.
+      if (method === 'POST' && url.includes('/dashboard/campaigns/77/attacks')) {
+        const successCount = requests.filter(
+          (r) => r.method === 'POST' && r.url.includes('/dashboard/campaigns/77/attacks')
+        ).length;
+        if (successCount === 1) {
+          return new Response(JSON.stringify({ attack: { id: 200 } }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify({ error: { code: 'VALIDATION', message: 'attack failed' } }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (method === 'DELETE' && url.includes('/dashboard/campaigns/77')) {
+        return new Response(null, {
+          status: 204,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }));
+
+      await waitFor(() => {
+        const deletes = requests.filter(
+          (r) => r.method === 'DELETE' && r.url.includes('/dashboard/campaigns/77')
+        );
+        expect(deletes.length).toBe(1);
+      });
+
+      // Error is surfaced to the user
+      expect(screen.getByText(/attack failed/)).toBeDefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe('CampaignCreatePage submit flow', () => {
   it('posts attacks in topological order and remaps dependency indices to backend IDs', async () => {
     // Two attacks in a chain: A0 → A1 (A1 depends on A0).
