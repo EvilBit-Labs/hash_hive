@@ -381,7 +381,7 @@ describe('runHealthMonitorTick', () => {
     expect(ctx.memory.redis).toBe('degraded');
   });
 
-  test('getSystemHealth rejection is swallowed; tick returns empty result', async () => {
+  test('getSystemHealth rejection is swallowed; tick result is marked skipped', async () => {
     const broadcasts: TestContext['broadcasts'] = [];
     const deps: HealthMonitorDeps = {
       readMemoryStatus: () => null,
@@ -401,6 +401,7 @@ describe('runHealthMonitorTick', () => {
     expect(result.transitioned).toEqual([]);
     expect(result.initialized).toEqual([]);
     expect(result.unchanged).toEqual([]);
+    expect(result.skipped).toEqual({ reason: 'getSystemHealth threw' });
     expect(broadcasts).toHaveLength(0);
   });
 

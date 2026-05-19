@@ -11,11 +11,15 @@ mock.module('../../../src/config/logger.js', () => ({
   },
 }));
 
+// Mutable per-test stale-agents fixture so individual tests can drive the
+// broadcast loop without re-mocking the whole module.
+let staleAgentsFixture: unknown[] = [];
+
 // Build a chainable mock for db.select().from().where() patterns
-function createSelectChain(results: unknown[] = []) {
+function createSelectChain() {
   const chain = {
     from: mock(() => chain),
-    where: mock(() => Promise.resolve(results)),
+    where: mock(() => Promise.resolve(staleAgentsFixture)),
   };
   return chain;
 }
@@ -29,7 +33,7 @@ function createUpdateChain() {
   return chain;
 }
 
-const mockSelectChain = createSelectChain([]);
+const mockSelectChain = createSelectChain();
 const mockUpdateChain = createUpdateChain();
 
 // Mock the DB (services import it)
@@ -47,9 +51,12 @@ mock.module('../../../src/services/tasks.js', () => ({
   generateTasksForAttack: mock(),
 }));
 
-// Mock the events service
+// Mock the events service — rebindable so individual tests can simulate a
+// throwing broadcast.
+let emitAgentStatusImpl: (projectId: number, agentId: number, status: string) => void = () => {};
 mock.module('../../../src/services/events.js', () => ({
-  emitAgentStatus: mock(),
+  emitAgentStatus: (projectId: number, agentId: number, status: string) =>
+    emitAgentStatusImpl(projectId, agentId, status),
 }));
 
 // Mock BullMQ Worker to capture the processor function
@@ -113,5 +120,28 @@ describe('Heartbeat monitor worker', () => {
     const result = await capturedProcessor!(fakeJob);
 
     expect(result).toEqual({ reassigned: 3, offlineAgents: 0 });
+  });
+
+  test('emitAgentStatus throws are isolated per-agent; remaining broadcasts still run', async () => {
+    staleAgentsFixture = [
+      { id: 11, projectId: 1 },
+      { id: 22, projectId: 1 },
+      { id: 33, projectId: 2 },
+    ];
+    const calls: number[] = [];
+    emitAgentStatusImpl = (_projectId, agentId, _status) => {
+      calls.push(agentId);
+      if (agentId === 22) throw new Error('WS broadcast failure');
+    };
+
+    const fakeJob = { id: 'test-3', data: { triggeredAt: new Date().toISOString() } };
+    const result = await capturedProcessor!(fakeJob);
+
+    expect(calls).toEqual([11, 22, 33]);
+    expect(result).toEqual({ reassigned: 0, offlineAgents: 3 });
+
+    // Reset for any later test
+    staleAgentsFixture = [];
+    emitAgentStatusImpl = () => {};
   });
 });

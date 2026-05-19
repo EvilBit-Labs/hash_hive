@@ -19,9 +19,11 @@ export function createTaskGeneratorWorker(
       );
 
       let totalTasks = 0;
+      let skippedAttacks = 0;
       for (const attackId of attackIds) {
         const result = await generateTasksForAttack(attackId);
         if ('error' in result) {
+          skippedAttacks++;
           logger.warn(
             { attackId, error: result.error },
             'Skipping attack — task generation failed'
@@ -31,8 +33,17 @@ export function createTaskGeneratorWorker(
         totalTasks += result.count;
       }
 
-      logger.info({ campaignId, totalTasks }, 'Task generation complete');
-      return { campaignId, totalTasks };
+      // Every attack failed — the campaign produced zero tasks; escalate so
+      // alerting picks it up instead of leaving the signal at warn level.
+      if (attackIds.length > 0 && skippedAttacks === attackIds.length) {
+        logger.error(
+          { campaignId, attackCount: attackIds.length, skippedAttacks },
+          'Task generation produced no tasks — every attack failed'
+        );
+      }
+
+      logger.info({ campaignId, totalTasks, skippedAttacks }, 'Task generation complete');
+      return { campaignId, totalTasks, skippedAttacks };
     },
     // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
     { connection: connection as unknown as ConnectionOptions }

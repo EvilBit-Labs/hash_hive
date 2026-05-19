@@ -34,8 +34,18 @@ export function createHeartbeatMonitorWorker(connection: Redis): Worker<Heartbea
           .set({ status: 'offline', updatedAt: new Date() })
           .where(and(eq(agents.status, 'online'), sql`${agents.lastSeenAt} < ${threshold}`));
 
+        // Per-agent try/catch: the DB transition already committed, so a
+        // mid-loop broadcast failure must not skip subsequent broadcasts or
+        // the downstream reassignStaleTasks call.
         for (const staleAgent of staleAgents) {
-          emitAgentStatus(staleAgent.projectId, staleAgent.id, 'offline');
+          try {
+            emitAgentStatus(staleAgent.projectId, staleAgent.id, 'offline');
+          } catch (err) {
+            logger.error(
+              { err, projectId: staleAgent.projectId, agentId: staleAgent.id },
+              'emitAgentStatus threw — agent marked offline in DB but WS broadcast skipped'
+            );
+          }
         }
 
         logger.info({ count: staleAgents.length }, 'Marked stale agents as offline');

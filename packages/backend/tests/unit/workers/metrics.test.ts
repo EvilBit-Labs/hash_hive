@@ -10,8 +10,15 @@ const infoMock = mock();
 const errorMock = mock();
 const warnMock = mock();
 
-type Handler = (...args: unknown[]) => unknown;
-const capturedHandlers: Record<string, Handler[]> = {};
+// Typed per-event handler map — argument shapes match BullMQ's actual
+// listener signatures so call sites in tests are checked against the real
+// contract instead of being erased to (...unknown[]).
+type CompletedHandler = (job: unknown, result: unknown) => unknown | Promise<unknown>;
+type FailedHandler = (job: unknown, err: Error) => unknown | Promise<unknown>;
+type ErrorHandler = (err: Error) => unknown | Promise<unknown>;
+type AnyHandler = CompletedHandler | FailedHandler | ErrorHandler;
+type EventName = 'completed' | 'failed' | 'error';
+const capturedHandlers: Partial<Record<EventName, AnyHandler[]>> = {};
 
 // Mutable db.update handler so individual tests can drive resolve vs reject.
 let dbUpdateImpl: () => Promise<void> = () => Promise.resolve();
@@ -56,7 +63,7 @@ if (IS_ISOLATED) {
   mock.module('bullmq', () => ({
     Worker: class MockWorker {
       constructor(_name: string, _processor: (job: unknown) => Promise<unknown>) {}
-      on(event: string, handler: Handler) {
+      on(event: EventName, handler: AnyHandler) {
         // Append not overwrite — workers attach multiple 'failed' listeners.
         (capturedHandlers[event] ??= []).push(handler);
         return this;
@@ -98,10 +105,13 @@ function lastCallMessage(m: typeof infoMock): unknown {
   return m.mock.calls.at(-1)?.[1];
 }
 
-function fireHandlers(event: string, ...args: unknown[]): Promise<void> {
+function fireHandlers(event: EventName, ...args: unknown[]): Promise<void> {
   const handlers = capturedHandlers[event] ?? [];
   return handlers.reduce<Promise<void>>(
-    (acc, handler) => acc.then(() => Promise.resolve(handler(...args)).then(() => undefined)),
+    (acc, handler) =>
+      acc.then(() =>
+        Promise.resolve((handler as (...a: unknown[]) => unknown)(...args)).then(() => undefined)
+      ),
     Promise.resolve()
   );
 }
@@ -367,23 +377,62 @@ describeIfIsolated('attachWorkerMetrics field-collision and error channel', () =
   beforeEach(resetCapture);
 
   test('canonical jobId/queue/durationMs/result always win over extractContext keys', async () => {
-    // Pick task-generator since it has an extractContext. We can't override
-    // the extractor at runtime through the public surface, so this is
-    // verified indirectly: the spread order puts canonical fields after the
-    // context spread, so an extractor returning jobId/queue won't clobber.
-    // The hash-list-parser case is enough — its extractor returns
-    // { hashListId }, and we already assert canonical fields survive.
-    const { createHashListParserWorker } = await import(
-      '../../../src/queue/workers/hash-list-parser.js'
+    // Direct test against attachWorkerMetrics with a hostile extractor.
+    const { attachWorkerMetrics } = await import('../../../src/queue/workers/metrics.js');
+    const { Worker } = await import('bullmq');
+    const mockWorker = new (Worker as unknown as new (n: string, p: unknown) => unknown)(
+      'test-collision',
+      async () => undefined
     );
-    createHashListParserWorker({} as Redis);
-    await fireHandlers('completed', fakeJobWithTiming({ id: 'canonical-job-id' }), {
-      inserted: 1,
-      skippedLines: 0,
+    attachWorkerMetrics(mockWorker as Parameters<typeof attachWorkerMetrics>[0], {
+      queueName: 'real-queue',
+      failureMessage: 'real-failure',
+      extractContext: () => ({
+        jobId: 'HIJACKED',
+        queue: 'HIJACKED',
+        durationMs: 99_999,
+        result: 'HIJACKED',
+      }),
     });
+
+    await fireHandlers('completed', fakeJobWithTiming({ id: 'canonical-job-id' }), {
+      real: true,
+    });
+
     const payload = lastCallPayload(infoMock);
     expect(payload['jobId']).toBe('canonical-job-id');
-    expect(payload['queue']).toBe(QUEUE_NAMES.HASH_LIST_PARSING);
+    expect(payload['queue']).toBe('real-queue');
+    expect(payload['durationMs']).toBe(250);
+    expect(payload['result']).toEqual({ real: true });
+  });
+
+  test('extractContext that throws does not crash the listener', async () => {
+    const { attachWorkerMetrics } = await import('../../../src/queue/workers/metrics.js');
+    const { Worker } = await import('bullmq');
+    const mockWorker = new (Worker as unknown as new (n: string, p: unknown) => unknown)(
+      'test-throw',
+      async () => undefined
+    );
+    attachWorkerMetrics(mockWorker as Parameters<typeof attachWorkerMetrics>[0], {
+      queueName: 'thrown-queue',
+      failureMessage: 'job failed',
+      extractContext: () => {
+        throw new Error('extractContext exploded');
+      },
+    });
+
+    await expect(
+      fireHandlers('completed', fakeJobWithTiming(), { ok: true })
+    ).resolves.toBeUndefined();
+
+    // The completed log still landed (with empty context), and the throw
+    // was logged separately to error.
+    const completedLog = infoMock.mock.calls.find((call) => call[1] === 'Job completed');
+    expect(completedLog).toBeDefined();
+    const throwLog = errorMock.mock.calls.find((call) =>
+      String(call[1] ?? '').includes('extractContext threw')
+    );
+    expect(throwLog).toBeDefined();
   });
 
   test("registers an 'error' listener that logs non-job worker errors", async () => {

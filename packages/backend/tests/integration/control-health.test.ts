@@ -60,8 +60,8 @@ mock.module('../../src/config/storage.js', () => ({
   getPresignedUrl: mock(),
 }));
 
-import { generateApiKey } from '../../src/lib/api-key.js';
 import { app } from '../../src/index.js';
+import { generateApiKey } from '../../src/lib/api-key.js';
 
 describe('GET /api/v1/control/health', () => {
   it('returns 401 (RFC 9457 problem details) without an API key', async () => {
