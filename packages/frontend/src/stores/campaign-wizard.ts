@@ -6,6 +6,7 @@ export interface AttackConfig {
   wordlistId?: number;
   rulelistId?: number;
   masklistId?: number;
+  advancedConfiguration?: Record<string, unknown>;
   dependencies: number[];
 }
 

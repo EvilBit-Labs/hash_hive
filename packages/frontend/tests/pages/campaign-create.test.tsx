@@ -1,0 +1,469 @@
+import { QueryClient } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { useAuthStore } from '../../src/stores/auth';
+import { useCampaignWizard } from '../../src/stores/campaign-wizard';
+import { useUiStore } from '../../src/stores/ui';
+import { mockFetch, restoreFetch } from '../mocks/fetch';
+import {
+  act,
+  cleanupAll,
+  createTestQueryClient,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  waitFor,
+} from '../test-utils';
+
+// React Flow needs ResizeObserver and DOM measurement APIs happy-dom lacks.
+// Stub it with a controllable test double that exposes the wired callbacks
+// (onConnect, onNodeClick, onNodeContextMenu, onEdgesDelete) so we can
+// invoke them imperatively from tests.
+
+interface CapturedHandlers {
+  onConnect?: (c: { source: string; target: string }) => void;
+  onNodeClick?: (e: unknown, node: { id: string }) => void;
+  onNodeContextMenu?: (e: { preventDefault: () => void }, node: { id: string }) => void;
+  onEdgesDelete?: (edges: { id: string; source: string; target: string }[]) => void;
+}
+
+const captured: CapturedHandlers = {};
+
+mock.module('reactflow', () => {
+  function ReactFlow(props: {
+    nodes: { id: string; data: { label: string } }[];
+    edges: { id: string; source: string; target: string }[];
+    onConnect?: CapturedHandlers['onConnect'];
+    onNodeClick?: CapturedHandlers['onNodeClick'];
+    onNodeContextMenu?: CapturedHandlers['onNodeContextMenu'];
+    onEdgesDelete?: CapturedHandlers['onEdgesDelete'];
+  }) {
+    captured.onConnect = props.onConnect;
+    captured.onNodeClick = props.onNodeClick;
+    captured.onNodeContextMenu = props.onNodeContextMenu;
+    captured.onEdgesDelete = props.onEdgesDelete;
+    return (
+      <div data-testid="react-flow-stub">
+        <ul data-testid="dag-nodes">
+          {props.nodes.map((n) => (
+            <li key={n.id} data-node-id={n.id}>
+              {n.data.label}
+            </li>
+          ))}
+        </ul>
+        <ul data-testid="dag-edges">
+          {props.edges.map((e) => (
+            <li key={e.id} data-edge-source={e.source} data-edge-target={e.target}>
+              {e.source} -&gt; {e.target}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  function useNodesState<T>(initial: T) {
+    return [initial, () => {}, () => {}] as const;
+  }
+  function useEdgesState<T>(initial: T) {
+    return [initial, () => {}, () => {}] as const;
+  }
+  return {
+    default: ReactFlow,
+    Background: () => null,
+    Controls: () => null,
+    useNodesState,
+    useEdgesState,
+  };
+});
+
+mock.module('reactflow/dist/style.css', () => ({}));
+
+// Import the page AFTER the reactflow mock is registered.
+const { CampaignCreatePage } = await import('../../src/pages/campaign-create');
+
+function setAdminWithProject(projectId = 1) {
+  useAuthStore.setState({
+    projects: [{ projectId, projectName: 'Test Project', roles: ['admin'] }],
+    hasFetchedProjects: true,
+  });
+  useUiStore.setState({ selectedProjectId: projectId });
+}
+
+const HASH_LIST_WITH_TYPE = {
+  id: 11,
+  name: 'NTLM Dump',
+  projectId: 1,
+  hashTypeId: 1000,
+  hashCount: 50,
+  crackedCount: 0,
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+const HASH_TYPE_NTLM = {
+  id: 1000,
+  name: 'NTLM',
+  hashcatMode: 1000,
+  category: 'Operating System',
+};
+
+const HASH_TYPE_MD5 = { id: 0, name: 'MD5', hashcatMode: 0, category: 'Raw Hash' };
+
+function defaultRoutes() {
+  return {
+    '/dashboard/resources/hash-lists': {
+      status: 200,
+      body: { hashLists: [HASH_LIST_WITH_TYPE] },
+    },
+    '/dashboard/resources/hash-types': {
+      status: 200,
+      body: { hashTypes: [HASH_TYPE_MD5, HASH_TYPE_NTLM] },
+    },
+    '/dashboard/resources/wordlists': { status: 200, body: { wordlists: [] } },
+    '/dashboard/resources/rulelists': { status: 200, body: { rulelists: [] } },
+    '/dashboard/resources/masklists': { status: 200, body: { masklists: [] } },
+    '/dashboard/attack-templates': { status: 200, body: { templates: [] } },
+  };
+}
+
+let fetchMock: ReturnType<typeof mockFetch>;
+
+beforeEach(() => {
+  // Reset captured handlers between tests
+  captured.onConnect = undefined;
+  captured.onNodeClick = undefined;
+  captured.onNodeContextMenu = undefined;
+  captured.onEdgesDelete = undefined;
+});
+
+afterEach(() => {
+  cleanupAll();
+  if (fetchMock) restoreFetch(fetchMock);
+});
+
+describe('CampaignCreatePage', () => {
+  it('redirects to /campaigns when the user lacks campaign:create permission', () => {
+    fetchMock = mockFetch(defaultRoutes());
+    useAuthStore.setState({
+      projects: [{ projectId: 1, projectName: 'Test', roles: ['viewer'] }],
+      hasFetchedProjects: true,
+    });
+    useUiStore.setState({ selectedProjectId: 1 });
+    renderWithProviders(<CampaignCreatePage />);
+    // <Navigate> renders nothing; the page header is the proof we're rendered
+    expect(screen.queryByText('Create Campaign')).toBeNull();
+  });
+
+  it('blocks Step 1 Next when the name is empty', async () => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    renderWithProviders(<CampaignCreatePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Next: Configure Attacks'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Name is required')).toBeDefined();
+    });
+    // Still on Step 1
+    expect(screen.queryByText('Add Attack')).toBeNull();
+  });
+
+  it('shows the cancel ConfirmDialog and resets state when Discard is clicked', async () => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    useCampaignWizard.setState({ name: 'In progress' });
+
+    renderWithProviders(<CampaignCreatePage />);
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(screen.getByText('Discard campaign?')).toBeDefined();
+
+    fireEvent.click(screen.getByText('Discard'));
+    expect(useCampaignWizard.getState().name).toBe('');
+  });
+});
+
+function seedResourceQueries(qc: QueryClient, projectId = 1) {
+  qc.setQueryData(['hash-lists', projectId], { hashLists: [HASH_LIST_WITH_TYPE] });
+  qc.setQueryData(['hash-types'], { hashTypes: [HASH_TYPE_MD5, HASH_TYPE_NTLM] });
+  qc.setQueryData(['wordlists', projectId], { resources: [] });
+  qc.setQueryData(['rulelists', projectId], { resources: [] });
+  qc.setQueryData(['masklists', projectId], { resources: [] });
+}
+
+describe('CampaignCreatePage Step 2 (attack form)', () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    qc = createTestQueryClient();
+    seedResourceQueries(qc);
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'My Campaign',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+    });
+  });
+
+  it('prefills Hash Type from the selected hash list when adding a new attack', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Add Attack' })).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Attack' }));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks).toHaveLength(1);
+    });
+    expect(useCampaignWizard.getState().attacks[0]?.hashTypeId).toBe(HASH_TYPE_NTLM.id);
+  });
+
+  it('renders Attack Mode as a labeled dropdown with the spec primitives', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Attack Mode')).toBeDefined();
+    });
+
+    const select = screen.getByLabelText('Attack Mode') as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.text);
+    expect(labels).toContain('Dictionary');
+    expect(labels).toContain('Combinator');
+    expect(labels).toContain('Mask');
+  });
+
+  it('rejects invalid JSON in Advanced Configuration', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Advanced Configuration/)).toBeDefined();
+    });
+
+    const textarea = screen.getByLabelText(/Advanced Configuration/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'not json' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Attack' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Must be valid JSON')).toBeDefined();
+    });
+    expect(useCampaignWizard.getState().attacks).toHaveLength(0);
+  });
+
+  it('accepts a JSON object in Advanced Configuration and stores it on the attack', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Advanced Configuration/)).toBeDefined();
+    });
+
+    const textarea = screen.getByLabelText(/Advanced Configuration/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '{"workload-profile": 3}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Attack' }));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks).toHaveLength(1);
+    });
+    expect(useCampaignWizard.getState().attacks[0]?.advancedConfiguration).toEqual({
+      'workload-profile': 3,
+    });
+  });
+
+  it('shows the cycle error with attack labels (not bare indices) when a cycle exists', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'cyclic',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      attacks: [
+        { mode: 0, dependencies: [1] },
+        { mode: 3, dependencies: [0] },
+      ],
+    });
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByText(/Circular dependency/)).toBeDefined();
+    });
+    const error = screen.getByText(/Circular dependency/).textContent ?? '';
+    expect(error).toContain('Dictionary');
+    expect(error).toContain('Mask');
+  });
+
+  it('disables Next when a cycle exists', async () => {
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'cyclic',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      attacks: [
+        { mode: 0, dependencies: [1] },
+        { mode: 3, dependencies: [0] },
+      ],
+    });
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByText('Next: Review')).toBeDefined();
+    });
+    const next = screen.getByText('Next: Review') as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+  });
+});
+
+describe('CampaignCreatePage edit flow', () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    qc = createTestQueryClient();
+    seedResourceQueries(qc);
+    useCampaignWizard.setState({
+      step: 1,
+      name: 'My Campaign',
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      priority: 5,
+      attacks: [{ mode: 0, wordlistId: 2, dependencies: [] }],
+    });
+  });
+
+  it('switches Add to Update Attack and patches the existing entry on submit', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getByText('Update Attack')).toBeDefined();
+
+    const modeSelect = screen.getByLabelText('Attack Mode') as HTMLSelectElement;
+    fireEvent.change(modeSelect, { target: { value: '3' } });
+    fireEvent.click(screen.getByText('Update Attack'));
+
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks[0]?.mode).toBe(3);
+    });
+    expect(useCampaignWizard.getState().attacks).toHaveLength(1);
+  });
+
+  it('removes the attack when right-clicked in the DAG editor', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(captured.onNodeContextMenu).toBeDefined();
+    });
+
+    let preventDefaultCalled = false;
+    act(() => {
+      captured.onNodeContextMenu?.(
+        {
+          preventDefault: () => {
+            preventDefaultCalled = true;
+          },
+        },
+        { id: '0' }
+      );
+    });
+
+    expect(preventDefaultCalled).toBe(true);
+    expect(useCampaignWizard.getState().attacks).toHaveLength(0);
+  });
+
+  it('seeds the form when a DAG node is clicked', async () => {
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+    await waitFor(() => {
+      expect(captured.onNodeClick).toBeDefined();
+    });
+
+    act(() => {
+      captured.onNodeClick?.({}, { id: '0' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Update Attack')).toBeDefined();
+    });
+  });
+});
+
+describe('CampaignCreatePage submit flow', () => {
+  it('posts attacks in topological order and remaps dependency indices to backend IDs', async () => {
+    // Two attacks in a chain: A0 → A1 (A1 depends on A0).
+    // The wizard stores deps as wizard indices [0]. The submit path must
+    // create A0 first (gets id=101), then create A1 with dependencies=[101].
+    setAdminWithProject();
+    const qc = createTestQueryClient();
+    seedResourceQueries(qc);
+
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'Chain',
+      description: '',
+      priority: 5,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      attacks: [
+        { mode: 0, dependencies: [] },
+        { mode: 0, dependencies: [0] },
+      ],
+    });
+
+    const attackPosts: { url: string; body: unknown }[] = [];
+    let nextAttackId = 101;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method ?? 'GET').toUpperCase();
+
+      if (method === 'POST' && url.includes('/dashboard/campaigns/55/attacks')) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        attackPosts.push({ url, body });
+        const attackId = nextAttackId++;
+        return new Response(JSON.stringify({ attack: { id: attackId } }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (method === 'POST' && url.includes('/dashboard/campaigns')) {
+        return new Response(
+          JSON.stringify({ campaign: { id: 55, name: 'Chain', status: 'draft' } }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }));
+
+      await waitFor(() => {
+        expect(attackPosts).toHaveLength(2);
+      });
+
+      // First POST: A0, no dependencies (empty list or field omitted are both fine)
+      const firstBody = attackPosts[0]?.body as { mode: number; dependencies?: number[] };
+      expect(firstBody.mode).toBe(0);
+      expect(firstBody.dependencies ?? []).toEqual([]);
+
+      // Second POST: A1, dependencies remapped to the backend ID we returned for A0 (101)
+      const secondBody = attackPosts[1]?.body as { mode: number; dependencies?: number[] };
+      expect(secondBody.dependencies).toEqual([101]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

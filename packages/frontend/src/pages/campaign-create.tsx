@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
 import { StatusBadge } from '../components/features/status-badge';
 import { Button } from '../components/ui/button';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorBanner } from '../components/ui/error-banner';
 import { Input } from '../components/ui/input';
@@ -24,9 +25,16 @@ import { Select } from '../components/ui/select';
 import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates';
 import { useCreateCampaign } from '../hooks/use-campaigns';
 import { usePermissions } from '../hooks/use-permissions';
-import { useHashLists, useMasklists, useRulelists, useWordlists } from '../hooks/use-resources';
+import {
+  useHashLists,
+  useHashTypes,
+  useMasklists,
+  useRulelists,
+  useWordlists,
+} from '../hooks/use-resources';
 import { ApiError, api } from '../lib/api';
-import { validateDAG } from '../lib/dag-validation';
+import { ATTACK_MODES, attackModeLabel } from '../lib/attack-modes';
+import { topologicalOrder, validateDAG } from '../lib/dag-validation';
 import { Permission } from '../lib/permissions';
 import { cn } from '../lib/utils';
 import { useCampaignWizard } from '../stores/campaign-wizard';
@@ -48,18 +56,49 @@ const optionalResourceId = z.preprocess(
   z.coerce.number().int().positive().optional()
 );
 
+const advancedConfigSchema = z
+  .string()
+  .optional()
+  .transform((raw, ctx) => {
+    if (raw == null) return undefined;
+    const trimmed = raw.trim();
+    if (trimmed === '') return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must be valid JSON',
+      });
+      return z.NEVER;
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must be a JSON object (e.g., {"workload-profile": 3})',
+      });
+      return z.NEVER;
+    }
+    return parsed as Record<string, unknown>;
+  });
+
 const attackSchema = z.object({
   mode: z.coerce.number().int().nonnegative('Mode is required'),
+  hashTypeId: optionalResourceId,
   wordlistId: optionalResourceId,
   rulelistId: optionalResourceId,
   masklistId: optionalResourceId,
+  advancedConfiguration: advancedConfigSchema,
 });
 
 interface AttackForm {
   mode: number;
+  hashTypeId?: number;
   wordlistId?: number;
   rulelistId?: number;
   masklistId?: number;
+  advancedConfiguration?: Record<string, unknown>;
 }
 
 type UploadModalType = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
@@ -72,7 +111,7 @@ function buildNodes(attacks: readonly { mode: number }[]): FlowNode[] {
     id: String(i),
     type: 'default',
     position: { x: (i % 4) * 200, y: Math.floor(i / 4) * 120 },
-    data: { label: `#${i} Mode ${attack.mode}` },
+    data: { label: `#${i} ${attackModeLabel(attack.mode)}` },
   }));
 }
 
@@ -101,6 +140,8 @@ export function CampaignCreatePage() {
   const createCampaign = useCreateCampaign();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [uploadModal, setUploadModal] = useState<{
     open: boolean;
     type: UploadModalType;
@@ -112,6 +153,7 @@ export function CampaignCreatePage() {
 
   // Resource queries for dropdowns
   const hashListsQuery = useHashLists();
+  const hashTypesQuery = useHashTypes();
   const wordlistsQuery = useWordlists();
   const rulelistsQuery = useRulelists();
   const masklistsQuery = useMasklists();
@@ -150,6 +192,17 @@ export function CampaignCreatePage() {
     resolver: zodResolver(attackSchema) as unknown as Resolver<AttackForm>,
   });
 
+  // Prefill hash type from the selected hash list when starting a fresh attack.
+  // Skips when editing an existing attack (the user's stored choice wins).
+  const selectedHashList = hashListsQuery.data?.hashLists?.find((h) => h.id === wizard.hashListId);
+  const detectedHashTypeId = selectedHashList?.hashTypeId ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attackForm identity is stable
+  useEffect(() => {
+    if (detectedHashTypeId != null && editingIndex == null) {
+      attackForm.setValue('hashTypeId', detectedHashTypeId);
+    }
+  }, [detectedHashTypeId, editingIndex]);
+
   const handleConnect: OnConnect = useCallback(
     (connection) => {
       const sourceIdx = Number(connection.source);
@@ -175,6 +228,65 @@ export function CampaignCreatePage() {
     [wizard]
   );
 
+  const clearEdit = useCallback(() => {
+    setEditingIndex(null);
+    attackForm.reset({ mode: 0 });
+  }, [attackForm]);
+
+  const seedFormFromAttack = useCallback(
+    (idx: number) => {
+      const attack = wizard.attacks[idx];
+      if (!attack) return;
+      attackForm.reset({
+        mode: attack.mode,
+        ...(attack.hashTypeId != null ? { hashTypeId: attack.hashTypeId } : {}),
+        ...(attack.wordlistId != null ? { wordlistId: attack.wordlistId } : {}),
+        ...(attack.rulelistId != null ? { rulelistId: attack.rulelistId } : {}),
+        ...(attack.masklistId != null ? { masklistId: attack.masklistId } : {}),
+        ...(attack.advancedConfiguration
+          ? {
+              advancedConfiguration: JSON.stringify(
+                attack.advancedConfiguration,
+                null,
+                2
+              ) as unknown as Record<string, unknown>,
+            }
+          : {}),
+      });
+      setEditingIndex(idx);
+    },
+    [attackForm, wizard.attacks]
+  );
+
+  const handleRemoveAttack = useCallback(
+    (idx: number) => {
+      wizard.removeAttack(idx);
+      if (editingIndex === idx) {
+        clearEdit();
+      } else if (editingIndex != null && editingIndex > idx) {
+        setEditingIndex(editingIndex - 1);
+      }
+    },
+    [wizard, editingIndex, clearEdit]
+  );
+
+  const handleNodeClick = useCallback(
+    (_event: unknown, node: { id: string }) => {
+      const idx = Number(node.id);
+      if (!Number.isNaN(idx)) seedFormFromAttack(idx);
+    },
+    [seedFormFromAttack]
+  );
+
+  const handleNodeContextMenu = useCallback(
+    (event: { preventDefault: () => void }, node: { id: string }) => {
+      event.preventDefault();
+      const idx = Number(node.id);
+      if (!Number.isNaN(idx)) handleRemoveAttack(idx);
+    },
+    [handleRemoveAttack]
+  );
+
   if (!can(Permission.CAMPAIGN_CREATE)) {
     return <Navigate to="/campaigns" replace />;
   }
@@ -193,21 +305,40 @@ export function CampaignCreatePage() {
     wizard.setStep(1);
   });
 
-  const handleAddAttack = (data: AttackForm) => {
-    wizard.addAttack({
+  const handleAttackSubmit = (data: AttackForm) => {
+    const payload = {
       mode: data.mode,
+      ...(data.hashTypeId ? { hashTypeId: data.hashTypeId } : {}),
       ...(data.wordlistId ? { wordlistId: data.wordlistId } : {}),
       ...(data.rulelistId ? { rulelistId: data.rulelistId } : {}),
       ...(data.masklistId ? { masklistId: data.masklistId } : {}),
-      dependencies: [],
-    });
-    attackForm.reset();
+      ...(data.advancedConfiguration ? { advancedConfiguration: data.advancedConfiguration } : {}),
+    };
+    if (editingIndex != null) {
+      const existing = wizard.attacks[editingIndex];
+      wizard.updateAttack(editingIndex, {
+        ...payload,
+        dependencies: existing?.dependencies ?? [],
+      });
+      clearEdit();
+    } else {
+      wizard.addAttack({ ...payload, dependencies: [] });
+      attackForm.reset({ mode: 0 });
+    }
   };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     setError(null);
     try {
+      // Sort attacks topologically so every dependency is created before its
+      // dependent — lets us remap wizard-local indices to real backend IDs.
+      const order = topologicalOrder(wizard.attacks);
+      if (order == null) {
+        setError('Cannot create campaign while a dependency cycle exists.');
+        return;
+      }
+
       const result = await createCampaign.mutateAsync({
         name: wizard.name,
         hashListId: wizard.hashListId ?? 0,
@@ -216,13 +347,35 @@ export function CampaignCreatePage() {
       });
 
       const campaignId = result.campaign.id;
+      const createdIds = new Map<number, number>();
 
-      // Create attacks sequentially using direct API calls to avoid stale hook state
-      for (const attack of wizard.attacks) {
-        await api.post(`/dashboard/campaigns/${campaignId}/attacks`, {
-          ...attack,
-          ...(attack.dependencies.length > 0 ? { dependencies: attack.dependencies } : {}),
-        });
+      // Snapshot the attacks list so a concurrent cancel/edit cannot mutate
+      // the store mid-loop and corrupt the dependency remap.
+      const attacksSnapshot = wizard.attacks;
+
+      // Create attacks in topological order so dependency IDs are known.
+      // Build each POST body explicitly to keep wizard-internal fields out
+      // of the wire shape — never spread the full attack object.
+      for (const idx of order) {
+        const attack = attacksSnapshot[idx];
+        if (!attack) continue;
+        const remappedDeps = attack.dependencies
+          .map((depIdx) => createdIds.get(depIdx))
+          .filter((id): id is number => id != null);
+        const body: Record<string, unknown> = { mode: attack.mode };
+        if (attack.hashTypeId != null) body['hashTypeId'] = attack.hashTypeId;
+        if (attack.wordlistId != null) body['wordlistId'] = attack.wordlistId;
+        if (attack.rulelistId != null) body['rulelistId'] = attack.rulelistId;
+        if (attack.masklistId != null) body['masklistId'] = attack.masklistId;
+        if (attack.advancedConfiguration) {
+          body['advancedConfiguration'] = attack.advancedConfiguration;
+        }
+        if (remappedDeps.length > 0) body['dependencies'] = remappedDeps;
+        const { attack: created } = await api.post<{ attack: { id: number } }>(
+          `/dashboard/campaigns/${campaignId}/attacks`,
+          body
+        );
+        createdIds.set(idx, created.id);
       }
 
       wizard.reset();
@@ -238,7 +391,15 @@ export function CampaignCreatePage() {
     }
   };
 
+  const handleCancel = () => setCancelOpen(true);
+  const confirmCancel = () => {
+    wizard.reset();
+    setCancelOpen(false);
+    navigate('/campaigns');
+  };
+
   const hashLists = hashListsQuery.data?.hashLists ?? [];
+  const hashTypes = hashTypesQuery.data?.hashTypes ?? [];
   const wordlists = wordlistsQuery.data?.resources ?? [];
   const rulelists = rulelistsQuery.data?.resources ?? [];
   const masklists = masklistsQuery.data?.resources ?? [];
@@ -339,7 +500,12 @@ export function CampaignCreatePage() {
             </div>
           </div>
 
-          <Button type="submit">Next: Configure Attacks</Button>
+          <div className="flex gap-2">
+            <Button type="submit">Next: Configure Attacks</Button>
+            <Button type="button" variant="secondary" onClick={handleCancel}>
+              Cancel
+            </Button>
+          </div>
         </form>
       )}
 
@@ -349,7 +515,7 @@ export function CampaignCreatePage() {
           <div className="flex gap-6">
             {/* Left column: Attack configuration form */}
             <div className="w-2/5 space-y-4">
-              <form onSubmit={attackForm.handleSubmit(handleAddAttack)} className="space-y-3">
+              <form onSubmit={attackForm.handleSubmit(handleAttackSubmit)} className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Add Attack</h3>
                   <Button
@@ -364,14 +530,35 @@ export function CampaignCreatePage() {
                 <div className="space-y-3">
                   <div>
                     <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
-                      Hashcat Mode
+                      Attack Mode
                     </label>
-                    <Input
-                      id="mode"
-                      type="number"
+                    <Select id="mode" className="mt-1.5" {...attackForm.register('mode')}>
+                      {ATTACK_MODES.map((mode) => (
+                        <option key={mode.value} value={mode.value}>
+                          {mode.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="hashTypeId"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Hash Type
+                    </label>
+                    <Select
+                      id="hashTypeId"
                       className="mt-1.5"
-                      {...attackForm.register('mode')}
-                    />
+                      {...attackForm.register('hashTypeId')}
+                    >
+                      <option value="">Auto (from hash list)</option>
+                      {hashTypes.map((ht) => (
+                        <option key={ht.id} value={ht.id}>
+                          {ht.name} (mode {ht.hashcatMode})
+                        </option>
+                      ))}
+                    </Select>
                   </div>
                   {[
                     {
@@ -423,10 +610,37 @@ export function CampaignCreatePage() {
                       </div>
                     </div>
                   ))}
+                  <div>
+                    <label
+                      htmlFor="advancedConfiguration"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Advanced Configuration (JSON, optional)
+                    </label>
+                    <textarea
+                      id="advancedConfiguration"
+                      rows={3}
+                      placeholder='{"workload-profile": 3}'
+                      className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 font-mono text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
+                      {...attackForm.register('advancedConfiguration')}
+                    />
+                    {attackForm.formState.errors.advancedConfiguration?.['message'] && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {String(attackForm.formState.errors.advancedConfiguration['message'])}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <Button variant="secondary" size="sm" type="submit">
-                  Add Attack
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" type="submit">
+                    {editingIndex != null ? 'Update Attack' : 'Add Attack'}
+                  </Button>
+                  {editingIndex != null && (
+                    <Button variant="secondary" size="sm" type="button" onClick={clearEdit}>
+                      Cancel Edit
+                    </Button>
+                  )}
+                </div>
               </form>
 
               {/* Attack list */}
@@ -441,7 +655,7 @@ export function CampaignCreatePage() {
                     >
                       <div className="text-xs">
                         <span className="font-mono font-medium">
-                          #{i} Mode {attack.mode}
+                          #{i} {attackModeLabel(attack.mode)}
                         </span>
                         {attack.wordlistId && (
                           <span className="ml-2 text-muted-foreground">
@@ -459,13 +673,25 @@ export function CampaignCreatePage() {
                           </span>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => wizard.removeAttack(i)}
-                        className="text-xs text-destructive hover:text-destructive/80"
-                      >
-                        Remove
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => seedFormFromAttack(i)}
+                          className={cn(
+                            'text-xs hover:text-foreground',
+                            editingIndex === i ? 'text-primary' : 'text-muted-foreground'
+                          )}
+                        >
+                          {editingIndex === i ? 'Editing...' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAttack(i)}
+                          className="text-xs text-destructive hover:text-destructive/80"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -476,12 +702,17 @@ export function CampaignCreatePage() {
             <div className="w-3/5 space-y-2">
               <h3 className="text-sm font-medium">Dependency Graph</h3>
               <p className="text-xs text-muted-foreground">
-                Drag edges between attacks to set dependencies. Arrow from A \u2192 B means B
-                depends on A.
+                Drag edges between attacks to set dependencies. Arrow from A -&gt; B means B depends
+                on A.
               </p>
               {!dagValidation.valid && (
                 <ErrorBanner
-                  message={`Circular dependency detected between attacks: [${dagValidation.cycle?.join(', ')}]`}
+                  message={`Circular dependency detected between attacks: [${dagValidation.cycle
+                    ?.map((i) => {
+                      const attack = wizard.attacks[i];
+                      return attack ? `#${i} ${attackModeLabel(attack.mode)}` : `#${i}`;
+                    })
+                    .join(', ')}]`}
                   className="text-xs"
                 />
               )}
@@ -507,6 +738,8 @@ export function CampaignCreatePage() {
                     onEdgesChange={onEdgesChange}
                     onConnect={handleConnect}
                     onEdgesDelete={handleEdgeDelete}
+                    onNodeClick={handleNodeClick}
+                    onNodeContextMenu={handleNodeContextMenu}
                     fitView
                     deleteKeyCode="Backspace"
                   >
@@ -531,6 +764,9 @@ export function CampaignCreatePage() {
               disabled={wizard.attacks.length === 0 || !dagValidation.valid}
             >
               Next: Review
+            </Button>
+            <Button variant="secondary" onClick={handleCancel}>
+              Cancel
             </Button>
           </div>
         </div>
@@ -598,6 +834,9 @@ export function CampaignCreatePage() {
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? 'Creating...' : 'Create Campaign'}
+            </Button>
+            <Button variant="secondary" onClick={handleCancel} disabled={submitting}>
+              Cancel
             </Button>
           </div>
         </div>
@@ -673,6 +912,18 @@ export function CampaignCreatePage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={cancelOpen}
+        title="Discard campaign?"
+        message="The wizard will close and your in-progress configuration will be lost."
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        destructive
+        busy={submitting}
+        onConfirm={confirmCancel}
+        onCancel={() => setCancelOpen(false)}
+      />
 
       {/* Resource upload modal */}
       <ResourceUploadModal
