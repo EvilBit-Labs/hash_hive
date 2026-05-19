@@ -3,10 +3,11 @@ import { type ConnectionOptions, Worker } from 'bullmq';
 import { and, count, eq, isNotNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
-import { QUEUE_NAMES } from '../../config/queue.js';
+import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js';
 import { downloadFile } from '../../config/storage.js';
 import { db } from '../../db/index.js';
 import type { HashListParseJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 const BATCH_SIZE = 5_000;
 const MAX_LINE_LENGTH = 10_000; // 10 KB — skip malformed/binary lines
@@ -158,18 +159,29 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', async (job, err) => {
-    logger.error(
-      { jobId: job?.id, hashListId: job?.data.hashListId, err },
-      'Hash list parse failed'
-    );
+  attachWorkerMetrics(worker, {
+    queueName: QUEUE_NAMES.HASH_LIST_PARSING,
+    failureMessage: 'Hash list parse failed',
+    extractContext: (job) => ({ hashListId: job?.data?.hashListId }),
+  });
 
-    // Mark hash list as error on final failure
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+  // Separate listener: a DB outage here must not suppress the metrics log,
+  // and BullMQ surfaces listener rejections as uncaughtException.
+  worker.on('failed', async (job, _err) => {
+    if (!job || job.attemptsMade < (job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS)) return;
+    const hashListId = job.data?.hashListId;
+    if (typeof hashListId !== 'number') return;
+    try {
       await db
         .update(hashLists)
         .set({ status: 'error', updatedAt: new Date() })
-        .where(eq(hashLists.id, job.data.hashListId));
+        .where(eq(hashLists.id, hashListId));
+    } catch (cleanupErr) {
+      // Hash list row likely stuck in non-error status; operator must reset manually.
+      logger.error(
+        { jobId: job.id, hashListId, err: cleanupErr },
+        'Hash list parse failed AND cleanup db.update failed — manual intervention required'
+      );
     }
   });
 

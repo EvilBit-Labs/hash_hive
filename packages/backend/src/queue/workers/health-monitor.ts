@@ -37,6 +37,7 @@ import {
   getSystemHealth,
 } from '../../services/health.js';
 import type { HealthMonitorJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 const COMPONENTS: ComponentName[] = ['database', 'redis', 'minio', 'queues'];
 const REDIS_KEY_PREFIX = 'health:last-status:';
@@ -74,6 +75,12 @@ export interface HealthMonitorTickResult {
   initialized: ComponentName[];
   /** Components whose status was unchanged. */
   unchanged: ComponentName[];
+  /**
+   * Set when the tick was aborted because `getSystemHealth()` threw. Lets
+   * downstream observers (and the metrics-listener `'Job completed'` log)
+   * distinguish a healthy completion from a swallowed failure.
+   */
+  skipped?: { reason: string };
 }
 
 /**
@@ -87,12 +94,15 @@ export async function runHealthMonitorTick(
   try {
     report = await deps.fetchHealth();
   } catch (err) {
-    // Defensive: every current probe coerces errors to unhealthy, but a
-    // future probe could throw. Swallow here so a single bad tick
-    // doesn't flood BullMQ's failed-jobs metric. The next tick gets a
-    // fresh shot.
+    // Swallow so a bad tick doesn't flood BullMQ's failed-jobs metric; mark
+    // the result `skipped` so the completion log doesn't read as healthy.
     logger.error({ err }, 'health monitor: getSystemHealth threw — skipping tick');
-    return { transitioned: [], initialized: [], unchanged: [] };
+    return {
+      transitioned: [],
+      initialized: [],
+      unchanged: [],
+      skipped: { reason: 'getSystemHealth threw' },
+    };
   }
 
   const result: HealthMonitorTickResult = { transitioned: [], initialized: [], unchanged: [] };
@@ -196,8 +206,9 @@ export function createHealthMonitorWorker(connection: Redis): Worker<HealthMonit
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'health monitor job failed');
+  attachWorkerMetrics(worker, {
+    queueName: QUEUE_NAMES.HEALTH_MONITOR,
+    failureMessage: 'health monitor job failed',
   });
 
   return worker;

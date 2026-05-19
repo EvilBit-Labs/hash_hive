@@ -79,10 +79,10 @@ describe('Task generator worker', () => {
     const result = await capturedProcessor!(fakeJob);
 
     expect(mockGenerateTasksForAttack).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({ campaignId: 1, totalTasks: 15 });
+    expect(result).toEqual({ campaignId: 1, totalTasks: 15, skippedAttacks: 0 });
   });
 
-  test('processor skips attacks that return errors', async () => {
+  test('processor skips attacks that return errors and reports skippedAttacks', async () => {
     mockGenerateTasksForAttack.mockReset();
     mockGenerateTasksForAttack
       .mockResolvedValueOnce({ tasks: [], count: 5 })
@@ -96,6 +96,22 @@ describe('Task generator worker', () => {
 
     const result = await capturedProcessor!(fakeJob);
 
-    expect(result).toEqual({ campaignId: 2, totalTasks: 8 });
+    expect(result).toEqual({ campaignId: 2, totalTasks: 8, skippedAttacks: 1 });
+  });
+
+  test('processor reports skippedAttacks=N when every attack fails', async () => {
+    mockGenerateTasksForAttack.mockReset();
+    mockGenerateTasksForAttack
+      .mockResolvedValueOnce({ error: 'Attack 1 not found' })
+      .mockResolvedValueOnce({ error: 'Attack 2 not found' });
+
+    const fakeJob = {
+      id: 'gen-3',
+      data: { campaignId: 3, projectId: 1, attackIds: [1, 2], priority: 5 },
+    };
+
+    const result = await capturedProcessor!(fakeJob);
+
+    expect(result).toEqual({ campaignId: 3, totalTasks: 0, skippedAttacks: 2 });
   });
 });

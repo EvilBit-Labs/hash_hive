@@ -150,6 +150,14 @@ if (!IS_ISOLATED) {
     failed: 1,
   }));
 
+  type TransitionErrorCode = 'QUEUE_UNAVAILABLE' | 'INVALID_TRANSITION' | 'NOT_FOUND';
+  type TransitionResult =
+    | { campaign: { id: number; status: string } | null }
+    | { error: string; code?: TransitionErrorCode };
+  const mockTransitionCampaign = mock<(id: number, target: string) => Promise<TransitionResult>>(
+    async () => ({ campaign: null })
+  );
+
   const mockListActiveAgentsByCampaign = mock(async (_id: number) => [
     {
       agentId: 11,
@@ -178,7 +186,7 @@ if (!IS_ISOLATED) {
     getAttackById: mock(async () => null),
     updateAttack: mock(async () => null),
     deleteAttack: mock(async () => null),
-    transitionCampaign: mock(async () => ({ campaign: null })),
+    transitionCampaign: mockTransitionCampaign,
     validateCampaignDAG: mock(async () => ({ valid: true })),
     // Required by tasks.ts (static import resolves to this mocked module
     // because mock.module is process-global).
@@ -422,6 +430,42 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error?: { code?: string } };
       expect(body.error?.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('Dashboard campaign lifecycle: queue-availability mapping', () => {
+    it('maps QUEUE_UNAVAILABLE → 503 SERVICE_UNAVAILABLE', async () => {
+      mockTransitionCampaign.mockResolvedValueOnce({
+        error: 'Queue unavailable — cannot start campaign',
+        code: 'QUEUE_UNAVAILABLE',
+      });
+
+      const res = await app.request(`${DASH_CAMPAIGNS}/1/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('SERVICE_UNAVAILABLE');
+      expect(body.error?.message).toContain('Queue unavailable');
+    });
+
+    it('still maps non-queue transition errors to 400 INVALID_TRANSITION', async () => {
+      mockTransitionCampaign.mockResolvedValueOnce({
+        error: "Cannot transition from 'running' to 'running'",
+      });
+
+      const res = await app.request(`${DASH_CAMPAIGNS}/1/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('INVALID_TRANSITION');
     });
   });
 } // end IS_ISOLATED

@@ -21,12 +21,12 @@
  * `queue-manager.test.ts` for the prior pattern this mirrors.
  */
 import { afterAll, describe, expect, it, mock, test } from 'bun:test';
+import type { ComponentHealth, SystemHealth } from '../../src/services/health.js';
 import {
   __resetSystemHealthCache,
   HEALTH_VERSION,
   legacyPublicEnvelope,
 } from '../../src/services/health.js';
-import type { ComponentHealth, SystemHealth } from '../../src/services/health.js';
 
 const IS_ISOLATED = process.env['HEALTH_DETERMINISTIC_TEST_ISOLATED'] === '1';
 

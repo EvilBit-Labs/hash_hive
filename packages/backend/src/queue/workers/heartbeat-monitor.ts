@@ -8,6 +8,7 @@ import { db } from '../../db/index.js';
 import { emitAgentStatus } from '../../services/events.js';
 import { reassignStaleTasks } from '../../services/tasks.js';
 import type { HeartbeatMonitorJob } from '../types.js';
+import { attachWorkerMetrics } from './metrics.js';
 
 const OFFLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -33,8 +34,18 @@ export function createHeartbeatMonitorWorker(connection: Redis): Worker<Heartbea
           .set({ status: 'offline', updatedAt: new Date() })
           .where(and(eq(agents.status, 'online'), sql`${agents.lastSeenAt} < ${threshold}`));
 
+        // Per-agent try/catch: the DB transition already committed, so a
+        // mid-loop broadcast failure must not skip subsequent broadcasts or
+        // the downstream reassignStaleTasks call.
         for (const staleAgent of staleAgents) {
-          emitAgentStatus(staleAgent.projectId, staleAgent.id, 'offline');
+          try {
+            emitAgentStatus(staleAgent.projectId, staleAgent.id, 'offline');
+          } catch (err) {
+            logger.error(
+              { err, projectId: staleAgent.projectId, agentId: staleAgent.id },
+              'emitAgentStatus threw — agent marked offline in DB but WS broadcast skipped'
+            );
+          }
         }
 
         logger.info({ count: staleAgents.length }, 'Marked stale agents as offline');
@@ -53,8 +64,9 @@ export function createHeartbeatMonitorWorker(connection: Redis): Worker<Heartbea
     { connection: connection as unknown as ConnectionOptions }
   );
 
-  worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'Heartbeat monitor job failed');
+  attachWorkerMetrics(worker, {
+    queueName: QUEUE_NAMES.HEARTBEAT_MONITOR,
+    failureMessage: 'Heartbeat monitor job failed',
   });
 
   return worker;
