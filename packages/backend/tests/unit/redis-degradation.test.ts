@@ -1,41 +1,8 @@
-/**
- * Redis degradation policy regression coverage.
- *
- * AC #3 of the BullMQ Queue Architecture spec requires:
- *   - Agent endpoints (`/api/v1/agent/*`) keep functioning when Redis is down
- *   - Dashboard/control operations requiring async processing return a
- *     `QUEUE_UNAVAILABLE` error envelope
- *
- * This file exercises the contract at three layers:
- *   1. `transitionCampaign(_, 'running')` returns `{ error, code:
- *      'QUEUE_UNAVAILABLE' }` when the queue manager is null
- *   2. ...and when the queue manager exists but `getHealth()` reports
- *      disconnected
- *   3. Direct-import guard on the agent-path entrypoints (`routes/agent/*`
- *      plus `services/{agents,tasks,crackers}.ts`). Those files must not
- *      import from `queue/context` or `queue/manager`. Adding a queue
- *      dependency to any of them silently regresses AC #3 by definition,
- *      since they are the only modules that execute on an agent request.
- *
- * Pattern follows `tests/unit/campaign-transition.test.ts` (uses
- * `_deps.getQueueContext` injection rather than `mock.module`, because
- * bun:test's shared module cache makes module-level mocks fragile
- * across files).
- *
- * The dashboard-route mapping (transitionCampaign → 503 SERVICE_UNAVAILABLE
- * response envelope) is exercised in tests/unit/dashboard-campaigns-routes.test.ts
- * and tests/unit/control-routes-rbac.test.ts; this file owns the service
- * boundary and the import-graph guard.
- */
+// Redis degradation regression coverage (AC #3). Gated as an isolated phase
+// because the events.js mock is process-global and would leak into siblings.
 
 import { describe, expect, mock, test } from 'bun:test';
 
-// bun:test mocks are process-global; campaigns.ts pulls events.js via a
-// minimal mock here, which would otherwise leak an incomplete events module
-// into sibling tests that need broadcastSystemHealth/emitAgentError/etc.
-// Run this file in an isolated bun:test phase via REDIS_DEGRADATION_TEST_ISOLATED=1
-// so the campaigns.ts module cache is hermetic to this file's overrides and
-// the shared phase sees the real events module.
 const IS_ISOLATED = process.env['REDIS_DEGRADATION_TEST_ISOLATED'] === '1';
 const describeIfIsolated = IS_ISOLATED ? describe : describe.skip;
 
@@ -56,10 +23,11 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// One attack with enough keyspace to force the async / queue path
-// (resolveGenerationStrategy switches to async at >= 100 estimated chunks
-// using MIN_CHUNK_SIZE = 1000 per chunk; we use 100k keyspace to be safe).
+// resolveGenerationStrategy switches to async at >= 100 chunks (MIN_CHUNK_SIZE = 1000).
 const QUEUE_BOUND_ATTACKS = [{ id: 20, keyspace: String(100 * 1000), campaignId: 1 }];
+
+// Captured by the db.update mock so individual tests can assert rollback.
+const updatedRows: Array<Record<string, unknown>> = [];
 
 if (IS_ISOLATED) {
   mock.module('../../src/db/index.js', () => ({
@@ -73,11 +41,14 @@ if (IS_ISOLATED) {
         })),
       })),
       update: mock(() => ({
-        set: mock(() => ({
-          where: mock(() => ({
-            returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
-          })),
-        })),
+        set: mock((values: Record<string, unknown>) => {
+          updatedRows.push(values);
+          return {
+            where: mock(() => ({
+              returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
+            })),
+          };
+        }),
       })),
     },
     client: {},
@@ -100,23 +71,31 @@ if (IS_ISOLATED) {
   }));
 }
 
-const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js');
-
-if (IS_ISOLATED) {
-  _deps.getQueueConfig = () =>
-    Promise.resolve({
-      QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
-    } as never);
-  _deps.getQueueTypes = () =>
-    Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as never);
-  _deps.getTasksModule = () =>
-    Promise.resolve({
-      generateTasksForAttack: mock(() => Promise.resolve({ count: 0 })),
-    } as never);
+// Module evaluation deferred behind the gate so the shared phase doesn't load
+// the real campaigns module unnecessarily.
+type CampaignsModule = typeof import('../../src/services/campaigns.js');
+let campaignsModule: CampaignsModule | null = null;
+async function loadCampaigns(): Promise<CampaignsModule> {
+  if (!campaignsModule) {
+    campaignsModule = await import('../../src/services/campaigns.js');
+    const { _deps } = campaignsModule;
+    _deps.getQueueConfig = () =>
+      Promise.resolve({
+        QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
+      } as never);
+    _deps.getQueueTypes = () =>
+      Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as never);
+    _deps.getTasksModule = () =>
+      Promise.resolve({
+        generateTasksForAttack: mock(() => Promise.resolve({ count: 0 })),
+      } as never);
+  }
+  return campaignsModule;
 }
 
 describeIfIsolated('Redis degradation: dashboard/control surface', () => {
   test('transitionCampaign returns QUEUE_UNAVAILABLE when queue manager is null', async () => {
+    const { transitionCampaign, _deps } = await loadCampaigns();
     _deps.getQueueContext = () => Promise.resolve({ getQueueManager: () => null } as never);
 
     const result = await transitionCampaign(1, 'running');
@@ -130,6 +109,7 @@ describeIfIsolated('Redis degradation: dashboard/control surface', () => {
   });
 
   test("transitionCampaign returns QUEUE_UNAVAILABLE when queue manager reports 'disconnected'", async () => {
+    const { transitionCampaign, _deps } = await loadCampaigns();
     _deps.getQueueContext = () =>
       Promise.resolve({
         getQueueManager: () => ({
@@ -147,29 +127,41 @@ describeIfIsolated('Redis degradation: dashboard/control surface', () => {
       })
     );
   });
+
+  test('transitionCampaign rolls back and returns QUEUE_UNAVAILABLE when enqueue fails on the async path', async () => {
+    // Health check passes, but enqueue returns false — covers the post-flight
+    // rollback branch at campaigns.ts:380-415 that the prior two tests skip.
+    const { transitionCampaign, _deps } = await loadCampaigns();
+    updatedRows.length = 0;
+    _deps.getQueueContext = () =>
+      Promise.resolve({
+        getQueueManager: () => ({
+          getHealth: () => Promise.resolve({ status: 'connected', queues: {} }),
+          enqueue: mock(() => Promise.resolve(false)),
+        }),
+      } as never);
+
+    const result = await transitionCampaign(1, 'running');
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        code: 'QUEUE_UNAVAILABLE',
+      })
+    );
+    // Rollback restored prior campaign state.
+    const rollback = updatedRows.find((row) => row['status'] === 'draft');
+    expect(rollback).toBeDefined();
+    expect(rollback?.['startedAt']).toBeNull();
+  });
 });
 
 describeIfIsolated('Redis degradation: agent surface (static guard)', () => {
-  /**
-   * Direct-import guard on the entrypoints that handle agent traffic. The
-   * surface stays queue-free *by construction* — handlers in
-   * `routes/agent/index.ts` and the service modules they call directly
-   * (`services/agents.ts`, `services/tasks.ts`, `services/crackers.ts`,
-   * `services/resources.ts` for `getAgentDownloadUrl`) must not import
-   * `queue/context` or `queue/manager` from the modules they execute on
-   * the agent path. Transitive imports through `services/resources.ts`'s
-   * hash-list upload path are fine — those code paths are dashboard-only,
-   * not invoked from an agent handler — so the guard checks direct
-   * imports rather than walking the full closure (the closure walk would
-   * false-positive on every shared service).
-   *
-   * Token-based regex over `from '<spec>'` avoids false positives on
-   * comments and string literals. The regression a future contributor
-   * has to introduce to break AC #3 is direct: adding a queue/context
-   * import to an agent route handler or to one of the agent-only service
-   * paths. This guard catches that.
-   */
-  const QUEUE_IMPORT_RE = /from\s*['"][^'"]*queue\/(?:context|manager)(?:\.js)?['"]/;
+  // Direct-import check, not closure walk — transitive imports through shared
+  // services are fine and would false-positive. The four guarded files are
+  // the only modules that execute on the agent request path.
+  // Pattern matches both static `from '...'` and dynamic `import('...')`.
+  const QUEUE_IMPORT_RE =
+    /(?:from\s*|import\s*\(\s*)['"][^'"]*queue\/(?:context|manager)(?:\.js)?['"]/;
 
   const AGENT_PATH_FILES = [
     'routes/agent/index.ts',

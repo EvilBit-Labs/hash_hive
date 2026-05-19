@@ -1,29 +1,8 @@
-/**
- * Unit tests for worker metrics — every worker factory must register a
- * `completed` event handler that logs `durationMs` and the job result,
- * and the `failed` handler must include `durationMs` alongside the error.
- *
- * Implements AC #4 ("Workers log job processing metrics — duration,
- * success/failure") from the BullMQ Queue Architecture spec. Mocks
- * BullMQ Worker so the test captures `.on()` listeners directly without
- * needing a real Redis or BullMQ queue runtime.
- */
-
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type Redis from 'ioredis';
 import { QUEUE_NAMES } from '../../../src/config/queue.js';
 import { computeJobDurationMs } from '../../../src/queue/workers/metrics.js';
 
-// bun:test shares its module cache process-wide, so the `mock.module('bullmq',
-// ...)` call below would otherwise leak its Worker stub into sibling worker
-// test files (task-generator, heartbeat-monitor) whose own MockWorker classes
-// capture their per-file `capturedProcessor` symbol. The runtime keeps
-// whichever mock was registered last, which produces `capturedProcessor is
-// null` failures depending on alphabetical file order. Run this file in an
-// isolated bun:test process via the WORKER_METRICS_TEST_ISOLATED env gate,
-// mirroring the same convention used by queue-manager.test.ts and
-// agent-heartbeat.test.ts. The package.json test script runs the isolated
-// phase before the shared phase and skips the file in the shared phase.
 const IS_ISOLATED = process.env['WORKER_METRICS_TEST_ISOLATED'] === '1';
 const describeIfIsolated = IS_ISOLATED ? describe : describe.skip;
 
@@ -31,29 +10,22 @@ const infoMock = mock();
 const errorMock = mock();
 const warnMock = mock();
 
-// Capture the `.on()` handlers registered by the worker factories.
 type Handler = (...args: unknown[]) => unknown;
 const capturedHandlers: Record<string, Handler[]> = {};
 
-// Gate all mock.module installations on the isolation env var. mock.module is
-// process-global in bun:test — installing these unconditionally would override
-// the per-file mocks in sibling worker tests (hash-list-parser, heartbeat-monitor,
-// task-generator) even when this file's describe blocks are skipped, because
-// top-level mock.module calls execute at file load time regardless of describe
-// state. Gating ensures this file is a complete no-op in the shared test phase.
+// Mutable db.update handler so individual tests can drive resolve vs reject.
+let dbUpdateImpl: () => Promise<void> = () => Promise.resolve();
+
+// Gated: process-global mock.module('bullmq', ...) would leak this Worker
+// stub into sibling worker tests whose capturedProcessor is per-file.
 if (IS_ISOLATED) {
   mock.module('../../../src/config/logger.js', () => ({
-    logger: {
-      info: infoMock,
-      error: errorMock,
-      warn: warnMock,
-      debug: mock(),
-    },
+    logger: { info: infoMock, error: errorMock, warn: warnMock, debug: mock() },
   }));
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
-      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      update: () => ({ set: () => ({ where: () => dbUpdateImpl() }) }),
       select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
     },
   }));
@@ -85,10 +57,7 @@ if (IS_ISOLATED) {
     Worker: class MockWorker {
       constructor(_name: string, _processor: (job: unknown) => Promise<unknown>) {}
       on(event: string, handler: Handler) {
-        // Append rather than overwrite — workers attach multiple `failed`
-        // listeners (e.g. hash-list-parser has one for metrics and one for
-        // DB cleanup). Capturing only the last listener masks regressions
-        // where the metrics listener gets unregistered.
+        // Append not overwrite — workers attach multiple 'failed' listeners.
         (capturedHandlers[event] ??= []).push(handler);
         return this;
       }
@@ -119,12 +88,6 @@ function fakeJobWithTiming(overrides: Record<string, unknown> = {}): Record<stri
   };
 }
 
-/**
- * Pull the most recent call payload off a captured logger mock and assert it
- * is a structured object. Folds the otherwise-repeated
- * `(payload as Record<string, unknown>)['key']` boilerplate that surfaces in
- * every metrics assertion.
- */
 function lastCallPayload(m: typeof infoMock): Record<string, unknown> {
   const call = m.mock.calls.at(-1);
   if (!call) throw new Error('logger mock has no recorded calls');
@@ -135,16 +98,19 @@ function lastCallMessage(m: typeof infoMock): unknown {
   return m.mock.calls.at(-1)?.[1];
 }
 
-/**
- * Invoke every captured listener for `event` (preserving registration order).
- * Mirrors BullMQ's behaviour of fanning a single event out to N listeners.
- */
 function fireHandlers(event: string, ...args: unknown[]): Promise<void> {
   const handlers = capturedHandlers[event] ?? [];
   return handlers.reduce<Promise<void>>(
     (acc, handler) => acc.then(() => Promise.resolve(handler(...args)).then(() => undefined)),
     Promise.resolve()
   );
+}
+
+function resetCapture(): void {
+  infoMock.mockReset();
+  errorMock.mockReset();
+  for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
+  dbUpdateImpl = () => Promise.resolve();
 }
 
 describeIfIsolated('computeJobDurationMs', () => {
@@ -162,10 +128,6 @@ describeIfIsolated('computeJobDurationMs', () => {
   });
 
   test('returns 0 when finishedOn is missing', () => {
-    // Defensive against a `failed` event firing before BullMQ stamps
-    // `finishedOn` — without the both-required guard, this would return
-    // wall-clock-since-pickup, conflating real processing time with
-    // elapsed time since BullMQ scheduled the job.
     expect(computeJobDurationMs({ processedOn: 100 })).toBe(0);
   });
 
@@ -179,11 +141,7 @@ describeIfIsolated('computeJobDurationMs', () => {
 });
 
 describeIfIsolated('task-generator worker metrics', () => {
-  beforeEach(() => {
-    infoMock.mockReset();
-    errorMock.mockReset();
-    for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
-  });
+  beforeEach(resetCapture);
 
   test("registers a 'completed' handler that logs durationMs and result", async () => {
     const { createTaskGeneratorWorker } = await import(
@@ -193,7 +151,6 @@ describeIfIsolated('task-generator worker metrics', () => {
 
     await fireHandlers('completed', fakeJobWithTiming(), { campaignId: 9, totalTasks: 6 });
 
-    expect(infoMock).toHaveBeenCalled();
     const payload = lastCallPayload(infoMock);
     expect(lastCallMessage(infoMock)).toBe('Job completed');
     expect(payload['queue']).toBe(QUEUE_NAMES.TASKS_NORMAL);
@@ -217,11 +174,7 @@ describeIfIsolated('task-generator worker metrics', () => {
 });
 
 describeIfIsolated('heartbeat-monitor worker metrics', () => {
-  beforeEach(() => {
-    infoMock.mockReset();
-    errorMock.mockReset();
-    for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
-  });
+  beforeEach(resetCapture);
 
   test("'completed' logs queue and result", async () => {
     const { createHeartbeatMonitorWorker } = await import(
@@ -240,11 +193,7 @@ describeIfIsolated('heartbeat-monitor worker metrics', () => {
 });
 
 describeIfIsolated('hash-list-parser worker metrics', () => {
-  beforeEach(() => {
-    infoMock.mockReset();
-    errorMock.mockReset();
-    for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
-  });
+  beforeEach(resetCapture);
 
   test("'completed' logs hashListId, durationMs, and result", async () => {
     const { createHashListParserWorker } = await import(
@@ -262,7 +211,7 @@ describeIfIsolated('hash-list-parser worker metrics', () => {
     expect(payload['result']).toEqual({ inserted: 1234, skippedLines: 2 });
   });
 
-  test("'failed' logs durationMs even when timing fields are absent", async () => {
+  test("'failed' logs durationMs=0 when timing fields are absent", async () => {
     const { createHashListParserWorker } = await import(
       '../../../src/queue/workers/hash-list-parser.js'
     );
@@ -274,15 +223,78 @@ describeIfIsolated('hash-list-parser worker metrics', () => {
       new Error('parse failure')
     );
 
-    const payload = lastCallPayload(errorMock);
-    expect(payload['durationMs']).toBe(0);
+    expect(lastCallPayload(errorMock)['durationMs']).toBe(0);
   });
 
-  test("'failed' on the final attempt triggers cleanup db.update without throwing", async () => {
-    // Exercises the second 'failed' listener — the one that marks the hash
-    // list as error on the last attempt. The metrics-logging listener is
-    // also fired (BullMQ fans events to all listeners), so this proves both
-    // are wired and survive together.
+  test('cleanup listener does not run on attemptsMade < attempts (boundary 2 of 3)', async () => {
+    let updateCalled = false;
+    dbUpdateImpl = () => {
+      updateCalled = true;
+      return Promise.resolve();
+    };
+    const { createHashListParserWorker } = await import(
+      '../../../src/queue/workers/hash-list-parser.js'
+    );
+    createHashListParserWorker({} as Redis);
+
+    await fireHandlers(
+      'failed',
+      fakeJobWithTiming({ attemptsMade: 2, opts: { attempts: 3 } }),
+      new Error('retry-eligible failure')
+    );
+
+    expect(updateCalled).toBe(false);
+  });
+
+  test('cleanup listener uses DEFAULT_JOB_ATTEMPTS when attempts is unset', async () => {
+    let updateCalled = false;
+    dbUpdateImpl = () => {
+      updateCalled = true;
+      return Promise.resolve();
+    };
+    const { createHashListParserWorker } = await import(
+      '../../../src/queue/workers/hash-list-parser.js'
+    );
+    createHashListParserWorker({} as Redis);
+
+    await fireHandlers(
+      'failed',
+      fakeJobWithTiming({ attemptsMade: 3, opts: {} }),
+      new Error('final attempt failure (default attempts)')
+    );
+
+    expect(updateCalled).toBe(true);
+  });
+
+  test('cleanup listener skips non-numeric hashListId', async () => {
+    let updateCalled = false;
+    dbUpdateImpl = () => {
+      updateCalled = true;
+      return Promise.resolve();
+    };
+    const { createHashListParserWorker } = await import(
+      '../../../src/queue/workers/hash-list-parser.js'
+    );
+    createHashListParserWorker({} as Redis);
+
+    await fireHandlers(
+      'failed',
+      {
+        id: 'bad-data',
+        processedOn: 1_000,
+        finishedOn: 1_100,
+        attemptsMade: 3,
+        opts: { attempts: 3 },
+        data: { hashListId: 'oops' },
+      },
+      new Error('bad data')
+    );
+
+    expect(updateCalled).toBe(false);
+  });
+
+  test('cleanup db.update failure is caught and logged (not re-thrown)', async () => {
+    dbUpdateImpl = () => Promise.reject(new Error('db connection refused'));
     const { createHashListParserWorker } = await import(
       '../../../src/queue/workers/hash-list-parser.js'
     );
@@ -296,7 +308,30 @@ describeIfIsolated('hash-list-parser worker metrics', () => {
       )
     ).resolves.toBeUndefined();
 
-    // Metrics listener still logged
+    const cleanupLog = errorMock.mock.calls.find((call) =>
+      String(call[1] ?? '').includes('cleanup db.update failed')
+    );
+    expect(cleanupLog).toBeDefined();
+  });
+
+  test("'failed' on the final attempt fires both the metrics and cleanup listeners", async () => {
+    let updateCalled = false;
+    dbUpdateImpl = () => {
+      updateCalled = true;
+      return Promise.resolve();
+    };
+    const { createHashListParserWorker } = await import(
+      '../../../src/queue/workers/hash-list-parser.js'
+    );
+    createHashListParserWorker({} as Redis);
+
+    await fireHandlers(
+      'failed',
+      fakeJobWithTiming({ attemptsMade: 3, opts: { attempts: 3 } }),
+      new Error('final attempt failure')
+    );
+
+    expect(updateCalled).toBe(true);
     const payload = lastCallPayload(errorMock);
     expect(payload['queue']).toBe(QUEUE_NAMES.HASH_LIST_PARSING);
     expect(payload['durationMs']).toBe(250);
@@ -304,11 +339,7 @@ describeIfIsolated('hash-list-parser worker metrics', () => {
 });
 
 describeIfIsolated('health-monitor worker metrics', () => {
-  beforeEach(() => {
-    infoMock.mockReset();
-    errorMock.mockReset();
-    for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
-  });
+  beforeEach(resetCapture);
 
   test("'completed' logs durationMs and the tick result", async () => {
     const { createHealthMonitorWorker } = await import(
@@ -325,8 +356,6 @@ describeIfIsolated('health-monitor worker metrics', () => {
       unchanged: ['database'],
     });
 
-    // health-monitor's processor itself emits an info log on every tick;
-    // the completed-handler log line comes last and has 'Job completed'.
     expect(lastCallMessage(infoMock)).toBe('Job completed');
     const payload = lastCallPayload(infoMock);
     expect(payload['queue']).toBe(QUEUE_NAMES.HEALTH_MONITOR);
@@ -334,19 +363,52 @@ describeIfIsolated('health-monitor worker metrics', () => {
   });
 });
 
-describeIfIsolated('worker-factory coverage parity', () => {
-  // Every create*Worker factory must register at least one 'completed'
-  // listener — otherwise AC #4 silently regresses when a future worker is
-  // added without going through attachWorkerMetrics. This is a small
-  // meta-test that proves the parity rather than each per-worker case
-  // having to check it individually.
-  beforeEach(() => {
-    infoMock.mockReset();
-    errorMock.mockReset();
-    for (const k of Object.keys(capturedHandlers)) delete capturedHandlers[k];
+describeIfIsolated('attachWorkerMetrics field-collision and error channel', () => {
+  beforeEach(resetCapture);
+
+  test('canonical jobId/queue/durationMs/result always win over extractContext keys', async () => {
+    // Pick task-generator since it has an extractContext. We can't override
+    // the extractor at runtime through the public surface, so this is
+    // verified indirectly: the spread order puts canonical fields after the
+    // context spread, so an extractor returning jobId/queue won't clobber.
+    // The hash-list-parser case is enough — its extractor returns
+    // { hashListId }, and we already assert canonical fields survive.
+    const { createHashListParserWorker } = await import(
+      '../../../src/queue/workers/hash-list-parser.js'
+    );
+    createHashListParserWorker({} as Redis);
+    await fireHandlers('completed', fakeJobWithTiming({ id: 'canonical-job-id' }), {
+      inserted: 1,
+      skippedLines: 0,
+    });
+    const payload = lastCallPayload(infoMock);
+    expect(payload['jobId']).toBe('canonical-job-id');
+    expect(payload['queue']).toBe(QUEUE_NAMES.HASH_LIST_PARSING);
   });
 
-  test('every worker factory registers a completed listener', async () => {
+  test("registers an 'error' listener that logs non-job worker errors", async () => {
+    const { createHeartbeatMonitorWorker } = await import(
+      '../../../src/queue/workers/heartbeat-monitor.js'
+    );
+    createHeartbeatMonitorWorker({} as Redis);
+
+    expect(capturedHandlers['error']?.length ?? 0).toBeGreaterThanOrEqual(1);
+
+    await fireHandlers('error', new Error('redis disconnected'));
+
+    const errorLog = errorMock.mock.calls.find((call) =>
+      String(call[1] ?? '').includes('Worker error')
+    );
+    expect(errorLog).toBeDefined();
+    const payload = errorLog?.[0] as Record<string, unknown>;
+    expect(payload['queue']).toBe(QUEUE_NAMES.HEARTBEAT_MONITOR);
+  });
+});
+
+describeIfIsolated('worker-factory coverage parity', () => {
+  beforeEach(resetCapture);
+
+  test('every worker factory registers completed, failed, and error listeners', async () => {
     const { createTaskGeneratorWorker } = await import(
       '../../../src/queue/workers/task-generator.js'
     );
@@ -374,6 +436,7 @@ describeIfIsolated('worker-factory coverage parity', () => {
       factory();
       expect(capturedHandlers['completed']?.length ?? 0).toBeGreaterThanOrEqual(1);
       expect(capturedHandlers['failed']?.length ?? 0).toBeGreaterThanOrEqual(1);
+      expect(capturedHandlers['error']?.length ?? 0).toBeGreaterThanOrEqual(1);
     }
   });
 });

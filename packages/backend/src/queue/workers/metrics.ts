@@ -3,18 +3,7 @@ import { logger } from '../../config/logger.js';
 
 type JobTiming = Pick<Job, 'processedOn' | 'finishedOn'>;
 
-/**
- * Compute job processing duration in milliseconds for worker metrics logging.
- *
- * BullMQ sets `processedOn` when a worker picks up a job and `finishedOn`
- * when it resolves or rejects. Both fields must be present for a meaningful
- * duration; if either is missing (e.g. when a `failed` handler fires before
- * `processedOn` is set, or before BullMQ has stamped `finishedOn`), the
- * function returns 0. Returning 0 rather than wall-clock-since-pickup
- * prevents `failed`-without-`finishedOn` from logging an inflated duration
- * that conflates real processing time with elapsed time since pickup, and
- * keeps the payload numeric and JSON-clean.
- */
+// Returns 0 (not wall-clock-since-pickup) if 'failed' fires before BullMQ stamps both timing fields.
 export function computeJobDurationMs(job: JobTiming | undefined | null): number {
   if (!job) return 0;
   if (typeof job.processedOn !== 'number' || typeof job.finishedOn !== 'number') return 0;
@@ -22,34 +11,35 @@ export function computeJobDurationMs(job: JobTiming | undefined | null): number 
   return Number.isFinite(ms) && ms >= 0 ? ms : 0;
 }
 
-/**
- * Attach `completed` and `failed` event listeners to a BullMQ worker that
- * emit structured "Job completed" / "Job failed" log lines carrying
- * `jobId`, `queue`, `durationMs`, and (on success) the job result. The
- * `extractContext` callback lets each worker contribute its own typed
- * payload fields (e.g. `hashListId`, `campaignId`) without re-creating the
- * surrounding log shape four times.
- *
- * Implements AC #4 ("workers log job processing metrics — duration,
- * success/failure") from the BullMQ Queue Architecture spec.
- */
-export function attachWorkerMetrics<DataT, ResultT, ContextT extends Record<string, unknown>>(
+export function attachWorkerMetrics<DataT, ResultT>(
   worker: Worker<DataT, ResultT>,
   options: {
     queueName: string;
     failureMessage: string;
-    extractContext?: (job: Job<DataT, ResultT> | undefined) => ContextT;
+    extractContext?: (job: Job<DataT, ResultT> | undefined) => Record<string, unknown>;
   }
 ): void {
-  const buildContext = (job: Job<DataT, ResultT> | undefined): ContextT | Record<string, never> =>
-    options.extractContext?.(job) ?? {};
+  // BullMQ surfaces listener rejections as uncaughtException — isolate the caller's throws.
+  function safeContext(job: Job<DataT, ResultT> | undefined): Record<string, unknown> {
+    if (!options.extractContext) return {};
+    try {
+      return options.extractContext(job);
+    } catch (err) {
+      logger.error(
+        { err, queue: options.queueName, jobId: job?.id },
+        'metrics extractContext threw — falling back to empty context'
+      );
+      return {};
+    }
+  }
 
   worker.on('completed', (job, result) => {
+    // Context spread first so canonical fields win on key collision.
     logger.info(
       {
+        ...safeContext(job),
         jobId: job.id,
         queue: options.queueName,
-        ...buildContext(job),
         durationMs: computeJobDurationMs(job),
         result,
       },
@@ -60,13 +50,18 @@ export function attachWorkerMetrics<DataT, ResultT, ContextT extends Record<stri
   worker.on('failed', (job, err) => {
     logger.error(
       {
+        ...safeContext(job),
         jobId: job?.id,
         queue: options.queueName,
-        ...buildContext(job),
         durationMs: computeJobDurationMs(job),
         err,
       },
       options.failureMessage
     );
+  });
+
+  // Non-job errors (Redis flaps, stream parse errors) arrive here, not 'failed'; no listener = uncaughtException.
+  worker.on('error', (err) => {
+    logger.error({ err, queue: options.queueName }, 'Worker error (non-job)');
   });
 }

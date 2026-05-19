@@ -150,11 +150,10 @@ if (!IS_ISOLATED) {
     failed: 1,
   }));
 
-  // Default success result; individual tests reassign via mockTransitionCampaign.mockResolvedValueOnce
-  // to drive specific branches (QUEUE_UNAVAILABLE, INVALID_TRANSITION, etc).
+  type TransitionErrorCode = 'QUEUE_UNAVAILABLE' | 'INVALID_TRANSITION' | 'NOT_FOUND';
   type TransitionResult =
     | { campaign: { id: number; status: string } | null }
-    | { error: string; code?: string };
+    | { error: string; code?: TransitionErrorCode };
   const mockTransitionCampaign = mock<(id: number, target: string) => Promise<TransitionResult>>(
     async () => ({ campaign: null })
   );
@@ -435,11 +434,6 @@ if (!IS_ISOLATED) {
   });
 
   describe('Dashboard campaign lifecycle: queue-availability mapping', () => {
-    // Implements AC #3 of the BullMQ Queue Architecture spec at the route
-    // boundary: when transitionCampaign returns QUEUE_UNAVAILABLE the
-    // dashboard surface must translate it into a 503 SERVICE_UNAVAILABLE
-    // envelope rather than the generic 400 INVALID_TRANSITION.
-
     it('maps QUEUE_UNAVAILABLE → 503 SERVICE_UNAVAILABLE', async () => {
       mockTransitionCampaign.mockResolvedValueOnce({
         error: 'Queue unavailable — cannot start campaign',

@@ -2,7 +2,7 @@ import { type ConnectionOptions, Queue } from 'bullmq';
 import type Redis from 'ioredis';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
-import { QUEUE_NAMES, type QueueName } from '../config/queue.js';
+import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES, type QueueName } from '../config/queue.js';
 import { createRedisClient, getRedisStatus } from '../config/redis.js';
 import type { QueueJobMap } from './types.js';
 
@@ -96,7 +96,7 @@ export class QueueManager {
     try {
       await queue.add(queueName, data, {
         ...(opts?.priority ? { priority: opts.priority } : {}),
-        attempts: 3,
+        attempts: DEFAULT_JOB_ATTEMPTS,
         backoff: { type: 'exponential', delay: 5_000 },
       });
       return true;

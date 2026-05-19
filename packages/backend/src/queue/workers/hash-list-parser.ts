@@ -3,7 +3,7 @@ import { type ConnectionOptions, Worker } from 'bullmq';
 import { and, count, eq, isNotNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { logger } from '../../config/logger.js';
-import { QUEUE_NAMES } from '../../config/queue.js';
+import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js';
 import { downloadFile } from '../../config/storage.js';
 import { db } from '../../db/index.js';
 import type { HashListParseJob } from '../types.js';
@@ -165,13 +165,10 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
     extractContext: (job) => ({ hashListId: job?.data?.hashListId }),
   });
 
-  // Mark hash list as error on final failure. Separate listener from the
-  // metrics-logging one so a DB outage during failure-side cleanup cannot
-  // suppress the log line, and so an unhandled rejection inside the cleanup
-  // is contained (BullMQ surfaces listener rejections as uncaughtException
-  // under strict process configs, which would take down the worker).
+  // Separate listener: a DB outage here must not suppress the metrics log,
+  // and BullMQ surfaces listener rejections as uncaughtException.
   worker.on('failed', async (job, _err) => {
-    if (!job || job.attemptsMade < (job.opts.attempts ?? 3)) return;
+    if (!job || job.attemptsMade < (job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS)) return;
     const hashListId = job.data?.hashListId;
     if (typeof hashListId !== 'number') return;
     try {
@@ -180,9 +177,10 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         .set({ status: 'error', updatedAt: new Date() })
         .where(eq(hashLists.id, hashListId));
     } catch (cleanupErr) {
+      // Hash list row likely stuck in non-error status; operator must reset manually.
       logger.error(
         { jobId: job.id, hashListId, err: cleanupErr },
-        'Hash list parse failed — cleanup db.update also failed'
+        'Hash list parse failed AND cleanup db.update failed — manual intervention required'
       );
     }
   });

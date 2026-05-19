@@ -13,6 +13,10 @@ export const QUEUE_NAMES = {
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
+// Shared so the queue manager's enqueue default and the workers' final-attempt
+// branches stay coupled.
+export const DEFAULT_JOB_ATTEMPTS = 3;
+
 /** The three priority-based task queues for task generation routing. */
 export const TASK_PRIORITY_QUEUES = [
   QUEUE_NAMES.TASKS_HIGH,
