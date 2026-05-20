@@ -1,5 +1,6 @@
 import { campaignSortFieldSchema, campaignSortOrderSchema } from '@hashhive/shared';
-import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
   type CampaignActionId,
@@ -23,6 +24,7 @@ import {
   type UseCampaignsOptions,
   useCampaigns,
 } from '../hooks/use-dashboard';
+import { type AppEvent, useEvents } from '../hooks/use-events';
 import { readCampaignPercentage } from '../lib/campaign-progress';
 import { Permission } from '../lib/permissions';
 import { useUiStore } from '../stores/ui';
@@ -108,6 +110,20 @@ export function CampaignsPage() {
   }, [status, priorityParam, sortParam, orderParam]);
 
   const { data, isLoading, isError, error } = useCampaigns(queryOptions);
+
+  // Real-time updates: refresh the campaigns list when the backend emits a
+  // campaign lifecycle change or a task-progress event for a campaign in
+  // this project. Skip task_update events without a campaignId (system
+  // tasks, not campaign-bearing).
+  const queryClient = useQueryClient();
+  const handleRealtimeEvent = useCallback(
+    (event: AppEvent) => {
+      if (event.type === 'task_update' && event.data['campaignId'] == null) return;
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+    },
+    [queryClient]
+  );
+  useEvents({ types: ['campaign_status', 'task_update'], onEvent: handleRealtimeEvent });
 
   const [confirm, setConfirm] = useState<{ action: ConfirmAction; campaign: CampaignRow | null }>({
     action: null,

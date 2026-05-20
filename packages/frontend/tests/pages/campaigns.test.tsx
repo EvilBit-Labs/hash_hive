@@ -1,16 +1,29 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { CampaignsPage } from '../../src/pages/campaigns';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
 import { mockCampaignsResponse } from '../fixtures/api-responses';
+import { resetMockSession, setMockSession, setupAuthClientMock } from '../mocks/auth-client';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
+import { installMockWebSocket } from '../mocks/websocket';
 import { cleanupAll, fireEvent, renderWithProviders, screen, waitFor } from '../test-utils';
 
+// authClient is mocked at the module level so useEvents (transitively
+// imported by CampaignsPage) sees the test session and opens a WS.
+setupAuthClientMock();
+const { CampaignsPage } = await import('../../src/pages/campaigns');
+
 let fetchMock: ReturnType<typeof mockFetch>;
+let wsMock: ReturnType<typeof installMockWebSocket>;
+
+beforeEach(() => {
+  wsMock = installMockWebSocket();
+});
 
 afterEach(() => {
   cleanupAll();
+  resetMockSession();
   if (fetchMock) restoreFetch(fetchMock);
+  if (wsMock) wsMock.restore();
 });
 
 function selectProject(projectId = 1) {
@@ -336,5 +349,122 @@ describe('CampaignsPage', () => {
     const lowRow = screen.getByText('Low Pri').closest('tr');
     expect(highRow?.textContent).toContain('high');
     expect(lowRow?.textContent).toContain('low');
+  });
+
+  describe('real-time updates', () => {
+    function makeListPayload(initial: { id: number; name: string; status: string }[]) {
+      return mockCampaignsResponse({
+        campaigns: initial.map((c) => ({
+          ...c,
+          priority: 5,
+        })),
+      });
+    }
+
+    it('refetches the campaigns list when a campaign_status event arrives', async () => {
+      setMockSession();
+      let fetchCount = 0;
+      fetchMock = mockFetch();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'GET' && url.includes('/dashboard/campaigns')) {
+          fetchCount++;
+          const body =
+            fetchCount === 1
+              ? makeListPayload([{ id: 1, name: 'NTLM', status: 'draft' }])
+              : makeListPayload([{ id: 1, name: 'NTLM', status: 'running' }]);
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }) as typeof fetch;
+
+      try {
+        setAuthUser();
+        selectProject();
+        renderWithProviders(<CampaignsPage />);
+
+        await waitFor(() => {
+          expect(screen.getByText('draft')).toBeDefined();
+        });
+
+        const ws = wsMock.instances[0];
+        expect(ws).toBeDefined();
+        if (!ws) return;
+        ws.simulateOpen();
+        ws.simulateMessage({
+          type: 'campaign_status',
+          projectId: 1,
+          data: { campaignId: 1, status: 'running' },
+          timestamp: new Date().toISOString(),
+        });
+
+        await waitFor(() => {
+          expect(screen.getByText('running')).toBeDefined();
+        });
+        expect(fetchCount).toBeGreaterThanOrEqual(2);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('ignores task_update events whose data.campaignId is null', async () => {
+      setMockSession();
+      let fetchCount = 0;
+      fetchMock = mockFetch();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'GET' && url.includes('/dashboard/campaigns')) {
+          fetchCount++;
+          return new Response(
+            JSON.stringify(makeListPayload([{ id: 1, name: 'X', status: 'draft' }])),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }) as typeof fetch;
+
+      try {
+        setAuthUser();
+        selectProject();
+        renderWithProviders(<CampaignsPage />);
+        await waitFor(() => {
+          expect(screen.getByText('X')).toBeDefined();
+        });
+        const initialCount = fetchCount;
+
+        const ws = wsMock.instances[0];
+        if (!ws) return;
+        ws.simulateOpen();
+        // A task_update without a campaignId (system task, not campaign-bearing)
+        // must NOT trigger a refetch.
+        ws.simulateMessage({
+          type: 'task_update',
+          projectId: 1,
+          data: { taskId: 99, status: 'completed' },
+          timestamp: new Date().toISOString(),
+        });
+
+        // Give React Query a tick to process if it were going to.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(fetchCount).toBe(initialCount);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 });
