@@ -13,6 +13,26 @@ export type EventType =
   | 'system_health';
 
 /**
+ * Membership set for runtime validation of WS frame `type` fields.
+ * Without this, an arbitrary string from a misbehaving backend would
+ * be cast to `EventType` and forwarded to consumers as if it were a
+ * recognized event.
+ */
+const KNOWN_EVENT_TYPES: ReadonlySet<EventType> = new Set([
+  'agent_status',
+  'agent_error',
+  'campaign_status',
+  'task_update',
+  'crack_result',
+  'resource_update',
+  'system_health',
+]);
+
+function isKnownEventType(value: string): value is EventType {
+  return KNOWN_EVENT_TYPES.has(value as EventType);
+}
+
+/**
  * Throttle the protocol-drift warnings emitted when a WS event arrives
  * without its expected scoping id (`agentId` or `campaignId`). A
  * misbehaving backend that emits a thousand malformed events in a row
@@ -174,6 +194,15 @@ export function useEvents(options: UseEventsOptions = {}) {
           }
 
           const eventType = data['type'] as string;
+          if (!isKnownEventType(eventType)) {
+            // Unknown event type from the backend — drop loudly rather
+            // than forwarding an unrecognized value to consumers.
+            // biome-ignore lint/suspicious/noConsole: protocol drift signal
+            console.warn('[useEvents] dropped WS frame with unknown event type', {
+              eventType: eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64),
+            });
+            return;
+          }
           const projectKeys = invalidationKeys[eventType];
           if (projectKeys) {
             for (const key of projectKeys) {
