@@ -167,8 +167,15 @@ export function CampaignCreatePage() {
 
   const clearEdit = useCallback(() => {
     setEditingIndex(null);
-    attackForm.reset({ mode: 0 });
-  }, [attackForm]);
+    // Re-seed the prefilled hash type for the next fresh add (same reason
+    // as in handleAttackSubmit's add branch — the prefill effect only
+    // re-fires when its deps change, so the reset must carry the prefill
+    // explicitly).
+    attackForm.reset({
+      mode: 0,
+      ...(detectedHashTypeId != null ? { hashTypeId: detectedHashTypeId } : {}),
+    });
+  }, [attackForm, detectedHashTypeId]);
 
   const seedFormFromAttack = useCallback(
     (idx: number) => {
@@ -287,7 +294,15 @@ export function CampaignCreatePage() {
       clearEdit();
     } else {
       wizard.addAttack({ ...payload, dependencies: [] });
-      attackForm.reset({ mode: 0 });
+      // Re-seed the prefilled hash type on the next-attack form. The prefill
+      // effect above only fires when `detectedHashTypeId` itself changes, so
+      // a plain `reset({ mode: 0 })` would leave the second and later fresh
+      // adds with no hash type. Inlining the prefill keeps subsequent attacks
+      // in sync with the basic-info hash list.
+      attackForm.reset({
+        mode: 0,
+        ...(detectedHashTypeId != null ? { hashTypeId: detectedHashTypeId } : {}),
+      });
     }
   };
 

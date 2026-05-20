@@ -218,6 +218,30 @@ describe('CampaignCreatePage Step 2 (attack form)', () => {
     });
   });
 
+  it('re-applies the hash-type prefill on the second fresh add', async () => {
+    // After the first Add Attack, attackForm.reset() clears the form.
+    // Without re-seeding the prefill, the second attack silently lands
+    // with no hashTypeId. Verify both attacks carry the prefill.
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Add Attack' })).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Attack' }));
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Attack' }));
+    await waitFor(() => {
+      expect(useCampaignWizard.getState().attacks).toHaveLength(2);
+    });
+
+    expect(useCampaignWizard.getState().attacks[0]?.hashTypeId).toBe(HASH_TYPE_NTLM.id);
+    expect(useCampaignWizard.getState().attacks[1]?.hashTypeId).toBe(HASH_TYPE_NTLM.id);
+  });
+
   it('prefills Hash Type from the selected hash list when adding a new attack', async () => {
     renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
 
