@@ -1,14 +1,23 @@
 import type { UseFormReturn } from 'react-hook-form';
+import { z } from 'zod';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Select } from '../../ui/select';
 
-export interface BasicInfoForm {
-  name: string;
-  description?: string;
-  priority: number;
-  hashListId: number;
-}
+/**
+ * Validation schema for Step 0. The form type is derived from this via
+ * `z.infer` so adding a field, tightening a bound, or marking something
+ * optional updates the type and the runtime check together — no manual
+ * interface to drift out of sync.
+ */
+export const basicInfoSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(255),
+  description: z.string().max(2000).optional(),
+  priority: z.coerce.number().int().min(1).max(10),
+  hashListId: z.coerce.number().int().positive('Hash list is required'),
+});
+
+export type BasicInfoForm = z.infer<typeof basicInfoSchema>;
 
 interface HashListOption {
   id: number;
@@ -88,7 +97,13 @@ export function BasicInfoStep({
                 </option>
               ))}
             </Select>
-            <Button variant="secondary" size="sm" className="shrink-0" onClick={onUploadHashList}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              onClick={onUploadHashList}
+            >
               Upload
             </Button>
           </div>

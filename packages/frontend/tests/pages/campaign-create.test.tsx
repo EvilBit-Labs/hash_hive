@@ -6,6 +6,7 @@ import { useUiStore } from '../../src/stores/ui';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
 import {
   act,
+  cleanup,
   cleanupAll,
   createTestQueryClient,
   fireEvent,
@@ -134,7 +135,12 @@ beforeEach(() => {
   captured.onEdgesDelete = undefined;
 });
 
+// Per the repo's frontend test pattern: explicit `afterEach(cleanup)` is
+// required to guarantee happy-dom DOM teardown. `cleanupAll()` resets the
+// Zustand stores and clears Testing Library, but the explicit `cleanup()`
+// satisfies the pattern callers can rely on.
 afterEach(() => {
+  cleanup();
   cleanupAll();
   if (fetchMock) restoreFetch(fetchMock);
 });

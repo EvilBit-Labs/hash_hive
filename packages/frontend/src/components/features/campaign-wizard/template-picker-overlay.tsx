@@ -31,9 +31,16 @@ export function TemplatePickerOverlay({
         className="absolute inset-0 bg-crust/80"
         onClick={onClose}
       />
-      <div className="relative z-10 w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-4 shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="template-picker-title"
+        className="relative z-10 w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-4 shadow-2xl"
+      >
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-medium">Select a Template</h3>
+          <h3 id="template-picker-title" className="text-sm font-medium">
+            Select a Template
+          </h3>
           <button
             type="button"
             className="text-xs text-muted-foreground hover:text-foreground"

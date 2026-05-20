@@ -4,12 +4,12 @@ import { type Resolver, useForm } from 'react-hook-form';
 import { Navigate, useNavigate } from 'react-router';
 import type { Edge, Node as FlowNode, OnConnect } from 'reactflow';
 import ReactFlow, { Background, useEdgesState, useNodesState } from 'reactflow';
-import { z } from 'zod';
 import {
   AttackDagEditor,
   AttackList,
   type BasicInfoForm,
   BasicInfoStep,
+  basicInfoSchema,
   TemplatePickerOverlay,
 } from '../components/features/campaign-wizard';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
@@ -45,13 +45,6 @@ import { useCampaignWizard } from '../stores/campaign-wizard';
 import { useUiStore } from '../stores/ui';
 
 const STEPS = ['Basic Info', 'Attacks', 'Review'];
-
-const basicInfoSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(255),
-  description: z.string().max(2000).optional(),
-  priority: z.coerce.number().int().min(1).max(10),
-  hashListId: z.coerce.number().int().positive('Hash list is required'),
-});
 
 type UploadModalType = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
 
@@ -268,13 +261,22 @@ export function CampaignCreatePage() {
   });
 
   const handleAttackSubmit = (data: AttackFormOutput) => {
+    // Use explicit null/undefined checks instead of truthy: `hashTypeId = 0`
+    // is conceptually valid (hashcat MD5 is mode 0), and an empty-object
+    // `advancedConfiguration` ({}) is truthy in JS so the previous check
+    // worked, but `!== undefined` matches the resolver's transform contract
+    // (returns undefined when the textarea is empty, the parsed object
+    // otherwise — including {}). Resource IDs stay truthy-checked because
+    // the wire schema enforces positive integers.
     const payload = {
       mode: data.mode,
-      ...(data.hashTypeId ? { hashTypeId: data.hashTypeId } : {}),
+      ...(data.hashTypeId != null ? { hashTypeId: data.hashTypeId } : {}),
       ...(data.wordlistId ? { wordlistId: data.wordlistId } : {}),
       ...(data.rulelistId ? { rulelistId: data.rulelistId } : {}),
       ...(data.masklistId ? { masklistId: data.masklistId } : {}),
-      ...(data.advancedConfiguration ? { advancedConfiguration: data.advancedConfiguration } : {}),
+      ...(data.advancedConfiguration !== undefined
+        ? { advancedConfiguration: data.advancedConfiguration }
+        : {}),
     };
     if (editingIndex != null) {
       const existing = wizard.attacks[editingIndex];
@@ -344,7 +346,7 @@ export function CampaignCreatePage() {
         if (attack.wordlistId != null) body['wordlistId'] = attack.wordlistId;
         if (attack.rulelistId != null) body['rulelistId'] = attack.rulelistId;
         if (attack.masklistId != null) body['masklistId'] = attack.masklistId;
-        if (attack.advancedConfiguration) {
+        if (attack.advancedConfiguration !== undefined) {
           body['advancedConfiguration'] = attack.advancedConfiguration;
         }
         if (remappedDeps.length > 0) body['dependencies'] = remappedDeps;
@@ -538,6 +540,7 @@ export function CampaignCreatePage() {
                           ))}
                         </Select>
                         <Button
+                          type="button"
                           variant="secondary"
                           size="sm"
                           className="shrink-0"
