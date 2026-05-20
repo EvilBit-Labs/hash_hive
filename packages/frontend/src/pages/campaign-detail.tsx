@@ -1,5 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useCallback, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CampaignAgentsSection } from '../components/features/campaign-agents-section';
 import { CampaignTaskStats } from '../components/features/campaign-task-stats';
@@ -16,7 +15,6 @@ import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/
 import { TextLink } from '../components/ui/text-link';
 import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns';
 import { useCampaignDetail } from '../hooks/use-dashboard';
-import { type AppEvent, useEvents } from '../hooks/use-events';
 import { computeEta } from '../lib/campaign-eta';
 import { readCampaignPercentage } from '../lib/campaign-progress';
 import { Permission } from '../lib/permissions';
@@ -40,21 +38,11 @@ export function CampaignDetailPage() {
   const lifecycle = useCampaignLifecycle();
   const del = useCampaignDelete();
 
-  // Real-time updates: refresh this campaign's detail (and the list cache
-  // so back-navigation is fresh) when the backend emits an event scoped to
-  // this campaign. Events for other campaigns are ignored — they will
-  // refresh the cross-campaign list cache via the list page's subscription.
-  const queryClient = useQueryClient();
-  const handleRealtimeEvent = useCallback(
-    (event: AppEvent) => {
-      const eventCampaignId = event.data['campaignId'];
-      if (typeof eventCampaignId !== 'number' || eventCampaignId !== campaignId) return;
-      queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
-      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
-    },
-    [queryClient, campaignId]
-  );
-  useEvents({ types: ['campaign_status', 'task_update'], onEvent: handleRealtimeEvent });
+  // Real-time updates: the shared useEvents hook mounted by EventsProvider
+  // (in AppLayout) already invalidates ['campaign', campaignId] for every
+  // campaign_status and task_update event whose payload carries a matching
+  // campaignId, so this detail page automatically refetches without a
+  // local subscription.
 
   const [confirm, setConfirm] = useState<ConfirmAction>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);

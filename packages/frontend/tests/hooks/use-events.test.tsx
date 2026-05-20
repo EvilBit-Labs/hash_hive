@@ -318,6 +318,11 @@ describe('useEvents', () => {
       const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'tasks' && k[1] === 1)).toBe(true);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
+      // task_update also refreshes the campaigns list — each task affects
+      // its campaign's progress percentage and task counts, which appear
+      // in the list table. Without this, the list's progress column would
+      // only refresh on campaign lifecycle transitions.
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'campaigns' && k[1] === 1)).toBe(true);
       // Per-agent invalidation uses [prefix, agentId] now.
       expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k[1] === 42)).toBe(true);
     });

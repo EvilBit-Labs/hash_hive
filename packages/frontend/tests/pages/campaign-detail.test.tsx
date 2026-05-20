@@ -1,29 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
+import { CampaignDetailPage } from '../../src/pages/campaign-detail';
 import { useAuthStore } from '../../src/stores/auth';
 import { useUiStore } from '../../src/stores/ui';
 import { mockCampaignDetailResponse } from '../fixtures/api-responses';
-import { resetMockSession, setMockSession, setupAuthClientMock } from '../mocks/auth-client';
 import { mockFetch, restoreFetch } from '../mocks/fetch';
-import { installMockWebSocket } from '../mocks/websocket';
 import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor } from '../test-utils';
 
-// authClient is mocked at the module level so useEvents (transitively
-// imported by CampaignDetailPage) sees the test session and opens a WS.
-setupAuthClientMock();
-const { CampaignDetailPage } = await import('../../src/pages/campaign-detail');
-
 let fetchMock: ReturnType<typeof mockFetch>;
-let wsMock: ReturnType<typeof installMockWebSocket>;
-
-beforeEach(() => {
-  wsMock = installMockWebSocket();
-});
 
 afterEach(() => {
   cleanupAll();
-  resetMockSession();
   if (fetchMock) restoreFetch(fetchMock);
-  if (wsMock) wsMock.restore();
 });
 
 function selectProject(projectId = 1) {
@@ -424,118 +411,5 @@ describe('CampaignDetailPage', () => {
     expect(screen.getByText('running')).toBeDefined();
     expect(screen.getByText('#5')).toBeDefined();
     expect(screen.getByText('2, 3')).toBeDefined();
-  });
-
-  describe('real-time updates', () => {
-    it('refetches the detail query when an event arrives for this campaign', async () => {
-      setMockSession();
-      let detailFetchCount = 0;
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        const method = (init?.method ?? 'GET').toUpperCase();
-        if (method === 'GET' && url.match(/\/dashboard\/campaigns\/42(?!\/)/)) {
-          detailFetchCount++;
-          const status = detailFetchCount === 1 ? 'draft' : 'running';
-          return new Response(
-            JSON.stringify(
-              mockCampaignDetailResponse({
-                campaign: { id: 42, name: 'Watched', status, priority: 5 },
-              })
-            ),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        return new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }) as typeof fetch;
-
-      try {
-        setAuthUser();
-        selectProject();
-        renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
-          initialRoute: '/campaigns/42',
-        });
-
-        await waitFor(() => {
-          expect(screen.getByText('Watched')).toBeDefined();
-        });
-        expect(detailFetchCount).toBe(1);
-
-        const ws = wsMock.instances[0];
-        if (!ws) return;
-        ws.simulateOpen();
-        ws.simulateMessage({
-          type: 'campaign_status',
-          projectId: 1,
-          data: { campaignId: 42, status: 'running' },
-          timestamp: new Date().toISOString(),
-        });
-
-        await waitFor(() => {
-          expect(detailFetchCount).toBeGreaterThanOrEqual(2);
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
-
-    it('ignores events for a different campaign', async () => {
-      setMockSession();
-      let detailFetchCount = 0;
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        const method = (init?.method ?? 'GET').toUpperCase();
-        if (method === 'GET' && url.match(/\/dashboard\/campaigns\/42(?!\/)/)) {
-          detailFetchCount++;
-          return new Response(
-            JSON.stringify(
-              mockCampaignDetailResponse({
-                campaign: { id: 42, name: 'Watched', status: 'draft', priority: 5 },
-              })
-            ),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        return new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }) as typeof fetch;
-
-      try {
-        setAuthUser();
-        selectProject();
-        renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
-          initialRoute: '/campaigns/42',
-        });
-
-        await waitFor(() => {
-          expect(screen.getByText('Watched')).toBeDefined();
-        });
-        const initialCount = detailFetchCount;
-
-        const ws = wsMock.instances[0];
-        if (!ws) return;
-        ws.simulateOpen();
-        // Event for a DIFFERENT campaign — must not trigger refetch of /42.
-        ws.simulateMessage({
-          type: 'task_update',
-          projectId: 1,
-          data: { campaignId: 99, taskId: 7, status: 'completed' },
-          timestamp: new Date().toISOString(),
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        expect(detailFetchCount).toBe(initialCount);
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
   });
 });

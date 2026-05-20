@@ -92,7 +92,12 @@ export function useEvents(options: UseEventsOptions = {}) {
       const invalidationKeys: Record<string, string[]> = {
         agent_status: ['agents', 'dashboard-stats'],
         campaign_status: ['campaigns', 'dashboard-stats'],
-        task_update: ['tasks', 'dashboard-stats'],
+        // task_update refreshes the campaigns list too because each task
+        // affects its campaign's progress percentage and task counts —
+        // both of which appear in the list table. Without this, the
+        // list's progress column would only refresh on campaign
+        // lifecycle transitions, missing per-task progress.
+        task_update: ['tasks', 'campaigns', 'dashboard-stats'],
         crack_result: [
           'dashboard-stats',
           'results',
