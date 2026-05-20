@@ -1,13 +1,19 @@
+import type { CreateAttackRequest } from '@hashhive/shared';
 import { create } from 'zustand';
 
-export interface AttackConfig {
-  mode: number;
-  hashTypeId?: number;
-  wordlistId?: number;
-  rulelistId?: number;
-  masklistId?: number;
+/**
+ * Wizard-local attack shape. Derived from the canonical wire schema in
+ * `@hashhive/shared` so any backend-accepted field is automatically
+ * available to the wizard without manual interface drift.
+ *
+ * `dependencies` is overridden to a required `number[]` because the
+ * wizard always carries a list (empty when no deps), and the indices it
+ * stores are wizard-local positional indices — not real backend attack
+ * IDs. The submit path remaps them to real IDs before POSTing.
+ */
+export type AttackConfig = Omit<CreateAttackRequest, 'dependencies'> & {
   dependencies: number[];
-}
+};
 
 interface WizardState {
   step: number;

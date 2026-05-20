@@ -1,6 +1,7 @@
 import { useUiStore } from '../stores/ui';
 
 const API_BASE = '/api/v1';
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 class ApiError extends Error {
   constructor(
@@ -19,15 +20,33 @@ function getProjectHeaders(): Record<string, string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getProjectHeaders(),
-      ...init?.headers,
-    },
-  });
+  // Compose the caller's signal with a 30s timeout so no request can hang
+  // forever on a slow backend. The sequential attack-creation loop in the
+  // campaign wizard would otherwise hold N connections open indefinitely.
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getProjectHeaders(),
+        ...init?.headers,
+      },
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new ApiError(408, 'REQUEST_TIMEOUT', 'Request timed out');
+    }
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError(0, 'REQUEST_ABORTED', 'Request aborted');
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     if (res.status === 401) {

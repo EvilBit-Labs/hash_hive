@@ -131,6 +131,7 @@ export const createAttackRequestSchema = insertAttackSchema.pick({
   wordlistId: true,
   rulelistId: true,
   masklistId: true,
+  advancedConfiguration: true,
   dependencies: true,
 });
 

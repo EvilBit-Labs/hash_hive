@@ -1,0 +1,68 @@
+import { attackModeLabel } from '../../../lib/attack-modes';
+import { cn } from '../../../lib/utils';
+import type { AttackConfig } from '../../../stores/campaign-wizard';
+
+interface AttackListProps {
+  attacks: readonly AttackConfig[];
+  editingIndex: number | null;
+  onEdit: (idx: number) => void;
+  onRemove: (idx: number) => void;
+}
+
+/**
+ * Read-only summary of attacks that have been added to the wizard so far,
+ * with Edit and Remove affordances per row. Wizard indices have no stable
+ * ID before backend creation, so `key={i}` is the only choice.
+ */
+export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackListProps) {
+  if (attacks.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">Configured Attacks</h3>
+      {attacks.map((attack, i) => (
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: attacks have no stable ID before creation
+          key={i}
+          className="flex items-center justify-between rounded-md border border-surface-0 bg-surface-0/30 p-3"
+        >
+          <div className="text-xs">
+            <span className="font-mono font-medium">
+              #{i} {attackModeLabel(attack.mode)}
+            </span>
+            {attack.wordlistId && (
+              <span className="ml-2 text-muted-foreground">Wordlist #{attack.wordlistId}</span>
+            )}
+            {attack.rulelistId && (
+              <span className="ml-2 text-muted-foreground">Rulelist #{attack.rulelistId}</span>
+            )}
+            {attack.dependencies.length > 0 && (
+              <span className="ml-2 text-muted-foreground">
+                Deps: [{attack.dependencies.join(', ')}]
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onEdit(i)}
+              className={cn(
+                'text-xs hover:text-foreground',
+                editingIndex === i ? 'text-primary' : 'text-muted-foreground'
+              )}
+            >
+              {editingIndex === i ? 'Editing...' : 'Edit'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="text-xs text-destructive hover:text-destructive/80"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

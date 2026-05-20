@@ -53,10 +53,22 @@ mock.module('reactflow', () => {
       </div>
     );
   }
+  // Expose the broader reactflow API so this mock can satisfy other test
+  // files (notably tests/pages/campaign-create.test.tsx) that share the
+  // process-level module cache after this file's mock loads first.
+  function useNodesState<T>(initial: T) {
+    return [initial, () => {}, () => {}] as const;
+  }
+  function useEdgesState<T>(initial: T) {
+    return [initial, () => {}, () => {}] as const;
+  }
   return {
     default: ReactFlow,
     Background: () => null,
+    Controls: () => null,
     Position: { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' },
+    useNodesState,
+    useEdgesState,
   };
 });
 

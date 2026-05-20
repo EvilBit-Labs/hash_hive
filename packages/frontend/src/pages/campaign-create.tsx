@@ -1,78 +1,59 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Resolver, useForm } from 'react-hook-form';
 import { Navigate, useNavigate } from 'react-router';
-import ReactFlow, {
-  Background,
-  Controls,
-  type Edge,
-  type Node as FlowNode,
-  type OnConnect,
-  useEdgesState,
-  useNodesState,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import { z } from 'zod';
+import type { Edge, Node as FlowNode, OnConnect } from 'reactflow';
+import ReactFlow, { Background, useEdgesState, useNodesState } from 'reactflow';
+import {
+  AttackDagEditor,
+  AttackList,
+  type BasicInfoForm,
+  BasicInfoStep,
+  basicInfoSchema,
+  TemplatePickerOverlay,
+} from '../components/features/campaign-wizard';
 import { ResourceUploadModal } from '../components/features/resource-upload-modal';
 import { StatusBadge } from '../components/features/status-badge';
 import { Button } from '../components/ui/button';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorBanner } from '../components/ui/error-banner';
-import { Input } from '../components/ui/input';
 import { PageHeader } from '../components/ui/page-header';
 import { Select } from '../components/ui/select';
 import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates';
 import { useCreateCampaign } from '../hooks/use-campaigns';
 import { usePermissions } from '../hooks/use-permissions';
-import { useHashLists, useMasklists, useRulelists, useWordlists } from '../hooks/use-resources';
+import {
+  useHashLists,
+  useHashTypes,
+  useMasklists,
+  useRulelists,
+  useWordlists,
+} from '../hooks/use-resources';
 import { ApiError, api } from '../lib/api';
-import { validateDAG } from '../lib/dag-validation';
+import { ATTACK_MODES, attackModeLabel } from '../lib/attack-modes';
+import {
+  type AttackFormInput,
+  type AttackFormOutput,
+  attackFormSchema,
+} from '../lib/attack-schemas';
+import { topologicalOrder, validateDAG } from '../lib/dag-validation';
 import { Permission } from '../lib/permissions';
+import 'reactflow/dist/style.css';
 import { cn } from '../lib/utils';
 import { useCampaignWizard } from '../stores/campaign-wizard';
 import { useUiStore } from '../stores/ui';
 
 const STEPS = ['Basic Info', 'Attacks', 'Review'];
 
-const basicInfoSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(255),
-  description: z.string().max(2000).optional(),
-  priority: z.coerce.number().int().min(1).max(10),
-  hashListId: z.coerce.number().int().positive('Hash list is required'),
-});
-
-type BasicInfoForm = z.infer<typeof basicInfoSchema>;
-
-const optionalResourceId = z.preprocess(
-  (val) => (val === '' || val === null ? undefined : val),
-  z.coerce.number().int().positive().optional()
-);
-
-const attackSchema = z.object({
-  mode: z.coerce.number().int().nonnegative('Mode is required'),
-  wordlistId: optionalResourceId,
-  rulelistId: optionalResourceId,
-  masklistId: optionalResourceId,
-});
-
-interface AttackForm {
-  mode: number;
-  wordlistId?: number;
-  rulelistId?: number;
-  masklistId?: number;
-}
-
 type UploadModalType = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
-
-/** Catppuccin red - matches --ctp-red / --destructive token */
-const CYCLE_EDGE_COLOR = 'hsl(351, 74%, 73%)';
 
 function buildNodes(attacks: readonly { mode: number }[]): FlowNode[] {
   return attacks.map((attack, i) => ({
     id: String(i),
     type: 'default',
     position: { x: (i % 4) * 200, y: Math.floor(i / 4) * 120 },
-    data: { label: `#${i} Mode ${attack.mode}` },
+    data: { label: `#${i} ${attackModeLabel(attack.mode)}` },
   }));
 }
 
@@ -101,6 +82,8 @@ export function CampaignCreatePage() {
   const createCampaign = useCreateCampaign();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [uploadModal, setUploadModal] = useState<{
     open: boolean;
     type: UploadModalType;
@@ -110,32 +93,68 @@ export function CampaignCreatePage() {
   const instantiateTemplate = useInstantiateAttackTemplate();
   const { data: templatesData } = useAttackTemplates();
 
-  // Resource queries for dropdowns
   const hashListsQuery = useHashLists();
+  const hashTypesQuery = useHashTypes();
   const wordlistsQuery = useWordlists();
   const rulelistsQuery = useRulelists();
   const masklistsQuery = useMasklists();
 
-  // DAG validation - runs on every attacks change
   const dagValidation = useMemo(() => validateDAG(wizard.attacks), [wizard.attacks]);
 
-  // React Flow state for Step 2
   const [nodes, setNodes, onNodesChange] = useNodesState(buildNodes(wizard.attacks));
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(wizard.attacks));
 
-  // Sync React Flow state when attacks change
+  // Sync React Flow state when attacks change.
+  //
+  // Position preservation is keyed by React Flow node id (= wizard index).
+  // That key is stable only when the array is appended to or updated in
+  // place. `removeAttack` shifts every index above the removed one down by
+  // one, so a stored position for id="2" would silently apply to the
+  // attack that used to be at index 3 — a misassignment that the user
+  // sees as nodes jumping into the wrong spot. Detect length decrease and
+  // reset to the grid layout instead. (A stable per-attack uiId would
+  // preserve positions across removes too, but that requires plumbing a
+  // wizard-only field through the AttackConfig / store / submit path; the
+  // length-based reset is correct and minimal.)
+  const prevAttacksLengthRef = useRef(wizard.attacks.length);
   useEffect(() => {
-    setNodes(buildNodes(wizard.attacks));
+    const prevLen = prevAttacksLengthRef.current;
+    const newLen = wizard.attacks.length;
+    prevAttacksLengthRef.current = newLen;
+
+    setNodes((prev) => {
+      if (newLen < prevLen) {
+        // remove: reset positions
+        return buildNodes(wizard.attacks);
+      }
+      // add or update: preserve existing positions
+      const prevPositions = new Map(prev.map((n) => [n.id, n.position]));
+      return buildNodes(wizard.attacks).map((n) => {
+        const previous = prevPositions.get(n.id);
+        return previous ? { ...n, position: previous } : n;
+      });
+    });
     setEdges(buildEdges(wizard.attacks));
   }, [wizard.attacks, setNodes, setEdges]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset wizard state on unmount only
+  // Cleanup wizard on real unmount only. The `mountedRef` + microtask guard
+  // absorbs the React 18 Strict Mode double-invoke (mount -> cleanup -> mount)
+  // so any pre-seeded store state survives the dev discard.
+  const mountedRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cleanup-only effect
   useEffect(() => {
-    return () => wizard.reset();
+    mountedRef.current = true;
+    return () => {
+      if (mountedRef.current) {
+        mountedRef.current = false;
+        queueMicrotask(() => {
+          if (!mountedRef.current) wizard.reset();
+        });
+      }
+    };
   }, []);
 
   const basicInfoForm = useForm<BasicInfoForm>({
-    // z.coerce widens input type; cast is safe since output matches BasicInfoForm
     resolver: zodResolver(basicInfoSchema) as unknown as Resolver<BasicInfoForm>,
     defaultValues: {
       name: wizard.name,
@@ -145,17 +164,99 @@ export function CampaignCreatePage() {
     },
   });
 
-  const attackForm = useForm<AttackForm>({
-    // z.preprocess widens input type to unknown; cast is safe since output matches AttackForm
-    resolver: zodResolver(attackSchema) as unknown as Resolver<AttackForm>,
+  // Form-bound type is z.input (string textarea); resolver narrows to z.output
+  // on submit (parsed object). The third generic on useForm carries the
+  // transformed shape so `handleSubmit(handleAttackSubmit)` type-checks
+  // without an `as never` cast in the JSX. The resolver cast remains
+  // because z.preprocess widens zodResolver's input type to unknown.
+  const attackForm = useForm<AttackFormInput, unknown, AttackFormOutput>({
+    resolver: zodResolver(attackFormSchema) as unknown as Resolver<
+      AttackFormInput,
+      unknown,
+      AttackFormOutput
+    >,
   });
+
+  // Prefill hash type from the selected hash list when starting a fresh attack.
+  // Skips when editing an existing attack (the user's stored choice wins) and
+  // when the user has already touched the hashTypeId field manually — without
+  // the touched guard, a background refetch of useHashLists would silently
+  // overwrite the user's explicit selection.
+  const selectedHashList = hashListsQuery.data?.hashLists?.find((h) => h.id === wizard.hashListId);
+  const detectedHashTypeId = selectedHashList?.hashTypeId ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attackForm identity is stable
+  useEffect(() => {
+    if (detectedHashTypeId == null || editingIndex != null) return;
+    if (attackForm.formState.touchedFields['hashTypeId']) return;
+    attackForm.setValue('hashTypeId', detectedHashTypeId);
+  }, [detectedHashTypeId, editingIndex]);
+
+  const clearEdit = useCallback(() => {
+    setEditingIndex(null);
+    // Re-seed the prefilled hash type for the next fresh add (same reason
+    // as in handleAttackSubmit's add branch — the prefill effect only
+    // re-fires when its deps change, so the reset must carry the prefill
+    // explicitly).
+    attackForm.reset({
+      mode: 0,
+      ...(detectedHashTypeId != null ? { hashTypeId: detectedHashTypeId } : {}),
+    });
+  }, [attackForm, detectedHashTypeId]);
+
+  const seedFormFromAttack = useCallback(
+    (idx: number) => {
+      const attack = wizard.attacks[idx];
+      if (!attack) return;
+      attackForm.reset({
+        mode: attack.mode,
+        ...(attack.hashTypeId != null ? { hashTypeId: attack.hashTypeId } : {}),
+        ...(attack.wordlistId != null ? { wordlistId: attack.wordlistId } : {}),
+        ...(attack.rulelistId != null ? { rulelistId: attack.rulelistId } : {}),
+        ...(attack.masklistId != null ? { masklistId: attack.masklistId } : {}),
+        ...(attack.advancedConfiguration
+          ? { advancedConfiguration: JSON.stringify(attack.advancedConfiguration, null, 2) }
+          : {}),
+      });
+      setEditingIndex(idx);
+    },
+    [attackForm, wizard.attacks]
+  );
+
+  const handleRemoveAttack = useCallback(
+    (idx: number) => {
+      wizard.removeAttack(idx);
+      if (editingIndex === idx) {
+        clearEdit();
+      } else if (editingIndex != null && editingIndex > idx) {
+        setEditingIndex(editingIndex - 1);
+      }
+    },
+    [wizard, editingIndex, clearEdit]
+  );
+
+  const handleNodeClick = useCallback(
+    (_event: unknown, node: { id: string }) => {
+      const idx = Number(node.id);
+      if (!Number.isNaN(idx)) seedFormFromAttack(idx);
+    },
+    [seedFormFromAttack]
+  );
+
+  const handleNodeContextMenu = useCallback(
+    (event: { preventDefault: () => void }, node: { id: string }) => {
+      event.preventDefault();
+      const idx = Number(node.id);
+      if (!Number.isNaN(idx)) handleRemoveAttack(idx);
+    },
+    [handleRemoveAttack]
+  );
 
   const handleConnect: OnConnect = useCallback(
     (connection) => {
       const sourceIdx = Number(connection.source);
       const targetIdx = Number(connection.target);
       if (!Number.isNaN(sourceIdx) && !Number.isNaN(targetIdx)) {
-        // Dependency direction: edge from source → target means target depends on source
+        // Edge from source -> target means target depends on source.
         wizard.addDependency(targetIdx, sourceIdx);
       }
     },
@@ -178,7 +279,6 @@ export function CampaignCreatePage() {
   if (!can(Permission.CAMPAIGN_CREATE)) {
     return <Navigate to="/campaigns" replace />;
   }
-
   if (!selectedProjectId) {
     return <EmptyState message="Select a project first." />;
   }
@@ -193,61 +293,187 @@ export function CampaignCreatePage() {
     wizard.setStep(1);
   });
 
-  const handleAddAttack = (data: AttackForm) => {
-    wizard.addAttack({
+  const handleAttackSubmit = (data: AttackFormOutput) => {
+    // Use `!= null` for hashTypeId so a future schema change that admits a
+    // zero-valued id doesn't silently drop it. `hash_types.id` is a serial
+    // primary key today (always positive in production), but truthy checks
+    // also drop NaN — and `data.hashTypeId` is the resolver's coerced
+    // output, where a coerce failure would surface as NaN rather than
+    // undefined. `!= null` rejects both null and undefined explicitly. For
+    // advancedConfiguration, `!== undefined` matches the resolver's
+    // transform contract: it returns undefined when the textarea is empty
+    // and the parsed object otherwise — which includes `{}`, a value that
+    // would be dropped by a truthy check. Resource IDs stay truthy-checked
+    // because the wire schema enforces positive integers.
+    const payload = {
       mode: data.mode,
+      ...(data.hashTypeId != null ? { hashTypeId: data.hashTypeId } : {}),
       ...(data.wordlistId ? { wordlistId: data.wordlistId } : {}),
       ...(data.rulelistId ? { rulelistId: data.rulelistId } : {}),
       ...(data.masklistId ? { masklistId: data.masklistId } : {}),
-      dependencies: [],
-    });
-    attackForm.reset();
+      ...(data.advancedConfiguration !== undefined
+        ? { advancedConfiguration: data.advancedConfiguration }
+        : {}),
+    };
+    if (editingIndex != null) {
+      const existing = wizard.attacks[editingIndex];
+      wizard.updateAttack(editingIndex, {
+        ...payload,
+        dependencies: existing?.dependencies ?? [],
+      });
+      clearEdit();
+    } else {
+      wizard.addAttack({ ...payload, dependencies: [] });
+      // Re-seed the prefilled hash type on the next-attack form. The prefill
+      // effect above only fires when `detectedHashTypeId` itself changes, so
+      // a plain `reset({ mode: 0 })` would leave the second and later fresh
+      // adds with no hash type. Inlining the prefill keeps subsequent attacks
+      // in sync with the basic-info hash list.
+      attackForm.reset({
+        mode: 0,
+        ...(detectedHashTypeId != null ? { hashTypeId: detectedHashTypeId } : {}),
+      });
+    }
   };
 
   const handleSubmit = async () => {
-    setSubmitting(true);
     setError(null);
+
+    // Pre-flight: refuse to start the submit if a cycle exists OR if a
+    // required field is missing. Computed outside the try/finally so
+    // `submitting` stays false (the button does not flicker
+    // disabled-then-enabled on a no-op press) and so we never POST a
+    // sentinel `hashListId: 0` to the backend (the schema requires a
+    // positive id; relying on the backend to reject 0 hides the bug).
+    const topo = topologicalOrder(wizard.attacks);
+    if (!topo.ok) {
+      setError('Cannot create campaign while a dependency cycle exists.');
+      return;
+    }
+    if (wizard.hashListId == null) {
+      setError('Select a hash list before creating the campaign.');
+      return;
+    }
+    const order = topo.order;
+    const hashListId = wizard.hashListId;
+
+    setSubmitting(true);
+    let campaignId: number | null = null;
     try {
       const result = await createCampaign.mutateAsync({
         name: wizard.name,
-        hashListId: wizard.hashListId ?? 0,
+        hashListId,
         priority: wizard.priority,
         ...(wizard.description ? { description: wizard.description } : {}),
       });
+      campaignId = result.campaign.id;
 
-      const campaignId = result.campaign.id;
+      // Clone the attacks list. The store currently replaces the array
+      // immutably on every edit, so a reference snapshot would also be
+      // stable today, but a clone is cheap insurance against a future
+      // store refactor that introduces in-place mutation.
+      const attacksSnapshot = [...wizard.attacks];
+      const createdIds = new Map<number, number>();
 
-      // Create attacks sequentially using direct API calls to avoid stale hook state
-      for (const attack of wizard.attacks) {
-        await api.post(`/dashboard/campaigns/${campaignId}/attacks`, {
-          ...attack,
-          ...(attack.dependencies.length > 0 ? { dependencies: attack.dependencies } : {}),
+      // Create attacks in topological order so dependency IDs are known.
+      // Build each POST body explicitly to keep wizard-internal fields out
+      // of the wire shape — never spread the full attack object.
+      for (const idx of order) {
+        const attack = attacksSnapshot[idx];
+        if (!attack) {
+          throw new Error(
+            `Internal error: topological order referenced attack #${idx} missing from snapshot.`
+          );
+        }
+        const remappedDeps = attack.dependencies.map((depIdx) => {
+          const id = createdIds.get(depIdx);
+          if (id == null) {
+            throw new Error(
+              `Internal error: attack #${idx} depends on #${depIdx} which was not created.`
+            );
+          }
+          return id;
         });
+        const body: Record<string, unknown> = { mode: attack.mode };
+        if (attack.hashTypeId != null) body['hashTypeId'] = attack.hashTypeId;
+        if (attack.wordlistId != null) body['wordlistId'] = attack.wordlistId;
+        if (attack.rulelistId != null) body['rulelistId'] = attack.rulelistId;
+        if (attack.masklistId != null) body['masklistId'] = attack.masklistId;
+        if (attack.advancedConfiguration !== undefined) {
+          body['advancedConfiguration'] = attack.advancedConfiguration;
+        }
+        if (remappedDeps.length > 0) body['dependencies'] = remappedDeps;
+        const { attack: created } = await api.post<{ attack: { id: number } }>(
+          `/dashboard/campaigns/${campaignId}/attacks`,
+          body
+        );
+        createdIds.set(idx, created.id);
       }
 
       wizard.reset();
       navigate(`/campaigns/${campaignId}`);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError('Failed to create campaign');
+      // biome-ignore lint/suspicious/noConsole: log raw error for debugging before mapping
+      console.error('[campaign-create] submit failed', err);
+
+      // Compensating delete: a campaign was created but at least one attack
+      // POST failed. Without this, retrying the wizard would create a
+      // duplicate campaign and leave the partial one behind. Best-effort
+      // only — surface the original error regardless of rollback success.
+      if (campaignId != null) {
+        try {
+          await api.delete<unknown>(`/dashboard/campaigns/${campaignId}`);
+        } catch (rollbackErr) {
+          // biome-ignore lint/suspicious/noConsole: rollback failures need to surface in dev
+          console.error(
+            '[campaign-create] rollback delete failed for campaign',
+            campaignId,
+            rollbackErr
+          );
+        }
       }
+
+      if (err instanceof ApiError) setError(err.message);
+      else if (err instanceof Error) setError(err.message);
+      else setError('Unexpected error creating campaign. Check console for details.');
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleCancel = () => setCancelOpen(true);
+  const confirmCancel = () => {
+    wizard.reset();
+    setCancelOpen(false);
+    navigate('/campaigns');
+  };
+
   const hashLists = hashListsQuery.data?.hashLists ?? [];
+  const hashTypes = hashTypesQuery.data?.hashTypes ?? [];
   const wordlists = wordlistsQuery.data?.resources ?? [];
   const rulelists = rulelistsQuery.data?.resources ?? [];
   const masklists = masklistsQuery.data?.resources ?? [];
+
+  const onTemplatePick = async (templateId: number) => {
+    try {
+      const result = await instantiateTemplate.mutateAsync(templateId);
+      const attack = result.attack;
+      attackForm.setValue('mode', attack.mode);
+      attackForm.setValue('wordlistId', attack.wordlistId ?? undefined);
+      attackForm.setValue('rulelistId', attack.rulelistId ?? undefined);
+      attackForm.setValue('masklistId', attack.masklistId ?? undefined);
+      setTemplateError(null);
+      setShowTemplatePicker(false);
+    } catch (err) {
+      if (err instanceof ApiError) setTemplateError(err.message);
+      else setTemplateError('Failed to load template');
+    }
+  };
 
   return (
     <div className="space-y-6">
       <PageHeader>Create Campaign</PageHeader>
 
-      {/* Step indicator */}
       <div className="flex gap-1.5">
         {STEPS.map((label, i) => (
           <button
@@ -268,88 +494,21 @@ export function CampaignCreatePage() {
 
       {error && <ErrorBanner message={error} />}
 
-      {/* Step 0: Basic Info */}
       {wizard.step === 0 && (
-        <form onSubmit={onBasicInfoSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="name" className="text-xs font-medium text-muted-foreground">
-              Campaign Name
-            </label>
-            <Input id="name" className="mt-1.5" {...basicInfoForm.register('name')} />
-            {basicInfoForm.formState.errors.name && (
-              <p className="mt-1 text-xs text-destructive">
-                {basicInfoForm.formState.errors.name.message}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="description" className="text-xs font-medium text-muted-foreground">
-              Description
-            </label>
-            <textarea
-              id="description"
-              rows={3}
-              className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
-              {...basicInfoForm.register('description')}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
-                Priority (1-10)
-              </label>
-              <Input
-                id="priority"
-                type="number"
-                min={1}
-                max={10}
-                className="mt-1.5"
-                {...basicInfoForm.register('priority')}
-              />
-            </div>
-            <div>
-              <label htmlFor="hashListId" className="text-xs font-medium text-muted-foreground">
-                Hash List
-              </label>
-              <div className="mt-1.5 flex gap-2">
-                <Select id="hashListId" {...basicInfoForm.register('hashListId')}>
-                  <option value="">Select a hash list...</option>
-                  {hashLists.map((hl) => (
-                    <option key={hl.id} value={hl.id}>
-                      {hl.name} ({hl.hashCount} hashes)
-                    </option>
-                  ))}
-                </Select>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => setUploadModal({ open: true, type: 'hash-lists' })}
-                >
-                  Upload
-                </Button>
-              </div>
-              {basicInfoForm.formState.errors.hashListId && (
-                <p className="mt-1 text-xs text-destructive">
-                  {basicInfoForm.formState.errors.hashListId.message}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <Button type="submit">Next: Configure Attacks</Button>
-        </form>
+        <BasicInfoStep
+          form={basicInfoForm}
+          hashLists={hashLists}
+          onSubmit={onBasicInfoSubmit}
+          onUploadHashList={() => setUploadModal({ open: true, type: 'hash-lists' })}
+          onCancel={handleCancel}
+        />
       )}
 
-      {/* Step 1: Attacks */}
       {wizard.step === 1 && (
         <div className="space-y-4">
           <div className="flex gap-6">
-            {/* Left column: Attack configuration form */}
             <div className="w-2/5 space-y-4">
-              <form onSubmit={attackForm.handleSubmit(handleAddAttack)} className="space-y-3">
+              <form onSubmit={attackForm.handleSubmit(handleAttackSubmit)} className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Add Attack</h3>
                   <Button
@@ -364,30 +523,51 @@ export function CampaignCreatePage() {
                 <div className="space-y-3">
                   <div>
                     <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
-                      Hashcat Mode
+                      Attack Mode
                     </label>
-                    <Input
-                      id="mode"
-                      type="number"
+                    <Select id="mode" className="mt-1.5" {...attackForm.register('mode')}>
+                      {ATTACK_MODES.map((mode) => (
+                        <option key={mode.value} value={mode.value}>
+                          {mode.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="hashTypeId"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Hash Type
+                    </label>
+                    <Select
+                      id="hashTypeId"
                       className="mt-1.5"
-                      {...attackForm.register('mode')}
-                    />
+                      {...attackForm.register('hashTypeId')}
+                    >
+                      <option value="">Auto (from hash list)</option>
+                      {hashTypes.map((ht) => (
+                        <option key={ht.id} value={ht.id}>
+                          {ht.name} (mode {ht.hashcatMode})
+                        </option>
+                      ))}
+                    </Select>
                   </div>
                   {[
                     {
-                      id: 'wordlistId',
+                      id: 'wordlistId' as const,
                       label: 'Wordlist',
                       items: wordlists,
                       modalType: 'wordlists' as UploadModalType,
                     },
                     {
-                      id: 'rulelistId',
+                      id: 'rulelistId' as const,
                       label: 'Rulelist',
                       items: rulelists,
                       modalType: 'rulelists' as UploadModalType,
                     },
                     {
-                      id: 'masklistId',
+                      id: 'masklistId' as const,
                       label: 'Masklist',
                       items: masklists,
                       modalType: 'masklists' as UploadModalType,
@@ -401,10 +581,7 @@ export function CampaignCreatePage() {
                         {field.label}
                       </label>
                       <div className="mt-1.5 flex gap-2">
-                        <Select
-                          id={field.id}
-                          {...attackForm.register(field.id as keyof AttackForm)}
-                        >
+                        <Select id={field.id} {...attackForm.register(field.id)}>
                           <option value="">None</option>
                           {field.items.map((item) => (
                             <option key={item.id} value={item.id}>
@@ -413,6 +590,7 @@ export function CampaignCreatePage() {
                           ))}
                         </Select>
                         <Button
+                          type="button"
                           variant="secondary"
                           size="sm"
                           className="shrink-0"
@@ -423,103 +601,60 @@ export function CampaignCreatePage() {
                       </div>
                     </div>
                   ))}
+                  <div>
+                    <label
+                      htmlFor="advancedConfiguration"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Advanced Configuration (JSON, optional)
+                    </label>
+                    <textarea
+                      id="advancedConfiguration"
+                      rows={3}
+                      placeholder='{"workload-profile": 3}'
+                      className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 font-mono text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
+                      {...attackForm.register('advancedConfiguration')}
+                    />
+                    {attackForm.formState.errors.advancedConfiguration?.['message'] && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {String(attackForm.formState.errors.advancedConfiguration['message'])}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <Button variant="secondary" size="sm" type="submit">
-                  Add Attack
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" type="submit">
+                    {editingIndex != null ? 'Update Attack' : 'Add Attack'}
+                  </Button>
+                  {editingIndex != null && (
+                    <Button variant="secondary" size="sm" type="button" onClick={clearEdit}>
+                      Cancel Edit
+                    </Button>
+                  )}
+                </div>
               </form>
 
-              {/* Attack list */}
-              {wizard.attacks.length > 0 && (
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium">Configured Attacks</h3>
-                  {wizard.attacks.map((attack, i) => (
-                    <div
-                      // biome-ignore lint/suspicious/noArrayIndexKey: attacks have no stable ID before creation
-                      key={i}
-                      className="flex items-center justify-between rounded-md border border-surface-0 bg-surface-0/30 p-3"
-                    >
-                      <div className="text-xs">
-                        <span className="font-mono font-medium">
-                          #{i} Mode {attack.mode}
-                        </span>
-                        {attack.wordlistId && (
-                          <span className="ml-2 text-muted-foreground">
-                            Wordlist #{attack.wordlistId}
-                          </span>
-                        )}
-                        {attack.rulelistId && (
-                          <span className="ml-2 text-muted-foreground">
-                            Rulelist #{attack.rulelistId}
-                          </span>
-                        )}
-                        {attack.dependencies.length > 0 && (
-                          <span className="ml-2 text-muted-foreground">
-                            Deps: [{attack.dependencies.join(', ')}]
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => wizard.removeAttack(i)}
-                        className="text-xs text-destructive hover:text-destructive/80"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <AttackList
+                attacks={wizard.attacks}
+                editingIndex={editingIndex}
+                onEdit={seedFormFromAttack}
+                onRemove={handleRemoveAttack}
+              />
             </div>
 
-            {/* Right column: React Flow DAG editor */}
-            <div className="w-3/5 space-y-2">
-              <h3 className="text-sm font-medium">Dependency Graph</h3>
-              <p className="text-xs text-muted-foreground">
-                Drag edges between attacks to set dependencies. Arrow from A \u2192 B means B
-                depends on A.
-              </p>
-              {!dagValidation.valid && (
-                <ErrorBanner
-                  message={`Circular dependency detected between attacks: [${dagValidation.cycle?.join(', ')}]`}
-                  className="text-xs"
-                />
-              )}
-              <div className="h-[400px] rounded-md border border-surface-0 bg-crust">
-                {wizard.attacks.length > 0 ? (
-                  <ReactFlow
-                    nodes={nodes}
-                    edges={
-                      dagValidation.valid
-                        ? edges
-                        : edges.map((e) => {
-                            const sourceIdx = Number(e.source);
-                            const targetIdx = Number(e.target);
-                            const inCycle =
-                              dagValidation.cycle?.includes(sourceIdx) &&
-                              dagValidation.cycle?.includes(targetIdx);
-                            return inCycle
-                              ? { ...e, style: { stroke: CYCLE_EDGE_COLOR, strokeWidth: 2 } }
-                              : e;
-                          })
-                    }
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
-                    onConnect={handleConnect}
-                    onEdgesDelete={handleEdgeDelete}
-                    fitView
-                    deleteKeyCode="Backspace"
-                  >
-                    <Background />
-                    <Controls />
-                  </ReactFlow>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                    Add attacks to see the dependency graph
-                  </div>
-                )}
-              </div>
-            </div>
+            <AttackDagEditor
+              attacks={wizard.attacks}
+              nodes={nodes}
+              edges={edges}
+              cycle={dagValidation.cycle}
+              isValid={dagValidation.valid}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={handleConnect}
+              onEdgesDelete={handleEdgeDelete}
+              onNodeClick={handleNodeClick}
+              onNodeContextMenu={handleNodeContextMenu}
+            />
           </div>
 
           <div className="flex gap-2">
@@ -532,11 +667,13 @@ export function CampaignCreatePage() {
             >
               Next: Review
             </Button>
+            <Button variant="secondary" onClick={handleCancel}>
+              Cancel
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Step 2: Review & Submit */}
       {wizard.step === 2 && (
         <div className="space-y-4">
           <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
@@ -571,7 +708,6 @@ export function CampaignCreatePage() {
             </dl>
           </div>
 
-          {/* DAG Preview - read-only visualization */}
           {wizard.attacks.length > 0 && (
             <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -599,82 +735,35 @@ export function CampaignCreatePage() {
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? 'Creating...' : 'Create Campaign'}
             </Button>
+            <Button variant="secondary" onClick={handleCancel} disabled={submitting}>
+              Cancel
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Template picker overlay */}
       {showTemplatePicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <button
-            type="button"
-            aria-label="Close template picker"
-            className="absolute inset-0 bg-crust/80"
-            onClick={() => setShowTemplatePicker(false)}
-          />
-          <div className="relative z-10 w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-4 shadow-2xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-medium">Select a Template</h3>
-              <button
-                type="button"
-                className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => setShowTemplatePicker(false)}
-              >
-                Cancel
-              </button>
-            </div>
-            {templateError && <ErrorBanner message={templateError} className="mb-2 text-xs" />}
-            <div className="max-h-64 space-y-1.5 overflow-y-auto">
-              {!templatesData?.templates.length ? (
-                <p className="py-4 text-center text-xs text-muted-foreground">
-                  No templates available.
-                </p>
-              ) : (
-                templatesData.templates.map((template) => (
-                  <div
-                    key={template.id}
-                    className="flex items-center justify-between rounded border border-surface-0 bg-surface-0/30 px-3 py-2"
-                  >
-                    <div className="text-xs">
-                      <span className="font-medium">{template.name}</span>
-                      <span className="ml-2 font-mono text-muted-foreground">
-                        Mode {template.mode}
-                      </span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={instantiateTemplate.isPending}
-                      onClick={async () => {
-                        try {
-                          const result = await instantiateTemplate.mutateAsync(template.id);
-                          const attack = result.attack;
-                          attackForm.setValue('mode', attack.mode);
-                          attackForm.setValue('wordlistId', attack.wordlistId ?? undefined);
-                          attackForm.setValue('rulelistId', attack.rulelistId ?? undefined);
-                          attackForm.setValue('masklistId', attack.masklistId ?? undefined);
-                          setTemplateError(null);
-                          setShowTemplatePicker(false);
-                        } catch (err) {
-                          if (err instanceof ApiError) {
-                            setTemplateError(err.message);
-                          } else {
-                            setTemplateError('Failed to load template');
-                          }
-                        }
-                      }}
-                    >
-                      Use
-                    </Button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
+        <TemplatePickerOverlay
+          templates={templatesData?.templates ?? []}
+          isPending={instantiateTemplate.isPending}
+          error={templateError}
+          onPick={onTemplatePick}
+          onClose={() => setShowTemplatePicker(false)}
+        />
       )}
 
-      {/* Resource upload modal */}
+      <ConfirmDialog
+        open={cancelOpen}
+        title="Discard campaign?"
+        message="The wizard will close and your in-progress configuration will be lost."
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        destructive
+        busy={submitting}
+        onConfirm={confirmCancel}
+        onCancel={() => setCancelOpen(false)}
+      />
+
       <ResourceUploadModal
         type={uploadModal.type}
         open={uploadModal.open}
