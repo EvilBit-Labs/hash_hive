@@ -165,9 +165,16 @@ export function CampaignCreatePage() {
   });
 
   // Form-bound type is z.input (string textarea); resolver narrows to z.output
-  // on submit (parsed object). The cast preserves that contract.
-  const attackForm = useForm<AttackFormInput>({
-    resolver: zodResolver(attackFormSchema) as unknown as Resolver<AttackFormInput>,
+  // on submit (parsed object). The third generic on useForm carries the
+  // transformed shape so `handleSubmit(handleAttackSubmit)` type-checks
+  // without an `as never` cast in the JSX. The resolver cast remains
+  // because z.preprocess widens zodResolver's input type to unknown.
+  const attackForm = useForm<AttackFormInput, unknown, AttackFormOutput>({
+    resolver: zodResolver(attackFormSchema) as unknown as Resolver<
+      AttackFormInput,
+      unknown,
+      AttackFormOutput
+    >,
   });
 
   // Prefill hash type from the selected hash list when starting a fresh attack.
@@ -287,13 +294,17 @@ export function CampaignCreatePage() {
   });
 
   const handleAttackSubmit = (data: AttackFormOutput) => {
-    // Use explicit null/undefined checks instead of truthy: `hashTypeId = 0`
-    // is conceptually valid (hashcat MD5 is mode 0), and an empty-object
-    // `advancedConfiguration` ({}) is truthy in JS so the previous check
-    // worked, but `!== undefined` matches the resolver's transform contract
-    // (returns undefined when the textarea is empty, the parsed object
-    // otherwise — including {}). Resource IDs stay truthy-checked because
-    // the wire schema enforces positive integers.
+    // Use `!= null` for hashTypeId so a future schema change that admits a
+    // zero-valued id doesn't silently drop it. `hash_types.id` is a serial
+    // primary key today (always positive in production), but truthy checks
+    // also drop NaN — and `data.hashTypeId` is the resolver's coerced
+    // output, where a coerce failure would surface as NaN rather than
+    // undefined. `!= null` rejects both null and undefined explicitly. For
+    // advancedConfiguration, `!== undefined` matches the resolver's
+    // transform contract: it returns undefined when the textarea is empty
+    // and the parsed object otherwise — which includes `{}`, a value that
+    // would be dropped by a truthy check. Resource IDs stay truthy-checked
+    // because the wire schema enforces positive integers.
     const payload = {
       mode: data.mode,
       ...(data.hashTypeId != null ? { hashTypeId: data.hashTypeId } : {}),
@@ -328,22 +339,30 @@ export function CampaignCreatePage() {
   const handleSubmit = async () => {
     setError(null);
 
-    // Pre-flight: refuse to start the submit if a cycle exists. Computed
-    // outside the try/finally so `submitting` stays false (the button does
-    // not flicker disabled-then-enabled on a no-op cycle press).
+    // Pre-flight: refuse to start the submit if a cycle exists OR if a
+    // required field is missing. Computed outside the try/finally so
+    // `submitting` stays false (the button does not flicker
+    // disabled-then-enabled on a no-op press) and so we never POST a
+    // sentinel `hashListId: 0` to the backend (the schema requires a
+    // positive id; relying on the backend to reject 0 hides the bug).
     const topo = topologicalOrder(wizard.attacks);
     if (!topo.ok) {
       setError('Cannot create campaign while a dependency cycle exists.');
       return;
     }
+    if (wizard.hashListId == null) {
+      setError('Select a hash list before creating the campaign.');
+      return;
+    }
     const order = topo.order;
+    const hashListId = wizard.hashListId;
 
     setSubmitting(true);
     let campaignId: number | null = null;
     try {
       const result = await createCampaign.mutateAsync({
         name: wizard.name,
-        hashListId: wizard.hashListId ?? 0,
+        hashListId,
         priority: wizard.priority,
         ...(wizard.description ? { description: wizard.description } : {}),
       });
@@ -489,10 +508,7 @@ export function CampaignCreatePage() {
         <div className="space-y-4">
           <div className="flex gap-6">
             <div className="w-2/5 space-y-4">
-              <form
-                onSubmit={attackForm.handleSubmit(handleAttackSubmit as never)}
-                className="space-y-3"
-              >
+              <form onSubmit={attackForm.handleSubmit(handleAttackSubmit)} className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Add Attack</h3>
                   <Button

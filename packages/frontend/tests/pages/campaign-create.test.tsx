@@ -602,6 +602,54 @@ describe('CampaignCreatePage edit-flow invariants', () => {
   });
 });
 
+describe('CampaignCreatePage submit preflight', () => {
+  it('refuses to POST when hashListId is null (no `?? 0` sentinel)', async () => {
+    fetchMock = mockFetch(defaultRoutes());
+    setAdminWithProject();
+    const qc = createTestQueryClient();
+    seedResourceQueries(qc);
+
+    // Step 2 reached, but hashListId never got set (e.g., store
+    // corruption, deep-link, future step-navigation bug).
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'X',
+      description: '',
+      priority: 5,
+      hashListId: null,
+      attacks: [{ mode: 0, dependencies: [] }],
+    });
+
+    let campaignPostCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (method === 'POST' && url.endsWith('/dashboard/campaigns')) campaignPostCount++;
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc });
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Select a hash list/)).toBeDefined();
+      });
+      expect(campaignPostCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe('CampaignCreatePage React Flow position handling', () => {
   // Regression: position preservation must not silently misassign positions
   // after removeAttack shifts wizard indices. The simplest correct fix is
