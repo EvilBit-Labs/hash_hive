@@ -104,11 +104,30 @@ export function CampaignCreatePage() {
   const [nodes, setNodes, onNodesChange] = useNodesState(buildNodes(wizard.attacks));
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(wizard.attacks));
 
-  // Sync React Flow state when attacks change. Preserve positions for nodes
-  // the user has dragged: rebuild data/label fresh, but keep the previous
-  // (x, y) when the same wizard index is still present.
+  // Sync React Flow state when attacks change.
+  //
+  // Position preservation is keyed by React Flow node id (= wizard index).
+  // That key is stable only when the array is appended to or updated in
+  // place. `removeAttack` shifts every index above the removed one down by
+  // one, so a stored position for id="2" would silently apply to the
+  // attack that used to be at index 3 — a misassignment that the user
+  // sees as nodes jumping into the wrong spot. Detect length decrease and
+  // reset to the grid layout instead. (A stable per-attack uiId would
+  // preserve positions across removes too, but that requires plumbing a
+  // wizard-only field through the AttackConfig / store / submit path; the
+  // length-based reset is correct and minimal.)
+  const prevAttacksLengthRef = useRef(wizard.attacks.length);
   useEffect(() => {
+    const prevLen = prevAttacksLengthRef.current;
+    const newLen = wizard.attacks.length;
+    prevAttacksLengthRef.current = newLen;
+
     setNodes((prev) => {
+      if (newLen < prevLen) {
+        // remove: reset positions
+        return buildNodes(wizard.attacks);
+      }
+      // add or update: preserve existing positions
       const prevPositions = new Map(prev.map((n) => [n.id, n.position]));
       return buildNodes(wizard.attacks).map((n) => {
         const previous = prevPositions.get(n.id);
