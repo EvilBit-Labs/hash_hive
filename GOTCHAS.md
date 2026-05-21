@@ -117,6 +117,13 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 
 - **401 intercept**: `api.ts` globally intercepts all 401 responses as "Session expired" -- tests for endpoints using the `api` wrapper must use 400 for invalid credentials to avoid triggering the interceptor. Login is exempt: it calls BetterAuth via raw `fetch` (not the `api` wrapper), so 401 from BetterAuth is correct and does not trigger the interceptor.
 - **PermissionGuard hides elements**: Tests asserting on guarded elements (New Campaign link, lifecycle buttons, Upload buttons) must seed the auth store with `roles: ['admin']` or `roles: ['contributor']` via `useAuthStore.setState()` — without this, PermissionGuard renders nothing
+- **Testing pages that use `useEvents` / `EventsProvider`**: WebSocket only opens when `authClient.useSession()` returns a session. Call `setupAuthClientMock()` then `setMockSession()` *before* the page module loads. Easiest pattern: top-level `setupAuthClientMock(); const { Page } = await import('../../src/pages/page')` — mock registration is module-load-order-sensitive. Without this, `wsMock.instances[0]` is undefined and `if (!ws) return` silently skips the test.
+
+## Real-time Events (useEvents / EventsProvider)
+
+- **`EventsProvider` is the singleton WebSocket owner** — mounted in `AppLayout`. `useEvents()` opens a fresh WS on every call; calling it from a page opens a duplicate connection AND duplicates the invalidation work the provider already does.
+- **To refresh a query on an event, add the query key to the maps in `use-events.ts`**: `invalidationKeys` (project-scoped, invalidated as `[key, projectId]`), `agentScopedKeysByEvent` (per-agentId), `campaignScopedKeysByEvent` (per-campaignId). Do not call `useEvents({ onEvent })` from page components.
+- **`EventType` union + `KNOWN_EVENT_TYPES` set derive from a single const tuple `EVENT_TYPES` in `use-events.ts`**: adding a new variant is a one-line change. The `isKnownEventType` guard drops unrecognized frames.
 
 ## Frontend (JSX)
 
