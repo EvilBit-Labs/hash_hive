@@ -38,6 +38,12 @@ export function CampaignDetailPage() {
   const lifecycle = useCampaignLifecycle();
   const del = useCampaignDelete();
 
+  // Real-time updates: the shared useEvents hook mounted by EventsProvider
+  // (in AppLayout) already invalidates ['campaign', campaignId] for every
+  // campaign_status and task_update event whose payload carries a matching
+  // campaignId, so this detail page automatically refetches without a
+  // local subscription.
+
   const [confirm, setConfirm] = useState<ConfirmAction>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 

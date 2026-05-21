@@ -109,6 +109,11 @@ export function CampaignsPage() {
 
   const { data, isLoading, isError, error } = useCampaigns(queryOptions);
 
+  // Real-time updates: the shared useEvents hook mounted by EventsProvider
+  // (in AppLayout) already invalidates ['campaigns', selectedProjectId] on
+  // every campaign_status and task_update event for the active project, so
+  // this page automatically refetches without a local subscription.
+
   const [confirm, setConfirm] = useState<{ action: ConfirmAction; campaign: CampaignRow | null }>({
     action: null,
     campaign: null,

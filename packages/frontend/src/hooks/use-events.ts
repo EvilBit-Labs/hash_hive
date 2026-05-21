@@ -3,14 +3,34 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { authClient } from '../lib/auth-client';
 import { useUiStore } from '../stores/ui';
 
-export type EventType =
-  | 'agent_status'
-  | 'agent_error'
-  | 'campaign_status'
-  | 'task_update'
-  | 'crack_result'
-  | 'resource_update'
-  | 'system_health';
+/**
+ * Single source of truth for both the `EventType` compile-time union
+ * and the runtime membership set below. Adding a new event variant is
+ * a one-line change here; the two cannot drift.
+ */
+const EVENT_TYPES = [
+  'agent_status',
+  'agent_error',
+  'campaign_status',
+  'task_update',
+  'crack_result',
+  'resource_update',
+  'system_health',
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+/**
+ * Membership set for runtime validation of WS frame `type` fields.
+ * Without this, an arbitrary string from a misbehaving backend would
+ * be cast to `EventType` and forwarded to consumers as if it were a
+ * recognized event.
+ */
+const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set(EVENT_TYPES);
+
+function isKnownEventType(value: string): value is EventType {
+  return KNOWN_EVENT_TYPES.has(value);
+}
 
 /**
  * Throttle the protocol-drift warnings emitted when a WS event arrives
@@ -22,8 +42,18 @@ export type EventType =
 const DRIFT_WARN_COOLDOWN_MS = 60_000;
 const driftWarnTimestamps = new Map<string, number>();
 
-function warnDriftOnce(scope: 'agent' | 'campaign', eventType: string): boolean {
-  const safeType = eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64);
+/**
+ * Sanitize an event-type string for safe logging. Strips characters
+ * that could be used to inject ANSI escapes or distort log shape, and
+ * caps length so a hostile backend cannot blow out console memory with
+ * a 1MB type string. Used everywhere we log a raw event-type value.
+ */
+function sanitizeEventType(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64);
+}
+
+function warnDriftOnce(scope: 'agent' | 'campaign' | 'unknown', eventType: string): boolean {
+  const safeType = sanitizeEventType(eventType);
   const key = `${scope}:${safeType}`;
   const last = driftWarnTimestamps.get(key) ?? 0;
   const now = Date.now();
@@ -92,7 +122,12 @@ export function useEvents(options: UseEventsOptions = {}) {
       const invalidationKeys: Record<string, string[]> = {
         agent_status: ['agents', 'dashboard-stats'],
         campaign_status: ['campaigns', 'dashboard-stats'],
-        task_update: ['tasks', 'dashboard-stats'],
+        // task_update refreshes the campaigns list too because each task
+        // affects its campaign's progress percentage and task counts —
+        // both of which appear in the list table. Without this, the
+        // list's progress column would only refresh on campaign
+        // lifecycle transitions, missing per-task progress.
+        task_update: ['tasks', 'campaigns', 'dashboard-stats'],
         crack_result: [
           'dashboard-stats',
           'results',
@@ -169,6 +204,22 @@ export function useEvents(options: UseEventsOptions = {}) {
           }
 
           const eventType = data['type'] as string;
+          if (!isKnownEventType(eventType)) {
+            // Drop rather than forward: invalidationKeys lookups would
+            // safely return undefined, but `onEventRef` consumers expect
+            // an `AppEvent.type` from the EventType union, and forwarding
+            // an unrecognized value would re-introduce the unchecked-cast
+            // bug this guard exists to prevent. Throttle the warn so a
+            // backend regression cannot flood the console.
+            if (warnDriftOnce('unknown', eventType)) {
+              const safeType = sanitizeEventType(eventType);
+              // biome-ignore lint/suspicious/noConsole: protocol drift signal
+              console.warn('[useEvents] dropped WS frame with unknown event type', {
+                eventType: safeType,
+              });
+            }
+            return;
+          }
           const projectKeys = invalidationKeys[eventType];
           if (projectKeys) {
             for (const key of projectKeys) {
@@ -191,14 +242,10 @@ export function useEvents(options: UseEventsOptions = {}) {
               // event type) per cooldown so a misbehaving backend cannot
               // flood the console.
               if (warnDriftOnce('agent', eventType)) {
-                const safeEventType =
-                  typeof eventType === 'string'
-                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
-                    : 'unknown';
                 // biome-ignore lint/suspicious/noConsole: protocol drift signal
                 console.warn(
                   '[useEvents] event missing agentId; falling back to broad invalidation',
-                  { eventType: safeEventType }
+                  { eventType: sanitizeEventType(eventType) }
                 );
               }
               for (const key of agentScopedKeys) {
@@ -220,14 +267,10 @@ export function useEvents(options: UseEventsOptions = {}) {
               // so the detail page still refreshes, but record the drift.
               // Throttled to one warn per (scope, event type) per cooldown.
               if (warnDriftOnce('campaign', eventType)) {
-                const safeEventType =
-                  typeof eventType === 'string'
-                    ? eventType.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
-                    : 'unknown';
                 // biome-ignore lint/suspicious/noConsole: protocol drift signal
                 console.warn(
                   '[useEvents] event missing campaignId; falling back to broad invalidation',
-                  { eventType: safeEventType }
+                  { eventType: sanitizeEventType(eventType) }
                 );
               }
               for (const key of campaignScopedKeys) {

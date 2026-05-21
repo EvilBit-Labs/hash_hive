@@ -288,7 +288,7 @@ describe('useEvents', () => {
     });
   });
 
-  it('invalidates agent-tasks on task_update event', async () => {
+  it('invalidates tasks, campaigns, dashboard-stats, and agent-tasks on task_update event', async () => {
     setAuthenticatedWithProject(1);
     const qc = createTestQueryClient();
     const invalidateSpy = mock(() => Promise.resolve());
@@ -318,9 +318,53 @@ describe('useEvents', () => {
       const queryKeys = calls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'tasks' && k[1] === 1)).toBe(true);
       expect(queryKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === 1)).toBe(true);
+      // Regression guard: the campaigns list shows per-task progress, so
+      // task_update must invalidate ['campaigns'] not just ['tasks'].
+      expect(queryKeys.some((k: unknown[]) => k[0] === 'campaigns' && k[1] === 1)).toBe(true);
       // Per-agent invalidation uses [prefix, agentId] now.
       expect(queryKeys.some((k: unknown[]) => k[0] === 'agent-tasks' && k[1] === 42)).toBe(true);
     });
+  });
+
+  it('drops WS frames with an unrecognized event type without invalidating any query or firing onEvent', async () => {
+    setAuthenticatedWithProject(1);
+    const qc = createTestQueryClient();
+    const invalidateSpy = mock(() => Promise.resolve());
+    const originalInvalidate = qc.invalidateQueries.bind(qc);
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args);
+      return originalInvalidate(...args);
+    }) as typeof qc.invalidateQueries;
+
+    const onEventSpy = mock(() => {});
+    renderEventsHook(qc, { onEvent: onEventSpy });
+
+    const ws = wsMock.instances[0]!;
+    ws.simulateOpen();
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true');
+    });
+
+    // A type the backend never emits today — the guard must drop the
+    // frame without invalidating any cache or forwarding it to onEvent
+    // (which expects AppEvent.type to be a member of the EventType union).
+    invalidateSpy.mockClear();
+    onEventSpy.mockClear();
+
+    // simulateMessage triggers ws.onmessage synchronously; invalidateQueries
+    // calls inside fire synchronously too. Flush a single microtask so any
+    // queued promise continuations (none expected, but defensive) settle
+    // before the negative assertion — no real-time sleep needed.
+    ws.simulateMessage({
+      type: 'unrecognized_event_type',
+      projectId: 1,
+      data: { foo: 'bar' },
+      timestamp: new Date().toISOString(),
+    });
+    await Promise.resolve();
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(onEventSpy).not.toHaveBeenCalled();
   });
 
   it('falls back to broad invalidation when task_update event lacks agentId', async () => {
