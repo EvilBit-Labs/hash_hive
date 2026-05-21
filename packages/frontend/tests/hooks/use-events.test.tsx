@@ -326,7 +326,7 @@ describe('useEvents', () => {
     });
   });
 
-  it('drops WS frames with an unrecognized event type without invalidating any query', async () => {
+  it('drops WS frames with an unrecognized event type without invalidating any query or firing onEvent', async () => {
     setAuthenticatedWithProject(1);
     const qc = createTestQueryClient();
     const invalidateSpy = mock(() => Promise.resolve());
@@ -336,7 +336,8 @@ describe('useEvents', () => {
       return originalInvalidate(...args);
     }) as typeof qc.invalidateQueries;
 
-    renderEventsHook(qc);
+    const onEventSpy = mock(() => {});
+    renderEventsHook(qc, { onEvent: onEventSpy });
 
     const ws = wsMock.instances[0]!;
     ws.simulateOpen();
@@ -345,19 +346,25 @@ describe('useEvents', () => {
     });
 
     // A type the backend never emits today — the guard must drop the
-    // frame without forwarding it as an EventType or invalidating any
-    // cache (which would silently regress if the guard were removed).
+    // frame without invalidating any cache or forwarding it to onEvent
+    // (which expects AppEvent.type to be a member of the EventType union).
     invalidateSpy.mockClear();
+    onEventSpy.mockClear();
+
+    // simulateMessage triggers ws.onmessage synchronously; invalidateQueries
+    // calls inside fire synchronously too. Flush a single microtask so any
+    // queued promise continuations (none expected, but defensive) settle
+    // before the negative assertion — no real-time sleep needed.
     ws.simulateMessage({
       type: 'unrecognized_event_type',
       projectId: 1,
       data: { foo: 'bar' },
       timestamp: new Date().toISOString(),
     });
+    await Promise.resolve();
 
-    // Wait long enough for any invalidation to have fired if it were going to.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(invalidateSpy.mock.calls.length).toBe(0);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(onEventSpy).not.toHaveBeenCalled();
   });
 
   it('falls back to broad invalidation when task_update event lacks agentId', async () => {
