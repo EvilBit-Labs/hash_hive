@@ -715,12 +715,17 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     return { task: updated, retried: true };
   }
 
-  // Max retries exceeded — mark as failed permanently
+  // Max retries exceeded — mark as failed permanently. Use the stable
+  // terminal code `max_retries_exceeded` so this row is distinguishable
+  // from a one-shot failure with the same underlying cause (the sweep's
+  // terminal branches use the same code). The agent-reported reason that
+  // tipped the task over the budget is preserved in resultStats.lastFailure
+  // for debugging.
   const [updated] = await db
     .update(tasks)
     .set({
       status: 'failed',
-      failureReason: reason,
+      failureReason: 'max_retries_exceeded',
       completedAt: new Date(),
       resultStats: { ...resultStats, lastFailure: reason },
       updatedAt: new Date(),

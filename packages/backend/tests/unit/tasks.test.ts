@@ -838,7 +838,14 @@ if (isIsolated) {
 
       expect(result).toMatchObject({ retried: false });
       expect(setCalls[0]?.['status']).toBe('failed');
-      expect(setCalls[0]?.['failureReason']).toBe('agent_timeout');
+      // Stable terminal code so this row is distinguishable from a one-shot
+      // failure with the same agent-reported reason; sweep terminal branches
+      // use the same code so both paths look identical to downstream code.
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
+      // The agent-reported reason that tipped the budget is preserved in
+      // resultStats.lastFailure for debugging.
+      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>;
+      expect(stats['lastFailure']).toBe('agent_timeout');
       expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
       expect(mockEmitTaskUpdate).toHaveBeenCalledWith(3, 51, 'failed', {
         agentId: 9,
