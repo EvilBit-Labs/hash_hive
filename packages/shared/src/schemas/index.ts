@@ -523,6 +523,48 @@ export const workRangeSchema = z.object({
   agentSpeedHs: z.number().int().nonnegative(),
 });
 
+/**
+ * Capability requirements that a task may impose on the agent that
+ * claims it. `gpu` and `hashcatMode` are the two recognized keys today;
+ * unknown keys are tolerated (passthrough) so agents on older clients
+ * keep working when the server adds new requirement axes.
+ */
+export const requiredCapabilitiesSchema = z
+  .object({
+    gpu: z.boolean().optional(),
+    hashcatMode: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
+/**
+ * Canonical shape of a task descriptor returned from `assignNextTask`
+ * and surfaced on the agent API `/tasks/next` route. The Date fields
+ * are real JS Dates as they live in memory between drizzle and the
+ * route handler — the JSON serializer turns them into ISO-8601
+ * strings at the wire boundary (governed by `agent-api.yaml`). Keep
+ * this in lockstep with the OpenAPI `TaskDescriptor` schema; the
+ * `tasks.retry_count` column is `NOT NULL DEFAULT 0`, so `retryCount`
+ * is always present.
+ */
+export const assignedTaskSchema = z.object({
+  id: z.number().int().positive(),
+  attackId: z.number().int().positive(),
+  campaignId: z.number().int().positive(),
+  agentId: z.number().int().positive(),
+  status: z.string(),
+  workRange: workRangeSchema,
+  progress: z.unknown(),
+  resultStats: z.unknown(),
+  requiredCapabilities: requiredCapabilitiesSchema.nullable(),
+  assignedAt: z.date().nullable(),
+  startedAt: z.date().nullable(),
+  completedAt: z.date().nullable(),
+  failureReason: z.string().nullable(),
+  retryCount: z.number().int().nonnegative(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 
 /**
