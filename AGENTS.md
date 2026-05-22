@@ -12,6 +12,11 @@ This file provides AI coding assistants with project context. All substantive do
 - **[Documented Solutions](./docs/solutions/)** -- searchable knowledge store of past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 - **[Frontend Design Context](./.impeccable.md)** -- users, brand personality, aesthetic direction, anti-references, and the five design principles every UI surface must follow. Read before any frontend visual work.
 
+## Planning & Status
+
+- **[STRATEGY.md](./STRATEGY.md)** -- target problem, approach, primary persona, the five key metrics, and the four investment tracks. Read before proposing scope changes or new features.
+- **[BACKLOG.md](./BACKLOG.md)** -- authoritative status of remaining work. Phase 1 is the 11 unfinished `spec/tickets/`; Phase 2 is the open GitHub issue backlog (#97-#124, grouped under epics #117-#121). Do NOT infer ticket completion from matching commit titles or file existence -- BACKLOG.md is the source of truth.
+
 ## API Surfaces
 
 HashHive exposes three distinct API surfaces, each with its own auth, error envelope, and pagination shape:
