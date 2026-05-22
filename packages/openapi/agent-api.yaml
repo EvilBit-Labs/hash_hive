@@ -421,6 +421,7 @@ components:
 
     TaskDescriptor:
       type: object
+      required: [retryCount]
       properties:
         id:
           type: integer
@@ -433,6 +434,16 @@ components:
           description: hashcat attack mode
         hashTypeId:
           type: integer
+        retryCount:
+          type: integer
+          minimum: 0
+          description: |
+            Number of times this task has been retried after a previous
+            assignment failed (e.g. agent timeout, error report, or stale
+            reclaim). `0` for first-time assignments. Backed by the
+            `tasks.retry_count` column, which is `NOT NULL DEFAULT 0`, so
+            this property is always present on a task descriptor returned
+            from `/tasks/next`.
         workRange:
           type: object
           properties:

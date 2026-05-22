@@ -208,6 +208,7 @@ export interface AssignedTask {
   startedAt: Date | null;
   completedAt: Date | null;
   failureReason: string | null;
+  retryCount: number;
   createdAt: Date;
   updatedAt: Date;
 }

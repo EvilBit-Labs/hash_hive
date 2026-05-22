@@ -141,6 +141,7 @@ if (isIsolated) {
         started_at: null,
         completed_at: null,
         failure_reason: null,
+        retry_count: 0,
         created_at: now,
         updated_at: now,
       };
@@ -158,6 +159,7 @@ if (isIsolated) {
         startedAt: null,
         completedAt: null,
         failureReason: null,
+        retryCount: 0,
         createdAt: now,
         updatedAt: now,
       };
@@ -424,7 +426,12 @@ if (isIsolated) {
 
       const result = await reassignStaleTasks();
 
-      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 1 });
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 0,
+        failedOverrun: 1,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('failed');
       expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
@@ -444,7 +451,12 @@ if (isIsolated) {
 
       const result = await reassignStaleTasks();
 
-      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 1 });
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 0,
+        failedOverrun: 1,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('failed');
       expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
@@ -465,7 +477,12 @@ if (isIsolated) {
 
       const result = await reassignStaleTasks();
 
-      expect(result).toEqual({ reassigned: 0, rebalanced: 1, failedOverrun: 0 });
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 1,
+        failedOverrun: 0,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('pending');
       expect(setCalls[0]?.['agentId']).toBe(null);
@@ -478,6 +495,8 @@ if (isIsolated) {
       expect(wr['total']).toBe(750_000);
       // Reported progress reset so the next agent starts at 0 within the trimmed range.
       expect(setCalls[0]?.['progress']).toEqual({});
+      // Retry counter bumped via SQL expression (`tasks.retry_count + 1`).
+      expect(setCalls[0]?.['retryCount']).toBeDefined();
     });
 
     test('falls through to reset-to-pending on 0% progress', async () => {
@@ -494,7 +513,12 @@ if (isIsolated) {
 
       const result = await reassignStaleTasks();
 
-      expect(result).toEqual({ reassigned: 1, rebalanced: 0, failedOverrun: 0 });
+      expect(result).toEqual({
+        reassigned: 1,
+        rebalanced: 0,
+        failedOverrun: 0,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(1);
       // Existing reset path: clear claim metadata but leave workRange/progress alone.
       expect(setCalls[0]?.['status']).toBe('pending');
@@ -503,6 +527,8 @@ if (isIsolated) {
       expect(setCalls[0]?.['startedAt']).toBe(null);
       expect(setCalls[0]?.['workRange']).toBeUndefined();
       expect(setCalls[0]?.['progress']).toBeUndefined();
+      // Retry counter bumped via SQL expression (`tasks.retry_count + 1`).
+      expect(setCalls[0]?.['retryCount']).toBeDefined();
     });
 
     test('handles string-encoded workRange values (bigint overflow case)', async () => {
@@ -525,7 +551,12 @@ if (isIsolated) {
 
       const result = await reassignStaleTasks();
 
-      expect(result).toEqual({ reassigned: 0, rebalanced: 1, failedOverrun: 0 });
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 1,
+        failedOverrun: 0,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(1);
       const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
       // New start = 0 + 1e18 = "1000000000000000000" (decimal string, bigint-safe).
@@ -539,7 +570,12 @@ if (isIsolated) {
     test('emits zero counts when no stale tasks exist', async () => {
       seedStaleTasks([]);
       const result = await reassignStaleTasks();
-      expect(result).toEqual({ reassigned: 0, rebalanced: 0, failedOverrun: 0 });
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 0,
+        failedOverrun: 0,
+        failedMaxRetries: 0,
+      });
       expect(setCalls).toHaveLength(0);
     });
   });

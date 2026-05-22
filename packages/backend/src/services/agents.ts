@@ -360,6 +360,25 @@ async function getHandleTaskFailure(): Promise<typeof import('./tasks.js').handl
   return cachedHandleTaskFailure;
 }
 
+/**
+ * Lazy reference to `buildCapabilityPredicate` from `./tasks.js`. Same
+ * circular-import workaround as `getHandleTaskFailure` above — the heartbeat
+ * high-priority check must filter against the agent's capabilities so we
+ * never tell an agent to ask for work it cannot actually claim.
+ */
+let cachedBuildCapabilityPredicate: typeof import('./tasks.js').buildCapabilityPredicate | null =
+  null;
+
+async function getBuildCapabilityPredicate(): Promise<
+  typeof import('./tasks.js').buildCapabilityPredicate
+> {
+  if (cachedBuildCapabilityPredicate === null) {
+    const mod = await import('./tasks.js');
+    cachedBuildCapabilityPredicate = mod.buildCapabilityPredicate;
+  }
+  return cachedBuildCapabilityPredicate;
+}
+
 function logStatusTransition(opts: {
   agentId: number;
   projectId: number;
@@ -635,9 +654,15 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
     taskFailureSummary = { attempted: activeTasks.length, failed };
   }
 
-  // Check if there are high-priority pending tasks for this agent's project
+  // Check if there are high-priority pending tasks for this agent's project.
+  // Filter against the agent's capabilities so we don't tell an agent to ask
+  // for work it cannot actually claim — buildCapabilityPredicate matches the
+  // SQL filter assignNextTask uses for the real claim.
   let hasHighPriorityTasks = false;
   if (updated) {
+    const buildCapabilityPredicate = await getBuildCapabilityPredicate();
+    const agentCaps = (updated.capabilities ?? {}) as Record<string, unknown>;
+    const capabilityPredicate = buildCapabilityPredicate(agentCaps);
     const [highPriority] = await db
       .select({ id: tasks.id })
       .from(tasks)
@@ -646,7 +671,8 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
         and(
           eq(tasks.status, 'pending'),
           eq(campaigns.projectId, updated.projectId),
-          sql`${campaigns.priority} <= 1`
+          sql`${campaigns.priority} <= 1`,
+          capabilityPredicate
         )
       )
       .limit(1);

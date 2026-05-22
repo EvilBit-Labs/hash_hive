@@ -33,6 +33,7 @@ const mockSnakeCaseTaskRow = {
   started_at: null,
   completed_at: null,
   failure_reason: null,
+  retry_count: 0,
   created_at: '2026-03-24T00:00:00.000Z',
   updated_at: '2026-03-24T00:00:00.000Z',
 };
@@ -108,6 +109,7 @@ const mockCamelCaseTask = {
   startedAt: mockSnakeCaseTaskRow.started_at,
   completedAt: mockSnakeCaseTaskRow.completed_at,
   failureReason: mockSnakeCaseTaskRow.failure_reason,
+  retryCount: mockSnakeCaseTaskRow.retry_count,
   createdAt: mockSnakeCaseTaskRow.created_at,
   updatedAt: mockSnakeCaseTaskRow.updated_at,
 };
@@ -504,10 +506,18 @@ describe('Agent API: POST /tasks/next', () => {
     expect(task['campaignId']).toBeDefined();
     expect(task['workRange']).toBeDefined();
 
+    // retryCount is part of the documented TaskDescriptor contract and
+    // is always present (backed by a NOT NULL DEFAULT 0 column). Assert
+    // the field is exposed with the expected value so generated agent
+    // clients can rely on it.
+    expect(task).toHaveProperty('retryCount');
+    expect(task['retryCount']).toBe(mockSnakeCaseTaskRow.retry_count);
+
     // snake_case keys should be absent
     expect(task['attack_id']).toBeUndefined();
     expect(task['campaign_id']).toBeUndefined();
     expect(task['work_range']).toBeUndefined();
+    expect(task['retry_count']).toBeUndefined();
   });
 });
 

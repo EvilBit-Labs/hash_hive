@@ -59,12 +59,13 @@ export class QueueManager {
       );
     }
 
-    // Schedule repeatable heartbeat monitor
+    // Schedule repeatable heartbeat monitor. Ticket #119 sets the cadence at
+    // 2 minutes so the stale-task sweep matches the agent offline threshold.
     const heartbeatQueue = this.queues.get(QUEUE_NAMES.HEARTBEAT_MONITOR);
     if (heartbeatQueue) {
       await heartbeatQueue.upsertJobScheduler(
         'heartbeat-check',
-        { every: 60_000 },
+        { every: 2 * 60 * 1000 },
         { data: { triggeredAt: new Date().toISOString() } }
       );
     }

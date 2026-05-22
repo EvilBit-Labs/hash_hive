@@ -26,6 +26,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { sql } from 'drizzle-orm';
 
 const IS_ISOLATED = process.env['AGENT_HEARTBEAT_TEST_ISOLATED'] === '1';
 
@@ -260,6 +261,11 @@ if (!IS_ISOLATED) {
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     listTasksByAgent: mock(),
+    // The heartbeat high-priority lookup composes a capability predicate
+    // into its WHERE clause. The drizzle-chain mock ignores the predicate
+    // contents, so returning a no-op `sql` fragment keeps the chain happy
+    // without leaking real SQL behavior into the test.
+    buildCapabilityPredicate: mock(() => sql`TRUE`),
   }));
 
   mock.module('../../src/lib/auth.js', () => ({

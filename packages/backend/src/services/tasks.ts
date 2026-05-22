@@ -275,7 +275,7 @@ export async function generateTasksForAttack(
  * - GPU requirement: task requires `gpu: true` → agent capabilities must contain `{"gpu": true}`
  * - Hash mode compatibility: task's `hashcatMode` value must be in agent's `hashModes` array
  */
-function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
+export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
   const hasGpu = agentCaps['gpu'] === true;
   const rawHashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : [];
   // Sanitize to finite integers only — NaN, Infinity, non-numeric strings are dropped
@@ -433,7 +433,8 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     RETURNING ${tasks.id}, ${tasks.attackId}, ${tasks.campaignId}, ${tasks.agentId},
               ${tasks.status}, ${tasks.workRange}, ${tasks.progress}, ${tasks.resultStats},
               ${tasks.requiredCapabilities}, ${tasks.assignedAt}, ${tasks.startedAt},
-              ${tasks.completedAt}, ${tasks.failureReason}, ${tasks.createdAt}, ${tasks.updatedAt}
+              ${tasks.completedAt}, ${tasks.failureReason}, ${tasks.retryCount},
+              ${tasks.createdAt}, ${tasks.updatedAt}
   `);
 
   const row = result[0] as Record<string, unknown> | undefined;
@@ -518,6 +519,7 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     startedAt: row['started_at'] as Date | null,
     completedAt: row['completed_at'] as Date | null,
     failureReason: row['failure_reason'] as string | null,
+    retryCount: row['retry_count'] as number,
     createdAt: row['created_at'] as Date,
     updatedAt: row['updated_at'] as Date,
   };
@@ -659,7 +661,7 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
   }
 
   const resultStats = (task.resultStats as Record<string, unknown>) ?? {};
-  const retryCount = (resultStats['retryCount'] as number) ?? 0;
+  const retryCount = task.retryCount ?? 0;
 
   // Derive projectId from the campaign for event emission
   const [campaign] = await db
@@ -678,7 +680,8 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
         assignedAt: null,
         startedAt: null,
         failureReason: reason,
-        resultStats: { ...resultStats, retryCount: retryCount + 1, lastFailure: reason },
+        retryCount: retryCount + 1,
+        resultStats: { ...resultStats, lastFailure: reason },
         updatedAt: new Date(),
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
@@ -703,7 +706,7 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
       status: 'failed',
       failureReason: reason,
       completedAt: new Date(),
-      resultStats: { ...resultStats, retryCount, lastFailure: reason },
+      resultStats: { ...resultStats, lastFailure: reason },
       updatedAt: new Date(),
     })
     .where(eq(tasks.id, taskId))
@@ -779,9 +782,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
   const threshold = new Date(Date.now() - staleThresholdMs);
 
   // Find tasks assigned to agents that haven't checked in. Carry workRange,
-  // progress, projectId, and campaignId so the rebalance branches don't
-  // need extra queries to publish task_update events or update the
-  // campaign progress aggregate.
+  // progress, projectId, campaignId, and retryCount so the rebalance branches
+  // don't need extra queries to publish task_update events, update the
+  // campaign progress aggregate, or gate on the retry budget.
   const staleTasks = await db
     .select({
       taskId: tasks.id,
@@ -790,6 +793,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
       workRange: tasks.workRange,
       progress: tasks.progress,
       projectId: campaigns.projectId,
+      retryCount: tasks.retryCount,
     })
     .from(tasks)
     .innerJoin(agents, eq(tasks.agentId, agents.id))
@@ -802,18 +806,24 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // values from the agent API, leaving stranded in-progress work
         // un-rebalanced.
         sql`${tasks.status} IN ('assigned', 'running')`,
-        sql`${agents.lastSeenAt} < ${threshold}`
+        sql`${agents.lastSeenAt} < ${threshold}`,
+        // Guard against reaping a task the agent only just claimed after a
+        // stale heartbeat — without this, a slow first-heartbeat after
+        // assignment would race the sweep and yank the task back.
+        sql`${tasks.assignedAt} < ${threshold}`
       )
     );
 
   let reassigned = 0;
   let rebalanced = 0;
   let failedOverrun = 0;
+  let failedMaxRetries = 0;
   for (const staleTask of staleTasks) {
     const start = readWorkRangeField(staleTask.workRange, 'start');
     const end = readWorkRangeField(staleTask.workRange, 'end');
     const total = end > start ? end - start : 0n;
     const keyspaceProgress = readKeyspaceProgress(staleTask.progress);
+    const exceededRetries = (staleTask.retryCount ?? 0) >= MAX_RETRIES;
 
     if (keyspaceProgress >= total && total > 0n) {
       // Agent reported as-much-or-more work than the chunk contains. Either
@@ -841,6 +851,27 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
     }
 
     if (keyspaceProgress > 0n && keyspaceProgress < total) {
+      if (exceededRetries) {
+        // Retry budget exhausted - permanent fail. Mirrors handleTaskFailure's
+        // terminal branch; keep agentId so operators can still see which agent
+        // dropped the task.
+        await db
+          .update(tasks)
+          .set({
+            status: 'failed',
+            failureReason: 'max_retries_exceeded',
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(tasks.id, staleTask.taskId));
+        emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed', {
+          campaignId: staleTask.campaignId,
+        });
+        await updateCampaignProgress(staleTask.campaignId);
+        failedMaxRetries++;
+        continue;
+      }
+
       // Partial progress - trim workRange.start forward and re-pend.
       const newStart = start + keyspaceProgress;
       const newTotal = end - newStart;
@@ -867,6 +898,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             total: jsonSafeBigint(newTotal),
           },
           progress: carriedProgress,
+          retryCount: sql`${tasks.retryCount} + 1`,
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, staleTask.taskId));
@@ -878,6 +910,25 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
       continue;
     }
 
+    if (exceededRetries) {
+      // 0% / unreadable progress but retry budget exhausted - permanent fail.
+      await db
+        .update(tasks)
+        .set({
+          status: 'failed',
+          failureReason: 'max_retries_exceeded',
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, staleTask.taskId));
+      emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed', {
+        campaignId: staleTask.campaignId,
+      });
+      await updateCampaignProgress(staleTask.campaignId);
+      failedMaxRetries++;
+      continue;
+    }
+
     // 0% progress or unreadable range - reset to pending unchanged.
     await db
       .update(tasks)
@@ -886,6 +937,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         agentId: null,
         assignedAt: null,
         startedAt: null,
+        retryCount: sql`${tasks.retryCount} + 1`,
         updatedAt: new Date(),
       })
       .where(eq(tasks.id, staleTask.taskId));
@@ -896,7 +948,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
     reassigned++;
   }
 
-  return { reassigned, rebalanced, failedOverrun };
+  return { reassigned, rebalanced, failedOverrun, failedMaxRetries };
 }
 
 // ─── Task Queries ───────────────────────────────────────────────────
