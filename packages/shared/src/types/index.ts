@@ -240,7 +240,11 @@ export type InstantiateAttackTemplateResponse = z.infer<
  */
 export type ApiKeyMetadata =
   | { readonly hasKey: false }
-  | { readonly hasKey: true; readonly prefix: string; readonly lastUsedAt: string | null };
+  | {
+      readonly hasKey: true;
+      readonly prefix: string;
+      readonly lastUsedAt: string | null;
+    };
 
 /**
  * Response from `POST /api/v1/dashboard/auth/me/api-key` (issue/rotate).

@@ -235,8 +235,17 @@ describe('Agent API: POST /heartbeat', () => {
       },
       body: JSON.stringify({
         status: 'online',
-        currentTask: { taskId: 42, progress: 0.5, speed: 12345, temperature: 72 },
-        error: { severity: 'warning', message: 'temperature spike', context: { gpuId: 0 } },
+        currentTask: {
+          taskId: 42,
+          progress: 0.5,
+          speed: 12345,
+          temperature: 72,
+        },
+        error: {
+          severity: 'warning',
+          message: 'temperature spike',
+          context: { gpuId: 0 },
+        },
       }),
     });
 

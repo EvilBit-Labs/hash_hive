@@ -50,7 +50,9 @@ if (isIsolated) {
   // implementation is a chain that returns nothing; the rebalance tests
   // override `mockUpdateSet` to record each call's payload.
   mockUpdateSet = mock(() => ({ where: mockUpdateWhere }));
-  mockUpdateWhere = mock(() => ({ returning: mock(() => Promise.resolve([])) }));
+  mockUpdateWhere = mock(() => ({
+    returning: mock(() => Promise.resolve([])),
+  }));
 
   mock.module('../../src/db/index.js', () => ({
     db: {
@@ -151,7 +153,12 @@ if (isIsolated) {
         campaignId: 5,
         agentId: 1,
         status: 'assigned',
-        workRange: { start: 0, end: 10000000, total: 10000000, agentSpeedHs: 1_000_000 },
+        workRange: {
+          start: 0,
+          end: 10000000,
+          total: 10000000,
+          agentSpeedHs: 1_000_000,
+        },
         progress: {},
         resultStats: {},
         requiredCapabilities: { hashcatMode: 1000 },
@@ -232,7 +239,12 @@ if (isIsolated) {
     // the two count queries that decide the reason.
     test('skip-diagnosis: no_pending_tasks when project has no pending tasks', async () => {
       mockLimit.mockResolvedValueOnce([
-        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+        {
+          id: 1,
+          projectId: 1,
+          status: 'online',
+          capabilities: { hashModes: [0] },
+        },
       ]);
       mockExecute.mockResolvedValueOnce([]); // CTE returns no claim
       // Diagnostic count #1 (any pending in project): 0 -> no_pending_tasks.
@@ -244,7 +256,12 @@ if (isIsolated) {
 
     test('skip-diagnosis: no_matching_capability when pending tasks exist but capabilities mismatch', async () => {
       mockLimit.mockResolvedValueOnce([
-        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+        {
+          id: 1,
+          projectId: 1,
+          status: 'online',
+          capabilities: { hashModes: [0] },
+        },
       ]);
       mockExecute.mockResolvedValueOnce([]); // CTE: no claim
       // Diagnostic #1: 5 pending; diagnostic #2: 0 matching.
@@ -257,7 +274,12 @@ if (isIsolated) {
 
     test('skip-diagnosis: claim_race_lost when matching tasks exist but were locked', async () => {
       mockLimit.mockResolvedValueOnce([
-        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+        {
+          id: 1,
+          projectId: 1,
+          status: 'online',
+          capabilities: { hashModes: [0] },
+        },
       ]);
       mockExecute.mockResolvedValueOnce([]); // CTE: no claim
       mockLimit.mockResolvedValueOnce([{ n: 5 }]); // any-pending: 5
@@ -273,7 +295,12 @@ if (isIsolated) {
       // claim path. Simulate the diagnostic blowing up - assignNextTask
       // must still return null cleanly.
       mockLimit.mockResolvedValueOnce([
-        { id: 1, projectId: 1, status: 'online', capabilities: { hashModes: [0] } },
+        {
+          id: 1,
+          projectId: 1,
+          status: 'online',
+          capabilities: { hashModes: [0] },
+        },
       ]);
       mockExecute.mockResolvedValueOnce([]); // CTE: no claim
       // Diagnostic query rejects -> caught, fallback to claim_race_lost log.
@@ -312,7 +339,9 @@ if (isIsolated) {
         },
       ]);
       mockExecute.mockResolvedValueOnce([rawDbRow]);
-      mockGetAgentBenchmarkForMode.mockResolvedValueOnce({ speedHs: 5_000_000 });
+      mockGetAgentBenchmarkForMode.mockResolvedValueOnce({
+        speedHs: 5_000_000,
+      });
 
       const result = await assignNextTask(1);
       expect(result).not.toBeNull();
@@ -393,7 +422,10 @@ if (isIsolated) {
       const whereReturning = mock(() => Promise.resolve(rows));
       const secondInnerJoin = mock(() => ({ where: whereReturning }));
       const firstInnerJoin = mock(() => ({ innerJoin: secondInnerJoin }));
-      mockFrom.mockImplementationOnce(() => ({ innerJoin: firstInnerJoin, where: mock() }));
+      mockFrom.mockImplementationOnce(() => ({
+        innerJoin: firstInnerJoin,
+        where: mock(),
+      }));
     }
 
     // Captures every .set() payload so each test can assert which branch fired.
@@ -404,9 +436,9 @@ if (isIsolated) {
         setCalls.push(payload);
         return { where: mockUpdateWhere };
       });
-      mockUpdateWhere
-        .mockReset()
-        .mockImplementation(() => ({ returning: mock(() => Promise.resolve([])) }));
+      mockUpdateWhere.mockReset().mockImplementation(() => ({
+        returning: mock(() => Promise.resolve([])),
+      }));
     });
 
     test('marks task failed when keyspaceProgress equals total (un-acked completion)', async () => {
@@ -621,7 +653,10 @@ if (isIsolated) {
             returning: mock(() =>
               Promise.resolve(
                 Array.isArray(rows)
-                  ? rows.map((r, i) => ({ ...(r as Record<string, unknown>), id: 1000 + i }))
+                  ? rows.map((r, i) => ({
+                      ...(r as Record<string, unknown>),
+                      id: 1000 + i,
+                    }))
                   : [{ ...(rows as Record<string, unknown>), id: 1000 }]
               )
             ),
@@ -651,7 +686,10 @@ if (isIsolated) {
       // pickChunkSize falls back to FALLBACK_CHUNK_SIZE (10_000_000), which
       // exceeds the 10_000 keyspace - chunks should clamp at totalKeyspace.
       const benchmarkWhereReturning = mock(() => Promise.resolve([]));
-      mockFrom.mockImplementationOnce(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockFrom.mockImplementationOnce(() => ({
+        where: mockWhere,
+        innerJoin: mock(),
+      }));
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
       }));
@@ -688,7 +726,10 @@ if (isIsolated) {
       // 60_000 per chunk. Total = 1_000_000 -> 17 chunks (16 full + 1 trailing
       // 40_000-unit chunk).
       const benchmarkWhereReturning = mock(() => Promise.resolve([{ speedHs: 1000 }]));
-      mockFrom.mockImplementationOnce(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockFrom.mockImplementationOnce(() => ({
+        where: mockWhere,
+        innerJoin: mock(),
+      }));
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
       }));

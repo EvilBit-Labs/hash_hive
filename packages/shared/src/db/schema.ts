@@ -86,8 +86,12 @@ export const baAccounts = pgTable(
     providerId: text('provider_id').notNull(),
     accessToken: text('access_token'),
     refreshToken: text('refresh_token'),
-    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
-    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', {
+      withTimezone: true,
+    }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', {
+      withTimezone: true,
+    }),
     scope: text('scope'),
     idToken: text('id_token'),
     password: text('password'),
@@ -173,7 +177,9 @@ export const agentErrors = pgTable(
     // checks (services/agents.ts `processHeartbeat`) prevent agents from
     // attributing errors to tasks they don't own; the FK is the
     // last-line guard so dangling task_ids cannot accumulate.
-    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    taskId: integer('task_id').references(() => tasks.id, {
+      onDelete: 'set null',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

@@ -55,7 +55,9 @@ export class QueueManager {
       // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
       this.queues.set(
         name,
-        new Queue(name, { connection: this.connection as unknown as ConnectionOptions })
+        new Queue(name, {
+          connection: this.connection as unknown as ConnectionOptions,
+        })
       );
     }
 

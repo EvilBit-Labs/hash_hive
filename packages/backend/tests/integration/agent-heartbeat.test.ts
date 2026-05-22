@@ -69,7 +69,12 @@ if (!IS_ISOLATED) {
 
   // Shared mutable state the test cases set up before each call.
   const state = {
-    agent: { id: 1, projectId: 7, status: 'online', capabilities: {} } as MockAgent | null,
+    agent: {
+      id: 1,
+      projectId: 7,
+      status: 'online',
+      capabilities: {},
+    } as MockAgent | null,
     activeTasks: [] as MockTask[],
     ownedTaskIds: new Set<number>(),
     capturedErrors: [] as CapturedAgentError[],
@@ -140,7 +145,9 @@ if (!IS_ISOLATED) {
           taskId: vals.taskId ?? null,
         };
         state.capturedErrors.push(row);
-        return { returning: () => Promise.resolve([{ id: state.capturedErrors.length, ...row }]) };
+        return {
+          returning: () => Promise.resolve([{ id: state.capturedErrors.length, ...row }]),
+        };
       },
     };
   }
@@ -183,7 +190,9 @@ if (!IS_ISOLATED) {
           // We disambiguate by call shape rather than parsing the where
           // clause (which is opaque drizzle SQL).
           if (keys.length === 1 && keys[0] === 'id') {
-            const ownedRows = Array.from(state.ownedTaskIds).map((id) => ({ id }));
+            const ownedRows = Array.from(state.ownedTaskIds).map((id) => ({
+              id,
+            }));
             const activeRows = state.activeTasks.map((t) => ({ id: t.id }));
             // verifyTaskOwnership now runs inside the tx with FOR UPDATE:
             //   select({id}).from(tasks).where(...).for('update').limit(1)
@@ -269,7 +278,10 @@ if (!IS_ISOLATED) {
   }));
 
   mock.module('../../src/lib/auth.js', () => ({
-    auth: { api: { getSession: async () => null }, handler: async () => new Response('ok') },
+    auth: {
+      api: { getSession: async () => null },
+      handler: async () => new Response('ok'),
+    },
   }));
 
   const { app } = await import('../../src/index.js');
@@ -316,10 +328,17 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
-          error: { severity: 'warning', message: 'temperature spike', context: { gpuId: 0 } },
+          error: {
+            severity: 'warning',
+            message: 'temperature spike',
+            context: { gpuId: 0 },
+          },
         }),
       });
 
@@ -350,7 +369,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'hashcat crashed' },
@@ -378,7 +400,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'gpu hung' },
@@ -395,12 +420,20 @@ if (!IS_ISOLATED) {
     it('emits a status-transition audit log line exactly once on a real transition', async () => {
       // Arrange — agent currently 'offline'; heartbeat says 'online'.
       const token = agentToken(TEST_AGENT_TOKEN);
-      state.agent = { id: 1, projectId: 7, status: 'offline', capabilities: {} };
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'offline',
+        capabilities: {},
+      };
 
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ status: 'online' }),
       });
 
@@ -425,7 +458,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ status: 'online' }),
       });
 
@@ -445,7 +481,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           currentTask: { taskId: 42, progress: 0.5, speed: 1000 },
@@ -468,7 +507,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           currentTask: { taskId: 999, progress: 0, speed: 0 },
@@ -503,7 +545,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'fan-out test' },
@@ -528,13 +573,20 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           error: {
             severity: 'warning',
             message: 'leak attempt',
-            context: { api_key: 'sk-real', stack: 'Error...', authorization: 'Bearer xxx' },
+            context: {
+              api_key: 'sk-real',
+              stack: 'Error...',
+              authorization: 'Bearer xxx',
+            },
           },
         }),
       });

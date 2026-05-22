@@ -592,7 +592,11 @@ export async function updateTaskProgress(
   // Insert cracked hash results if submitted
   if (data.results && data.results.length > 0 && !taskRow.hashListId) {
     logger.error(
-      { taskId, campaignId: taskRow.campaignId, resultCount: data.results.length },
+      {
+        taskId,
+        campaignId: taskRow.campaignId,
+        resultCount: data.results.length,
+      },
       'Cannot store crack results: campaign has no associated hash list'
     );
   }
@@ -628,7 +632,13 @@ export async function updateTaskProgress(
       emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length);
     } catch (err) {
       logger.error(
-        { err, taskId, agentId, hashListId: taskRow.hashListId, resultCount: data.results.length },
+        {
+          err,
+          taskId,
+          agentId,
+          hashListId: taskRow.hashListId,
+          resultCount: data.results.length,
+        },
         'Failed to insert crack results'
       );
       return { error: 'Failed to store crack results' };

@@ -71,7 +71,10 @@ export function classifyRecentErrors(rows: { severity: string }[]): {
     if (isFatal) hasFatal = true;
     if (isWarning) hasWarning = true;
   }
-  return { count, worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }) };
+  return {
+    count,
+    worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }),
+  };
 }
 
 interface ActiveTaskRow {
@@ -297,7 +300,11 @@ type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
  * makes `fromStatus` / `reason` available only when they're meaningful.
  */
 export type HeartbeatTransition =
-  | { kind: 'noop'; effectiveStatus: ResolvedStatusLiteral; isFatalError: boolean }
+  | {
+      kind: 'noop';
+      effectiveStatus: ResolvedStatusLiteral;
+      isFatalError: boolean;
+    }
   | {
       kind: 'transition';
       effectiveStatus: ResolvedStatusLiteral;
