@@ -71,7 +71,10 @@ export function classifyRecentErrors(rows: { severity: string }[]): {
     if (isFatal) hasFatal = true;
     if (isWarning) hasWarning = true;
   }
-  return { count, worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }) };
+  return {
+    count,
+    worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }),
+  };
 }
 
 interface ActiveTaskRow {
@@ -297,7 +300,11 @@ type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
  * makes `fromStatus` / `reason` available only when they're meaningful.
  */
 export type HeartbeatTransition =
-  | { kind: 'noop'; effectiveStatus: ResolvedStatusLiteral; isFatalError: boolean }
+  | {
+      kind: 'noop';
+      effectiveStatus: ResolvedStatusLiteral;
+      isFatalError: boolean;
+    }
   | {
       kind: 'transition';
       effectiveStatus: ResolvedStatusLiteral;
@@ -349,15 +356,88 @@ export function decideHeartbeatTransition(input: {
  * `getAgentBenchmarkForMode` from this module). We resolve the module
  * once on first use and cache the function reference so every
  * subsequent fatal heartbeat skips the import-resolution roundtrip.
+ *
+ * Returns `null` (and logs) on import failure or unexpected export shape
+ * so callers can degrade gracefully instead of bubbling a 500 to the
+ * agent — the heartbeat must stay alive so the agent can keep checking
+ * in even if a downstream module is misbehaving.
  */
 let cachedHandleTaskFailure: typeof import('./tasks.js').handleTaskFailure | null = null;
 
-async function getHandleTaskFailure(): Promise<typeof import('./tasks.js').handleTaskFailure> {
-  if (cachedHandleTaskFailure === null) {
-    const mod = await import('./tasks.js');
-    cachedHandleTaskFailure = mod.handleTaskFailure;
+async function getHandleTaskFailure(): Promise<
+  typeof import('./tasks.js').handleTaskFailure | null
+> {
+  if (cachedHandleTaskFailure != null) {
+    return cachedHandleTaskFailure;
   }
-  return cachedHandleTaskFailure;
+  try {
+    const mod = await import('./tasks.js');
+    if (typeof mod.handleTaskFailure !== 'function') {
+      logger.error(
+        { exportType: typeof mod.handleTaskFailure },
+        'handleTaskFailure export is not a function — possible circular-import edge'
+      );
+      return null;
+    }
+    cachedHandleTaskFailure = mod.handleTaskFailure;
+    return cachedHandleTaskFailure;
+  } catch (err) {
+    logger.error({ err }, 'Failed to lazy-import handleTaskFailure from ./tasks.js');
+    return null;
+  }
+}
+
+/**
+ * Lazy reference to `buildCapabilityPredicate` from `./tasks.js`. Same
+ * circular-import workaround as `getHandleTaskFailure` above — the heartbeat
+ * high-priority check must filter against the agent's capabilities so we
+ * never tell an agent to ask for work it cannot actually claim. Returns
+ * `null` on import failure so the caller can degrade by omitting the
+ * high-priority hint rather than 500-ing the heartbeat.
+ */
+let cachedBuildCapabilityPredicate: typeof import('./tasks.js').buildCapabilityPredicate | null =
+  null;
+
+async function getBuildCapabilityPredicate(): Promise<
+  typeof import('./tasks.js').buildCapabilityPredicate | null
+> {
+  if (cachedBuildCapabilityPredicate != null) {
+    return cachedBuildCapabilityPredicate;
+  }
+  try {
+    const mod = await import('./tasks.js');
+    if (typeof mod.buildCapabilityPredicate !== 'function') {
+      logger.error(
+        { exportType: typeof mod.buildCapabilityPredicate },
+        'buildCapabilityPredicate export is not a function — possible circular-import edge'
+      );
+      return null;
+    }
+    cachedBuildCapabilityPredicate = mod.buildCapabilityPredicate;
+    return cachedBuildCapabilityPredicate;
+  } catch (err) {
+    logger.error({ err }, 'Failed to lazy-import buildCapabilityPredicate from ./tasks.js');
+    return null;
+  }
+}
+
+/**
+ * Once-per-agent guard for the "empty/malformed capabilities" warn. The
+ * Set lives for the process lifetime so a noisy agent doesn't flood logs
+ * each heartbeat. Operators see one warn per agent until the agent
+ * announces real capabilities.
+ */
+const warnedEmptyCapsAgentIds = new Set<number>();
+
+/**
+ * Test-only reset for the warned-agent guard. Integration tests that
+ * exercise the empty-capabilities path within a single process need to
+ * reach the warn branch repeatedly with the same mock agent id; this
+ * keeps the production guard intact while letting tests start each case
+ * from a known empty state.
+ */
+export function __resetWarnedEmptyCapsForTesting(): void {
+  warnedEmptyCapsAgentIds.clear();
 }
 
 function logStatusTransition(opts: {
@@ -621,36 +701,100 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
 
     const handleTaskFailure = await getHandleTaskFailure();
     let failed = 0;
-    for (const activeTask of activeTasks) {
-      try {
-        await handleTaskFailure(activeTask.id, agentId, data.error?.message ?? 'Agent fatal error');
-      } catch (err) {
-        failed += 1;
-        logger.error(
-          { err, agentId, taskId: activeTask.id },
-          'handleTaskFailure threw during fatal-heartbeat fan-out; sibling tasks continue'
-        );
+    if (handleTaskFailure === null) {
+      // Lazy import failed - count every active task as failed-to-fail so the
+      // summary still gives operators a non-zero failure count to investigate.
+      failed = activeTasks.length;
+      logger.error(
+        { agentId, attempted: activeTasks.length },
+        'handleTaskFailure unavailable on fatal heartbeat; active tasks left in their current status until the sweep reaps them'
+      );
+    } else {
+      for (const activeTask of activeTasks) {
+        try {
+          await handleTaskFailure(
+            activeTask.id,
+            agentId,
+            data.error?.message ?? 'Agent fatal error'
+          );
+        } catch (err) {
+          failed += 1;
+          logger.error(
+            { err, agentId, taskId: activeTask.id },
+            'handleTaskFailure threw during fatal-heartbeat fan-out; sibling tasks continue'
+          );
+        }
       }
     }
     taskFailureSummary = { attempted: activeTasks.length, failed };
   }
 
-  // Check if there are high-priority pending tasks for this agent's project
+  // Check if there are high-priority pending tasks for this agent's project.
+  // Filter against the agent's capabilities so we don't tell an agent to ask
+  // for work it cannot actually claim — buildCapabilityPredicate matches the
+  // SQL filter assignNextTask uses for the real claim.
+  //
+  // Gated on online/benchmarked status because assignNextTask refuses to
+  // assign to any other status, so suggesting work to an agent in 'error'
+  // or 'offline' is both useless and misleading.
   let hasHighPriorityTasks = false;
-  if (updated) {
-    const [highPriority] = await db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
-      .where(
-        and(
-          eq(tasks.status, 'pending'),
-          eq(campaigns.projectId, updated.projectId),
-          sql`${campaigns.priority} <= 1`
-        )
-      )
-      .limit(1);
-    hasHighPriorityTasks = !!highPriority;
+  const isClaimEligible = updated?.status === 'online' || updated?.status === 'benchmarked';
+  if (updated && isClaimEligible) {
+    const rawCaps = updated.capabilities;
+    const capsIsObject = rawCaps !== null && typeof rawCaps === 'object' && !Array.isArray(rawCaps);
+    // An agent that has not yet announced is operationally equivalent to one
+    // with malformed capabilities: `buildCapabilityPredicate` would emit a
+    // filter that excludes every real hashcat task (every task carries a
+    // `hashcatMode` requirement), so the hint silently zero-matches AND we
+    // pay for an extra DB join per heartbeat. Treat "no usable hashModes"
+    // (missing key, empty array, or all-invalid entries) the same as
+    // null/non-object: warn once, skip the lookup.
+    const hasUsableHashModes =
+      capsIsObject &&
+      Array.isArray((rawCaps as Record<string, unknown>)['hashModes']) &&
+      ((rawCaps as Record<string, unknown>)['hashModes'] as unknown[]).some((m) => {
+        const n = Number(m);
+        return Number.isFinite(n) && Number.isInteger(n);
+      });
+    if (!capsIsObject || !hasUsableHashModes) {
+      if (!warnedEmptyCapsAgentIds.has(agentId)) {
+        warnedEmptyCapsAgentIds.add(agentId);
+        const capabilitiesType = !capsIsObject
+          ? rawCaps === null
+            ? 'null'
+            : typeof rawCaps
+          : 'object-without-usable-hashModes';
+        logger.warn(
+          { agentId, capabilitiesType },
+          'Agent has empty or non-object capabilities — high-priority hint disabled until announce'
+        );
+      }
+    } else {
+      const buildCapabilityPredicate = await getBuildCapabilityPredicate();
+      if (buildCapabilityPredicate === null) {
+        // Lazy import failed; degrade by omitting the hint. The agent will
+        // still pick up work through the normal claim path on the next
+        // /tasks/next call — the hint is a latency optimization, not a
+        // correctness requirement.
+      } else {
+        const agentCaps = rawCaps as Record<string, unknown>;
+        const capabilityPredicate = buildCapabilityPredicate(agentCaps);
+        const [highPriority] = await db
+          .select({ id: tasks.id })
+          .from(tasks)
+          .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+          .where(
+            and(
+              eq(tasks.status, 'pending'),
+              eq(campaigns.projectId, updated.projectId),
+              sql`${campaigns.priority} <= 1`,
+              capabilityPredicate
+            )
+          )
+          .limit(1);
+        hasHighPriorityTasks = !!highPriority;
+      }
+    }
   }
 
   return {

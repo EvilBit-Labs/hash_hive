@@ -8,6 +8,7 @@ import type {
   agentStatusSchema,
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
+  assignedTaskSchema,
   benchmarkSubmissionSchema,
   campaignActiveAgentSchema,
   campaignAttackRowSchema,
@@ -46,6 +47,7 @@ import type {
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
   loginRequestSchema,
+  requiredCapabilitiesSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
@@ -189,28 +191,20 @@ export { KNOWN_ENGINES, KNOWN_PLATFORMS } from '../schemas/index.js';
  */
 export type WorkRange = z.infer<typeof workRangeSchema>;
 
-export interface RequiredCapabilities {
-  gpu?: boolean;
-  hashcatMode?: number;
-}
+/**
+ * Capability requirements imposed by a task. Inferred from
+ * `requiredCapabilitiesSchema` in `@hashhive/shared`. Passthrough
+ * keys may carry future requirement axes — consumers should not
+ * exhaustively switch on a closed set.
+ */
+export type RequiredCapabilities = z.infer<typeof requiredCapabilitiesSchema>;
 
-export interface AssignedTask {
-  id: number;
-  attackId: number;
-  campaignId: number;
-  agentId: number;
-  status: string;
-  workRange: WorkRange;
-  progress: unknown;
-  resultStats: unknown;
-  requiredCapabilities: RequiredCapabilities | null;
-  assignedAt: Date | null;
-  startedAt: Date | null;
-  completedAt: Date | null;
-  failureReason: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+/**
+ * Canonical assigned-task shape returned from the agent API
+ * `/tasks/next`. Inferred from `assignedTaskSchema` so the wire
+ * shape and the in-process TypeScript type cannot drift.
+ */
+export type AssignedTask = z.infer<typeof assignedTaskSchema>;
 
 // ─── API Request Types ──────────────────────────────────────────────
 
@@ -239,7 +233,11 @@ export type InstantiateAttackTemplateResponse = z.infer<
  */
 export type ApiKeyMetadata =
   | { readonly hasKey: false }
-  | { readonly hasKey: true; readonly prefix: string; readonly lastUsedAt: string | null };
+  | {
+      readonly hasKey: true;
+      readonly prefix: string;
+      readonly lastUsedAt: string | null;
+    };
 
 /**
  * Response from `POST /api/v1/dashboard/auth/me/api-key` (issue/rotate).

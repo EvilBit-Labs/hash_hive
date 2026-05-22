@@ -57,6 +57,13 @@
       "when": 1779152939557,
       "tag": "0007_light_ulik",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779426146854,
+      "tag": "0008_gifted_ultragirl",
+      "breakpoints": true
     }
   ]
 }

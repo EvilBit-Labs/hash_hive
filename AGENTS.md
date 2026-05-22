@@ -34,6 +34,7 @@ Users issue and rotate Control API keys from the dashboard Account page (`/accou
 - Prefer mermaid diagrams for architectural or sequence diagrams in documentation.
 - Agents (hashcat workers) are the primary API consumer. Never break the agent API to improve the dashboard experience.
 - **Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas.** Do not declare local TypeScript interfaces in `packages/backend/src/services/*` or `packages/frontend/src/hooks/*` for shapes that cross the API boundary — add a schema to `packages/shared/src/schemas/index.ts`, export the `z.infer<...>` type from `packages/shared/src/types/index.ts`, and import. The same rule applies to test fixtures (`tests/fixtures/api-responses.ts`).
+- **Keep the OpenAPI spec in sync with shared types.** When adding or changing a field on a shape that crosses the agent/dashboard/control API boundary, update the corresponding `packages/openapi/*.yaml` schema (properties + `required` list) and the contract test in the same change — generated clients rely on the spec, not the TypeScript type.
 
 ## Validation Gates (MANDATORY)
 

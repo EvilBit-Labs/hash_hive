@@ -26,6 +26,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { sql } from 'drizzle-orm';
 
 const IS_ISOLATED = process.env['AGENT_HEARTBEAT_TEST_ISOLATED'] === '1';
 
@@ -68,7 +69,12 @@ if (!IS_ISOLATED) {
 
   // Shared mutable state the test cases set up before each call.
   const state = {
-    agent: { id: 1, projectId: 7, status: 'online', capabilities: {} } as MockAgent | null,
+    agent: {
+      id: 1,
+      projectId: 7,
+      status: 'online',
+      capabilities: {},
+    } as MockAgent | null,
     activeTasks: [] as MockTask[],
     ownedTaskIds: new Set<number>(),
     capturedErrors: [] as CapturedAgentError[],
@@ -139,7 +145,9 @@ if (!IS_ISOLATED) {
           taskId: vals.taskId ?? null,
         };
         state.capturedErrors.push(row);
-        return { returning: () => Promise.resolve([{ id: state.capturedErrors.length, ...row }]) };
+        return {
+          returning: () => Promise.resolve([{ id: state.capturedErrors.length, ...row }]),
+        };
       },
     };
   }
@@ -182,7 +190,9 @@ if (!IS_ISOLATED) {
           // We disambiguate by call shape rather than parsing the where
           // clause (which is opaque drizzle SQL).
           if (keys.length === 1 && keys[0] === 'id') {
-            const ownedRows = Array.from(state.ownedTaskIds).map((id) => ({ id }));
+            const ownedRows = Array.from(state.ownedTaskIds).map((id) => ({
+              id,
+            }));
             const activeRows = state.activeTasks.map((t) => ({ id: t.id }));
             // verifyTaskOwnership now runs inside the tx with FOR UPDATE:
             //   select({id}).from(tasks).where(...).for('update').limit(1)
@@ -248,6 +258,12 @@ if (!IS_ISOLATED) {
     SYSTEM_EVENT_PROJECT_ID: 0 as const,
   }));
 
+  // Exposed so tests can assert the heartbeat high-priority path called
+  // the capability filter with the right agent caps. Default impl returns
+  // a no-op SQL fragment (the drizzle-chain mock ignores predicate
+  // contents); tests can mockImplementationOnce to override.
+  const buildCapabilityPredicateMock = mock(() => sql`TRUE`);
+
   mock.module('../../src/services/tasks.js', () => ({
     assignNextTask: mock(),
     updateTaskProgress: mock(),
@@ -260,13 +276,18 @@ if (!IS_ISOLATED) {
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     listTasksByAgent: mock(),
+    buildCapabilityPredicate: buildCapabilityPredicateMock,
   }));
 
   mock.module('../../src/lib/auth.js', () => ({
-    auth: { api: { getSession: async () => null }, handler: async () => new Response('ok') },
+    auth: {
+      api: { getSession: async () => null },
+      handler: async () => new Response('ok'),
+    },
   }));
 
   const { app } = await import('../../src/index.js');
+  const { __resetWarnedEmptyCapsForTesting } = await import('../../src/services/agents.js');
   const { agentToken } = await import('../fixtures.js');
 
   const AGENT_BASE = '/api/v1/agent';
@@ -293,6 +314,11 @@ if (!IS_ISOLATED) {
     loggerMock.error.mockReset();
     emitAgentErrorMock.mockReset();
     emitAgentStatusMock.mockReset();
+    buildCapabilityPredicateMock.mockReset();
+    buildCapabilityPredicateMock.mockImplementation(() => sql`TRUE`);
+    // Reset the process-global once-per-agent warn guard so each test
+    // starts from a known empty state.
+    __resetWarnedEmptyCapsForTesting();
   });
 
   afterEach(() => {
@@ -310,10 +336,17 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
-          error: { severity: 'warning', message: 'temperature spike', context: { gpuId: 0 } },
+          error: {
+            severity: 'warning',
+            message: 'temperature spike',
+            context: { gpuId: 0 },
+          },
         }),
       });
 
@@ -344,7 +377,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'hashcat crashed' },
@@ -372,7 +408,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'gpu hung' },
@@ -389,12 +428,20 @@ if (!IS_ISOLATED) {
     it('emits a status-transition audit log line exactly once on a real transition', async () => {
       // Arrange — agent currently 'offline'; heartbeat says 'online'.
       const token = agentToken(TEST_AGENT_TOKEN);
-      state.agent = { id: 1, projectId: 7, status: 'offline', capabilities: {} };
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'offline',
+        capabilities: {},
+      };
 
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ status: 'online' }),
       });
 
@@ -419,7 +466,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ status: 'online' }),
       });
 
@@ -439,7 +489,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           currentTask: { taskId: 42, progress: 0.5, speed: 1000 },
@@ -462,7 +515,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           currentTask: { taskId: 999, progress: 0, speed: 0 },
@@ -497,7 +553,10 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'error',
           error: { severity: 'fatal', message: 'fan-out test' },
@@ -522,13 +581,20 @@ if (!IS_ISOLATED) {
       // Act
       const res = await app.request(`${AGENT_BASE}/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           status: 'online',
           error: {
             severity: 'warning',
             message: 'leak attempt',
-            context: { api_key: 'sk-real', stack: 'Error...', authorization: 'Bearer xxx' },
+            context: {
+              api_key: 'sk-real',
+              stack: 'Error...',
+              authorization: 'Bearer xxx',
+            },
           },
         }),
       });
@@ -540,6 +606,154 @@ if (!IS_ISOLATED) {
       expect(ctx['api_key']).toBe('[REDACTED]');
       expect(ctx['authorization']).toBe('[REDACTED]');
       expect(ctx['stack']).toBe('Error...');
+    });
+
+    it('calls buildCapabilityPredicate with the agent capabilities on the high-priority lookup', async () => {
+      // Arrange — online agent with GPU + hashMode capabilities; pretend a
+      // high-priority task is queued for its project.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: true, hashModes: [0, 1000] },
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBe(true);
+      expect(buildCapabilityPredicateMock).toHaveBeenCalledTimes(1);
+      // The heartbeat must pass the agent's own capabilities to the filter,
+      // not an empty object — otherwise the predicate excludes everything.
+      expect(buildCapabilityPredicateMock.mock.calls[0]?.[0]).toEqual({
+        gpu: true,
+        hashModes: [0, 1000],
+      });
+    });
+
+    it('skips the high-priority lookup for an agent in error status', async () => {
+      // Arrange — agent transitioning to error via fatal heartbeat. The
+      // hint must not fire because assignNextTask refuses to assign to
+      // non-online/non-benchmarked agents, so suggesting work is misleading.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: true, hashModes: [0] },
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act — fatal heartbeat moves status to 'error'.
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: 'error',
+          error: { severity: 'fatal', message: 'gpu hung' },
+        }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      // The route omits hasHighPriorityTasks when false (response-shape
+      // optimization in /heartbeat). The status gate must short-circuit
+      // before the lookup, so the predicate is not invoked.
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+    });
+
+    it('warn-logs and skips the high-priority lookup for empty hashModes', async () => {
+      // Arrange — DB default for agents.capabilities is `{}`, which is an
+      // object but carries no usable hashModes. The predicate would
+      // silently exclude every real task and still pay for an extra DB
+      // join, so treat this the same as null: warn once, skip the lookup.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: false }, // object without hashModes
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+      const warnCalls = loggerMock.warn.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined;
+        return (
+          arg?.['agentId'] === 1 && arg?.['capabilitiesType'] === 'object-without-usable-hashModes'
+        );
+      });
+      expect(warnCalls).toHaveLength(1);
+    });
+
+    it('warn-logs and skips the high-priority lookup for null capabilities', async () => {
+      // Arrange — agent row exists but capabilities are NULL (jsonb is
+      // nullable in schema; can happen on a freshly-inserted row that
+      // hasn't yet announced). The shape check skips the predicate so we
+      // don't silently exclude every real task.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        // biome-ignore lint/suspicious/noExplicitAny: deliberate null to mirror jsonb nullability the route now defends against
+        capabilities: null as any,
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      // Predicate must NOT have been called — the shape gate short-circuited.
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+      // And the warn must have fired exactly once for this agent.
+      const warnCallsForAgent = loggerMock.warn.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined;
+        return arg?.['agentId'] === 1 && arg?.['capabilitiesType'] === 'null';
+      });
+      expect(warnCallsForAgent).toHaveLength(1);
     });
   });
 }
