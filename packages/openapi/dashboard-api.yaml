@@ -1,0 +1,630 @@
+openapi: 3.1.0
+info:
+  title: HashHive Dashboard API
+  description: |
+    REST API consumed by the HashHive React dashboard. Authenticated by
+    BetterAuth cookie sessions, paginated with `page`/`pageSize` (or
+    `limit`/`offset` on some surfaces), and returns errors in the
+    envelope `{ error: { code, message } }`.
+
+    This document covers the **Campaign Orchestration** surface
+    completed in PR #151. The full dashboard surface (auth, projects,
+    agents, resources, results, stats, health) is currently
+    documented in-code; a future revision of this spec will expand
+    coverage. New endpoints should be added here as they ship.
+
+    ## Conventions
+
+    - All authenticated requests carry the BetterAuth session cookie
+      (`hh.session_token=...`).
+    - The user's active project is conveyed via the `x-project-id`
+      header and enforced server-side via `requireProjectAccess`.
+    - All errors share the envelope `{ error: { code: string,
+      message: string } }`.
+    - Status codes:
+      - **200** — request succeeded
+      - **201** — resource created
+      - **400** — request was malformed or input invalid
+      - **403** — caller lacks the required role
+      - **404** — resource not found or not visible in the current project
+      - **409** — request well-formed but state precondition failed
+        (NOT_DRAFT, RESOURCE_MISSING, STALE_STATE)
+      - **500** — server error (TASK_GENERATION_FAILED, unexpected)
+      - **503** — dependent service unavailable (queue, resource lookup)
+
+  version: 1.0.0
+
+servers:
+  - url: /api/v1/dashboard
+    description: Dashboard API base path
+
+tags:
+  - name: Campaigns
+    description: Campaign orchestration — create, edit, list, lifecycle, attacks.
+
+paths:
+  /campaigns:
+    post:
+      operationId: createCampaign
+      summary: Create a new campaign (optionally with inline attacks)
+      description: |
+        Creates a campaign in `draft` status. When the optional
+        `attacks[]` array is supplied, the campaign and all attacks are
+        inserted in a single database transaction with pre-commit DAG
+        validation and cross-project resource validation. Attack
+        `dependencyIndices` reference attacks by their 0-based position
+        in the same request (since attacks have no DB id until insert);
+        the server translates these to real attack IDs after insert.
+      tags: [Campaigns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampaignRequest"
+      responses:
+        "201":
+          description: Campaign created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaign, attacks]
+                properties:
+                  campaign:
+                    $ref: "#/components/schemas/Campaign"
+                  attacks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AttackSummary"
+                    description: |
+                      Always present. Empty when the request omitted
+                      `attacks[]`; otherwise contains the inserted
+                      attacks with real IDs and translated dependencies.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: DAG cycle in proposed attacks, or cross-project resource reference.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DagInvalidError"
+                  - $ref: "#/components/schemas/ResourceMissingError"
+
+  /campaigns/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    patch:
+      operationId: updateCampaignPartial
+      summary: Partial-update a draft campaign
+      description: |
+        Updates only the fields supplied in the request body. Only
+        permitted while the campaign is in `draft` status; transitions
+        to `running` lock the editable surface.
+      tags: [Campaigns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchCampaignRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          $ref: "#/components/responses/NotDraft"
+    put:
+      operationId: updateCampaignReplace
+      summary: Full-replace a draft campaign
+      description: |
+        Replaces the campaign with the supplied body. `name` and
+        `priority` are required. `description` may be `null` to
+        explicitly clear a previous description; omitting the field
+        with PATCH would leave it untouched.
+      tags: [Campaigns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutCampaignRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          $ref: "#/components/responses/NotDraft"
+    delete:
+      operationId: deleteCampaign
+      summary: Delete a draft campaign
+      tags: [Campaigns]
+      responses:
+        "200":
+          description: Campaign deleted
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          $ref: "#/components/responses/NotDraft"
+
+  /campaigns/{id}/start:
+    post:
+      operationId: startCampaign
+      summary: Transition a campaign to `running`
+      description: |
+        Validates that the campaign has at least one attack, that every
+        referenced resource exists in the current project, and that
+        the task queue is available. On success, generates tasks
+        (inline if small, queued if large) and emits the
+        `campaign_status` event.
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Resource missing or stale state.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ResourceMissingError"
+                  - $ref: "#/components/schemas/StaleStateError"
+        "500":
+          $ref: "#/components/responses/TaskGenerationFailed"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /campaigns/{id}/pause:
+    post:
+      operationId: pauseCampaign
+      summary: Transition a running campaign to `paused`
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Stale state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaleStateError"
+
+  /campaigns/{id}/resume:
+    post:
+      operationId: resumeCampaign
+      summary: Transition a paused campaign back to `running`
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Resource missing or stale state.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ResourceMissingError"
+                  - $ref: "#/components/schemas/StaleStateError"
+
+  /campaigns/{id}/stop:
+    post:
+      operationId: stopCampaign
+      summary: Stop a campaign and reset it to `draft`
+      description: |
+        Cancels all in-flight tasks and resets the campaign's
+        `startedAt`, `completedAt`, and `progress` fields. The
+        campaign remains restartable.
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Stale state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaleStateError"
+
+  /campaigns/{id}/cancel:
+    post:
+      operationId: cancelCampaign
+      summary: Transition a campaign to `cancelled` (terminal)
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+
+  /campaigns/{id}/lifecycle:
+    post:
+      operationId: lifecycleAction
+      summary: Run a lifecycle action via action-enum body
+      description: |
+        Equivalent surface to the spec-named alias routes
+        (`/start`, `/pause`, `/resume`, `/stop`, `/cancel`).
+        Preserved for clients that prefer the enum-style request.
+      tags: [Campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [start, pause, stop, cancel]
+      responses:
+        "200":
+          $ref: "#/components/responses/CampaignWrapper"
+        "400":
+          $ref: "#/components/responses/InvalidTransition"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Resource missing or stale state.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ResourceMissingError"
+                  - $ref: "#/components/schemas/StaleStateError"
+
+  /campaigns/{id}/attacks:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    post:
+      operationId: addAttack
+      summary: Add an attack to a campaign
+      description: |
+        Pre-validates the proposed DAG (current attacks + the new one
+        with a synthetic id) and the referenced resources before
+        persisting. `dependencies` here references **real attack IDs**
+        — not indices like the inline-create path.
+      tags: [Campaigns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttackRequest"
+      responses:
+        "201":
+          description: Attack created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attack]
+                properties:
+                  attack: { $ref: "#/components/schemas/AttackSummary" }
+        "400":
+          description: Validation error or DAG cycle.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationError"
+                  - $ref: "#/components/schemas/DagInvalidError"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "409":
+          description: Cross-project resource reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceMissingError"
+
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: hh.session_token
+
+  schemas:
+    Campaign:
+      type: object
+      required: [id, projectId, name, hashListId, status, priority]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        hashListId: { type: integer }
+        status:
+          type: string
+          enum: [draft, running, paused, completed, cancelled]
+        priority: { type: integer, minimum: 1, maximum: 10 }
+        progress: { $ref: "#/components/schemas/CampaignProgress" }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CampaignProgress:
+      type: object
+      description: |
+        Cached progress payload written by `updateCampaignProgress`.
+        Field names use camelCase to match the frontend hook
+        consumers; the spec ticket's snake_case form is illustrative
+        documentation, not a wire-format mandate.
+      properties:
+        totalTasks: { type: integer }
+        completedTasks: { type: integer }
+        tasksFailed:
+          type: integer
+          description: Tasks in terminal `failed` status.
+        overallProgress:
+          type: number
+          description: Fraction in [0, 1] including in-flight task progress.
+        eta:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Forecasted completion based on average throughput since
+            `startedAt`. Null when there's no throughput basis
+            (no running tasks, no measurable progress, elapsed < 1s).
+        hashProgress:
+          type: object
+          properties:
+            total: { type: integer }
+            cracked: { type: integer }
+            remaining: { type: integer }
+            percentage: { type: number }
+        updatedAt: { type: string, format: date-time }
+
+    AttackSummary:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer }
+        dependencies:
+          type: array
+          nullable: true
+          items: { type: integer, description: Real attack ID }
+
+    InlineAttack:
+      type: object
+      required: [mode]
+      description: Used by the transactional POST /campaigns inline-create path.
+      properties:
+        mode: { type: integer, minimum: 0 }
+        hashTypeId: { type: integer, minimum: 1 }
+        wordlistId: { type: integer, minimum: 1 }
+        rulelistId: { type: integer, minimum: 1 }
+        masklistId: { type: integer, minimum: 1 }
+        advancedConfiguration:
+          type: object
+          additionalProperties: true
+        dependencyIndices:
+          type: array
+          items: { type: integer, minimum: 0 }
+          description: |
+            0-based indices into the same `attacks[]` array. NOT real
+            attack IDs. The server translates these to real IDs after
+            the insert returns.
+
+    CreateCampaignRequest:
+      type: object
+      required: [name, hashListId]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, maxLength: 2000 }
+        hashListId: { type: integer, minimum: 1 }
+        priority: { type: integer, minimum: 1, maximum: 10 }
+        attacks:
+          type: array
+          items: { $ref: "#/components/schemas/InlineAttack" }
+
+    PatchCampaignRequest:
+      type: object
+      description: Partial-update; all fields optional.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, maxLength: 2000 }
+        priority: { type: integer, minimum: 1, maximum: 10 }
+
+    PutCampaignRequest:
+      type: object
+      required: [name, priority]
+      description: |
+        Full-replace; `name` and `priority` required. `description`
+        may be `null` to explicitly clear.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, maxLength: 2000, nullable: true }
+        priority: { type: integer, minimum: 1, maximum: 10 }
+
+    CreateAttackRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: integer, minimum: 0 }
+        hashTypeId: { type: integer, minimum: 1 }
+        wordlistId: { type: integer, minimum: 1 }
+        rulelistId: { type: integer, minimum: 1 }
+        masklistId: { type: integer, minimum: 1 }
+        advancedConfiguration:
+          type: object
+          additionalProperties: true
+        dependencies:
+          type: array
+          items: { type: integer, minimum: 1 }
+          description: Real attack IDs (not indices).
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    ValidationError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            error:
+              properties:
+                code: { type: string, enum: [VALIDATION_ERROR] }
+
+    DagInvalidError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            error:
+              properties:
+                code: { type: string, enum: [DAG_INVALID] }
+
+    ResourceMissingError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            error:
+              properties:
+                code: { type: string, enum: [RESOURCE_MISSING] }
+
+    StaleStateError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            error:
+              properties:
+                code: { type: string, enum: [STALE_STATE] }
+
+  responses:
+    CampaignWrapper:
+      description: Returns the campaign envelope.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [campaign]
+            properties:
+              campaign: { $ref: "#/components/schemas/Campaign" }
+
+    ValidationError:
+      description: Request body or path parameter failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationError"
+
+    ResourceNotFound:
+      description: Campaign / attack not found or not visible in this project.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+    NotDraft:
+      description: Operation only permitted on `draft` campaigns.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [NOT_DRAFT] }
+
+    InvalidTransition:
+      description: |
+        Requested transition is not allowed from the current status.
+        See `VALID_TRANSITIONS` in `services/campaigns.ts` for the
+        full allow-list.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [INVALID_TRANSITION] }
+
+    ServiceUnavailable:
+      description: |
+        Underlying service unavailable. `code` distinguishes the cause:
+        - `SERVICE_UNAVAILABLE` — queue health check failed, or resource
+          validation lookup itself threw.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [SERVICE_UNAVAILABLE] }
+
+    TaskGenerationFailed:
+      description: Task generation failed during campaign start; campaign rolled back.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [TASK_GENERATION_FAILED] }
+
+security:
+  - SessionCookie: []

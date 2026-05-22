@@ -62,7 +62,6 @@ if (IS_ISOLATED) {
 
   mock.module('bullmq', () => ({
     Worker: class MockWorker {
-      constructor(_name: string, _processor: (job: unknown) => Promise<unknown>) {}
       on(event: EventName, handler: AnyHandler) {
         // Append not overwrite — workers attach multiple 'failed' listeners.
         (capturedHandlers[event] ??= []).push(handler);

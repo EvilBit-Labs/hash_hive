@@ -170,6 +170,8 @@ if (!IS_ISOLATED) {
     | 'INVALID_TRANSITION'
     | 'NOT_FOUND'
     | 'RESOURCE_MISSING'
+    | 'RESOURCE_VALIDATION_FAILED'
+    | 'STALE_STATE'
     | 'TASK_GENERATION_FAILED';
   type TransitionResult =
     | { campaign: { id: number; status: string } | null }
@@ -223,7 +225,7 @@ if (!IS_ISOLATED) {
 
   const mockCreateCampaignWithAttacks = mock(
     async (_input: {
-      attacks: ReadonlyArray<{ dependencies?: number[] | undefined }>;
+      attacks: ReadonlyArray<{ dependencyIndices?: number[] | undefined }>;
     }): Promise<CreateWithAttacksResult> => ({
       kind: 'created',
       campaign: makeCampaign(),
@@ -534,22 +536,64 @@ if (!IS_ISOLATED) {
       });
     }
 
-    for (const method of ['PATCH', 'PUT'] as const) {
-      it(`${method} updates a draft campaign and returns 200`, async () => {
-        mockUpdateCampaign.mockClear();
-        const res = await updateBody(method, 100, { name: 'New name' });
-        expect(res.status).toBe(200);
-        const body = (await res.json()) as { campaign?: { name?: string } };
-        expect(body.campaign?.name).toBe('New name');
-        expect(mockUpdateCampaign).toHaveBeenCalledTimes(1);
-      });
+    // PATCH is partial: any field optional. PUT is full-replace: name +
+    // priority required; description optional (null means "explicit clear").
+    const patchBody = { name: 'New name' };
+    const putBody = { name: 'New name', description: 'Updated', priority: 5 };
 
+    it('PATCH updates a draft campaign with a partial body and returns 200', async () => {
+      mockUpdateCampaign.mockClear();
+      const res = await updateBody('PATCH', 100, patchBody);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { campaign?: { name?: string } };
+      expect(body.campaign?.name).toBe('New name');
+      expect(mockUpdateCampaign).toHaveBeenCalledTimes(1);
+    });
+
+    it('PUT updates a draft campaign with a full body and returns 200', async () => {
+      mockUpdateCampaign.mockClear();
+      const res = await updateBody('PUT', 100, putBody);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { campaign?: { name?: string } };
+      expect(body.campaign?.name).toBe('New name');
+      expect(mockUpdateCampaign).toHaveBeenCalledTimes(1);
+    });
+
+    it('PUT with missing required field (priority) returns 400 VALIDATION_ERROR', async () => {
+      const res = await updateBody('PUT', 100, { name: 'Incomplete' });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT with missing required field (name) returns 400 VALIDATION_ERROR', async () => {
+      const res = await updateBody('PUT', 100, { priority: 5 });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT with explicit description: null clears the field', async () => {
+      mockUpdateCampaign.mockClear();
+      const res = await updateBody('PUT', 100, {
+        name: 'Clear desc',
+        priority: 5,
+        description: null,
+      });
+      expect(res.status).toBe(200);
+      const calls = mockUpdateCampaign.mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect((lastCall?.[1] as { description?: string | null }).description).toBeNull();
+    });
+
+    for (const method of ['PATCH', 'PUT'] as const) {
       it(`${method} on running campaign returns 409 NOT_DRAFT`, async () => {
-        const res = await updateBody(method, 101, { name: 'Should fail' });
+        const body = method === 'PUT' ? putBody : patchBody;
+        const res = await updateBody(method, 101, body);
         expect(res.status).toBe(409);
-        const body = (await res.json()) as { error?: { code?: string; message?: string } };
-        expect(body.error?.code).toBe('NOT_DRAFT');
-        expect(body.error?.message).toContain('running');
+        const parsed = (await res.json()) as { error?: { code?: string; message?: string } };
+        expect(parsed.error?.code).toBe('NOT_DRAFT');
+        expect(parsed.error?.message).toContain('running');
       });
     }
 
@@ -617,7 +661,7 @@ if (!IS_ISOLATED) {
       expect(body.error?.code).toBe('INVALID_TRANSITION');
     });
 
-    it('maps RESOURCE_MISSING → 400 with specific missing-id message', async () => {
+    it('maps RESOURCE_MISSING → 409 Conflict with specific missing-id message', async () => {
       mockTransitionCampaign.mockResolvedValueOnce({
         error: 'Referenced resources missing: wordlist(99)',
         code: 'RESOURCE_MISSING',
@@ -627,10 +671,27 @@ if (!IS_ISOLATED) {
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'start' }),
       });
-      expect(res.status).toBe(400);
+      // 409 Conflict — the request is well-formed; the state is.
+      expect(res.status).toBe(409);
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('RESOURCE_MISSING');
       expect(body.error?.message).toContain('wordlist(99)');
+    });
+
+    it('maps STALE_STATE → 409 Conflict when source-status guard rejects', async () => {
+      mockTransitionCampaign.mockResolvedValueOnce({
+        error:
+          "Campaign status changed during transition (was 'running'); retry against the current state",
+        code: 'STALE_STATE',
+      });
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'pause' }),
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('STALE_STATE');
     });
 
     it('returns 404 RESOURCE_NOT_FOUND on cross-project campaign without consuming the transition mock', async () => {
@@ -713,7 +774,7 @@ if (!IS_ISOLATED) {
         hashListId: 1,
         attacks: [
           { mode: 0, wordlistId: 1 },
-          { mode: 0, wordlistId: 2, dependencies: [0] },
+          { mode: 0, wordlistId: 2, dependencyIndices: [0] },
         ],
       });
       expect(res.status).toBe(201);
@@ -735,8 +796,8 @@ if (!IS_ISOLATED) {
         name: 'Cycle',
         hashListId: 1,
         attacks: [
-          { mode: 0, dependencies: [1] },
-          { mode: 0, dependencies: [0] },
+          { mode: 0, dependencyIndices: [1] },
+          { mode: 0, dependencyIndices: [0] },
         ],
       });
       expect(res.status).toBe(400);
@@ -753,7 +814,7 @@ if (!IS_ISOLATED) {
       const res = await postCampaign({
         name: 'Bad ref',
         hashListId: 1,
-        attacks: [{ mode: 0, dependencies: [5] }],
+        attacks: [{ mode: 0, dependencyIndices: [5] }],
       });
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error?: { code?: string } };
@@ -765,16 +826,16 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400);
     });
 
-    it('rejects negative dependency index at the schema layer', async () => {
+    it('rejects negative dependencyIndices at the schema layer', async () => {
       const res = await postCampaign({
         name: 'Bad index',
         hashListId: 1,
-        attacks: [{ mode: 0, dependencies: [-1] }],
+        attacks: [{ mode: 0, dependencyIndices: [-1] }],
       });
       expect(res.status).toBe(400);
     });
 
-    it('returns 400 RESOURCE_MISSING when transactional create surfaces a cross-project ref', async () => {
+    it('returns 409 RESOURCE_MISSING when transactional create surfaces a cross-project ref', async () => {
       mockCreateCampaignWithAttacks.mockResolvedValueOnce({
         kind: 'resource_missing',
         missing: ['wordlist(42)'],
@@ -784,7 +845,7 @@ if (!IS_ISOLATED) {
         hashListId: 1,
         attacks: [{ mode: 0, wordlistId: 42 }],
       });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('RESOURCE_MISSING');
       expect(body.error?.message).toContain('wordlist(42)');
@@ -792,7 +853,7 @@ if (!IS_ISOLATED) {
   });
 
   describe('Attack-write-time cross-project resource validation', () => {
-    it('POST /:id/attacks returns 400 RESOURCE_MISSING when validator rejects', async () => {
+    it('POST /:id/attacks returns 409 RESOURCE_MISSING when validator rejects', async () => {
       mockValidateCampaignResources.mockResolvedValueOnce({
         valid: false,
         missing: ['wordlist(99)'],
@@ -802,7 +863,7 @@ if (!IS_ISOLATED) {
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ mode: 0, wordlistId: 99 }),
       });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('RESOURCE_MISSING');
       expect(body.error?.message).toContain('wordlist(99)');
@@ -819,7 +880,7 @@ if (!IS_ISOLATED) {
       expect(mockValidateCampaignResources).toHaveBeenCalledTimes(0);
     });
 
-    it('PATCH /:id/attacks/:attackId returns 400 RESOURCE_MISSING when validator rejects a changed resource', async () => {
+    it('PATCH /:id/attacks/:attackId returns 409 RESOURCE_MISSING when validator rejects a changed resource', async () => {
       mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] });
       mockValidateCampaignResources.mockResolvedValueOnce({
         valid: false,
@@ -830,7 +891,7 @@ if (!IS_ISOLATED) {
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ rulelistId: 13 }),
       });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('RESOURCE_MISSING');
       expect(body.error?.message).toContain('rulelist(13)');
@@ -942,8 +1003,8 @@ if (!IS_ISOLATED) {
     });
   });
 
-  describe('Dashboard campaign lifecycle aliases: /start /pause /resume /stop', () => {
-    function lifecyclePost(id: number, action: 'start' | 'pause' | 'resume' | 'stop') {
+  describe('Dashboard campaign lifecycle aliases: /start /pause /resume /stop /cancel', () => {
+    function lifecyclePost(id: number, action: 'start' | 'pause' | 'resume' | 'stop' | 'cancel') {
       return app.request(`${DASH_CAMPAIGNS}/${id}/${action}`, {
         method: 'POST',
         headers: makeHeaders(),
@@ -955,9 +1016,10 @@ if (!IS_ISOLATED) {
       pause: 'paused',
       resume: 'running',
       stop: 'draft',
+      cancel: 'cancelled',
     } as const;
 
-    for (const action of ['start', 'pause', 'resume', 'stop'] as const) {
+    for (const action of ['start', 'pause', 'resume', 'stop', 'cancel'] as const) {
       it(`POST /:id/${action} delegates to transitionCampaign with the right target status`, async () => {
         mockTransitionCampaign.mockClear();
         mockTransitionCampaign.mockResolvedValueOnce({
@@ -993,17 +1055,29 @@ if (!IS_ISOLATED) {
         expect(body.error?.code).toBe('SERVICE_UNAVAILABLE');
       });
 
-      it(`POST /:id/${action} maps RESOURCE_MISSING → 400`, async () => {
+      it(`POST /:id/${action} maps RESOURCE_MISSING → 409 Conflict`, async () => {
         mockTransitionCampaign.mockResolvedValueOnce({
           error: 'Referenced resources missing: hashList(42), wordlist(7)',
           code: 'RESOURCE_MISSING',
         });
         const res = await lifecyclePost(100, action);
-        expect(res.status).toBe(400);
+        expect(res.status).toBe(409);
         const body = (await res.json()) as { error?: { code?: string; message?: string } };
         expect(body.error?.code).toBe('RESOURCE_MISSING');
         expect(body.error?.message).toContain('hashList(42)');
         expect(body.error?.message).toContain('wordlist(7)');
+      });
+
+      it(`POST /:id/${action} maps STALE_STATE → 409 Conflict`, async () => {
+        mockTransitionCampaign.mockResolvedValueOnce({
+          error:
+            "Campaign status changed during transition (was 'running'); retry against the current state",
+          code: 'STALE_STATE',
+        });
+        const res = await lifecyclePost(100, action);
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { error?: { code?: string } };
+        expect(body.error?.code).toBe('STALE_STATE');
       });
 
       it(`POST /:id/${action} on cross-project campaign returns 404`, async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 
 // DAG validation now tests the real exported pure function from the
 // campaigns service. The local helper that previously lived here has
@@ -88,7 +88,6 @@ describe('DAG validation', () => {
 // We import the production helper directly to test the real decision path.
 
 import {
-  INLINE_GENERATION_THRESHOLD,
   computeCampaignEta,
   resolveGenerationStrategy,
   shouldAutoCompleteCampaign,
@@ -239,10 +238,24 @@ describe('shouldAutoCompleteCampaign', () => {
     ).toBe(true);
   });
 
-  test('returns false when paused even if all tasks terminal', () => {
+  test('returns true when paused and all tasks terminal', () => {
+    // Paused-with-all-terminal-tasks is a valid auto-complete trigger:
+    // without it, a campaign whose last tasks finish during a pause
+    // would stay 'paused' forever with no further trigger to flip it.
     expect(
       shouldAutoCompleteCampaign({
         status: 'paused',
+        totalTasks: 3,
+        completedCount: 3,
+        failedCount: 0,
+      })
+    ).toBe(true);
+  });
+
+  test('returns false when cancelled (terminal status, no recursion)', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'cancelled',
         totalTasks: 3,
         completedCount: 3,
         failedCount: 0,

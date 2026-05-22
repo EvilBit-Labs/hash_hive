@@ -3,29 +3,34 @@ import {
   type CampaignSortField,
   type CampaignSortOrder,
   campaigns,
-  hashLists,
-  hashTypes,
-  maskLists,
-  ruleLists,
   tasks,
-  wordLists,
 } from '@hashhive/shared';
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
+import { validateProposedDAG } from './campaign-dag.js';
+import { validateCampaignResources } from './campaign-resources.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
-import { getHashListStats } from './resources.js';
 
-// Re-export the dashboard-surface functions from the sibling module so
-// existing callers (route handlers, tests) keep working through the
-// `services/campaigns` import path until the next refactor sweep.
+export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js';
+// Re-export from sibling modules so existing callers (route handlers,
+// tests) keep working through the `services/campaigns` import path.
+// Splitting the file out kept it under the 800-line guideline without
+// forcing every caller to update its import path.
 export {
   type DeleteCampaignResult,
   deleteCampaign,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
 } from './campaign-dashboard.js';
+export {
+  _progressDeps,
+  computeCampaignEta,
+  shouldAutoCompleteCampaign,
+  updateCampaignProgress,
+} from './campaign-progress.js';
+export { validateCampaignResources } from './campaign-resources.js';
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100;
@@ -237,9 +242,13 @@ export async function createCampaign(data: {
 
 /**
  * Inline-attack payload shape accepted by `createCampaignWithAttacks`.
- * `dependencies` carries 0-based indices into the same `attacks[]`
- * array of the request body (since attacks have no DB id until insert);
- * the service translates indices → real attack IDs after insert.
+ *
+ * `dependencyIndices` carries **0-based indices into the same
+ * `attacks[]` array** of the request body (since attacks have no DB
+ * id until insert); the service translates indices → real attack IDs
+ * after insert. The field is named distinctly from `dependencies` on
+ * `createAttack` (which carries real attack IDs) so the two semantics
+ * cannot be confused at the call site or on the wire.
  */
 export interface InlineAttackInput {
   mode: number;
@@ -248,7 +257,7 @@ export interface InlineAttackInput {
   rulelistId?: number | null | undefined;
   masklistId?: number | null | undefined;
   advancedConfiguration?: Record<string, unknown> | undefined;
-  dependencies?: number[] | undefined;
+  dependencyIndices?: number[] | undefined;
 }
 
 export type CreateCampaignWithAttacksResult =
@@ -266,10 +275,11 @@ export type CreateCampaignWithAttacksResult =
  * graph (using indices first, then real ids after insert); a cycle
  * aborts the txn so no rows are persisted.
  *
- * Attack `dependencies` values are interpreted as **0-based indices
- * into the supplied `attacks[]` array**, not real attack IDs. This
- * matches the wizard's UX where the user composes the graph before
- * any IDs exist.
+ * Each `InlineAttackInput.dependencyIndices` value is a 0-based index
+ * into the supplied `attacks[]` array, NOT a real attack id (since
+ * attacks have no DB id until insert). The service translates
+ * indices → real ids after insert. This matches the wizard's UX
+ * where the user composes the graph before any IDs exist.
  */
 export async function createCampaignWithAttacks(input: {
   projectId: number;
@@ -286,7 +296,7 @@ export async function createCampaignWithAttacks(input: {
   // validation is cheaper.
   const indexValidationInput = input.attacks.map((a, idx) => ({
     id: idx,
-    dependencies: a.dependencies ?? null,
+    dependencies: a.dependencyIndices ?? null,
   }));
   const preCheck = validateProposedDAG(indexValidationInput);
   if (!preCheck.valid) {
@@ -374,15 +384,21 @@ export async function createCampaignWithAttacks(input: {
         realIdByIndex.push(row.id);
       }
 
-      // Translate and persist real-id deps; also assemble the
-      // post-translation graph for the final DAG check.
+      // Translate index-based deps → real-id deps and persist. The
+      // index-to-id mapping is bijective (per-row insert above gives a
+      // deterministic order) and validateProposedDAG already ran
+      // structurally on the index form, so no post-translation cycle
+      // check is needed — every edge present in the real-id graph has a
+      // corresponding edge in the index graph that was already proven
+      // acyclic. The only remaining failure mode is an out-of-range
+      // index, which is caught point-of-use below.
       const finalGraph: Array<{ id: number; dependencies: number[] | null }> = [];
       for (let idx = 0; idx < input.attacks.length; idx++) {
         const realId = realIdByIndex[idx];
         if (realId === undefined) {
           throw new Error('Inserted attack id missing — txn invariant violated');
         }
-        const indexDeps = input.attacks[idx]?.dependencies ?? [];
+        const indexDeps = input.attacks[idx]?.dependencyIndices ?? [];
         const realDeps = indexDeps.map((depIdx) => {
           const target = realIdByIndex[depIdx];
           if (target === undefined) {
@@ -400,15 +416,6 @@ export async function createCampaignWithAttacks(input: {
             .set({ dependencies: realDeps, updatedAt: new Date() })
             .where(eq(attacks.id, realId));
         }
-      }
-
-      // Final safety net: re-validate the persisted graph with real
-      // IDs. The pre-check on indices already caught structural
-      // cycles, so this should always pass; if it fails the txn is
-      // aborted via the sentinel rather than persisting a bad graph.
-      const finalCheck = validateProposedDAG(finalGraph);
-      if (!finalCheck.valid) {
-        throw new DAGInvalidInsideTx(finalCheck.error ?? 'Invalid DAG');
       }
 
       return { kind: 'created' as const, campaign, attacks: finalGraph };
@@ -437,7 +444,12 @@ export async function updateCampaign(
   id: number,
   data: {
     name?: string | undefined;
-    description?: string | undefined;
+    // PUT requests can pass `null` to explicitly clear the description;
+    // PATCH requests omit the field entirely (undefined) to leave it
+    // untouched. The Drizzle `.set()` call below only writes keys
+    // present in `data`, so `undefined` is skipped while `null` is
+    // persisted.
+    description?: string | null | undefined;
     priority?: number | undefined;
   }
 ): Promise<UpdateCampaignResult> {
@@ -459,168 +471,24 @@ export async function updateCampaign(
 }
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
-
-/**
- * Verify every resource referenced by the campaign and its attacks
- * actually exists, and (for project-scoped resources) belongs to the
- * campaign's project. Returns the missing resource identifiers grouped
- * by table so the route layer can surface a single combined error.
- *
- * Runs one parallel SELECT per table; all resource id lookups are
- * indexed by primary key.
- *
- * Project scoping:
- *   - `hashLists`, `wordLists`, `ruleLists`, `maskLists` have
- *     `project_id` and are scoped to the campaign's project.
- *   - `hashTypes` is global (no project_id) so it's looked up by id only.
- */
-export async function validateCampaignResources(
-  campaign: { projectId: number; hashListId: number | null },
-  campaignAttacks: ReadonlyArray<{
-    hashTypeId?: number | null | undefined;
-    wordlistId?: number | null | undefined;
-    rulelistId?: number | null | undefined;
-    masklistId?: number | null | undefined;
-  }>
-): Promise<{ valid: true } | { valid: false; missing: string[] }> {
-  const wantedHashListIds = campaign.hashListId ? [campaign.hashListId] : [];
-  const wantedHashTypeIds = Array.from(
-    new Set(campaignAttacks.map((a) => a.hashTypeId).filter((v): v is number => v != null))
-  );
-  const wantedWordlistIds = Array.from(
-    new Set(campaignAttacks.map((a) => a.wordlistId).filter((v): v is number => v != null))
-  );
-  const wantedRulelistIds = Array.from(
-    new Set(campaignAttacks.map((a) => a.rulelistId).filter((v): v is number => v != null))
-  );
-  const wantedMasklistIds = Array.from(
-    new Set(campaignAttacks.map((a) => a.masklistId).filter((v): v is number => v != null))
-  );
-
-  const lookups: Array<Promise<{ table: string; foundIds: Set<number>; wanted: number[] }>> = [];
-
-  if (wantedHashListIds.length > 0) {
-    lookups.push(
-      (async () => {
-        const rows = await db
-          .select({ id: hashLists.id })
-          .from(hashLists)
-          .where(
-            and(
-              inArray(hashLists.id, wantedHashListIds),
-              eq(hashLists.projectId, campaign.projectId)
-            )
-          );
-        return {
-          table: 'hashList',
-          foundIds: new Set(rows.map((r) => r.id)),
-          wanted: wantedHashListIds,
-        };
-      })()
-    );
-  }
-  if (wantedHashTypeIds.length > 0) {
-    lookups.push(
-      (async () => {
-        const rows = await db
-          .select({ id: hashTypes.id })
-          .from(hashTypes)
-          .where(inArray(hashTypes.id, wantedHashTypeIds));
-        return {
-          table: 'hashType',
-          foundIds: new Set(rows.map((r) => r.id)),
-          wanted: wantedHashTypeIds,
-        };
-      })()
-    );
-  }
-  if (wantedWordlistIds.length > 0) {
-    lookups.push(
-      (async () => {
-        const rows = await db
-          .select({ id: wordLists.id })
-          .from(wordLists)
-          .where(
-            and(
-              inArray(wordLists.id, wantedWordlistIds),
-              eq(wordLists.projectId, campaign.projectId)
-            )
-          );
-        return {
-          table: 'wordlist',
-          foundIds: new Set(rows.map((r) => r.id)),
-          wanted: wantedWordlistIds,
-        };
-      })()
-    );
-  }
-  if (wantedRulelistIds.length > 0) {
-    lookups.push(
-      (async () => {
-        const rows = await db
-          .select({ id: ruleLists.id })
-          .from(ruleLists)
-          .where(
-            and(
-              inArray(ruleLists.id, wantedRulelistIds),
-              eq(ruleLists.projectId, campaign.projectId)
-            )
-          );
-        return {
-          table: 'rulelist',
-          foundIds: new Set(rows.map((r) => r.id)),
-          wanted: wantedRulelistIds,
-        };
-      })()
-    );
-  }
-  if (wantedMasklistIds.length > 0) {
-    lookups.push(
-      (async () => {
-        const rows = await db
-          .select({ id: maskLists.id })
-          .from(maskLists)
-          .where(
-            and(
-              inArray(maskLists.id, wantedMasklistIds),
-              eq(maskLists.projectId, campaign.projectId)
-            )
-          );
-        return {
-          table: 'masklist',
-          foundIds: new Set(rows.map((r) => r.id)),
-          wanted: wantedMasklistIds,
-        };
-      })()
-    );
-  }
-
-  if (lookups.length === 0) {
-    return { valid: true };
-  }
-
-  const results = await Promise.all(lookups);
-  const missing: string[] = [];
-  for (const { table, foundIds, wanted } of results) {
-    for (const id of wanted) {
-      if (!foundIds.has(id)) {
-        missing.push(`${table}(${id})`);
-      }
-    }
-  }
-
-  if (missing.length === 0) {
-    return { valid: true };
-  }
-  return { valid: false, missing };
-}
+//
+// Cross-project resource validation lives in `campaign-resources.ts`
+// (re-exported above). The DAG validator lives in `campaign-dag.ts`.
+// Progress aggregation + auto-completion lives in
+// `campaign-progress.ts`. Splitting kept this file under the project's
+// 800-line guideline without changing the public import surface.
 
 type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'cancelled';
 
 const VALID_TRANSITIONS: Record<string, CampaignStatus[]> = {
   draft: ['running', 'cancelled'],
   running: ['paused', 'completed', 'cancelled', 'draft'],
-  paused: ['running', 'cancelled', 'draft'],
+  // paused → completed is permitted so the auto-complete gate can fire
+  // when the last in-flight task of a paused campaign reaches a
+  // terminal state. Without this edge, a paused campaign whose tasks
+  // happened to finish during the pause window would sit at 'paused'
+  // indefinitely with no further trigger to flip it to 'completed'.
+  paused: ['running', 'completed', 'cancelled', 'draft'],
   completed: [],
   cancelled: [],
 };
@@ -729,11 +597,29 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     updates['progress'] = {};
   }
 
-  const [updated] = await db.update(campaigns).set(updates).where(eq(campaigns.id, id)).returning();
+  // Source-status guard: fold the read-time status into the UPDATE
+  // WHERE so a concurrent transition (e.g. auto-complete racing with
+  // manual stop, or two parallel /lifecycle requests) cannot both
+  // succeed. The first writer flips the row; the second observes 0
+  // affected rows and returns a stale-state error so the caller can
+  // re-fetch and decide. Same pattern the `updateCampaign` draft guard
+  // uses.
+  const [updated] = await db
+    .update(campaigns)
+    .set(updates)
+    .where(and(eq(campaigns.id, id), eq(campaigns.status, campaign.status)))
+    .returning();
+
+  if (!updated) {
+    return {
+      error: `Campaign status changed during transition (was '${campaign.status}'); retry against the current state`,
+      code: 'STALE_STATE' as const,
+    };
+  }
 
   // Emit status for non-running transitions immediately; for 'running',
   // defer until after task generation enqueue succeeds to avoid premature events.
-  if (updated && targetStatus !== 'running') {
+  if (targetStatus !== 'running') {
     emitCampaignStatus(campaign.projectId, id, targetStatus);
   }
 
@@ -917,292 +803,4 @@ export async function updateAttack(
 export async function deleteAttack(id: number) {
   const [deleted] = await db.delete(attacks).where(eq(attacks.id, id)).returning();
   return deleted ?? null;
-}
-
-// ─── Campaign Progress ─────────────────────────────────────────────
-
-/**
- * Pure decision: should a campaign auto-transition to `completed`?
- * Triggered only when the campaign is currently `running` AND every
- * task has reached a terminal state (completed/exhausted/failed).
- * Exported for unit testing the guard without mocking SQL.
- */
-export function shouldAutoCompleteCampaign(input: {
-  status: string;
-  totalTasks: number;
-  completedCount: number;
-  failedCount: number;
-}): boolean {
-  if (input.status !== 'running') return false;
-  if (input.totalTasks <= 0) return false;
-  return input.completedCount + input.failedCount >= input.totalTasks;
-}
-
-/**
- * Pure ETA estimator: project remaining-work completion from average
- * throughput since campaign start. Returns `null` when there's no
- * throughput basis (no running tasks, no startedAt, elapsed < 1s, no
- * measurable progress, or no remaining work). Exported for unit
- * testing the rate math without mocking SQL.
- */
-export function computeCampaignEta(input: {
-  startedAt: Date | null;
-  now: Date;
-  totalTasks: number;
-  completedCount: number;
-  failedCount: number;
-  runningProgress: number;
-  runningTaskCount: number;
-}): string | null {
-  if (input.runningTaskCount <= 0) return null;
-  if (!input.startedAt) return null;
-  const completedFraction = input.completedCount + input.runningProgress;
-  if (completedFraction <= 0) return null;
-  const elapsedMs = input.now.getTime() - input.startedAt.getTime();
-  if (elapsedMs < 1000) return null;
-  const rate = completedFraction / (elapsedMs / 1000); // tasks per second
-  const remaining = Math.max(0, input.totalTasks - completedFraction - input.failedCount);
-  if (rate <= 0 || remaining <= 0) return null;
-  return new Date(input.now.getTime() + (remaining / rate) * 1000).toISOString();
-}
-
-export async function updateCampaignProgress(campaignId: number) {
-  // Single aggregation query: total tasks, terminal counts, clamped running progress.
-  //
-  // `progress.keyspaceProgress` is the agent-reported count of keyspace units
-  // already cracked within a task's `workRange.total`. We divide to get a
-  // fraction in [0, 1] (LEAST clamps reports that overrun the chunk to 1.0),
-  // then SUM the fractions across running tasks for the campaign's running
-  // contribution. The earlier `LEAST(keyspaceProgress, 1)` formulation
-  // misread the field as already-a-fraction; the spec at
-  // docs/issues/96-keyspace-task-distribution-spec.md is the contract.
-  const [agg] = await db
-    .select({
-      totalTasks: sql<number>`count(*)`,
-      completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
-      failedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'failed')`,
-      // CASE WHEN guards the divide-by-zero case explicitly: a placeholder
-      // task created without a real keyspace has `workRange.total = 0`, and
-      // letting that flow into the division produces NULL, which
-      // `LEAST(NULL, 1) = 1` would silently count as a 100%-complete task.
-      // Default to 0 progress for any task with total <= 0.
-      //
-      // Use ::numeric (arbitrary-precision) instead of ::float for the
-      // division: mask-attack keyspaces routinely exceed 2^53 - 1, and
-      // ::float would round large numerators / denominators to the
-      // nearest 64-bit double - a near-complete task could appear as
-      // 1.0 long before the agent actually finished. We cast back to
-      // double precision at the outermost boundary so the result still
-      // fits the `runningProgress: number` JS field.
-      runningProgress: sql<number>`(COALESCE(
-        SUM(
-          CASE
-            WHEN COALESCE((${tasks.workRange}->>'total')::numeric, 0) > 0 THEN
-              GREATEST(
-                0::numeric,
-                LEAST(
-                  COALESCE((${tasks.progress}->>'keyspaceProgress')::numeric, 0)
-                    / (${tasks.workRange}->>'total')::numeric,
-                  1::numeric
-                )
-              )
-            ELSE 0::numeric
-          END
-        ) FILTER (WHERE ${tasks.status} = 'running'),
-        0::numeric
-      ))::double precision`,
-      runningTaskCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'running')`,
-    })
-    .from(tasks)
-    .where(eq(tasks.campaignId, campaignId));
-
-  const totalTasks = agg?.totalTasks ?? 0;
-  if (totalTasks === 0) return;
-
-  const completedCount = agg?.completedCount ?? 0;
-  const failedCount = agg?.failedCount ?? 0;
-  const runningProgress = agg?.runningProgress ?? 0;
-  const runningTaskCount = agg?.runningTaskCount ?? 0;
-
-  const overallProgress = (completedCount + runningProgress) / totalTasks;
-
-  // Hash-based progress + ETA reference: load campaign metadata once.
-  const [campaign] = await db
-    .select({
-      hashListId: campaigns.hashListId,
-      status: campaigns.status,
-      projectId: campaigns.projectId,
-      startedAt: campaigns.startedAt,
-    })
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
-
-  let hashProgress: {
-    total: number;
-    cracked: number;
-    remaining: number;
-    percentage: number;
-  } | null = null;
-
-  if (campaign?.hashListId) {
-    const stats = await getHashListStats(campaign.hashListId);
-
-    if (stats.total > 0) {
-      hashProgress = {
-        ...stats,
-        percentage: Math.round((stats.cracked / stats.total) * 10000) / 10000,
-      };
-    }
-  }
-
-  // ETA: project completion from the average rate since campaign start.
-  // Estimate driven by task-completion velocity — the dashboard treats
-  // it as a forecast, not a guarantee. See `computeCampaignEta` for the
-  // null-handling rules.
-  const eta = computeCampaignEta({
-    startedAt: campaign?.startedAt ?? null,
-    now: new Date(),
-    totalTasks,
-    completedCount,
-    failedCount,
-    runningProgress,
-    runningTaskCount,
-  });
-
-  await db
-    .update(campaigns)
-    .set({
-      progress: {
-        totalTasks,
-        completedTasks: completedCount,
-        tasksFailed: failedCount,
-        eta,
-        overallProgress: Math.round(overallProgress * 10000) / 10000,
-        updatedAt: new Date().toISOString(),
-        ...(hashProgress ? { hashProgress } : {}),
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(campaigns.id, campaignId));
-
-  // Auto-transition running → completed when every task has reached a
-  // terminal state (completed/exhausted/failed). Guarded so we don't
-  // fight a manual stop or recurse on an already-completed campaign.
-  // transitionCampaign emits the `campaign_status` event and stamps
-  // `completedAt` — we don't duplicate either here.
-  //
-  // Failure handling: this function is on the task-report hot path
-  // (tasks.ts:updateTaskProgress). If the auto-transition throws (DB
-  // blip, queue glitch), an unwrapped throw would 500 the agent's
-  // `/tasks/:id/report` call *after* the task row was already
-  // persisted, leaving the agent to retry against a "task already
-  // completed" error and never recover. Treat the auto-transition as
-  // best-effort: log and swallow. The next task-status write will
-  // re-evaluate the gate and retry.
-  if (
-    campaign &&
-    shouldAutoCompleteCampaign({
-      status: campaign.status,
-      totalTasks,
-      completedCount,
-      failedCount,
-    })
-  ) {
-    try {
-      await transitionCampaign(campaignId, 'completed');
-    } catch (err) {
-      logger.error(
-        { err, campaignId, totalTasks, completedCount, failedCount },
-        'auto-complete transitionCampaign threw; leaving for next progress write to retry'
-      );
-    }
-  }
-}
-
-// ─── DAG Validation ─────────────────────────────────────────────────
-
-/**
- * Pure DAG validator. Operates on an in-memory attack list so write-
- * path callers can validate the *proposed* state (current attacks ±
- * the staged change) before committing to the database. The
- * `validateCampaignDAG` wrapper reads from the DB and delegates here.
- *
- * Returns `{ valid: false, error }` when:
- *   - any dependency references an id outside the input set (covers
- *     cross-campaign references and dangling deps)
- *   - the resulting graph contains a cycle (Kahn's algorithm cannot
- *     drain all nodes)
- */
-export function validateProposedDAG(
-  proposedAttacks: ReadonlyArray<{ id: number; dependencies: number[] | null }>
-): { valid: boolean; error?: string | undefined } {
-  if (proposedAttacks.length === 0) {
-    return { valid: true };
-  }
-
-  const attackIds = new Set(proposedAttacks.map((a) => a.id));
-
-  const inDegree = new Map<number, number>();
-  const adjacency = new Map<number, number[]>();
-
-  for (const attack of proposedAttacks) {
-    inDegree.set(attack.id, 0);
-    adjacency.set(attack.id, []);
-  }
-
-  for (const attack of proposedAttacks) {
-    const deps = attack.dependencies ?? [];
-    for (const depId of deps) {
-      if (!attackIds.has(depId)) {
-        return {
-          valid: false,
-          error: `Attack ${attack.id} depends on non-existent attack ${depId}`,
-        };
-      }
-      adjacency.get(depId)?.push(attack.id);
-      inDegree.set(attack.id, (inDegree.get(attack.id) ?? 0) + 1);
-    }
-  }
-
-  const queue: number[] = [];
-  for (const [id, degree] of inDegree) {
-    if (degree === 0) {
-      queue.push(id);
-    }
-  }
-
-  let processed = 0;
-  while (queue.length > 0) {
-    // biome-ignore lint/style/noNonNullAssertion: queue.length > 0 guarantees non-empty
-    const current = queue.shift()!;
-    processed++;
-
-    for (const neighbor of adjacency.get(current) ?? []) {
-      const newDegree = (inDegree.get(neighbor) ?? 1) - 1;
-      inDegree.set(neighbor, newDegree);
-      if (newDegree === 0) {
-        queue.push(neighbor);
-      }
-    }
-  }
-
-  if (processed !== proposedAttacks.length) {
-    return { valid: false, error: 'Circular dependency detected among attacks' };
-  }
-
-  return { valid: true };
-}
-
-/**
- * DB-backed campaign DAG validator. Reads the current attack set for
- * the campaign and delegates to `validateProposedDAG`.
- */
-export async function validateCampaignDAG(
-  campaignId: number
-): Promise<{ valid: boolean; error?: string | undefined }> {
-  const campaignAttacks = await listAttacks(campaignId);
-  return validateProposedDAG(
-    campaignAttacks.map((a) => ({ id: a.id, dependencies: a.dependencies as number[] | null }))
-  );
 }

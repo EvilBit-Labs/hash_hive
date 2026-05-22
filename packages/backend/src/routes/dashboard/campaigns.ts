@@ -1,3 +1,4 @@
+import { inlineAttackRequestSchema } from '@hashhive/shared';
 import { zValidator } from '@hono/zod-validator';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -90,27 +91,17 @@ campaignRoutes.get(
   }
 );
 
-// Inline-attack payload schema for the optional transactional create
-// path. `dependencies` here are 0-based indices into the same `attacks[]`
-// array — the service layer translates them to real attack IDs after
-// the INSERT returns. Indices are non-negative integers because zero is
-// a valid index into the array.
-const inlineAttackSchema = z.object({
-  mode: z.number().int().nonnegative(),
-  hashTypeId: z.number().int().positive().optional(),
-  wordlistId: z.number().int().positive().optional(),
-  rulelistId: z.number().int().positive().optional(),
-  masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
-  dependencies: z.array(z.number().int().nonnegative()).optional(),
-});
-
+// Inline-attack payload schema is canonical in @hashhive/shared so the
+// frontend and backend stay in lockstep. The shared schema names the
+// dependency field `dependencyIndices` to make the index-vs-id
+// semantic explicit at the wire level (the standalone POST
+// /:id/attacks path uses `dependencies` for real attack IDs).
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
   hashListId: z.number().int().positive(),
   priority: z.number().int().min(1).max(10).optional(),
-  attacks: z.array(inlineAttackSchema).optional(),
+  attacks: z.array(inlineAttackRequestSchema).optional(),
 });
 
 campaignRoutes.post(
@@ -163,7 +154,7 @@ campaignRoutes.post(
             message: `Referenced resources missing: ${result.missing.join(', ')}`,
           },
         },
-        400
+        409
       );
     }
 
@@ -250,16 +241,25 @@ campaignRoutes.delete('/:id', requireRole('admin', 'contributor'), async (c) => 
   }
 });
 
-const updateCampaignSchema = z.object({
+// PATCH is the partial-update form: every field is optional, only
+// supplied fields are written. PUT is the full-replace form per REST
+// semantics: name + priority are required, description is treated as
+// "explicit value or null" so a PUT can deliberately clear a previous
+// description rather than leaving it untouched. Both share the
+// draft-only gate at the service layer.
+const patchCampaignSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional(),
   priority: z.number().int().min(1).max(10).optional(),
 });
 
-// Shared handler for PATCH and PUT — spec ticket calls for PUT, frontend
-// already uses PATCH; both map to the same partial-update semantics, and
-// both are gated to draft-status campaigns at the service layer.
-const updateCampaignHandler = async (c: Context<AppEnv>) => {
+const putCampaignSchema = z.object({
+  name: z.string().min(1).max(255),
+  description: z.string().max(2000).nullable().default(null),
+  priority: z.number().int().min(1).max(10),
+});
+
+const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<AppEnv>) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id) || id <= 0) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
@@ -285,7 +285,8 @@ const updateCampaignHandler = async (c: Context<AppEnv>) => {
       400
     );
   }
-  const parsed = updateCampaignSchema.safeParse(body);
+  const schema = method === 'PUT' ? putCampaignSchema : patchCampaignSchema;
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return c.json(
       {
@@ -297,6 +298,9 @@ const updateCampaignHandler = async (c: Context<AppEnv>) => {
       400
     );
   }
+  // PUT's `description` can be the literal `null` ("explicit clear");
+  // updateCampaign accepts `undefined` to mean "leave alone", so we
+  // pass null through unchanged and let the service write it.
   const result = await updateCampaign(id, parsed.data);
 
   switch (result.kind) {
@@ -317,12 +321,12 @@ const updateCampaignHandler = async (c: Context<AppEnv>) => {
   }
 };
 
-// Validation runs inside the shared handler via safeParse so PATCH and
-// PUT share a single source of truth for the response envelope (the
-// default zValidator shape uses `{ success, error }`, but the rest of
-// the dashboard API uses `{ error: { code, message } }`).
-campaignRoutes.patch('/:id', requireRole('admin', 'contributor'), updateCampaignHandler);
-campaignRoutes.put('/:id', requireRole('admin', 'contributor'), updateCampaignHandler);
+// PATCH and PUT share a handler factory but use different schemas:
+// PATCH is partial, PUT is full-replace. The handler bypasses
+// zValidator's default envelope so all error responses use the
+// dashboard's `{ error: { code, message } }` shape.
+campaignRoutes.patch('/:id', requireRole('admin', 'contributor'), updateCampaignHandler('PATCH'));
+campaignRoutes.put('/:id', requireRole('admin', 'contributor'), updateCampaignHandler('PUT'));
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
 
@@ -377,11 +381,20 @@ function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
     }
     if (code === 'RESOURCE_VALIDATION_FAILED') {
       // Resource lookup itself failed (DB blip). Surface as 503 so
-      // clients can retry rather than treating it as a permanent 400.
+      // clients can retry rather than treating it as a permanent error.
       return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503);
     }
     if (code === 'RESOURCE_MISSING') {
-      return c.json({ error: { code: 'RESOURCE_MISSING', message: result.error } }, 400);
+      // Precondition failed (referenced resource doesn't exist or
+      // crosses project boundary). 409 Conflict captures this better
+      // than 400 — the request was well-formed, the state isn't.
+      return c.json({ error: { code: 'RESOURCE_MISSING', message: result.error } }, 409);
+    }
+    if (code === 'STALE_STATE') {
+      // Optimistic-concurrency loss: another writer transitioned this
+      // campaign between our read and write. 409 signals the client
+      // should re-fetch and retry against the current state.
+      return c.json({ error: { code: 'STALE_STATE', message: result.error } }, 409);
     }
     if (code === 'TASK_GENERATION_FAILED') {
       return c.json({ error: { code: 'TASK_GENERATION_FAILED', message: result.error } }, 500);
@@ -401,6 +414,7 @@ const lifecycleAliasStatus = {
   pause: 'paused',
   resume: 'running',
   stop: 'draft',
+  cancel: 'cancelled',
 } as const;
 
 const lifecycleAliasHandler =
@@ -439,6 +453,11 @@ campaignRoutes.post(
   '/:id/stop',
   requireRole('admin', 'contributor'),
   lifecycleAliasHandler('stop')
+);
+campaignRoutes.post(
+  '/:id/cancel',
+  requireRole('admin', 'contributor'),
+  lifecycleAliasHandler('cancel')
 );
 
 // ─── DAG Validation ─────────────────────────────────────────────────
@@ -516,7 +535,7 @@ campaignRoutes.post(
               message: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
             },
           },
-          400
+          409
         );
       }
     }
@@ -633,7 +652,7 @@ campaignRoutes.patch(
               message: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
             },
           },
-          400
+          409
         );
       }
     }
