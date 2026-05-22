@@ -258,10 +258,21 @@ const updateCampaignHandler = async (c: Context<AppEnv>) => {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
   }
 
-  // zValidator on the route registration already rejects invalid bodies
-  // with 400; re-parse here so the shared handler still gets a typed
-  // payload without depending on the per-route generic input map.
-  const parsed = updateCampaignSchema.safeParse(await c.req.json());
+  // Parse and validate the body inside the handler. Wrapping c.req.json()
+  // in try/catch keeps a malformed body (invalid JSON, premature EOF) from
+  // surfacing as an unhandled 500; the safeParse below handles schema
+  // violations on syntactically valid JSON. Both failures share the
+  // dashboard's `{ error: { code, message } }` envelope.
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'Request body must be valid JSON' } },
+      400
+    );
+  }
+  const parsed = updateCampaignSchema.safeParse(body);
   if (!parsed.success) {
     return c.json(
       {
@@ -447,24 +458,29 @@ campaignRoutes.post(
     // Pre-insert DAG validation: build the proposed graph (current
     // attacks + this new attack with a synthetic id) and reject the
     // request if it would introduce a cycle or reference a missing
-    // attack id.
-    const currentAttacks = await listAttacks(campaignId);
-    const proposed = [
-      ...currentAttacks.map((a) => ({
-        id: a.id,
-        dependencies: a.dependencies as number[] | null,
-      })),
-      {
-        id: SYNTHETIC_NEW_ATTACK_ID,
-        dependencies: data.dependencies ?? null,
-      },
-    ];
-    const dagResult = validateProposedDAG(proposed);
-    if (!dagResult.valid) {
-      return c.json(
-        { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
-        400
-      );
+    // attack id. Skipped when no dependencies are supplied — a
+    // dependency-less attack cannot introduce a cycle, and skipping
+    // the listAttacks read keeps the hot path cheap. Mirrors the same
+    // optimization on the PATCH /:id/attacks/:attackId route.
+    if (data.dependencies && data.dependencies.length > 0) {
+      const currentAttacks = await listAttacks(campaignId);
+      const proposed = [
+        ...currentAttacks.map((a) => ({
+          id: a.id,
+          dependencies: a.dependencies as number[] | null,
+        })),
+        {
+          id: SYNTHETIC_NEW_ATTACK_ID,
+          dependencies: data.dependencies,
+        },
+      ];
+      const dagResult = validateProposedDAG(proposed);
+      if (!dagResult.valid) {
+        return c.json(
+          { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
+          400
+        );
+      }
     }
 
     const attack = await createAttack({

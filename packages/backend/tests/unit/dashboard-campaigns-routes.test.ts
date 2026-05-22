@@ -792,10 +792,13 @@ if (!IS_ISOLATED) {
       expect(body.error?.message).toContain('Circular');
     });
 
-    it('POST: with no dependencies on a fresh campaign returns 201', async () => {
-      mockListAttacks.mockResolvedValueOnce([]);
+    it('POST: with no dependencies skips the DAG pre-check listAttacks read', async () => {
+      mockListAttacks.mockClear();
       const res = await postAttack(100, { mode: 0 });
       expect(res.status).toBe(201);
+      // Optimization: a dependency-less attack can't introduce a cycle,
+      // so we don't load the campaign's attack list on this hot path.
+      expect(mockListAttacks).toHaveBeenCalledTimes(0);
     });
 
     it('PATCH: self-loop on dependencies returns 400 DAG_INVALID', async () => {
