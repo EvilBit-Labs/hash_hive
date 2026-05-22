@@ -1,6 +1,12 @@
 name: Copilot Setup
 "on":
   workflow_dispatch:
+# Least-privilege default token scope: the setup steps only need to
+# clone the repo. Any future step that needs to write back to the
+# repo or post statuses must opt in explicitly with a job-level
+# override.
+permissions:
+  contents: read
 jobs:
   copilot-setup-steps:
     runs-on: ubuntu-latest
