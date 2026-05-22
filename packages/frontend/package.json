@@ -31,7 +31,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1018.0",
+    "@aws-sdk/client-s3": "^3.1047.0",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/vite": "^4.2.2",
     "@testcontainers/postgresql": "^11.13.0",
