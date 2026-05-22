@@ -909,6 +909,106 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(200);
       expect(mockValidateCampaignResources).toHaveBeenCalledTimes(0);
     });
+
+    it('POST /:id/attacks returns 503 SERVICE_UNAVAILABLE when validator throws (DB blip)', async () => {
+      mockValidateCampaignResources.mockReset();
+      mockValidateCampaignResources.mockRejectedValueOnce(new Error('ECONNRESET'));
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0, wordlistId: 99 }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('SERVICE_UNAVAILABLE');
+    });
+
+    it('PATCH /:id/attacks/:attackId returns 503 SERVICE_UNAVAILABLE when validator throws', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] });
+      mockValidateCampaignResources.mockReset();
+      mockValidateCampaignResources.mockRejectedValueOnce(new Error('ECONNRESET'));
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ rulelistId: 13 }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('SERVICE_UNAVAILABLE');
+    });
+  });
+
+  describe('Attack-write-time project-scope guards', () => {
+    it('POST /:id/attacks returns 404 RESOURCE_NOT_FOUND on cross-project campaign', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/200/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RESOURCE_NOT_FOUND');
+    });
+
+    it('POST /:id/attacks returns 404 on unknown campaign id', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/9999/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('POST /:id/attacks returns 400 on non-integer campaign id', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/abc/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PATCH /:id/attacks/:attackId returns 404 on cross-project campaign even without resource ref changes', async () => {
+      // Important: project guard fires BEFORE the resource-ref check, so
+      // a mode-only PATCH on a cross-project campaign must still 404.
+      const res = await app.request(`${DASH_CAMPAIGNS}/200/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 3 }),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RESOURCE_NOT_FOUND');
+    });
+
+    it('PATCH /:id/attacks/:attackId returns 404 on unknown campaign id', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/9999/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 3 }),
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /campaigns: transactional create error handling', () => {
+    it('returns 503 SERVICE_UNAVAILABLE when createCampaignWithAttacks throws', async () => {
+      mockCreateCampaignWithAttacks.mockRejectedValueOnce(new Error('ECONNRESET during txn'));
+      const res = await app.request(DASH_CAMPAIGNS, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'DB blip',
+          hashListId: 1,
+          attacks: [{ mode: 0, wordlistId: 99 }],
+        }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('SERVICE_UNAVAILABLE');
+    });
   });
 
   describe('Attack write-time DAG validation', () => {

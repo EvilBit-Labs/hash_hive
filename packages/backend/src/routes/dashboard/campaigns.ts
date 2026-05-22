@@ -131,16 +131,38 @@ campaignRoutes.post(
       return c.json({ campaign, attacks: [] }, 201);
     }
 
-    // Attacks supplied → single-transaction create + DAG pre-check.
-    const result = await createCampaignWithAttacks({
-      name: data.name,
-      description: data.description,
-      hashListId: data.hashListId,
-      priority: data.priority,
-      projectId,
-      createdBy: userId,
-      attacks: data.attacks,
-    });
+    // Attacks supplied → single-transaction create + resource +
+    // DAG pre-check. Wrap in try/catch so a DB blip during the
+    // pre-check or the transaction surfaces as a typed 503 instead
+    // of bubbling to onError as a generic 500. The discriminated
+    // result handles the *expected* failure modes (dag_invalid,
+    // resource_missing); this catches the *unexpected* throws.
+    let result: Awaited<ReturnType<typeof createCampaignWithAttacks>>;
+    try {
+      result = await createCampaignWithAttacks({
+        name: data.name,
+        description: data.description,
+        hashListId: data.hashListId,
+        priority: data.priority,
+        projectId,
+        createdBy: userId,
+        attacks: data.attacks,
+      });
+    } catch (err) {
+      logger.error(
+        { err, route: 'POST /campaigns (with attacks)', projectId, userId },
+        'createCampaignWithAttacks threw — surfacing as service unavailable'
+      );
+      return c.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Unable to create campaign right now',
+          },
+        },
+        503
+      );
+    }
 
     if (result.kind === 'dag_invalid') {
       return c.json({ error: { code: 'DAG_INVALID', message: result.error } }, 400);
@@ -409,6 +431,52 @@ function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
   return c.json({ campaign: result.campaign });
 }
 
+/**
+ * Route-layer wrapper around `validateCampaignResources` that turns
+ * service throws into the dashboard's `{ error: { code, message } }`
+ * envelope. Returns:
+ *   - `null` when validation succeeded (caller proceeds)
+ *   - a 409 `RESOURCE_MISSING` Response when refs are missing
+ *   - a 503 `SERVICE_UNAVAILABLE` Response when the lookup itself
+ *     threw (DB blip, query error) — mirrors `transitionCampaign`'s
+ *     `RESOURCE_VALIDATION_FAILED` mapping so attack-write paths
+ *     have the same retryability semantics as the lifecycle path.
+ */
+async function checkResourcesOrErrorResponse(
+  c: Context<AppEnv>,
+  campaign: { projectId: number; hashListId: number | null },
+  attacks: Parameters<typeof validateCampaignResources>[1],
+  logContext: { route: string; campaignId: number; projectId: number }
+): Promise<Response | null> {
+  try {
+    const result = await validateCampaignResources(campaign, attacks);
+    if (result.valid) return null;
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_MISSING',
+          message: `Referenced resources missing: ${result.missing.join(', ')}`,
+        },
+      },
+      409
+    );
+  } catch (err) {
+    logger.error(
+      { err, ...logContext },
+      'validateCampaignResources threw — surfacing as service unavailable'
+    );
+    return c.json(
+      {
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Unable to validate campaign resources right now',
+        },
+      },
+      503
+    );
+  }
+}
+
 // Spec-named lifecycle aliases. These delegate to the same
 // transitionCampaign service the action-enum /lifecycle route uses, so
 // behavior (queue check, task generation, event emission, valid-
@@ -502,9 +570,18 @@ campaignRoutes.post(
   zValidator('json', createAttackSchema),
   async (c) => {
     const campaignId = Number(c.req.param('id'));
-    const campaign = await getCampaignById(campaignId);
+    if (!Number.isInteger(campaignId) || campaignId <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
+    }
 
-    if (!campaign) {
+    // Project-scope guard: requireRole only validates that the caller
+    // is a contributor *somewhere*; without this check a contributor
+    // in project A could create attacks against a campaign in project
+    // B by guessing the campaign id. 404 on cross-project to avoid
+    // leaking existence.
+    const { projectId } = c.get('currentUser');
+    const campaign = await getCampaignById(campaignId);
+    if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
       return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
     }
 
@@ -521,7 +598,8 @@ campaignRoutes.post(
       data.rulelistId != null ||
       data.masklistId != null;
     if (hasResourceRefs) {
-      const resourceCheck = await validateCampaignResources(
+      const errResp = await checkResourcesOrErrorResponse(
+        c,
         { projectId: campaign.projectId, hashListId: null },
         [
           {
@@ -530,19 +608,10 @@ campaignRoutes.post(
             rulelistId: data.rulelistId,
             masklistId: data.masklistId,
           },
-        ]
+        ],
+        { route: 'POST /:id/attacks', campaignId, projectId: campaign.projectId }
       );
-      if (!resourceCheck.valid) {
-        return c.json(
-          {
-            error: {
-              code: 'RESOURCE_MISSING',
-              message: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
-            },
-          },
-          409
-        );
-      }
+      if (errResp) return errResp;
     }
 
     // Pre-insert DAG validation: build the proposed graph (current
@@ -612,6 +681,26 @@ campaignRoutes.patch(
   async (c) => {
     const campaignId = Number(c.req.param('id'));
     const attackId = Number(c.req.param('attackId'));
+    if (
+      !Number.isInteger(campaignId) ||
+      campaignId <= 0 ||
+      !Number.isInteger(attackId) ||
+      attackId <= 0
+    ) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400);
+    }
+
+    // Project-scope guard: load the parent campaign unconditionally
+    // (not just when resource refs change) and reject when it doesn't
+    // belong to the caller's active project. Without this gate a
+    // contributor in project A could mutate attacks in project B by
+    // guessing {campaignId, attackId} pairs. The attack-belongs-to-
+    // campaign check below is necessary but not sufficient.
+    const { projectId } = c.get('currentUser');
+    const parentCampaign = await getCampaignById(campaignId);
+    if (!parentCampaign || (projectId !== undefined && parentCampaign.projectId !== projectId)) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+    }
 
     // Verify attack belongs to the specified campaign
     const existing = await getAttackById(attackId);
@@ -623,22 +712,16 @@ campaignRoutes.patch(
 
     // Cross-project resource pre-check at draft write time. Only fires
     // when a resource ref is actually being changed; the existing row
-    // already passed this gate when it was created. Need the parent
-    // campaign for its projectId — fetch alongside the existing attack.
+    // already passed this gate when it was created. Uses the
+    // parentCampaign already loaded above for its projectId.
     const hasResourceRefChange =
       data.hashTypeId !== undefined ||
       data.wordlistId !== undefined ||
       data.rulelistId !== undefined ||
       data.masklistId !== undefined;
     if (hasResourceRefChange) {
-      const parentCampaign = await getCampaignById(campaignId);
-      if (!parentCampaign) {
-        return c.json(
-          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } },
-          404
-        );
-      }
-      const resourceCheck = await validateCampaignResources(
+      const errResp = await checkResourcesOrErrorResponse(
+        c,
         { projectId: parentCampaign.projectId, hashListId: null },
         [
           {
@@ -647,19 +730,10 @@ campaignRoutes.patch(
             rulelistId: data.rulelistId,
             masklistId: data.masklistId,
           },
-        ]
+        ],
+        { route: 'PATCH /:id/attacks/:attackId', campaignId, projectId: parentCampaign.projectId }
       );
-      if (!resourceCheck.valid) {
-        return c.json(
-          {
-            error: {
-              code: 'RESOURCE_MISSING',
-              message: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
-            },
-          },
-          409
-        );
-      }
+      if (errResp) return errResp;
     }
 
     // Pre-update DAG validation: only when dependencies are being
