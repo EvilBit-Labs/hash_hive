@@ -200,6 +200,14 @@ if (!IS_ISOLATED) {
       }>
   );
 
+  type ResourceCheckResult = { valid: true } | { valid: false; missing: string[] };
+  const mockValidateCampaignResources = mock(
+    async (
+      _campaign: { projectId: number; hashListId: number | null },
+      _attacks: ReadonlyArray<Record<string, unknown>>
+    ): Promise<ResourceCheckResult> => ({ valid: true })
+  );
+
   type CreateWithAttacksResult =
     | {
         kind: 'created';
@@ -230,75 +238,11 @@ if (!IS_ISOLATED) {
       null as { id: number; campaignId: number; dependencies: number[] | null } | null
   );
 
-  mock.module('../../src/services/campaigns.js', () => ({
-    // Test-driven stubs.
-    listCampaigns: mockListCampaigns,
-    getCampaignById: mockGetCampaignById,
-    getCampaignTaskStats: mockGetCampaignTaskStats,
-    listActiveAgentsByCampaign: mockListActiveAgentsByCampaign,
-    deleteCampaign: mockDeleteCampaign,
-    // Inert stubs for sibling exports the routes module imports.
-    createCampaign: mockCreateCampaign,
-    createCampaignWithAttacks: mockCreateCampaignWithAttacks,
-    updateCampaign: mockUpdateCampaign,
-    listAttacks: mockListAttacks,
-    listAttacksPaginated: mock(async () => ({ attacks: [], total: 0, limit: 50, offset: 0 })),
-    createAttack: mockCreateAttack,
-    getAttackById: mockGetAttackByIdImpl,
-    updateAttack: mockUpdateAttackImpl,
-    deleteAttack: mock(async () => null),
-    transitionCampaign: mockTransitionCampaign,
-    validateCampaignDAG: mock(async () => ({ valid: true })),
-    // Pure cycle detector — used by attack write-path DAG validation.
-    // Re-export the real implementation so route tests exercise the
-    // production algorithm rather than a stub.
-    validateProposedDAG: (
-      proposed: ReadonlyArray<{ id: number; dependencies: number[] | null }>
-    ) => {
-      if (proposed.length === 0) return { valid: true };
-      const ids = new Set(proposed.map((p) => p.id));
-      const inDegree = new Map<number, number>();
-      const adj = new Map<number, number[]>();
-      for (const p of proposed) {
-        inDegree.set(p.id, 0);
-        adj.set(p.id, []);
-      }
-      for (const p of proposed) {
-        for (const d of p.dependencies ?? []) {
-          if (!ids.has(d))
-            return {
-              valid: false,
-              error: `Attack ${p.id} depends on non-existent attack ${d}`,
-            };
-          adj.get(d)?.push(p.id);
-          inDegree.set(p.id, (inDegree.get(p.id) ?? 0) + 1);
-        }
-      }
-      const q: number[] = [];
-      for (const [id, deg] of inDegree) if (deg === 0) q.push(id);
-      let processed = 0;
-      while (q.length > 0) {
-        // biome-ignore lint/style/noNonNullAssertion: q.length > 0
-        const cur = q.shift()!;
-        processed++;
-        for (const n of adj.get(cur) ?? []) {
-          const nd = (inDegree.get(n) ?? 1) - 1;
-          inDegree.set(n, nd);
-          if (nd === 0) q.push(n);
-        }
-      }
-      return processed === proposed.length
-        ? { valid: true }
-        : { valid: false, error: 'Circular dependency detected among attacks' };
-    },
-    // Required by tasks.ts (static import resolves to this mocked module
-    // because mock.module is process-global).
-    updateCampaignProgress: mock(async () => undefined),
-    resolveGenerationStrategy: () => 'inline' as const,
-    INLINE_GENERATION_THRESHOLD: 100,
-    _deps: {},
-  }));
-
+  // Mock db + ioredis BEFORE importing the real campaigns module so
+  // that the real `validateProposedDAG` (pure, no DB) can be lifted out
+  // and used inside the campaigns mock. Without this, the campaigns
+  // module would resolve db to the real driver during the dynamic
+  // import below and fail to load.
   mock.module('../../src/db/index.js', () => ({
     db: {
       select: () => ({
@@ -322,6 +266,51 @@ if (!IS_ISOLATED) {
       }
       disconnect() {}
     },
+  }));
+
+  // Pull the REAL validateProposedDAG from the production module so the
+  // route mock below uses the same Kahn implementation that ships, not
+  // a hand-ported test stub. Per bun:test mock.module ordering (see
+  // GOTCHAS.md), this dynamic-import must happen AFTER the db/ioredis
+  // mocks but BEFORE the campaigns mock.module — once the campaigns
+  // wholesale mock is registered, any subsequent import resolves to
+  // the mock, not the real exports.
+  const { validateProposedDAG: realValidateProposedDAG } = await import(
+    '../../src/services/campaigns.js'
+  );
+
+  mock.module('../../src/services/campaigns.js', () => ({
+    // Test-driven stubs.
+    listCampaigns: mockListCampaigns,
+    getCampaignById: mockGetCampaignById,
+    getCampaignTaskStats: mockGetCampaignTaskStats,
+    listActiveAgentsByCampaign: mockListActiveAgentsByCampaign,
+    deleteCampaign: mockDeleteCampaign,
+    // Inert stubs for sibling exports the routes module imports.
+    createCampaign: mockCreateCampaign,
+    createCampaignWithAttacks: mockCreateCampaignWithAttacks,
+    updateCampaign: mockUpdateCampaign,
+    listAttacks: mockListAttacks,
+    listAttacksPaginated: mock(async () => ({ attacks: [], total: 0, limit: 50, offset: 0 })),
+    createAttack: mockCreateAttack,
+    getAttackById: mockGetAttackByIdImpl,
+    updateAttack: mockUpdateAttackImpl,
+    deleteAttack: mock(async () => null),
+    transitionCampaign: mockTransitionCampaign,
+    validateCampaignDAG: mock(async () => ({ valid: true })),
+    // Cross-project resource pre-check on draft writes. Default to
+    // valid; individual tests override per case via mockResolvedValueOnce.
+    validateCampaignResources: mockValidateCampaignResources,
+    // Real production implementation — caught by the dynamic-import
+    // above. Production drift now fails the tests immediately instead
+    // of silently diverging from a hand-ported stub.
+    validateProposedDAG: realValidateProposedDAG,
+    // Required by tasks.ts (static import resolves to this mocked module
+    // because mock.module is process-global).
+    updateCampaignProgress: mock(async () => undefined),
+    resolveGenerationStrategy: () => 'inline' as const,
+    INLINE_GENERATION_THRESHOLD: 100,
+    _deps: {},
   }));
 
   // Dynamically import so the app module loads AFTER the mock.module calls
@@ -600,7 +589,7 @@ if (!IS_ISOLATED) {
         code: 'QUEUE_UNAVAILABLE',
       });
 
-      const res = await app.request(`${DASH_CAMPAIGNS}/1/lifecycle`, {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/lifecycle`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'start' }),
@@ -617,7 +606,7 @@ if (!IS_ISOLATED) {
         error: "Cannot transition from 'running' to 'running'",
       });
 
-      const res = await app.request(`${DASH_CAMPAIGNS}/1/lifecycle`, {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/lifecycle`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'start' }),
@@ -633,7 +622,7 @@ if (!IS_ISOLATED) {
         error: 'Referenced resources missing: wordlist(99)',
         code: 'RESOURCE_MISSING',
       });
-      const res = await app.request(`${DASH_CAMPAIGNS}/1/lifecycle`, {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/lifecycle`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'start' }),
@@ -642,6 +631,42 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('RESOURCE_MISSING');
       expect(body.error?.message).toContain('wordlist(99)');
+    });
+
+    it('returns 404 RESOURCE_NOT_FOUND on cross-project campaign without consuming the transition mock', async () => {
+      mockTransitionCampaign.mockClear();
+      const res = await app.request(`${DASH_CAMPAIGNS}/200/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('RESOURCE_NOT_FOUND');
+      // The 404 fires BEFORE transitionCampaign, mirroring alias handlers.
+      expect(mockTransitionCampaign).toHaveBeenCalledTimes(0);
+    });
+
+    it('returns 404 RESOURCE_NOT_FOUND for unknown id', async () => {
+      mockTransitionCampaign.mockClear();
+      const res = await app.request(`${DASH_CAMPAIGNS}/9999/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+      expect(res.status).toBe(404);
+      expect(mockTransitionCampaign).toHaveBeenCalledTimes(0);
+    });
+
+    it('returns 400 VALIDATION_ERROR for non-integer id', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/abc/lifecycle`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
     });
   });
 
@@ -747,6 +772,80 @@ if (!IS_ISOLATED) {
         attacks: [{ mode: 0, dependencies: [-1] }],
       });
       expect(res.status).toBe(400);
+    });
+
+    it('returns 400 RESOURCE_MISSING when transactional create surfaces a cross-project ref', async () => {
+      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+        kind: 'resource_missing',
+        missing: ['wordlist(42)'],
+      });
+      const res = await postCampaign({
+        name: 'Cross-project',
+        hashListId: 1,
+        attacks: [{ mode: 0, wordlistId: 42 }],
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('RESOURCE_MISSING');
+      expect(body.error?.message).toContain('wordlist(42)');
+    });
+  });
+
+  describe('Attack-write-time cross-project resource validation', () => {
+    it('POST /:id/attacks returns 400 RESOURCE_MISSING when validator rejects', async () => {
+      mockValidateCampaignResources.mockResolvedValueOnce({
+        valid: false,
+        missing: ['wordlist(99)'],
+      });
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0, wordlistId: 99 }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('RESOURCE_MISSING');
+      expect(body.error?.message).toContain('wordlist(99)');
+    });
+
+    it('POST /:id/attacks skips validator when no resource refs are supplied', async () => {
+      mockValidateCampaignResources.mockClear();
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      });
+      expect(res.status).toBe(201);
+      expect(mockValidateCampaignResources).toHaveBeenCalledTimes(0);
+    });
+
+    it('PATCH /:id/attacks/:attackId returns 400 RESOURCE_MISSING when validator rejects a changed resource', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] });
+      mockValidateCampaignResources.mockResolvedValueOnce({
+        valid: false,
+        missing: ['rulelist(13)'],
+      });
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ rulelistId: 13 }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('RESOURCE_MISSING');
+      expect(body.error?.message).toContain('rulelist(13)');
+    });
+
+    it('PATCH /:id/attacks/:attackId skips validator when no resource fields are changed', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] });
+      mockValidateCampaignResources.mockClear();
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 3 }),
+      });
+      expect(res.status).toBe(200);
+      expect(mockValidateCampaignResources).toHaveBeenCalledTimes(0);
     });
   });
 

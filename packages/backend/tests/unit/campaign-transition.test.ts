@@ -43,15 +43,10 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
 
 let mockAttacks: Array<Record<string, unknown>> = [];
 
-// Helper: makes where() awaitable as the supplied default value AND
-// chainable to limit/orderBy. validateCampaignResources uses
-// `db.select({fields}).from(table).where(...)` directly without limit/
-// orderBy and expects an array; the existing chain on campaigns/attacks
-// uses `.where(...).limit/orderBy(...)`. The proxy supports both.
-function makeAwaitableChain(defaultRows: unknown[], chain: Record<string, unknown>) {
-  const promise = Promise.resolve(defaultRows);
-  return Object.assign(promise, chain);
-}
+// Shared mock helper: makes where() awaitable AND chainable to
+// limit/orderBy. validateCampaignResources awaits where() directly;
+// the legacy campaign/attack chains use where().limit / .orderBy.
+import { makeAwaitableChain } from '../helpers/db-mock.js';
 
 mock.module('../../src/db/index.js', () => ({
   db: {

@@ -11,6 +11,7 @@ import {
   wordLists,
 } from '@hashhive/shared';
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { logger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
@@ -256,7 +257,8 @@ export type CreateCampaignWithAttacksResult =
       campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>>;
       attacks: Array<{ id: number; dependencies: number[] | null }>;
     }
-  | { kind: 'dag_invalid'; error: string };
+  | { kind: 'dag_invalid'; error: string }
+  | { kind: 'resource_missing'; missing: string[] };
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -291,6 +293,25 @@ export async function createCampaignWithAttacks(input: {
     return { kind: 'dag_invalid', error: preCheck.error ?? 'Invalid DAG' };
   }
 
+  // Cross-project resource pre-check: refuse to persist a campaign or
+  // attack row whose hashList/wordlist/rulelist/masklist belongs to a
+  // different project. The FK constraints only enforce existence, not
+  // project ownership. Running this BEFORE the transaction lets us
+  // surface a clean RESOURCE_MISSING without rolling back work.
+  // hashTypes is global (no project scope) so it's matched on id only.
+  const resourceCheck = await validateCampaignResources(
+    { projectId: input.projectId, hashListId: input.hashListId },
+    input.attacks.map((a) => ({
+      hashTypeId: a.hashTypeId,
+      wordlistId: a.wordlistId,
+      rulelistId: a.rulelistId,
+      masklistId: a.masklistId,
+    }))
+  );
+  if (!resourceCheck.valid) {
+    return { kind: 'resource_missing', missing: resourceCheck.missing };
+  }
+
   class DAGInvalidInsideTx extends Error {
     constructor(public readonly reason: string) {
       super(reason);
@@ -319,13 +340,22 @@ export async function createCampaignWithAttacks(input: {
         return { kind: 'created' as const, campaign, attacks: [] };
       }
 
-      // Insert attacks WITHOUT dependencies first so we get their real
-      // ids; then translate index-based deps → real-id deps and update.
-      // A single round of UPDATEs is cheaper than per-row inserts.
-      const inserted = await tx
-        .insert(attacks)
-        .values(
-          input.attacks.map((a) => ({
+      // Insert attacks one at a time so the returned id reliably
+      // corresponds to the input index. Postgres does NOT guarantee
+      // multi-row `INSERT ... RETURNING` row order matches the VALUES
+      // order — earlier batch-insert versions of this code could
+      // silently scramble dependency wiring when the planner chose a
+      // non-source-order execution. Per-row insert adds n round trips
+      // for n attacks, but campaign creation is bounded by the wizard
+      // (typically ≤10 attacks), and the inserts are inside an open
+      // transaction so latency is dominated by the txn itself.
+      // Dependencies start empty; they're translated and persisted in
+      // the loop below.
+      const realIdByIndex: number[] = [];
+      for (const a of input.attacks) {
+        const [row] = await tx
+          .insert(attacks)
+          .values({
             campaignId: campaign.id,
             projectId: input.projectId,
             mode: a.mode,
@@ -336,12 +366,13 @@ export async function createCampaignWithAttacks(input: {
             advancedConfiguration: a.advancedConfiguration ?? {},
             dependencies: [],
             status: 'pending' as const,
-          }))
-        )
-        .returning();
-
-      // Map index → real id for the dependency translation.
-      const realIdByIndex = inserted.map((row) => row.id);
+          })
+          .returning({ id: attacks.id });
+        if (!row) {
+          throw new Error('Attack insert returned no row — txn invariant violated');
+        }
+        realIdByIndex.push(row.id);
+      }
 
       // Translate and persist real-id deps; also assemble the
       // post-translation graph for the final DAG check.
@@ -446,10 +477,10 @@ export async function updateCampaign(
 export async function validateCampaignResources(
   campaign: { projectId: number; hashListId: number | null },
   campaignAttacks: ReadonlyArray<{
-    hashTypeId?: number | null;
-    wordlistId?: number | null;
-    rulelistId?: number | null;
-    masklistId?: number | null;
+    hashTypeId?: number | null | undefined;
+    wordlistId?: number | null | undefined;
+    rulelistId?: number | null | undefined;
+    masklistId?: number | null | undefined;
   }>
 ): Promise<{ valid: true } | { valid: false; missing: string[] }> {
   const wantedHashListIds = campaign.hashListId ? [campaign.hashListId] : [];
@@ -617,15 +648,32 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
       return { error: 'Campaign must have at least one attack before starting' };
     }
 
-    const resourceCheck = await validateCampaignResources(
-      { projectId: campaign.projectId, hashListId: campaign.hashListId },
-      campaignAttacks.map((a) => ({
-        hashTypeId: a.hashTypeId,
-        wordlistId: a.wordlistId,
-        rulelistId: a.rulelistId,
-        masklistId: a.masklistId,
-      }))
-    );
+    // validateCampaignResources fires 4-5 parallel SELECTs. Promise.all
+    // short-circuits on rejection, so a DB blip would otherwise surface
+    // as an unstructured 500. Wrap and map to a typed error so the route
+    // layer returns a consistent envelope rather than letting the throw
+    // bubble through the lifecycle handler.
+    let resourceCheck: Awaited<ReturnType<typeof validateCampaignResources>>;
+    try {
+      resourceCheck = await validateCampaignResources(
+        { projectId: campaign.projectId, hashListId: campaign.hashListId },
+        campaignAttacks.map((a) => ({
+          hashTypeId: a.hashTypeId,
+          wordlistId: a.wordlistId,
+          rulelistId: a.rulelistId,
+          masklistId: a.masklistId,
+        }))
+      );
+    } catch (err) {
+      logger.error(
+        { err, campaignId: id, projectId: campaign.projectId },
+        'validateCampaignResources threw — treating as service unavailable'
+      );
+      return {
+        error: 'Unable to validate campaign resources right now',
+        code: 'RESOURCE_VALIDATION_FAILED' as const,
+      };
+    }
     if (!resourceCheck.valid) {
       return {
         error: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
@@ -1043,6 +1091,15 @@ export async function updateCampaignProgress(campaignId: number) {
   // fight a manual stop or recurse on an already-completed campaign.
   // transitionCampaign emits the `campaign_status` event and stamps
   // `completedAt` — we don't duplicate either here.
+  //
+  // Failure handling: this function is on the task-report hot path
+  // (tasks.ts:updateTaskProgress). If the auto-transition throws (DB
+  // blip, queue glitch), an unwrapped throw would 500 the agent's
+  // `/tasks/:id/report` call *after* the task row was already
+  // persisted, leaving the agent to retry against a "task already
+  // completed" error and never recover. Treat the auto-transition as
+  // best-effort: log and swallow. The next task-status write will
+  // re-evaluate the gate and retry.
   if (
     campaign &&
     shouldAutoCompleteCampaign({
@@ -1052,7 +1109,14 @@ export async function updateCampaignProgress(campaignId: number) {
       failedCount,
     })
   ) {
-    await transitionCampaign(campaignId, 'completed');
+    try {
+      await transitionCampaign(campaignId, 'completed');
+    } catch (err) {
+      logger.error(
+        { err, campaignId, totalTasks, completedCount, failedCount },
+        'auto-complete transitionCampaign threw; leaving for next progress write to retry'
+      );
+    }
   }
 }
 

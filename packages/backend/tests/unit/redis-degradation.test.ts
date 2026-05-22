@@ -29,16 +29,11 @@ const QUEUE_BOUND_ATTACKS = [{ id: 20, keyspace: String(100 * 1000), campaignId:
 // Captured by the db.update mock so individual tests can assert rollback.
 const updatedRows: Array<Record<string, unknown>> = [];
 
-// Helper: same dual-purpose mock as in campaign-transition.test.ts.
-// validateCampaignResources awaits where() directly; the legacy
-// campaign/attack chains use where().limit / .orderBy. Resolving
-// where() to [{ id: 1 }] makes hashListId=1 look present so the
-// resource validation gate passes and we reach the queue checks
-// these tests target.
-function makeAwaitableChain(defaultRows: unknown[], chain: Record<string, unknown>) {
-  const promise = Promise.resolve(defaultRows);
-  return Object.assign(promise, chain);
-}
+// Resolving where() to [{ id: 1 }] makes hashListId=1 look present so
+// the resource validation gate passes and we reach the queue checks
+// these tests target. Shared helper kept in tests/helpers/db-mock.ts so
+// future shape changes only need to be made in one place.
+import { makeAwaitableChain } from '../helpers/db-mock.js';
 
 if (IS_ISOLATED) {
   mock.module('../../src/db/index.js', () => ({
