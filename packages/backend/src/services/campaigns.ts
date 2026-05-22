@@ -3,9 +3,14 @@ import {
   type CampaignSortField,
   type CampaignSortOrder,
   campaigns,
+  hashLists,
+  hashTypes,
+  maskLists,
+  ruleLists,
   tasks,
+  wordLists,
 } from '@hashhive/shared';
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
 import { emitCampaignStatus } from './events.js';
@@ -229,6 +234,174 @@ export async function createCampaign(data: {
   return campaign ?? null;
 }
 
+/**
+ * Inline-attack payload shape accepted by `createCampaignWithAttacks`.
+ * `dependencies` carries 0-based indices into the same `attacks[]`
+ * array of the request body (since attacks have no DB id until insert);
+ * the service translates indices → real attack IDs after insert.
+ */
+export interface InlineAttackInput {
+  mode: number;
+  hashTypeId?: number | null | undefined;
+  wordlistId?: number | null | undefined;
+  rulelistId?: number | null | undefined;
+  masklistId?: number | null | undefined;
+  advancedConfiguration?: Record<string, unknown> | undefined;
+  dependencies?: number[] | undefined;
+}
+
+export type CreateCampaignWithAttacksResult =
+  | {
+      kind: 'created';
+      campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>>;
+      attacks: Array<{ id: number; dependencies: number[] | null }>;
+    }
+  | { kind: 'dag_invalid'; error: string };
+
+/**
+ * Transactional create: campaign + attacks land in a single DB
+ * transaction. Pre-commit DAG validation runs against the proposed
+ * graph (using indices first, then real ids after insert); a cycle
+ * aborts the txn so no rows are persisted.
+ *
+ * Attack `dependencies` values are interpreted as **0-based indices
+ * into the supplied `attacks[]` array**, not real attack IDs. This
+ * matches the wizard's UX where the user composes the graph before
+ * any IDs exist.
+ */
+export async function createCampaignWithAttacks(input: {
+  projectId: number;
+  name: string;
+  description?: string | undefined;
+  hashListId: number;
+  priority?: number | undefined;
+  createdBy?: number | undefined;
+  attacks: ReadonlyArray<InlineAttackInput>;
+}): Promise<CreateCampaignWithAttacksResult> {
+  // First validate the proposed DAG using index-based IDs. We use the
+  // input position as a stable proxy id; this catches cycles and
+  // dangling references before we open the transaction so a failed
+  // validation is cheaper.
+  const indexValidationInput = input.attacks.map((a, idx) => ({
+    id: idx,
+    dependencies: a.dependencies ?? null,
+  }));
+  const preCheck = validateProposedDAG(indexValidationInput);
+  if (!preCheck.valid) {
+    return { kind: 'dag_invalid', error: preCheck.error ?? 'Invalid DAG' };
+  }
+
+  class DAGInvalidInsideTx extends Error {
+    constructor(public readonly reason: string) {
+      super(reason);
+    }
+  }
+
+  try {
+    return await db.transaction(async (tx) => {
+      const [campaign] = await tx
+        .insert(campaigns)
+        .values({
+          projectId: input.projectId,
+          name: input.name,
+          description: input.description ?? null,
+          hashListId: input.hashListId,
+          priority: input.priority ?? 5,
+          createdBy: input.createdBy ?? null,
+          status: 'draft',
+        })
+        .returning();
+      if (!campaign) {
+        throw new Error('Campaign insert returned no row');
+      }
+
+      if (input.attacks.length === 0) {
+        return { kind: 'created' as const, campaign, attacks: [] };
+      }
+
+      // Insert attacks WITHOUT dependencies first so we get their real
+      // ids; then translate index-based deps → real-id deps and update.
+      // A single round of UPDATEs is cheaper than per-row inserts.
+      const inserted = await tx
+        .insert(attacks)
+        .values(
+          input.attacks.map((a) => ({
+            campaignId: campaign.id,
+            projectId: input.projectId,
+            mode: a.mode,
+            hashTypeId: a.hashTypeId ?? null,
+            wordlistId: a.wordlistId ?? null,
+            rulelistId: a.rulelistId ?? null,
+            masklistId: a.masklistId ?? null,
+            advancedConfiguration: a.advancedConfiguration ?? {},
+            dependencies: [],
+            status: 'pending' as const,
+          }))
+        )
+        .returning();
+
+      // Map index → real id for the dependency translation.
+      const realIdByIndex = inserted.map((row) => row.id);
+
+      // Translate and persist real-id deps; also assemble the
+      // post-translation graph for the final DAG check.
+      const finalGraph: Array<{ id: number; dependencies: number[] | null }> = [];
+      for (let idx = 0; idx < input.attacks.length; idx++) {
+        const realId = realIdByIndex[idx];
+        if (realId === undefined) {
+          throw new Error('Inserted attack id missing — txn invariant violated');
+        }
+        const indexDeps = input.attacks[idx]?.dependencies ?? [];
+        const realDeps = indexDeps.map((depIdx) => {
+          const target = realIdByIndex[depIdx];
+          if (target === undefined) {
+            throw new DAGInvalidInsideTx(
+              `Attack at index ${idx} depends on out-of-range index ${depIdx}`
+            );
+          }
+          return target;
+        });
+        finalGraph.push({ id: realId, dependencies: realDeps.length > 0 ? realDeps : null });
+
+        if (realDeps.length > 0) {
+          await tx
+            .update(attacks)
+            .set({ dependencies: realDeps, updatedAt: new Date() })
+            .where(eq(attacks.id, realId));
+        }
+      }
+
+      // Final safety net: re-validate the persisted graph with real
+      // IDs. The pre-check on indices already caught structural
+      // cycles, so this should always pass; if it fails the txn is
+      // aborted via the sentinel rather than persisting a bad graph.
+      const finalCheck = validateProposedDAG(finalGraph);
+      if (!finalCheck.valid) {
+        throw new DAGInvalidInsideTx(finalCheck.error ?? 'Invalid DAG');
+      }
+
+      return { kind: 'created' as const, campaign, attacks: finalGraph };
+    });
+  } catch (err) {
+    if (err instanceof DAGInvalidInsideTx) {
+      return { kind: 'dag_invalid', error: err.reason };
+    }
+    throw err;
+  }
+}
+
+export type UpdateCampaignResult =
+  | { kind: 'updated'; campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>> }
+  | { kind: 'not_found' }
+  | { kind: 'not_draft'; status: string };
+
+/**
+ * Update a campaign if and only if its status is `draft`. The draft
+ * guard is folded into the WHERE clause so a concurrent transition
+ * cannot flip the row out of `draft` between a separate read-time
+ * check and the write below; the post-write recheck distinguishes
+ * not_found from not_draft for accurate error reporting.
+ */
 export async function updateCampaign(
   id: number,
   data: {
@@ -236,17 +409,180 @@ export async function updateCampaign(
     description?: string | undefined;
     priority?: number | undefined;
   }
-) {
+): Promise<UpdateCampaignResult> {
   const [updated] = await db
     .update(campaigns)
     .set({ ...data, updatedAt: new Date() })
-    .where(eq(campaigns.id, id))
+    .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
     .returning();
 
-  return updated ?? null;
+  if (updated) {
+    return { kind: 'updated', campaign: updated };
+  }
+
+  const existing = await getCampaignById(id);
+  if (!existing) {
+    return { kind: 'not_found' };
+  }
+  return { kind: 'not_draft', status: existing.status };
 }
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
+
+/**
+ * Verify every resource referenced by the campaign and its attacks
+ * actually exists, and (for project-scoped resources) belongs to the
+ * campaign's project. Returns the missing resource identifiers grouped
+ * by table so the route layer can surface a single combined error.
+ *
+ * Runs one parallel SELECT per table; all resource id lookups are
+ * indexed by primary key.
+ *
+ * Project scoping:
+ *   - `hashLists`, `wordLists`, `ruleLists`, `maskLists` have
+ *     `project_id` and are scoped to the campaign's project.
+ *   - `hashTypes` is global (no project_id) so it's looked up by id only.
+ */
+export async function validateCampaignResources(
+  campaign: { projectId: number; hashListId: number | null },
+  campaignAttacks: ReadonlyArray<{
+    hashTypeId?: number | null;
+    wordlistId?: number | null;
+    rulelistId?: number | null;
+    masklistId?: number | null;
+  }>
+): Promise<{ valid: true } | { valid: false; missing: string[] }> {
+  const wantedHashListIds = campaign.hashListId ? [campaign.hashListId] : [];
+  const wantedHashTypeIds = Array.from(
+    new Set(campaignAttacks.map((a) => a.hashTypeId).filter((v): v is number => v != null))
+  );
+  const wantedWordlistIds = Array.from(
+    new Set(campaignAttacks.map((a) => a.wordlistId).filter((v): v is number => v != null))
+  );
+  const wantedRulelistIds = Array.from(
+    new Set(campaignAttacks.map((a) => a.rulelistId).filter((v): v is number => v != null))
+  );
+  const wantedMasklistIds = Array.from(
+    new Set(campaignAttacks.map((a) => a.masklistId).filter((v): v is number => v != null))
+  );
+
+  const lookups: Array<Promise<{ table: string; foundIds: Set<number>; wanted: number[] }>> = [];
+
+  if (wantedHashListIds.length > 0) {
+    lookups.push(
+      (async () => {
+        const rows = await db
+          .select({ id: hashLists.id })
+          .from(hashLists)
+          .where(
+            and(
+              inArray(hashLists.id, wantedHashListIds),
+              eq(hashLists.projectId, campaign.projectId)
+            )
+          );
+        return {
+          table: 'hashList',
+          foundIds: new Set(rows.map((r) => r.id)),
+          wanted: wantedHashListIds,
+        };
+      })()
+    );
+  }
+  if (wantedHashTypeIds.length > 0) {
+    lookups.push(
+      (async () => {
+        const rows = await db
+          .select({ id: hashTypes.id })
+          .from(hashTypes)
+          .where(inArray(hashTypes.id, wantedHashTypeIds));
+        return {
+          table: 'hashType',
+          foundIds: new Set(rows.map((r) => r.id)),
+          wanted: wantedHashTypeIds,
+        };
+      })()
+    );
+  }
+  if (wantedWordlistIds.length > 0) {
+    lookups.push(
+      (async () => {
+        const rows = await db
+          .select({ id: wordLists.id })
+          .from(wordLists)
+          .where(
+            and(
+              inArray(wordLists.id, wantedWordlistIds),
+              eq(wordLists.projectId, campaign.projectId)
+            )
+          );
+        return {
+          table: 'wordlist',
+          foundIds: new Set(rows.map((r) => r.id)),
+          wanted: wantedWordlistIds,
+        };
+      })()
+    );
+  }
+  if (wantedRulelistIds.length > 0) {
+    lookups.push(
+      (async () => {
+        const rows = await db
+          .select({ id: ruleLists.id })
+          .from(ruleLists)
+          .where(
+            and(
+              inArray(ruleLists.id, wantedRulelistIds),
+              eq(ruleLists.projectId, campaign.projectId)
+            )
+          );
+        return {
+          table: 'rulelist',
+          foundIds: new Set(rows.map((r) => r.id)),
+          wanted: wantedRulelistIds,
+        };
+      })()
+    );
+  }
+  if (wantedMasklistIds.length > 0) {
+    lookups.push(
+      (async () => {
+        const rows = await db
+          .select({ id: maskLists.id })
+          .from(maskLists)
+          .where(
+            and(
+              inArray(maskLists.id, wantedMasklistIds),
+              eq(maskLists.projectId, campaign.projectId)
+            )
+          );
+        return {
+          table: 'masklist',
+          foundIds: new Set(rows.map((r) => r.id)),
+          wanted: wantedMasklistIds,
+        };
+      })()
+    );
+  }
+
+  if (lookups.length === 0) {
+    return { valid: true };
+  }
+
+  const results = await Promise.all(lookups);
+  const missing: string[] = [];
+  for (const { table, foundIds, wanted } of results) {
+    for (const id of wanted) {
+      if (!foundIds.has(id)) {
+        missing.push(`${table}(${id})`);
+      }
+    }
+  }
+
+  if (missing.length === 0) {
+    return { valid: true };
+  }
+  return { valid: false, missing };
+}
 
 type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'cancelled';
 
@@ -271,11 +607,30 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     };
   }
 
-  // Validate campaign has attacks and resources before starting
+  // Validate campaign has attacks and that every referenced resource
+  // still exists before starting. Resource validation runs after the
+  // attack-count check so the more specific "missing resources" error
+  // is preferred over the generic "no attacks" error.
   if (targetStatus === 'running') {
     const campaignAttacks = await listAttacks(id);
     if (campaignAttacks.length === 0) {
       return { error: 'Campaign must have at least one attack before starting' };
+    }
+
+    const resourceCheck = await validateCampaignResources(
+      { projectId: campaign.projectId, hashListId: campaign.hashListId },
+      campaignAttacks.map((a) => ({
+        hashTypeId: a.hashTypeId,
+        wordlistId: a.wordlistId,
+        rulelistId: a.rulelistId,
+        masklistId: a.masklistId,
+      }))
+    );
+    if (!resourceCheck.valid) {
+      return {
+        error: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
+        code: 'RESOURCE_MISSING' as const,
+      };
     }
   }
 
@@ -518,8 +873,53 @@ export async function deleteAttack(id: number) {
 
 // ─── Campaign Progress ─────────────────────────────────────────────
 
+/**
+ * Pure decision: should a campaign auto-transition to `completed`?
+ * Triggered only when the campaign is currently `running` AND every
+ * task has reached a terminal state (completed/exhausted/failed).
+ * Exported for unit testing the guard without mocking SQL.
+ */
+export function shouldAutoCompleteCampaign(input: {
+  status: string;
+  totalTasks: number;
+  completedCount: number;
+  failedCount: number;
+}): boolean {
+  if (input.status !== 'running') return false;
+  if (input.totalTasks <= 0) return false;
+  return input.completedCount + input.failedCount >= input.totalTasks;
+}
+
+/**
+ * Pure ETA estimator: project remaining-work completion from average
+ * throughput since campaign start. Returns `null` when there's no
+ * throughput basis (no running tasks, no startedAt, elapsed < 1s, no
+ * measurable progress, or no remaining work). Exported for unit
+ * testing the rate math without mocking SQL.
+ */
+export function computeCampaignEta(input: {
+  startedAt: Date | null;
+  now: Date;
+  totalTasks: number;
+  completedCount: number;
+  failedCount: number;
+  runningProgress: number;
+  runningTaskCount: number;
+}): string | null {
+  if (input.runningTaskCount <= 0) return null;
+  if (!input.startedAt) return null;
+  const completedFraction = input.completedCount + input.runningProgress;
+  if (completedFraction <= 0) return null;
+  const elapsedMs = input.now.getTime() - input.startedAt.getTime();
+  if (elapsedMs < 1000) return null;
+  const rate = completedFraction / (elapsedMs / 1000); // tasks per second
+  const remaining = Math.max(0, input.totalTasks - completedFraction - input.failedCount);
+  if (rate <= 0 || remaining <= 0) return null;
+  return new Date(input.now.getTime() + (remaining / rate) * 1000).toISOString();
+}
+
 export async function updateCampaignProgress(campaignId: number) {
-  // Single aggregation query: total tasks, completed count, and clamped running progress.
+  // Single aggregation query: total tasks, terminal counts, clamped running progress.
   //
   // `progress.keyspaceProgress` is the agent-reported count of keyspace units
   // already cracked within a task's `workRange.total`. We divide to get a
@@ -532,6 +932,7 @@ export async function updateCampaignProgress(campaignId: number) {
     .select({
       totalTasks: sql<number>`count(*)`,
       completedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} IN ('completed', 'exhausted'))`,
+      failedCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'failed')`,
       // CASE WHEN guards the divide-by-zero case explicitly: a placeholder
       // task created without a real keyspace has `workRange.total = 0`, and
       // letting that flow into the division produces NULL, which
@@ -562,6 +963,7 @@ export async function updateCampaignProgress(campaignId: number) {
         ) FILTER (WHERE ${tasks.status} = 'running'),
         0::numeric
       ))::double precision`,
+      runningTaskCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'running')`,
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId));
@@ -570,23 +972,30 @@ export async function updateCampaignProgress(campaignId: number) {
   if (totalTasks === 0) return;
 
   const completedCount = agg?.completedCount ?? 0;
+  const failedCount = agg?.failedCount ?? 0;
   const runningProgress = agg?.runningProgress ?? 0;
+  const runningTaskCount = agg?.runningTaskCount ?? 0;
 
   const overallProgress = (completedCount + runningProgress) / totalTasks;
 
-  // Hash-based progress: look up the campaign's hash list and count cracked vs total
+  // Hash-based progress + ETA reference: load campaign metadata once.
+  const [campaign] = await db
+    .select({
+      hashListId: campaigns.hashListId,
+      status: campaigns.status,
+      projectId: campaigns.projectId,
+      startedAt: campaigns.startedAt,
+    })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+
   let hashProgress: {
     total: number;
     cracked: number;
     remaining: number;
     percentage: number;
   } | null = null;
-
-  const [campaign] = await db
-    .select({ hashListId: campaigns.hashListId })
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
 
   if (campaign?.hashListId) {
     const stats = await getHashListStats(campaign.hashListId);
@@ -599,12 +1008,28 @@ export async function updateCampaignProgress(campaignId: number) {
     }
   }
 
+  // ETA: project completion from the average rate since campaign start.
+  // Estimate driven by task-completion velocity — the dashboard treats
+  // it as a forecast, not a guarantee. See `computeCampaignEta` for the
+  // null-handling rules.
+  const eta = computeCampaignEta({
+    startedAt: campaign?.startedAt ?? null,
+    now: new Date(),
+    totalTasks,
+    completedCount,
+    failedCount,
+    runningProgress,
+    runningTaskCount,
+  });
+
   await db
     .update(campaigns)
     .set({
       progress: {
         totalTasks,
         completedTasks: completedCount,
+        tasksFailed: failedCount,
+        eta,
         overallProgress: Math.round(overallProgress * 10000) / 10000,
         updatedAt: new Date().toISOString(),
         ...(hashProgress ? { hashProgress } : {}),
@@ -612,36 +1037,58 @@ export async function updateCampaignProgress(campaignId: number) {
       updatedAt: new Date(),
     })
     .where(eq(campaigns.id, campaignId));
+
+  // Auto-transition running → completed when every task has reached a
+  // terminal state (completed/exhausted/failed). Guarded so we don't
+  // fight a manual stop or recurse on an already-completed campaign.
+  // transitionCampaign emits the `campaign_status` event and stamps
+  // `completedAt` — we don't duplicate either here.
+  if (
+    campaign &&
+    shouldAutoCompleteCampaign({
+      status: campaign.status,
+      totalTasks,
+      completedCount,
+      failedCount,
+    })
+  ) {
+    await transitionCampaign(campaignId, 'completed');
+  }
 }
 
 // ─── DAG Validation ─────────────────────────────────────────────────
 
 /**
- * Validates that the attacks in a campaign form a valid DAG
- * (no circular dependencies). Uses Kahn's algorithm for topological sort.
+ * Pure DAG validator. Operates on an in-memory attack list so write-
+ * path callers can validate the *proposed* state (current attacks ±
+ * the staged change) before committing to the database. The
+ * `validateCampaignDAG` wrapper reads from the DB and delegates here.
+ *
+ * Returns `{ valid: false, error }` when:
+ *   - any dependency references an id outside the input set (covers
+ *     cross-campaign references and dangling deps)
+ *   - the resulting graph contains a cycle (Kahn's algorithm cannot
+ *     drain all nodes)
  */
-export async function validateCampaignDAG(
-  campaignId: number
-): Promise<{ valid: boolean; error?: string | undefined }> {
-  const campaignAttacks = await listAttacks(campaignId);
-
-  if (campaignAttacks.length === 0) {
+export function validateProposedDAG(
+  proposedAttacks: ReadonlyArray<{ id: number; dependencies: number[] | null }>
+): { valid: boolean; error?: string | undefined } {
+  if (proposedAttacks.length === 0) {
     return { valid: true };
   }
 
-  const attackIds = new Set(campaignAttacks.map((a) => a.id));
+  const attackIds = new Set(proposedAttacks.map((a) => a.id));
 
-  // Build adjacency list and in-degree count
   const inDegree = new Map<number, number>();
   const adjacency = new Map<number, number[]>();
 
-  for (const attack of campaignAttacks) {
+  for (const attack of proposedAttacks) {
     inDegree.set(attack.id, 0);
     adjacency.set(attack.id, []);
   }
 
-  for (const attack of campaignAttacks) {
-    const deps = (attack.dependencies as number[] | null) ?? [];
+  for (const attack of proposedAttacks) {
+    const deps = attack.dependencies ?? [];
     for (const depId of deps) {
       if (!attackIds.has(depId)) {
         return {
@@ -654,7 +1101,6 @@ export async function validateCampaignDAG(
     }
   }
 
-  // Kahn's algorithm
   const queue: number[] = [];
   for (const [id, degree] of inDegree) {
     if (degree === 0) {
@@ -677,9 +1123,22 @@ export async function validateCampaignDAG(
     }
   }
 
-  if (processed !== campaignAttacks.length) {
+  if (processed !== proposedAttacks.length) {
     return { valid: false, error: 'Circular dependency detected among attacks' };
   }
 
   return { valid: true };
+}
+
+/**
+ * DB-backed campaign DAG validator. Reads the current attack set for
+ * the campaign and delegates to `validateProposedDAG`.
+ */
+export async function validateCampaignDAG(
+  campaignId: number
+): Promise<{ valid: boolean; error?: string | undefined }> {
+  const campaignAttacks = await listAttacks(campaignId);
+  return validateProposedDAG(
+    campaignAttacks.map((a) => ({ id: a.id, dependencies: a.dependencies as number[] | null }))
+  );
 }

@@ -1,5 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { logger } from '../../config/logger.js';
 import { requireSession } from '../../middleware/auth.js';
@@ -7,6 +7,7 @@ import { requireProjectAccess, requireRole } from '../../middleware/rbac.js';
 import {
   createAttack,
   createCampaign,
+  createCampaignWithAttacks,
   deleteAttack,
   deleteCampaign,
   getAttackById,
@@ -19,6 +20,7 @@ import {
   updateAttack,
   updateCampaign,
   validateCampaignDAG,
+  validateProposedDAG,
 } from '../../services/campaigns.js';
 import type { AppEnv } from '../../types.js';
 
@@ -87,11 +89,27 @@ campaignRoutes.get(
   }
 );
 
+// Inline-attack payload schema for the optional transactional create
+// path. `dependencies` here are 0-based indices into the same `attacks[]`
+// array — the service layer translates them to real attack IDs after
+// the INSERT returns. Indices are non-negative integers because zero is
+// a valid index into the array.
+const inlineAttackSchema = z.object({
+  mode: z.number().int().nonnegative(),
+  hashTypeId: z.number().int().positive().optional(),
+  wordlistId: z.number().int().positive().optional(),
+  rulelistId: z.number().int().positive().optional(),
+  masklistId: z.number().int().positive().optional(),
+  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
+  dependencies: z.array(z.number().int().nonnegative()).optional(),
+});
+
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
   hashListId: z.number().int().positive(),
   priority: z.number().int().min(1).max(10).optional(),
+  attacks: z.array(inlineAttackSchema).optional(),
 });
 
 campaignRoutes.post(
@@ -107,8 +125,36 @@ campaignRoutes.post(
         400
       );
     }
-    const campaign = await createCampaign({ ...data, projectId, createdBy: userId });
-    return c.json({ campaign }, 201);
+
+    // No attacks supplied → legacy single-row insert (backward compatible).
+    if (!data.attacks || data.attacks.length === 0) {
+      const campaign = await createCampaign({
+        name: data.name,
+        description: data.description,
+        hashListId: data.hashListId,
+        priority: data.priority,
+        projectId,
+        createdBy: userId,
+      });
+      return c.json({ campaign, attacks: [] }, 201);
+    }
+
+    // Attacks supplied → single-transaction create + DAG pre-check.
+    const result = await createCampaignWithAttacks({
+      name: data.name,
+      description: data.description,
+      hashListId: data.hashListId,
+      priority: data.priority,
+      projectId,
+      createdBy: userId,
+      attacks: data.attacks,
+    });
+
+    if (result.kind === 'dag_invalid') {
+      return c.json({ error: { code: 'DAG_INVALID', message: result.error } }, 400);
+    }
+
+    return c.json({ campaign: result.campaign, attacks: result.attacks }, 201);
   }
 );
 
@@ -197,22 +243,62 @@ const updateCampaignSchema = z.object({
   priority: z.number().int().min(1).max(10).optional(),
 });
 
-campaignRoutes.patch(
-  '/:id',
-  requireRole('admin', 'contributor'),
-  zValidator('json', updateCampaignSchema),
-  async (c) => {
-    const id = Number(c.req.param('id'));
-    const data = c.req.valid('json');
-    const campaign = await updateCampaign(id, data);
-
-    if (!campaign) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
-    }
-
-    return c.json({ campaign });
+// Shared handler for PATCH and PUT — spec ticket calls for PUT, frontend
+// already uses PATCH; both map to the same partial-update semantics, and
+// both are gated to draft-status campaigns at the service layer.
+const updateCampaignHandler = async (c: Context<AppEnv>) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
   }
-);
+
+  const { projectId } = c.get('currentUser');
+  const existing = await getCampaignById(id);
+  if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+  }
+
+  // zValidator on the route registration already rejects invalid bodies
+  // with 400; re-parse here so the shared handler still gets a typed
+  // payload without depending on the per-route generic input map.
+  const parsed = updateCampaignSchema.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parsed.error.issues.map((i) => i.message).join('; '),
+        },
+      },
+      400
+    );
+  }
+  const result = await updateCampaign(id, parsed.data);
+
+  switch (result.kind) {
+    case 'not_found':
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+    case 'not_draft':
+      return c.json(
+        {
+          error: {
+            code: 'NOT_DRAFT',
+            message: `Campaign cannot be updated in status "${result.status}". Only draft campaigns are editable.`,
+          },
+        },
+        409
+      );
+    case 'updated':
+      return c.json({ campaign: result.campaign });
+  }
+};
+
+// Validation runs inside the shared handler via safeParse so PATCH and
+// PUT share a single source of truth for the response envelope (the
+// default zValidator shape uses `{ success, error }`, but the rest of
+// the dashboard API uses `{ error: { code, message } }`).
+campaignRoutes.patch('/:id', requireRole('admin', 'contributor'), updateCampaignHandler);
+campaignRoutes.put('/:id', requireRole('admin', 'contributor'), updateCampaignHandler);
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
 
@@ -237,16 +323,80 @@ campaignRoutes.post(
 
     const targetStatus = statusMap[action];
     const result = await transitionCampaign(id, targetStatus);
+    return respondToTransition(c, result);
+  }
+);
 
-    if ('error' in result) {
-      if ('code' in result && result.code === 'QUEUE_UNAVAILABLE') {
-        return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503);
-      }
-      return c.json({ error: { code: 'INVALID_TRANSITION', message: result.error } }, 400);
+// Shared error mapping for transitionCampaign results. Keeps the
+// /lifecycle action-enum route and the spec-named alias routes in
+// lockstep — every recognized service-layer error code maps to the
+// same HTTP status and envelope across both surfaces.
+type TransitionResult = Awaited<ReturnType<typeof transitionCampaign>>;
+function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
+  if ('error' in result) {
+    const code = 'code' in result ? result.code : undefined;
+    if (code === 'QUEUE_UNAVAILABLE') {
+      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503);
+    }
+    if (code === 'RESOURCE_MISSING') {
+      return c.json({ error: { code: 'RESOURCE_MISSING', message: result.error } }, 400);
+    }
+    if (code === 'TASK_GENERATION_FAILED') {
+      return c.json({ error: { code: 'TASK_GENERATION_FAILED', message: result.error } }, 500);
+    }
+    return c.json({ error: { code: 'INVALID_TRANSITION', message: result.error } }, 400);
+  }
+  return c.json({ campaign: result.campaign });
+}
+
+// Spec-named lifecycle aliases. These delegate to the same
+// transitionCampaign service the action-enum /lifecycle route uses, so
+// behavior (queue check, task generation, event emission, valid-
+// transition allow-list) stays in lockstep. The pre-existing
+// /lifecycle route is kept for the frontend which still calls it.
+const lifecycleAliasStatus = {
+  start: 'running',
+  pause: 'paused',
+  resume: 'running',
+  stop: 'draft',
+} as const;
+
+const lifecycleAliasHandler =
+  (action: keyof typeof lifecycleAliasStatus) => async (c: Context<AppEnv>) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400);
     }
 
-    return c.json({ campaign: result.campaign });
-  }
+    const { projectId } = c.get('currentUser');
+    const existing = await getCampaignById(id);
+    if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404);
+    }
+
+    const result = await transitionCampaign(id, lifecycleAliasStatus[action]);
+    return respondToTransition(c, result);
+  };
+
+campaignRoutes.post(
+  '/:id/start',
+  requireRole('admin', 'contributor'),
+  lifecycleAliasHandler('start')
+);
+campaignRoutes.post(
+  '/:id/pause',
+  requireRole('admin', 'contributor'),
+  lifecycleAliasHandler('pause')
+);
+campaignRoutes.post(
+  '/:id/resume',
+  requireRole('admin', 'contributor'),
+  lifecycleAliasHandler('resume')
+);
+campaignRoutes.post(
+  '/:id/stop',
+  requireRole('admin', 'contributor'),
+  lifecycleAliasHandler('stop')
 );
 
 // ─── DAG Validation ─────────────────────────────────────────────────
@@ -275,6 +425,11 @@ const createAttackSchema = z.object({
   dependencies: z.array(z.number().int().positive()).optional(),
 });
 
+// Synthetic id used for pre-insert DAG validation. Attack IDs are
+// positive serials, so any negative value is guaranteed not to collide
+// with existing rows.
+const SYNTHETIC_NEW_ATTACK_ID = -1;
+
 campaignRoutes.post(
   '/:id/attacks',
   requireRole('admin', 'contributor'),
@@ -288,6 +443,30 @@ campaignRoutes.post(
     }
 
     const data = c.req.valid('json');
+
+    // Pre-insert DAG validation: build the proposed graph (current
+    // attacks + this new attack with a synthetic id) and reject the
+    // request if it would introduce a cycle or reference a missing
+    // attack id.
+    const currentAttacks = await listAttacks(campaignId);
+    const proposed = [
+      ...currentAttacks.map((a) => ({
+        id: a.id,
+        dependencies: a.dependencies as number[] | null,
+      })),
+      {
+        id: SYNTHETIC_NEW_ATTACK_ID,
+        dependencies: data.dependencies ?? null,
+      },
+    ];
+    const dagResult = validateProposedDAG(proposed);
+    if (!dagResult.valid) {
+      return c.json(
+        { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
+        400
+      );
+    }
+
     const attack = await createAttack({
       ...data,
       campaignId,
@@ -335,6 +514,26 @@ campaignRoutes.patch(
     }
 
     const data = c.req.valid('json');
+
+    // Pre-update DAG validation: only when dependencies are being
+    // changed. Other field changes (mode, wordlist, etc.) do not affect
+    // the dependency graph, so skipping the load avoids the extra query.
+    if (data.dependencies !== undefined) {
+      const currentAttacks = await listAttacks(campaignId);
+      const proposed = currentAttacks.map((a) => ({
+        id: a.id,
+        dependencies:
+          a.id === attackId ? (data.dependencies ?? null) : (a.dependencies as number[] | null),
+      }));
+      const dagResult = validateProposedDAG(proposed);
+      if (!dagResult.valid) {
+        return c.json(
+          { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
+          400
+        );
+      }
+    }
+
     const attack = await updateAttack(attackId, data);
 
     if (!attack) {
