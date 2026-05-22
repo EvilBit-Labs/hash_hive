@@ -442,8 +442,13 @@ if (isIsolated) {
         setCalls.push(payload);
         return { where: mockUpdateWhere };
       });
+      // Sweep branches now gate event emission and counter increments on
+      // `.returning()` rowcount > 0 — the default mock must report a row
+      // matched so the existing happy-path tests still observe the side
+      // effects. Tests that exercise the concurrent-sweep no-op override
+      // this to return [].
       mockUpdateWhere.mockReset().mockImplementation(() => ({
-        returning: mock(() => Promise.resolve([])),
+        returning: mock(() => Promise.resolve([{ id: 1 }])),
       }));
       mockEmitTaskUpdate.mockReset();
       mockUpdateCampaignProgress.mockReset();
@@ -746,16 +751,17 @@ if (isIsolated) {
         },
       ]);
 
-      // Drizzle's UPDATE chain is awaited directly without `.returning()` in
-      // reassignStaleTasks. The second per-task UPDATE rejects so the
-      // try/catch path is exercised; the first and third resolve.
+      // Sweep paths now call `.where(...).returning({id})`. The second
+      // per-task UPDATE rejects from `.returning()` so the try/catch path
+      // is exercised; the first and third resolve with a single-row array
+      // so the success path runs.
       let callIdx = 0;
       mockUpdateWhere.mockReset().mockImplementation(() => {
         const i = callIdx++;
         if (i === 1) {
-          return Promise.reject(new Error('db blip'));
+          return { returning: mock(() => Promise.reject(new Error('db blip'))) };
         }
-        return Promise.resolve([]);
+        return { returning: mock(() => Promise.resolve([{ id: 1 }])) };
       });
 
       const result = await reassignStaleTasks();

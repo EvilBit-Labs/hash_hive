@@ -721,6 +721,10 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
   // terminal branches use the same code). The agent-reported reason that
   // tipped the task over the budget is preserved in resultStats.lastFailure
   // for debugging.
+  //
+  // Guard the UPDATE on agentId + status so a concurrent sweep that
+  // already reassigned this row cannot cause us to mark a now-unowned
+  // task as failed; only emit events when a row was actually updated.
   const [updated] = await db
     .update(tasks)
     .set({
@@ -730,7 +734,13 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
       resultStats: { ...resultStats, lastFailure: reason },
       updatedAt: new Date(),
     })
-    .where(eq(tasks.id, taskId))
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        eq(tasks.agentId, agentId),
+        sql`${tasks.status} IN ('assigned', 'running')`
+      )
+    )
     .returning();
 
   if (updated && campaign) {
@@ -811,12 +821,16 @@ type StaleTaskRow = {
  * The UPDATE is guarded by `status IN ('assigned', 'running') AND
  * agent_id = staleTask.agentId` so a concurrent sweep (e.g. transient
  * overlap during a rolling deploy) cannot double-process the same row.
+ * Returns `true` when the UPDATE actually changed a row; callers use
+ * this to gate the event broadcast and aggregate refresh so a no-op
+ * (row already swept by a peer) does not produce phantom transitions
+ * or skew sweep metrics.
  */
 async function terminalFailStaleTask(
   staleTask: StaleTaskRow,
   failureReason: 'keyspace_progress_overrun' | 'max_retries_exceeded'
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const updated = await db
     .update(tasks)
     .set({
       status: 'failed',
@@ -830,11 +844,16 @@ async function terminalFailStaleTask(
         sql`${tasks.status} IN ('assigned', 'running')`,
         staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
       )
-    );
+    )
+    .returning({ id: tasks.id });
+  if (updated.length === 0) {
+    return false;
+  }
   emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed', {
     campaignId: staleTask.campaignId,
   });
   await updateCampaignProgress(staleTask.campaignId);
+  return true;
 }
 
 /**
@@ -916,9 +935,12 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // completion message, or its report is malformed. Either way, the
         // chunk did not flow through the normal completion path - mark
         // failed so a fresh agent reruns the range rather than silently
-        // trusting an un-acked completion.
-        await terminalFailStaleTask(staleTask, 'keyspace_progress_overrun');
-        failedOverrun++;
+        // trusting an un-acked completion. Only count the outcome when the
+        // helper actually changed a row — a concurrent sweep that already
+        // processed this task makes the UPDATE a no-op.
+        if (await terminalFailStaleTask(staleTask, 'keyspace_progress_overrun')) {
+          failedOverrun++;
+        }
         continue;
       }
 
@@ -927,8 +949,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           // Retry budget exhausted - permanent fail. Mirrors
           // handleTaskFailure's terminal branch; keep agentId so operators
           // can still see which agent dropped the task.
-          await terminalFailStaleTask(staleTask, 'max_retries_exceeded');
-          failedMaxRetries++;
+          if (await terminalFailStaleTask(staleTask, 'max_retries_exceeded')) {
+            failedMaxRetries++;
+          }
           continue;
         }
 
@@ -945,7 +968,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             : {};
         const carriedProgress: Record<string, unknown> = { ...priorProgress };
         delete carriedProgress['keyspaceProgress'];
-        await db
+        const rebalanceUpdated = await db
           .update(tasks)
           .set({
             status: 'pending',
@@ -967,7 +990,11 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
               sql`${tasks.status} IN ('assigned', 'running')`,
               staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
             )
-          );
+          )
+          .returning({ id: tasks.id });
+        if (rebalanceUpdated.length === 0) {
+          continue;
+        }
         emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
           campaignId: staleTask.campaignId,
         });
@@ -978,13 +1005,14 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
 
       if (exceededRetries) {
         // 0% / unreadable progress but retry budget exhausted - permanent fail.
-        await terminalFailStaleTask(staleTask, 'max_retries_exceeded');
-        failedMaxRetries++;
+        if (await terminalFailStaleTask(staleTask, 'max_retries_exceeded')) {
+          failedMaxRetries++;
+        }
         continue;
       }
 
       // 0% progress or unreadable range - reset to pending unchanged.
-      await db
+      const resetUpdated = await db
         .update(tasks)
         .set({
           status: 'pending',
@@ -1000,7 +1028,11 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             sql`${tasks.status} IN ('assigned', 'running')`,
             staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
           )
-        );
+        )
+        .returning({ id: tasks.id });
+      if (resetUpdated.length === 0) {
+        continue;
+      }
       emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
         campaignId: staleTask.campaignId,
       });
