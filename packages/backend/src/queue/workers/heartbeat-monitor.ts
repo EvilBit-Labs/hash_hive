@@ -54,8 +54,29 @@ export function createHeartbeatMonitorWorker(connection: Redis): Worker<Heartbea
       // Reassign tasks from offline agents
       const result = await reassignStaleTasks();
 
-      if (result.reassigned > 0) {
-        logger.info({ reassigned: result.reassigned }, 'Reassigned stale tasks');
+      // Surface every non-zero counter so terminal failures and per-task
+      // errors are observable in operator logs, not buried in task rows.
+      const anyMovement =
+        result.reassigned > 0 ||
+        result.rebalanced > 0 ||
+        result.failedOverrun > 0 ||
+        result.failedMaxRetries > 0 ||
+        result.errored > 0;
+      if (anyMovement) {
+        const isWarn =
+          result.failedOverrun > 0 || result.failedMaxRetries > 0 || result.errored > 0;
+        const summary = {
+          reassigned: result.reassigned,
+          rebalanced: result.rebalanced,
+          failedOverrun: result.failedOverrun,
+          failedMaxRetries: result.failedMaxRetries,
+          errored: result.errored,
+        };
+        if (isWarn) {
+          logger.warn(summary, 'Stale task sweep summary');
+        } else {
+          logger.info(summary, 'Stale task sweep summary');
+        }
       }
 
       return { ...result, offlineAgents: staleAgents.length };

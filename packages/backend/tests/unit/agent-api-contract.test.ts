@@ -528,6 +528,29 @@ describe('Agent API: POST /tasks/next', () => {
     expect(task['work_range']).toBeUndefined();
     expect(task['retry_count']).toBeUndefined();
   });
+
+  it('round-trips a non-zero retryCount through the snake↔camel projection', async () => {
+    // toHaveProperty passes even on an explicit undefined; assert a real
+    // non-zero value so a regression that drops the column projection is
+    // caught here rather than at runtime in the agent client.
+    const tasksMod = await import('../../src/services/tasks.js');
+    const assignNextTaskMock = tasksMod.assignNextTask as unknown as ReturnType<typeof mock>;
+    assignNextTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({ ...mockCamelCaseTask, retryCount: 2 })
+    );
+
+    const token = agentToken(TEST_AGENT_TOKEN);
+    const res = await app.request(`${AGENT_BASE}/tasks/next`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    const task = body['task'] as Record<string, unknown>;
+    expect(task['retryCount']).toBe(2);
+    expect(task['retryCount']).not.toBeUndefined();
+  });
 });
 
 // ─── POST /tasks/:id/report — Report Task Progress ─────────────────

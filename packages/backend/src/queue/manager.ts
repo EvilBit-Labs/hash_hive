@@ -12,6 +12,16 @@ export interface QueueHealth {
 }
 
 /**
+ * Heartbeat-monitor scheduler cadence. Must stay strictly shorter than the
+ * 5-minute offline threshold in `queue/workers/heartbeat-monitor.ts` and
+ * the 5-minute default `staleThresholdMs` in `services/tasks.ts` so a
+ * stale task is caught within roughly one tick after it crosses the
+ * threshold. Increasing this without bumping the assigned-at floor in
+ * `reassignStaleTasks` would reintroduce the first-heartbeat race.
+ */
+export const HEARTBEAT_SCHEDULER_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
  * Manages BullMQ queues for the API process.
  * Responsible for enqueuing jobs and health reporting only.
  * Workers run in dedicated processes — see worker-*.ts entrypoints.
@@ -61,13 +71,13 @@ export class QueueManager {
       );
     }
 
-    // Schedule repeatable heartbeat monitor. Ticket #119 sets the cadence at
-    // 2 minutes so the stale-task sweep matches the agent offline threshold.
+    // Schedule repeatable heartbeat monitor. See HEARTBEAT_SCHEDULER_INTERVAL_MS
+    // for the rationale on the relationship to the offline threshold.
     const heartbeatQueue = this.queues.get(QUEUE_NAMES.HEARTBEAT_MONITOR);
     if (heartbeatQueue) {
       await heartbeatQueue.upsertJobScheduler(
         'heartbeat-check',
-        { every: 2 * 60 * 1000 },
+        { every: HEARTBEAT_SCHEDULER_INTERVAL_MS },
         { data: { triggeredAt: new Date().toISOString() } }
       );
     }

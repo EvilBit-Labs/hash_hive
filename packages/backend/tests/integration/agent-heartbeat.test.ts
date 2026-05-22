@@ -258,6 +258,12 @@ if (!IS_ISOLATED) {
     SYSTEM_EVENT_PROJECT_ID: 0 as const,
   }));
 
+  // Exposed so tests can assert the heartbeat high-priority path called
+  // the capability filter with the right agent caps. Default impl returns
+  // a no-op SQL fragment (the drizzle-chain mock ignores predicate
+  // contents); tests can mockImplementationOnce to override.
+  const buildCapabilityPredicateMock = mock(() => sql`TRUE`);
+
   mock.module('../../src/services/tasks.js', () => ({
     assignNextTask: mock(),
     updateTaskProgress: mock(),
@@ -270,11 +276,7 @@ if (!IS_ISOLATED) {
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     listTasksByAgent: mock(),
-    // The heartbeat high-priority lookup composes a capability predicate
-    // into its WHERE clause. The drizzle-chain mock ignores the predicate
-    // contents, so returning a no-op `sql` fragment keeps the chain happy
-    // without leaking real SQL behavior into the test.
-    buildCapabilityPredicate: mock(() => sql`TRUE`),
+    buildCapabilityPredicate: buildCapabilityPredicateMock,
   }));
 
   mock.module('../../src/lib/auth.js', () => ({
@@ -311,6 +313,8 @@ if (!IS_ISOLATED) {
     loggerMock.error.mockReset();
     emitAgentErrorMock.mockReset();
     emitAgentStatusMock.mockReset();
+    buildCapabilityPredicateMock.mockReset();
+    buildCapabilityPredicateMock.mockImplementation(() => sql`TRUE`);
   });
 
   afterEach(() => {
@@ -598,6 +602,116 @@ if (!IS_ISOLATED) {
       expect(ctx['api_key']).toBe('[REDACTED]');
       expect(ctx['authorization']).toBe('[REDACTED]');
       expect(ctx['stack']).toBe('Error...');
+    });
+
+    it('calls buildCapabilityPredicate with the agent capabilities on the high-priority lookup', async () => {
+      // Arrange — online agent with GPU + hashMode capabilities; pretend a
+      // high-priority task is queued for its project.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: true, hashModes: [0, 1000] },
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBe(true);
+      expect(buildCapabilityPredicateMock).toHaveBeenCalledTimes(1);
+      // The heartbeat must pass the agent's own capabilities to the filter,
+      // not an empty object — otherwise the predicate excludes everything.
+      expect(buildCapabilityPredicateMock.mock.calls[0]?.[0]).toEqual({
+        gpu: true,
+        hashModes: [0, 1000],
+      });
+    });
+
+    it('skips the high-priority lookup for an agent in error status', async () => {
+      // Arrange — agent transitioning to error via fatal heartbeat. The
+      // hint must not fire because assignNextTask refuses to assign to
+      // non-online/non-benchmarked agents, so suggesting work is misleading.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: true, hashModes: [0] },
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act — fatal heartbeat moves status to 'error'.
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: 'error',
+          error: { severity: 'fatal', message: 'gpu hung' },
+        }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      // The route omits hasHighPriorityTasks when false (response-shape
+      // optimization in /heartbeat). The status gate must short-circuit
+      // before the lookup, so the predicate is not invoked.
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+    });
+
+    it('warn-logs and skips the high-priority lookup for null capabilities', async () => {
+      // Arrange — agent row exists but capabilities are NULL (jsonb is
+      // nullable in schema; can happen on a freshly-inserted row that
+      // hasn't yet announced). The shape check skips the predicate so we
+      // don't silently exclude every real task.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        // biome-ignore lint/suspicious/noExplicitAny: deliberate null to mirror jsonb nullability the route now defends against
+        capabilities: null as any,
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      // Predicate must NOT have been called — the shape gate short-circuited.
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+      // And the warn must have fired exactly once for this agent.
+      const warnCallsForAgent = loggerMock.warn.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined;
+        return arg?.['agentId'] === 1 && arg?.['capabilitiesType'] === 'null';
+      });
+      expect(warnCallsForAgent).toHaveLength(1);
     });
   });
 }

@@ -15,6 +15,8 @@ let mockExecute: ReturnType<typeof mock>;
 let mockGetAgentBenchmarkForMode: ReturnType<typeof mock>;
 let mockUpdateSet: ReturnType<typeof mock>;
 let mockUpdateWhere: ReturnType<typeof mock>;
+let mockEmitTaskUpdate: ReturnType<typeof mock>;
+let mockUpdateCampaignProgress: ReturnType<typeof mock>;
 
 if (isIsolated) {
   // ─── Config / logger mocks (prevent env validation during import) ──
@@ -66,13 +68,15 @@ if (isIsolated) {
     },
   }));
 
+  mockEmitTaskUpdate = mock();
   mock.module('../../src/services/events.js', () => ({
     emitCrackResult: mock(),
-    emitTaskUpdate: mock(),
+    emitTaskUpdate: mockEmitTaskUpdate,
   }));
 
+  mockUpdateCampaignProgress = mock();
   mock.module('../../src/services/campaigns.js', () => ({
-    updateCampaignProgress: mock(),
+    updateCampaignProgress: mockUpdateCampaignProgress,
   }));
 
   mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null));
@@ -80,7 +84,9 @@ if (isIsolated) {
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
   }));
 
-  const { assignNextTask, reassignStaleTasks } = await import('../../src/services/tasks.js');
+  const { assignNextTask, handleTaskFailure, reassignStaleTasks } = await import(
+    '../../src/services/tasks.js'
+  );
   const { db } = await import('../../src/db/index.js');
 
   describe('assignNextTask', () => {
@@ -439,6 +445,8 @@ if (isIsolated) {
       mockUpdateWhere.mockReset().mockImplementation(() => ({
         returning: mock(() => Promise.resolve([])),
       }));
+      mockEmitTaskUpdate.mockReset();
+      mockUpdateCampaignProgress.mockReset();
     });
 
     test('marks task failed when keyspaceProgress equals total (un-acked completion)', async () => {
@@ -463,6 +471,7 @@ if (isIsolated) {
         rebalanced: 0,
         failedOverrun: 1,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('failed');
@@ -488,6 +497,7 @@ if (isIsolated) {
         rebalanced: 0,
         failedOverrun: 1,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('failed');
@@ -514,6 +524,7 @@ if (isIsolated) {
         rebalanced: 1,
         failedOverrun: 0,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0]?.['status']).toBe('pending');
@@ -550,6 +561,7 @@ if (isIsolated) {
         rebalanced: 0,
         failedOverrun: 0,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(1);
       // Existing reset path: clear claim metadata but leave workRange/progress alone.
@@ -588,6 +600,7 @@ if (isIsolated) {
         rebalanced: 1,
         failedOverrun: 0,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(1);
       const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
@@ -607,8 +620,259 @@ if (isIsolated) {
         rebalanced: 0,
         failedOverrun: 0,
         failedMaxRetries: 0,
+        errored: 0,
       });
       expect(setCalls).toHaveLength(0);
+    });
+
+    test('terminal-fails partial-progress task when retry budget exhausted', async () => {
+      seedStaleTasks([
+        {
+          taskId: 77,
+          agentId: 4,
+          projectId: 9,
+          campaignId: 42,
+          workRange: { start: 0, end: 1_000_000, total: 1_000_000 },
+          progress: { keyspaceProgress: 250_000 }, // partial-progress branch
+          retryCount: 3, // at MAX_RETRIES — exceededRetries is true
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 0,
+        failedOverrun: 0,
+        failedMaxRetries: 1,
+        errored: 0,
+      });
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
+      // Terminal fail must not touch workRange/progress — the row is dead.
+      expect(setCalls[0]?.['workRange']).toBeUndefined();
+      expect(setCalls[0]?.['progress']).toBeUndefined();
+      expect(mockEmitTaskUpdate).toHaveBeenCalledWith(9, 77, 'failed', {
+        campaignId: 42,
+      });
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(42);
+    });
+
+    test('terminal-fails zero-progress task when retry budget exhausted', async () => {
+      seedStaleTasks([
+        {
+          taskId: 78,
+          agentId: 5,
+          projectId: 9,
+          campaignId: 43,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: {}, // 0% / unreadable
+          retryCount: 4, // above cap (defensive bound)
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result).toEqual({
+        reassigned: 0,
+        rebalanced: 0,
+        failedOverrun: 0,
+        failedMaxRetries: 1,
+        errored: 0,
+      });
+      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
+      expect(mockEmitTaskUpdate).toHaveBeenCalledWith(9, 78, 'failed', {
+        campaignId: 43,
+      });
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(43);
+    });
+
+    test('does NOT terminal-fail at the boundary (retryCount = MAX_RETRIES - 1)', async () => {
+      // Boundary guard: predicate is `>= MAX_RETRIES`, so retryCount=2 must
+      // still rebalance, not terminal-fail. Catches an off-by-one regression.
+      seedStaleTasks([
+        {
+          taskId: 79,
+          agentId: 6,
+          projectId: 9,
+          campaignId: 44,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: { keyspaceProgress: 250 },
+          retryCount: 2,
+        },
+      ]);
+
+      const result = await reassignStaleTasks();
+
+      expect(result.failedMaxRetries).toBe(0);
+      expect(result.rebalanced).toBe(1);
+      expect(setCalls[0]?.['status']).toBe('pending');
+      expect(setCalls[0]?.['failureReason']).toBeUndefined();
+    });
+
+    test('isolates per-task errors so siblings still process', async () => {
+      // Three stale tasks; the second's UPDATE rejects. The first and third
+      // must still complete and the envelope reports errored=1.
+      seedStaleTasks([
+        {
+          taskId: 101,
+          agentId: 11,
+          projectId: 1,
+          campaignId: 1,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: {},
+          retryCount: 0,
+        },
+        {
+          taskId: 102,
+          agentId: 12,
+          projectId: 1,
+          campaignId: 1,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: {},
+          retryCount: 0,
+        },
+        {
+          taskId: 103,
+          agentId: 13,
+          projectId: 1,
+          campaignId: 1,
+          workRange: { start: 0, end: 1000, total: 1000 },
+          progress: {},
+          retryCount: 0,
+        },
+      ]);
+
+      // Drizzle's UPDATE chain is awaited directly without `.returning()` in
+      // reassignStaleTasks. The second per-task UPDATE rejects so the
+      // try/catch path is exercised; the first and third resolve.
+      let callIdx = 0;
+      mockUpdateWhere.mockReset().mockImplementation(() => {
+        const i = callIdx++;
+        if (i === 1) {
+          return Promise.reject(new Error('db blip'));
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await reassignStaleTasks();
+
+      expect(result.reassigned).toBe(2);
+      expect(result.errored).toBe(1);
+    });
+  });
+
+  // ─── handleTaskFailure ────────────────────────────────────────────
+  //
+  // Exercises the retry-budget gating, the source-of-truth migration from
+  // result_stats.retryCount to the new tasks.retry_count column, and the
+  // terminal-fail branch that now also refreshes the campaign aggregate.
+  describe('handleTaskFailure', () => {
+    let setCalls: Array<Record<string, unknown>>;
+
+    beforeEach(() => {
+      setCalls = [];
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }));
+      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }));
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }));
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]));
+      mockUpdateSet.mockReset().mockImplementation((payload: Record<string, unknown>) => {
+        setCalls.push(payload);
+        return { where: mockUpdateWhere };
+      });
+      mockUpdateWhere.mockReset().mockImplementation(() => ({
+        returning: mock(() => Promise.resolve([])),
+      }));
+      mockEmitTaskUpdate.mockReset();
+      mockUpdateCampaignProgress.mockReset();
+    });
+
+    test('retries (sets retryCount = current + 1) when below MAX_RETRIES', async () => {
+      const task = {
+        id: 50,
+        agentId: 8,
+        campaignId: 12,
+        resultStats: { lastFailure: 'prior' },
+        retryCount: 1,
+      };
+      // First .limit() returns the task; second returns the campaign.
+      mockLimit.mockResolvedValueOnce([task]);
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      mockUpdateWhere.mockImplementationOnce(() => ({
+        returning: mock(() =>
+          Promise.resolve([{ ...task, status: 'pending', retryCount: 2, agentId: null }])
+        ),
+      }));
+
+      const result = await handleTaskFailure(50, 8, 'agent_timeout');
+
+      expect(result).toMatchObject({ retried: true });
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0]?.['status']).toBe('pending');
+      expect(setCalls[0]?.['retryCount']).toBe(2);
+      expect(setCalls[0]?.['failureReason']).toBe('agent_timeout');
+      // result_stats.retryCount must NOT be written anymore.
+      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>;
+      expect(stats['retryCount']).toBeUndefined();
+      expect(stats['lastFailure']).toBe('agent_timeout');
+    });
+
+    test('terminal-fails when retryCount equals MAX_RETRIES and refreshes campaign', async () => {
+      const task = {
+        id: 51,
+        agentId: 9,
+        campaignId: 12,
+        resultStats: {},
+        retryCount: 3,
+      };
+      mockLimit.mockResolvedValueOnce([task]);
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      mockUpdateWhere.mockImplementationOnce(() => ({
+        returning: mock(() => Promise.resolve([{ ...task, status: 'failed' }])),
+      }));
+
+      const result = await handleTaskFailure(51, 9, 'agent_timeout');
+
+      expect(result).toMatchObject({ retried: false });
+      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(setCalls[0]?.['failureReason']).toBe('agent_timeout');
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
+      expect(mockEmitTaskUpdate).toHaveBeenCalledWith(3, 51, 'failed', {
+        agentId: 9,
+        campaignId: 12,
+      });
+      // Terminal fail must refresh the campaign aggregate so the dashboard
+      // does not lag a sweep cycle (symmetric with the sweep terminal-fail).
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(12);
+    });
+
+    test('reads retryCount from the column, not result_stats (back-compat)', async () => {
+      // A row migrated from the legacy schema may still carry a stale
+      // result_stats.retryCount; the new code must IGNORE it and only honor
+      // the column. Otherwise pre-migration tasks one-failure-from-terminal
+      // would silently fail immediately on first post-migration retry.
+      const task = {
+        id: 52,
+        agentId: 10,
+        campaignId: 12,
+        resultStats: { retryCount: 99, lastFailure: 'stale_legacy_value' },
+        retryCount: 0,
+      };
+      mockLimit.mockResolvedValueOnce([task]);
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      mockUpdateWhere.mockImplementationOnce(() => ({
+        returning: mock(() => Promise.resolve([{ ...task, retryCount: 1 }])),
+      }));
+
+      const result = await handleTaskFailure(52, 10, 'agent_timeout');
+
+      // Despite resultStats.retryCount=99, the column says 0 -> still retry.
+      expect(result).toMatchObject({ retried: true });
+      expect(setCalls[0]?.['retryCount']).toBe(1);
+      expect(setCalls[0]?.['status']).toBe('pending');
     });
   });
 
