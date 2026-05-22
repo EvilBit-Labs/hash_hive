@@ -216,7 +216,8 @@ if (!IS_ISOLATED) {
         campaign: CampaignRow;
         attacks: Array<{ id: number; dependencies: number[] | null }>;
       }
-    | { kind: 'dag_invalid'; error: string };
+    | { kind: 'dag_invalid'; error: string }
+    | { kind: 'resource_missing'; missing: string[] };
 
   const mockCreateCampaign = mock(
     async (data: { name: string; projectId: number; hashListId: number }) =>
@@ -695,7 +696,7 @@ if (!IS_ISOLATED) {
     });
 
     it('returns 404 RESOURCE_NOT_FOUND on cross-project campaign without consuming the transition mock', async () => {
-      mockTransitionCampaign.mockClear();
+      mockTransitionCampaign.mockReset();
       const res = await app.request(`${DASH_CAMPAIGNS}/200/lifecycle`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
@@ -709,7 +710,7 @@ if (!IS_ISOLATED) {
     });
 
     it('returns 404 RESOURCE_NOT_FOUND for unknown id', async () => {
-      mockTransitionCampaign.mockClear();
+      mockTransitionCampaign.mockReset();
       const res = await app.request(`${DASH_CAMPAIGNS}/9999/lifecycle`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
@@ -870,7 +871,7 @@ if (!IS_ISOLATED) {
     });
 
     it('POST /:id/attacks skips validator when no resource refs are supplied', async () => {
-      mockValidateCampaignResources.mockClear();
+      mockValidateCampaignResources.mockReset();
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
@@ -899,7 +900,7 @@ if (!IS_ISOLATED) {
 
     it('PATCH /:id/attacks/:attackId skips validator when no resource fields are changed', async () => {
       mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] });
-      mockValidateCampaignResources.mockClear();
+      mockValidateCampaignResources.mockReset();
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
         method: 'PATCH',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },
@@ -1021,7 +1022,7 @@ if (!IS_ISOLATED) {
 
     for (const action of ['start', 'pause', 'resume', 'stop', 'cancel'] as const) {
       it(`POST /:id/${action} delegates to transitionCampaign with the right target status`, async () => {
-        mockTransitionCampaign.mockClear();
+        mockTransitionCampaign.mockReset();
         mockTransitionCampaign.mockResolvedValueOnce({
           campaign: { id: 100, status: aliasTransitionTarget[action] },
         });

@@ -44,6 +44,8 @@ tags:
 
 paths:
   /campaigns:
+    parameters:
+      - $ref: "#/components/parameters/XProjectIdHeader"
     post:
       operationId: createCampaign
       summary: Create a new campaign (optionally with inline attacks)
@@ -82,18 +84,23 @@ paths:
                       `attacks[]`; otherwise contains the inserted
                       attacks with real IDs and translated dependencies.
         "400":
-          $ref: "#/components/responses/ValidationError"
-        "409":
-          description: DAG cycle in proposed attacks, or cross-project resource reference.
+          description: Body failed validation, or proposed inline-attack DAG contains a cycle / dangling dependency.
           content:
             application/json:
               schema:
                 oneOf:
+                  - $ref: "#/components/schemas/ValidationError"
                   - $ref: "#/components/schemas/DagInvalidError"
-                  - $ref: "#/components/schemas/ResourceMissingError"
+        "409":
+          description: Cross-project resource reference rejected by the draft-write resource validator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceMissingError"
 
   /campaigns/{id}:
     parameters:
+      - $ref: "#/components/parameters/XProjectIdHeader"
       - name: id
         in: path
         required: true
@@ -169,6 +176,7 @@ paths:
         `campaign_status` event.
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -196,6 +204,7 @@ paths:
       summary: Transition a running campaign to `paused`
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -217,6 +226,7 @@ paths:
       summary: Transition a paused campaign back to `running`
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -244,6 +254,7 @@ paths:
         campaign remains restartable.
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -265,6 +276,7 @@ paths:
       summary: Transition a campaign to `cancelled` (terminal)
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -284,6 +296,7 @@ paths:
         Preserved for clients that prefer the enum-style request.
       tags: [Campaigns]
       parameters:
+        - $ref: "#/components/parameters/XProjectIdHeader"
         - { name: id, in: path, required: true, schema: { type: integer } }
       requestBody:
         required: true
@@ -295,7 +308,7 @@ paths:
               properties:
                 action:
                   type: string
-                  enum: [start, pause, stop, cancel]
+                  enum: [start, pause, resume, stop, cancel]
       responses:
         "200":
           $ref: "#/components/responses/CampaignWrapper"
@@ -314,6 +327,7 @@ paths:
 
   /campaigns/{id}/attacks:
     parameters:
+      - $ref: "#/components/parameters/XProjectIdHeader"
       - { name: id, in: path, required: true, schema: { type: integer } }
     post:
       operationId: addAttack
@@ -363,6 +377,20 @@ components:
       type: apiKey
       in: cookie
       name: hh.session_token
+
+  parameters:
+    XProjectIdHeader:
+      name: x-project-id
+      in: header
+      required: true
+      description: |
+        The active project id for this request. Enforced server-side by
+        `requireProjectAccess` middleware against the BetterAuth
+        session. All campaign endpoints (and every project-scoped
+        dashboard route) require this header.
+      schema:
+        type: integer
+        minimum: 1
 
   schemas:
     Campaign:

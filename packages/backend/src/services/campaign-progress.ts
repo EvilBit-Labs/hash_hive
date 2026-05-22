@@ -81,7 +81,7 @@ export const _progressDeps = {
   },
 };
 
-export async function updateCampaignProgress(campaignId: number) {
+export async function updateCampaignProgress(campaignId: number): Promise<void> {
   // Single aggregation query: total tasks, terminal counts, clamped running progress.
   //
   // `progress.keyspaceProgress` is the agent-reported count of keyspace units

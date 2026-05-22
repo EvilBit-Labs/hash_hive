@@ -571,7 +571,7 @@ export const campaignSortOrderSchema = z.enum(['asc', 'desc']);
  * Lifecycle actions the dashboard can fire against
  * `POST /dashboard/campaigns/:id/lifecycle`.
  */
-export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'stop', 'cancel']);
+export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'resume', 'stop', 'cancel']);
 
 /**
  * Canonical priority buckets. Backend pegs three integer values

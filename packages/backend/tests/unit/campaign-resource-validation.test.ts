@@ -273,24 +273,59 @@ if (!IS_ISOLATED) {
       expect(statusUpdates.some((c) => c.values['status'] === 'completed')).toBe(true);
     });
 
-    test('does NOT trigger auto-complete when status is draft', async () => {
+    test('does NOT trigger auto-complete when status is draft (gate guards even with terminal tasks)', async () => {
+      // Non-zero aggregate so updateCampaignProgress doesn't short-circuit
+      // on the totalTasks check — we need to reach the campaign-meta
+      // load and exercise the actual status guard.
       expectFromCall('tasks', [
         {
-          totalTasks: 0,
-          completedCount: 0,
+          totalTasks: 3,
+          completedCount: 3,
           failedCount: 0,
           runningProgress: 0,
           runningTaskCount: 0,
         },
       ]);
-      // totalTasks === 0 short-circuits the function before campaign load.
+      expectFromCall('campaigns', [
+        { hashListId: null, status: 'draft', projectId: 1, startedAt: null },
+      ]);
+
       await updateCampaignProgress(100);
 
-      // No status writes to campaigns.
-      const statusUpdates = updateCalls.filter(
-        (c) => c.tableName === 'campaigns' && typeof c.values['status'] === 'string'
+      // Progress payload still gets written (the function persists the
+      // aggregation regardless of status), but no status flip should
+      // occur because the guard rejects draft.
+      const progressWrite = updateCalls.find(
+        (c) => c.tableName === 'campaigns' && c.values['progress'] !== undefined
       );
-      expect(statusUpdates.length).toBe(0);
+      expect(progressWrite).toBeDefined();
+
+      const statusFlip = updateCalls.find(
+        (c) => c.tableName === 'campaigns' && c.values['status'] === 'completed'
+      );
+      expect(statusFlip).toBeUndefined();
+    });
+
+    test('does NOT trigger auto-complete when status is cancelled', async () => {
+      expectFromCall('tasks', [
+        {
+          totalTasks: 3,
+          completedCount: 3,
+          failedCount: 0,
+          runningProgress: 0,
+          runningTaskCount: 0,
+        },
+      ]);
+      expectFromCall('campaigns', [
+        { hashListId: null, status: 'cancelled', projectId: 1, startedAt: null },
+      ]);
+
+      await updateCampaignProgress(100);
+
+      const statusFlip = updateCalls.find(
+        (c) => c.tableName === 'campaigns' && c.values['status'] === 'completed'
+      );
+      expect(statusFlip).toBeUndefined();
     });
 
     test('writes tasksFailed and eta fields into progress payload when running', async () => {

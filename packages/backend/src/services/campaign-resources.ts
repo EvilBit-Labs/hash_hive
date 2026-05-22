@@ -13,13 +13,35 @@ import { db } from '../db/index.js';
 
 type ResourceLookupKey = 'hashListId' | 'hashTypeId' | 'wordlistId' | 'rulelistId' | 'masklistId';
 
+// Each of the 5 resource tables is a Drizzle pgTable carrying an
+// integer `id` column and (for everything except hashTypes) a
+// `projectId` column. Modeling the union explicitly drops the `any`
+// holes the prior version carried; the helper only needs `.id` and
+// optionally `.projectId`, both of which are present on every member
+// of the union.
+type ResourceTable =
+  | typeof hashLists
+  | typeof hashTypes
+  | typeof wordLists
+  | typeof ruleLists
+  | typeof maskLists;
+
 interface ResourceLookupSpec {
-  // biome-ignore lint/suspicious/noExplicitAny: drizzle table shapes are heterogeneous; the helper only uses .id and .projectId which exist on each row
-  table: any;
-  // biome-ignore lint/suspicious/noExplicitAny: see above
-  idColumn: any;
-  // biome-ignore lint/suspicious/noExplicitAny: see above
-  projectIdColumn: any | null;
+  table: ResourceTable;
+  idColumn:
+    | typeof hashLists.id
+    | typeof hashTypes.id
+    | typeof wordLists.id
+    | typeof ruleLists.id
+    | typeof maskLists.id;
+  // hashTypes is global (no `projectId` column), so this is nullable
+  // and the helper switches off it.
+  projectIdColumn:
+    | typeof hashLists.projectId
+    | typeof wordLists.projectId
+    | typeof ruleLists.projectId
+    | typeof maskLists.projectId
+    | null;
   label: string;
 }
 
@@ -52,7 +74,7 @@ const RESOURCE_LOOKUPS: Record<ResourceLookupKey, ResourceLookupSpec> = {
     table: maskLists,
     idColumn: maskLists.id,
     projectIdColumn: maskLists.projectId,
-    label: 'maskList',
+    label: 'masklist',
   },
 };
 
@@ -63,10 +85,10 @@ async function lookupExistingIds(
 ): Promise<Set<number>> {
   if (wanted.length === 0) return new Set();
   const whereClause = spec.projectIdColumn
-    ? and(inArray(spec.idColumn, wanted as number[]), eq(spec.projectIdColumn, projectId))
-    : inArray(spec.idColumn, wanted as number[]);
+    ? and(inArray(spec.idColumn, [...wanted]), eq(spec.projectIdColumn, projectId))
+    : inArray(spec.idColumn, [...wanted]);
   const rows = await db.select({ id: spec.idColumn }).from(spec.table).where(whereClause);
-  return new Set((rows as Array<{ id: number }>).map((r) => r.id));
+  return new Set(rows.map((r) => r.id));
 }
 
 /**

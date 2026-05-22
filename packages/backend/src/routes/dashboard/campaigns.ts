@@ -330,8 +330,12 @@ campaignRoutes.put('/:id', requireRole('admin', 'contributor'), updateCampaignHa
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
 
+// Action enum matches the spec-named alias routes — `resume` is
+// included alongside `start` even though both map to `running`,
+// because the alias path exposes `/resume` and the parity is
+// documented in the OpenAPI spec.
 const lifecycleSchema = z.object({
-  action: z.enum(['start', 'pause', 'stop', 'cancel']),
+  action: z.enum(['start', 'pause', 'resume', 'stop', 'cancel']),
 });
 
 campaignRoutes.post(
@@ -358,6 +362,7 @@ campaignRoutes.post(
     const statusMap = {
       start: 'running',
       pause: 'paused',
+      resume: 'running',
       stop: 'draft',
       cancel: 'cancelled',
     } as const;

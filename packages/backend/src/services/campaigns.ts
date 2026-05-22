@@ -16,8 +16,10 @@ import { emitCampaignStatus } from './events.js';
 export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js';
 // Re-export from sibling modules so existing callers (route handlers,
 // tests) keep working through the `services/campaigns` import path.
-// Splitting the file out kept it under the 800-line guideline without
-// forcing every caller to update its import path.
+// The split brought this file near the 800-line project guideline
+// (down from 1,500+) without forcing every caller to update its
+// import path; further growth should land in one of the sibling
+// modules instead of bloating this facade.
 export {
   type DeleteCampaignResult,
   deleteCampaign,
