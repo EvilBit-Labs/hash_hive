@@ -43,20 +43,35 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
 
 let mockAttacks: Array<Record<string, unknown>> = [];
 
+// Helper: makes where() awaitable as the supplied default value AND
+// chainable to limit/orderBy. validateCampaignResources uses
+// `db.select({fields}).from(table).where(...)` directly without limit/
+// orderBy and expects an array; the existing chain on campaigns/attacks
+// uses `.where(...).limit/orderBy(...)`. The proxy supports both.
+function makeAwaitableChain(defaultRows: unknown[], chain: Record<string, unknown>) {
+  const promise = Promise.resolve(defaultRows);
+  return Object.assign(promise, chain);
+}
+
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mock(() => ({
-      from: mock(() => {
-        // getCampaignById path: campaigns table → returns campaign row
-        // listAttacks path: attacks table → returns mockAttacks
-        return {
-          where: mock(() => ({
-            limit: mock(() => Promise.resolve([makeCampaignRow()])),
-            orderBy: mock(() => Promise.resolve(mockAttacks)),
-          })),
+      from: mock(() =>
+        // For validateCampaignResources lookups (no further chain), where()
+        // is awaited directly and should resolve to [{ id: 1 }] so the
+        // hashListId=1 reference is treated as existing. For the legacy
+        // campaign/attack chains, the `.limit` / `.orderBy` methods are
+        // attached to the same returned object.
+        ({
+          where: mock(() =>
+            makeAwaitableChain([{ id: 1 }], {
+              limit: mock(() => Promise.resolve([makeCampaignRow()])),
+              orderBy: mock(() => Promise.resolve(mockAttacks)),
+            })
+          ),
           orderBy: mock(() => Promise.resolve(mockAttacks)),
-        };
-      }),
+        })
+      ),
     })),
     update: mock(() => ({
       set: mock(() => ({
