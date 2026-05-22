@@ -538,13 +538,13 @@ export const requiredCapabilitiesSchema = z
 
 /**
  * Canonical shape of a task descriptor returned from `assignNextTask`
- * and surfaced on the agent API `/tasks/next` route. The Date fields
- * are real JS Dates as they live in memory between drizzle and the
- * route handler — the JSON serializer turns them into ISO-8601
- * strings at the wire boundary (governed by `agent-api.yaml`). Keep
- * this in lockstep with the OpenAPI `TaskDescriptor` schema; the
- * `tasks.retry_count` column is `NOT NULL DEFAULT 0`, so `retryCount`
- * is always present.
+ * and surfaced on the agent API `/tasks/next` route. Timestamp fields
+ * use `z.coerce.date()` so the same schema parses both the backend's
+ * in-memory `Date` objects (from drizzle) and the ISO-8601 strings
+ * frontend/agent clients receive after JSON serialization. Inferred
+ * type is `Date` in both cases. Keep in lockstep with the OpenAPI
+ * `TaskDescriptor` schema; the `tasks.retry_count` column is
+ * `NOT NULL DEFAULT 0`, so `retryCount` is always present.
  */
 export const assignedTaskSchema = z.object({
   id: z.number().int().positive(),
@@ -556,13 +556,13 @@ export const assignedTaskSchema = z.object({
   progress: z.unknown(),
   resultStats: z.unknown(),
   requiredCapabilities: requiredCapabilitiesSchema.nullable(),
-  assignedAt: z.date().nullable(),
-  startedAt: z.date().nullable(),
-  completedAt: z.date().nullable(),
+  assignedAt: z.coerce.date().nullable(),
+  startedAt: z.coerce.date().nullable(),
+  completedAt: z.coerce.date().nullable(),
   failureReason: z.string().nullable(),
   retryCount: z.number().int().nonnegative(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
 });
 
 // ─── Campaign Dashboard Surface ─────────────────────────────────────

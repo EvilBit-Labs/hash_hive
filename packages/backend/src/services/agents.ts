@@ -429,6 +429,17 @@ async function getBuildCapabilityPredicate(): Promise<
  */
 const warnedEmptyCapsAgentIds = new Set<number>();
 
+/**
+ * Test-only reset for the warned-agent guard. Integration tests that
+ * exercise the empty-capabilities path within a single process need to
+ * reach the warn branch repeatedly with the same mock agent id; this
+ * keeps the production guard intact while letting tests start each case
+ * from a known empty state.
+ */
+export function __resetWarnedEmptyCapsForTesting(): void {
+  warnedEmptyCapsAgentIds.clear();
+}
+
 function logStatusTransition(opts: {
   agentId: number;
   projectId: number;
@@ -731,15 +742,30 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   if (updated && isClaimEligible) {
     const rawCaps = updated.capabilities;
     const capsIsObject = rawCaps !== null && typeof rawCaps === 'object' && !Array.isArray(rawCaps);
-    if (!capsIsObject) {
-      // Empty / malformed capabilities means the predicate would silently
-      // exclude every real task (every hashcat task has a hashcatMode
-      // requirement). Warn once per agent so operators can see the agent
-      // hasn't announced yet, then skip the lookup.
+    // An agent that has not yet announced is operationally equivalent to one
+    // with malformed capabilities: `buildCapabilityPredicate` would emit a
+    // filter that excludes every real hashcat task (every task carries a
+    // `hashcatMode` requirement), so the hint silently zero-matches AND we
+    // pay for an extra DB join per heartbeat. Treat "no usable hashModes"
+    // (missing key, empty array, or all-invalid entries) the same as
+    // null/non-object: warn once, skip the lookup.
+    const hasUsableHashModes =
+      capsIsObject &&
+      Array.isArray((rawCaps as Record<string, unknown>)['hashModes']) &&
+      ((rawCaps as Record<string, unknown>)['hashModes'] as unknown[]).some((m) => {
+        const n = Number(m);
+        return Number.isFinite(n) && Number.isInteger(n);
+      });
+    if (!capsIsObject || !hasUsableHashModes) {
       if (!warnedEmptyCapsAgentIds.has(agentId)) {
         warnedEmptyCapsAgentIds.add(agentId);
+        const capabilitiesType = !capsIsObject
+          ? rawCaps === null
+            ? 'null'
+            : typeof rawCaps
+          : 'object-without-usable-hashModes';
         logger.warn(
-          { agentId, capabilitiesType: rawCaps === null ? 'null' : typeof rawCaps },
+          { agentId, capabilitiesType },
           'Agent has empty or non-object capabilities — high-priority hint disabled until announce'
         );
       }

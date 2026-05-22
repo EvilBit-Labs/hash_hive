@@ -287,6 +287,7 @@ if (!IS_ISOLATED) {
   }));
 
   const { app } = await import('../../src/index.js');
+  const { __resetWarnedEmptyCapsForTesting } = await import('../../src/services/agents.js');
   const { agentToken } = await import('../fixtures.js');
 
   const AGENT_BASE = '/api/v1/agent';
@@ -315,6 +316,9 @@ if (!IS_ISOLATED) {
     emitAgentStatusMock.mockReset();
     buildCapabilityPredicateMock.mockReset();
     buildCapabilityPredicateMock.mockImplementation(() => sql`TRUE`);
+    // Reset the process-global once-per-agent warn guard so each test
+    // starts from a known empty state.
+    __resetWarnedEmptyCapsForTesting();
   });
 
   afterEach(() => {
@@ -673,6 +677,44 @@ if (!IS_ISOLATED) {
       // before the lookup, so the predicate is not invoked.
       expect(body['hasHighPriorityTasks']).toBeUndefined();
       expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+    });
+
+    it('warn-logs and skips the high-priority lookup for empty hashModes', async () => {
+      // Arrange — DB default for agents.capabilities is `{}`, which is an
+      // object but carries no usable hashModes. The predicate would
+      // silently exclude every real task and still pay for an extra DB
+      // join, so treat this the same as null: warn once, skip the lookup.
+      state.agent = {
+        id: 1,
+        projectId: 7,
+        status: 'online',
+        capabilities: { gpu: false }, // object without hashModes
+      };
+      state.highPriorityTask = { id: 99 };
+      const token = agentToken(TEST_AGENT_TOKEN);
+
+      // Act
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      });
+
+      // Assert
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['hasHighPriorityTasks']).toBeUndefined();
+      expect(buildCapabilityPredicateMock).not.toHaveBeenCalled();
+      const warnCalls = loggerMock.warn.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined;
+        return (
+          arg?.['agentId'] === 1 && arg?.['capabilitiesType'] === 'object-without-usable-hashModes'
+        );
+      });
+      expect(warnCalls).toHaveLength(1);
     });
 
     it('warn-logs and skips the high-priority lookup for null capabilities', async () => {
