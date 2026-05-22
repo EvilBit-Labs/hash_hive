@@ -43,20 +43,30 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
 
 let mockAttacks: Array<Record<string, unknown>> = [];
 
+// Shared mock helper: makes where() awaitable AND chainable to
+// limit/orderBy. validateCampaignResources awaits where() directly;
+// the legacy campaign/attack chains use where().limit / .orderBy.
+import { makeAwaitableChain } from '../helpers/db-mock.js';
+
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mock(() => ({
-      from: mock(() => {
-        // getCampaignById path: campaigns table → returns campaign row
-        // listAttacks path: attacks table → returns mockAttacks
-        return {
-          where: mock(() => ({
-            limit: mock(() => Promise.resolve([makeCampaignRow()])),
-            orderBy: mock(() => Promise.resolve(mockAttacks)),
-          })),
+      from: mock(() =>
+        // For validateCampaignResources lookups (no further chain), where()
+        // is awaited directly and should resolve to [{ id: 1 }] so the
+        // hashListId=1 reference is treated as existing. For the legacy
+        // campaign/attack chains, the `.limit` / `.orderBy` methods are
+        // attached to the same returned object.
+        ({
+          where: mock(() =>
+            makeAwaitableChain([{ id: 1 }], {
+              limit: mock(() => Promise.resolve([makeCampaignRow()])),
+              orderBy: mock(() => Promise.resolve(mockAttacks)),
+            })
+          ),
           orderBy: mock(() => Promise.resolve(mockAttacks)),
-        };
-      }),
+        })
+      ),
     })),
     update: mock(() => ({
       set: mock(() => ({

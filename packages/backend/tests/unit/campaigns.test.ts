@@ -1,66 +1,11 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 
-// Test the DAG validation logic by importing the pure cycle-detection algorithm
-// Since validateCampaignDAG hits the DB, we test the core Kahn's algorithm logic directly.
+// DAG validation now tests the real exported pure function from the
+// campaigns service. The local helper that previously lived here has
+// been replaced; if the production behavior drifts, these tests fail.
+import { validateProposedDAG } from '../../src/services/campaigns.js';
 
-/**
- * Pure function version of the cycle detection from campaigns service.
- * Takes a list of { id, dependencies } and returns whether the graph is a valid DAG.
- */
-function validateDAG(nodes: Array<{ id: number; dependencies: number[] }>): {
-  valid: boolean;
-  error?: string | undefined;
-} {
-  if (nodes.length === 0) {
-    return { valid: true };
-  }
-
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  const inDegree = new Map<number, number>();
-  const adjacency = new Map<number, number[]>();
-
-  for (const node of nodes) {
-    inDegree.set(node.id, 0);
-    adjacency.set(node.id, []);
-  }
-
-  for (const node of nodes) {
-    for (const depId of node.dependencies) {
-      if (!nodeIds.has(depId)) {
-        return { valid: false, error: `Node ${node.id} depends on non-existent node ${depId}` };
-      }
-      adjacency.get(depId)!.push(node.id);
-      inDegree.set(node.id, (inDegree.get(node.id) ?? 0) + 1);
-    }
-  }
-
-  const queue: number[] = [];
-  for (const [id, degree] of inDegree) {
-    if (degree === 0) {
-      queue.push(id);
-    }
-  }
-
-  let processed = 0;
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    processed++;
-
-    for (const neighbor of adjacency.get(current) ?? []) {
-      const newDegree = (inDegree.get(neighbor) ?? 1) - 1;
-      inDegree.set(neighbor, newDegree);
-      if (newDegree === 0) {
-        queue.push(neighbor);
-      }
-    }
-  }
-
-  if (processed !== nodes.length) {
-    return { valid: false, error: 'Circular dependency detected among attacks' };
-  }
-
-  return { valid: true };
-}
+const validateDAG = validateProposedDAG;
 
 describe('DAG validation', () => {
   test('should accept an empty graph', () => {
@@ -143,8 +88,9 @@ describe('DAG validation', () => {
 // We import the production helper directly to test the real decision path.
 
 import {
-  INLINE_GENERATION_THRESHOLD,
+  computeCampaignEta,
   resolveGenerationStrategy,
+  shouldAutoCompleteCampaign,
 } from '../../src/services/campaigns.js';
 
 // resolveGenerationStrategy estimates with MIN_CHUNK_SIZE so its task count
@@ -264,5 +210,234 @@ describe('Task generation threshold (99/100 split)', () => {
     // tests, queue handlers that haven't been threaded the resource fields)
     // continue to see "1 task -> inline" since mode is undefined.
     expect(resolveGenerationStrategy([{ keyspace: null }])).toBe('inline');
+  });
+});
+
+// ─── Campaign auto-completion guard ────────────────────────────────
+
+describe('shouldAutoCompleteCampaign', () => {
+  test('returns true when running and every task is terminal (completed only)', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'running',
+        totalTasks: 3,
+        completedCount: 3,
+        failedCount: 0,
+      })
+    ).toBe(true);
+  });
+
+  test('returns true when running and mix of completed + failed sums to total', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'running',
+        totalTasks: 5,
+        completedCount: 3,
+        failedCount: 2,
+      })
+    ).toBe(true);
+  });
+
+  test('returns true when paused and all tasks terminal', () => {
+    // Paused-with-all-terminal-tasks is a valid auto-complete trigger:
+    // without it, a campaign whose last tasks finish during a pause
+    // would stay 'paused' forever with no further trigger to flip it.
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'paused',
+        totalTasks: 3,
+        completedCount: 3,
+        failedCount: 0,
+      })
+    ).toBe(true);
+  });
+
+  test('returns false when cancelled (terminal status, no recursion)', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'cancelled',
+        totalTasks: 3,
+        completedCount: 3,
+        failedCount: 0,
+      })
+    ).toBe(false);
+  });
+
+  test('returns false when draft with zero tasks', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'draft',
+        totalTasks: 0,
+        completedCount: 0,
+        failedCount: 0,
+      })
+    ).toBe(false);
+  });
+
+  test('returns false when running but tasks still in-flight', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'running',
+        totalTasks: 5,
+        completedCount: 3,
+        failedCount: 1,
+      })
+    ).toBe(false);
+  });
+
+  test('returns false when already completed (no recursion)', () => {
+    expect(
+      shouldAutoCompleteCampaign({
+        status: 'completed',
+        totalTasks: 3,
+        completedCount: 3,
+        failedCount: 0,
+      })
+    ).toBe(false);
+  });
+});
+
+// ─── Campaign ETA estimator ─────────────────────────────────────────
+
+describe('computeCampaignEta', () => {
+  const baseStart = new Date('2026-01-01T00:00:00.000Z');
+  const tenSecondsLater = new Date('2026-01-01T00:00:10.000Z');
+
+  test('returns null when no running tasks', () => {
+    expect(
+      computeCampaignEta({
+        startedAt: baseStart,
+        now: tenSecondsLater,
+        totalTasks: 10,
+        completedCount: 5,
+        failedCount: 0,
+        runningProgress: 0,
+        runningTaskCount: 0,
+      })
+    ).toBeNull();
+  });
+
+  test('returns null when campaign has no startedAt', () => {
+    expect(
+      computeCampaignEta({
+        startedAt: null,
+        now: tenSecondsLater,
+        totalTasks: 10,
+        completedCount: 5,
+        failedCount: 0,
+        runningProgress: 0.5,
+        runningTaskCount: 1,
+      })
+    ).toBeNull();
+  });
+
+  test('returns null when elapsed time < 1 second (no stable rate yet)', () => {
+    expect(
+      computeCampaignEta({
+        startedAt: baseStart,
+        now: new Date(baseStart.getTime() + 500),
+        totalTasks: 10,
+        completedCount: 1,
+        failedCount: 0,
+        runningProgress: 0.5,
+        runningTaskCount: 1,
+      })
+    ).toBeNull();
+  });
+
+  test('returns null when no measurable progress yet', () => {
+    expect(
+      computeCampaignEta({
+        startedAt: baseStart,
+        now: tenSecondsLater,
+        totalTasks: 10,
+        completedCount: 0,
+        failedCount: 0,
+        runningProgress: 0,
+        runningTaskCount: 1,
+      })
+    ).toBeNull();
+  });
+
+  test('returns null when no remaining work', () => {
+    expect(
+      computeCampaignEta({
+        startedAt: baseStart,
+        now: tenSecondsLater,
+        totalTasks: 10,
+        completedCount: 10,
+        failedCount: 0,
+        runningProgress: 0,
+        runningTaskCount: 1,
+      })
+    ).toBeNull();
+  });
+
+  test('returns ISO timestamp in the future when rate and remaining are positive', () => {
+    // 5 tasks done in 10s → 0.5 tasks/sec. 5 remaining → 10s more → eta = baseStart + 20s
+    const eta = computeCampaignEta({
+      startedAt: baseStart,
+      now: tenSecondsLater,
+      totalTasks: 10,
+      completedCount: 5,
+      failedCount: 0,
+      runningProgress: 0,
+      runningTaskCount: 1,
+    });
+    expect(eta).not.toBeNull();
+    expect(new Date(eta as string).getTime()).toBe(tenSecondsLater.getTime() + 10_000);
+  });
+
+  test('excludes failed tasks from remaining-work calculation', () => {
+    // 4 done + 1 failed, 5 remaining-to-process. rate = 4/10 = 0.4 → 5/0.4 = 12.5s
+    const eta = computeCampaignEta({
+      startedAt: baseStart,
+      now: tenSecondsLater,
+      totalTasks: 10,
+      completedCount: 4,
+      failedCount: 1,
+      runningProgress: 0,
+      runningTaskCount: 1,
+    });
+    expect(eta).not.toBeNull();
+    expect(new Date(eta as string).getTime()).toBe(tenSecondsLater.getTime() + 12_500);
+  });
+});
+
+// ─── Transactional create: DAG pre-check ────────────────────────────
+//
+// createCampaignWithAttacks runs `validateProposedDAG` on index-based
+// ids before opening the transaction. We can exercise that pre-check
+// directly by feeding the same shape; cycle detection is the property
+// we want to lock down here.
+
+describe('Inline-attack DAG pre-check (index-based ids)', () => {
+  test('mutual-cycle indices [0]↔[1] are rejected', () => {
+    const result = validateProposedDAG([
+      { id: 0, dependencies: [1] },
+      { id: 1, dependencies: [0] },
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('Circular');
+  });
+
+  test('out-of-range index is reported as a non-existent dep', () => {
+    const result = validateProposedDAG([{ id: 0, dependencies: [5] }]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('non-existent');
+  });
+
+  test('valid linear inline chain [0] -> [1] -> [2] is accepted', () => {
+    const result = validateProposedDAG([
+      { id: 0, dependencies: null },
+      { id: 1, dependencies: [0] },
+      { id: 2, dependencies: [1] },
+    ]);
+    expect(result.valid).toBe(true);
+  });
+
+  test('empty attacks[] is accepted (no graph to check)', () => {
+    const result = validateProposedDAG([]);
+    expect(result.valid).toBe(true);
   });
 });

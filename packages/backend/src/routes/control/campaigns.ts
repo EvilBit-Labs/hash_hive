@@ -118,8 +118,24 @@ controlCampaignRoutes.patch(
       if (!existing || existing.projectId !== projectId) {
         return problemResponse(c, 404, 'not_found', 'campaign not found');
       }
-      const updated = await updateCampaign(id, c.req.valid('json'));
-      return c.json(updated);
+      // updateCampaign now returns a discriminated union so the
+      // draft-only gate is enforced at the service layer for both
+      // dashboard and Control API consumers. Map each variant to the
+      // appropriate Control-API RFC 9457 problem-details response.
+      const result = await updateCampaign(id, c.req.valid('json'));
+      switch (result.kind) {
+        case 'updated':
+          return c.json(result.campaign);
+        case 'not_found':
+          return problemResponse(c, 404, 'not_found', 'campaign not found');
+        case 'not_draft':
+          return problemResponse(
+            c,
+            409,
+            'conflict',
+            `campaign cannot be updated in status "${result.status}"; only draft campaigns are editable`
+          );
+      }
     } catch (err) {
       return controlErrorResponse(c, err);
     }

@@ -118,12 +118,41 @@ export const loginRequestSchema = z.object({
   password: z.string().min(8),
 });
 
-export const createCampaignRequestSchema = insertCampaignSchema.pick({
-  name: true,
-  description: true,
-  hashListId: true,
-  priority: true,
+/**
+ * Inline-attack payload accepted by the transactional `POST /campaigns`
+ * path. Distinct from `createAttackRequestSchema` in one important
+ * way: `dependencyIndices` here are **0-based indices into the same
+ * `attacks[]` array** (since the attacks don't have real DB ids until
+ * insert), whereas `createAttackRequestSchema.dependencies` carries
+ * **real attack IDs**. The field is named differently to make the
+ * semantic split explicit at the wire level.
+ */
+export const inlineAttackRequestSchema = z.object({
+  mode: z.number().int().nonnegative(),
+  hashTypeId: z.number().int().positive().optional(),
+  wordlistId: z.number().int().positive().optional(),
+  rulelistId: z.number().int().positive().optional(),
+  masklistId: z.number().int().positive().optional(),
+  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
+  dependencyIndices: z.array(z.number().int().nonnegative()).optional(),
 });
+
+export const createCampaignRequestSchema = insertCampaignSchema
+  .pick({
+    name: true,
+    description: true,
+    hashListId: true,
+    priority: true,
+  })
+  .extend({
+    /**
+     * Optional inline attacks. When supplied, the campaign and its
+     * attacks are created in a single transaction with pre-commit
+     * DAG validation. Omit (or pass `[]`) to fall back to the legacy
+     * single-row insert path.
+     */
+    attacks: z.array(inlineAttackRequestSchema).optional(),
+  });
 
 export const createAttackRequestSchema = insertAttackSchema.pick({
   mode: true,
@@ -542,7 +571,7 @@ export const campaignSortOrderSchema = z.enum(['asc', 'desc']);
  * Lifecycle actions the dashboard can fire against
  * `POST /dashboard/campaigns/:id/lifecycle`.
  */
-export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'stop', 'cancel']);
+export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'resume', 'stop', 'cancel']);
 
 /**
  * Canonical priority buckets. Backend pegs three integer values
