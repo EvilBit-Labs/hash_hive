@@ -130,7 +130,12 @@ interface HashListDetail {
   projectId: number
   hashTypeId: number | null
   status: string
-  statistics: { total: number; cracked: number; remaining: number }
+  statistics: {
+    totalCount: number
+    crackedCount: number
+    crackRate: number
+    lastUpdated?: string
+  }
   createdAt: string
 }
 

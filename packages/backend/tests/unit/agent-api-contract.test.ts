@@ -90,6 +90,7 @@ mock.module('../../src/services/events.js', () => ({
   emitCrackResult: mock(),
   emitTaskUpdate: mock(),
   emitCampaignStatus: mock(),
+  emitResourceUpdate: mock(),
 }))
 
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase

@@ -58,6 +58,7 @@ let emitAgentStatusImpl: (projectId: number, agentId: number, status: string) =>
 mock.module('../../../src/services/events.js', () => ({
   emitAgentStatus: (projectId: number, agentId: number, status: string) =>
     emitAgentStatusImpl(projectId, agentId, status),
+  emitResourceUpdate: () => undefined,
 }))
 
 // Mock BullMQ Worker to capture the processor function

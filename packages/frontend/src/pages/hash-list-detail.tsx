@@ -72,7 +72,8 @@ export function HashListDetailPage() {
 
   const { hashList } = data
   const stats = hashList.statistics
-  const percentage = stats.total > 0 ? (stats.cracked / stats.total) * 100 : 0
+  const percentage = stats.crackRate * 100
+  const remaining = stats.totalCount - stats.crackedCount
   const items = itemsData?.items ?? []
   const total = itemsData?.total ?? 0
   const hasNext = offset + PAGE_SIZE < total
@@ -92,9 +93,13 @@ export function HashListDetailPage() {
 
       {/* Statistics cards */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Total" value={stats.total.toLocaleString()} />
-        <StatCard label="Cracked" value={stats.cracked.toLocaleString()} className="text-success" />
-        <StatCard label="Remaining" value={stats.remaining.toLocaleString()} />
+        <StatCard label="Total" value={stats.totalCount.toLocaleString()} />
+        <StatCard
+          label="Cracked"
+          value={stats.crackedCount.toLocaleString()}
+          className="text-success"
+        />
+        <StatCard label="Remaining" value={remaining.toLocaleString()} />
         <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
           <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
             Progress

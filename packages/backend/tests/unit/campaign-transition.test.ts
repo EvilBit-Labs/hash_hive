@@ -85,6 +85,7 @@ mock.module('../../src/db/index.js', () => ({
 
 mock.module('../../src/services/events.js', () => ({
   emitCampaignStatus: mock(() => {}),
+  emitResourceUpdate: mock(() => {}),
 }))
 
 // Import module under test after DB/events mocks are registered

@@ -306,6 +306,30 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
   })
 }
 
+/**
+ * Resource lifecycle event emitted when an async resource job transitions
+ * to a terminal state. `action` discriminates the payload:
+ *   - 'hash_list_ready'  -> data carries the final `statistics` JSONB
+ *   - 'hash_list_failed' -> data carries `error` (operator-facing string)
+ *
+ * Subscribers already wired for `resource_update` invalidations switch on
+ * `data.action` to decide whether to refetch detail (ready) or surface a
+ * banner (failed).
+ */
+export function emitResourceUpdate(
+  projectId: number,
+  payload:
+    | { action: 'hash_list_ready'; hashListId: number; statistics: Record<string, unknown> }
+    | { action: 'hash_list_failed'; hashListId: number; error: string }
+) {
+  emit({
+    type: 'resource_update',
+    projectId,
+    data: payload,
+    timestamp: new Date().toISOString(),
+  })
+}
+
 // ─── System-wide Broadcast (issue #109) ─────────────────────────────
 
 /**

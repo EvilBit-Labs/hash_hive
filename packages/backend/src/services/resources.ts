@@ -267,9 +267,9 @@ export function escapeLike(value: string): string {
  * Uses a single COUNT + FILTER query (fast with composite index).
  */
 export async function getHashListStats(hashListId: number): Promise<{
-  total: number
-  cracked: number
-  remaining: number
+  totalCount: number
+  crackedCount: number
+  crackRate: number
 }> {
   const [stats] = await db
     .select({
@@ -279,9 +279,10 @@ export async function getHashListStats(hashListId: number): Promise<{
     .from(hashItems)
     .where(eq(hashItems.hashListId, hashListId))
 
-  const total = Number(stats?.total ?? 0)
-  const cracked = Number(stats?.cracked ?? 0)
-  return { total, cracked, remaining: total - cracked }
+  const totalCount = Number(stats?.total ?? 0)
+  const crackedCount = Number(stats?.cracked ?? 0)
+  const crackRate = totalCount > 0 ? crackedCount / totalCount : 0
+  return { totalCount, crackedCount, crackRate }
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────

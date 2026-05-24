@@ -47,6 +47,7 @@ if (IS_ISOLATED) {
   mock.module('../../../src/services/events.js', () => ({
     emitAgentStatus: mock(),
     broadcastSystemHealth: mock(),
+    emitResourceUpdate: mock(),
   }))
 
   mock.module('../../../src/services/health.js', () => ({

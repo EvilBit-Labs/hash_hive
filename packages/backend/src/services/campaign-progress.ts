@@ -164,10 +164,16 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
   if (campaign?.hashListId) {
     const stats = await getHashListStats(campaign.hashListId)
 
-    if (stats.total > 0) {
+    if (stats.totalCount > 0) {
+      // hashProgress is a separate wire shape embedded in campaigns.progress —
+      // its consumers (frontend `campaign-progress.ts`) read `total/cracked/
+      // remaining/percentage`, so we map from the renamed hash-list stats here
+      // rather than propagating the rename across the campaign surface.
       hashProgress = {
-        ...stats,
-        percentage: Math.round((stats.cracked / stats.total) * 10000) / 10000,
+        total: stats.totalCount,
+        cracked: stats.crackedCount,
+        remaining: stats.totalCount - stats.crackedCount,
+        percentage: Math.round(stats.crackRate * 10000) / 10000,
       }
     }
   }
