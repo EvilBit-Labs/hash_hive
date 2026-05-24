@@ -14,7 +14,7 @@ git clone <repository-url>
 cd hashhive
 bun install
 cp packages/backend/.env.example packages/backend/.env
-docker compose up -d     # PostgreSQL, Redis, MinIO
+docker compose up -d     # PostgreSQL, Redis, SeaweedFS (+ bucket-init sidecar)
 bun dev                  # Start all services via Turborepo
 ```
 
@@ -84,8 +84,14 @@ Run this before pushing. It matches what CI runs.
 |---------|------|-------------|-----|
 | PostgreSQL | 5432 | hashhive/hashhive | Drizzle Studio (`just db-studio`) or psql |
 | Redis | 6379 | -- | RedisInsight or `redis-cli` |
-| MinIO (API) | 9000 | minioadmin/minioadmin | -- |
-| MinIO (Console) | 9001 | minioadmin/minioadmin | <http://localhost:9001> |
+| SeaweedFS (S3 API) | 9000 | minioadmin/minioadmin | -- |
+| SeaweedFS (master) | 9333 | -- | <http://localhost:9333> |
+
+A one-shot `bucket-init` sidecar runs after SeaweedFS reports healthy on first
+`docker compose up`; it creates the `hashhive` bucket via the S3 API and exits.
+Re-runs are idempotent (the "bucket already exists" response is swallowed).
+SeaweedFS replaces MinIO across the local stack (MinIO upstream was archived in
+April 2026); the S3 API surface is identical from the application's perspective.
 
 ## Environment Variables
 
@@ -95,7 +101,7 @@ Copy `packages/backend/.env.example` to `packages/backend/.env`. Key variables:
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgres://hashhive:hashhive@localhost:5432/hashhive` |
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
-| `S3_ENDPOINT` | MinIO endpoint | `http://localhost:9000` |
+| `S3_ENDPOINT` | Object-store S3 API endpoint (SeaweedFS in dev, AWS S3 in hosted envs) | `http://localhost:9000` |
 | `BETTER_AUTH_SECRET` | Session signing secret (min 32 chars) | -- |
 | `PORT` | Backend port | `4000` |
 | `NODE_ENV` | Environment | `development` |

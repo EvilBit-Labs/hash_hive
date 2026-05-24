@@ -38,7 +38,7 @@ This starts:
 
 - MongoDB on port 27017
 - Redis on port 6379
-- MinIO on ports 9000 (API) and 9001 (Console)
+- SeaweedFS on ports 9000 (S3 API) and 9333 (master UI)
 
 ### 3. Configure Environment
 
@@ -63,7 +63,7 @@ npm run dev -w frontend
 
 - Backend API: <http://localhost:3001>
 - Frontend UI: <http://localhost:3000>
-- MinIO Console: <http://localhost:9001> (minioadmin/minioadmin)
+- SeaweedFS Master UI: <http://localhost:9333> (S3 API on 9000, credentials minioadmin/minioadmin)
 
 ## Development
 
@@ -135,11 +135,11 @@ HashHive follows a monorepo structure with:
 - Session storage
 - Caching layer
 
-### MinIO
+### SeaweedFS
 
-- S3-compatible object storage
+- S3-compatible object storage (Apache-2.0)
 - Stores hash lists, wordlists, and other binary artifacts
-- Development alternative to AWS S3
+- Replaces MinIO (MinIO upstream archived April 2026); the application talks the S3 API only, so AWS S3 is a drop-in substitute in hosted deployments
 
 ## Testing
 

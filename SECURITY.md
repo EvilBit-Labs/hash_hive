@@ -107,7 +107,7 @@ When deploying HashHive, follow these security guidelines:
 - **Never expose HashHive to the internet** - deploy on isolated LANs only
 - Use firewall rules to restrict access to authorized networks
 - Use TLS/SSL for HTTP traffic if operating on untrusted LAN segments
-- Isolate MongoDB, Redis, and MinIO on private networks
+- Isolate PostgreSQL, Redis, and the object store on private networks
 - Enable authentication and access controls on all infrastructure services
 - Regularly update dependencies and base container images
 - Use secrets management solutions (e.g., HashiCorp Vault, AWS Secrets Manager)

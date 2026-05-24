@@ -295,6 +295,9 @@ mock.module('../../src/queue/manager.js', () => ({
 }));
 
 mock.module('../../src/config/storage.js', () => ({
+  // `health.ts` imports `checkObjectStoreHealth`; the `checkMinioHealth`
+  // alias is kept for back-compat with callers that have not migrated.
+  checkObjectStoreHealth: async () => ({ status: 'connected' }),
   checkMinioHealth: async () => ({ status: 'connected' }),
   createPresignedDownloadUrl: async () => 'http://localhost:9000/fake',
 }));

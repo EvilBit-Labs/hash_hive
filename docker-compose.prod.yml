@@ -26,20 +26,106 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
+  # Object storage. See docker-compose.yml for the rationale behind the
+  # SeaweedFS choice. In production we drop the host port mapping (the
+  # backend reaches SeaweedFS over the internal Docker network) and
+  # generate the IAM config at container start from operator-supplied
+  # env vars so the dev-default credentials in
+  # docker/seaweedfs/s3-iam.json never reach a production cluster.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.27
     restart: unless-stopped
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
     volumes:
-      - miniodata:/data
-    command: server /data
+      - seaweedfsdata:/data
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+    # `weed` ships with no JSON-templating tool, so we shell out to `awk` to
+    # produce a syntactically valid IAM config from operator-supplied env
+    # vars. AWK is used (not naive heredoc/sed) because credentials may
+    # legitimately contain `"`, `\`, or other JSON-significant characters,
+    # and naive string interpolation would either malform the file (DoS) or
+    # let a crafted value inject an extra identity. AWK gives us proper
+    # escaping without requiring `jq` (which is not in the SeaweedFS image).
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        : "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
+        : "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
+        awk -v ak="$$S3_ACCESS_KEY" -v sk="$$S3_SECRET_KEY" '
+          function esc(s,  r) {
+            r = s
+            gsub(/\\/, "\\\\", r)
+            gsub(/"/,  "\\\"", r)
+            gsub(/\n/, "\\n",  r)
+            gsub(/\r/, "\\r",  r)
+            gsub(/\t/, "\\t",  r)
+            return r
+          }
+          BEGIN {
+            printf("{\n")
+            printf("  \"identities\": [\n")
+            printf("    {\n")
+            printf("      \"name\": \"hashhive-admin\",\n")
+            printf("      \"credentials\": [{\"accessKey\": \"%s\", \"secretKey\": \"%s\"}],\n", esc(ak), esc(sk))
+            printf("      \"actions\": [\"Admin\", \"Read\", \"Write\", \"List\", \"Tagging\"]\n")
+            printf("    }\n")
+            printf("  ]\n")
+            printf("}\n")
+          }
+        ' > /tmp/s3.json
+        exec weed server -s3 -s3.config=/tmp/s3.json -dir=/data
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/ready']
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:9333/cluster/status || exit 1']
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
+  # One-shot sidecar that creates the configured bucket on first boot. See
+  # docker-compose.yml for behavior. Production reads credentials from
+  # operator-supplied env vars rather than the dev default.
+  # One-shot sidecar that creates the configured bucket on first boot.
+  # `set -e` propagates any failure to the exit code so the backend's
+  # `depends_on: bucket-init: service_completed_successfully` correctly
+  # blocks until the bucket actually exists. Retry exhaustion is treated
+  # as fatal (exit 1) so the backend never starts against an unreachable
+  # S3 endpoint.
+  bucket-init:
+    image: amazon/aws-cli:2.27.8
+    restart: 'no'
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+      BUCKET: ${S3_BUCKET:-hashhive}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        ready=0
+        for i in $$(seq 1 30); do
+          if aws --cli-connect-timeout 3 --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; then
+            ready=1
+            break
+          fi
+          echo "bucket-init: waiting for seaweedfs s3 endpoint... ($$i/30)"
+          sleep 2
+        done
+        if [ "$$ready" -ne 1 ]; then
+          echo "bucket-init: seaweedfs s3 endpoint did not become ready within 60s; failing" >&2
+          exit 1
+        fi
+        mb_out=$$(aws --endpoint-url http://seaweedfs:8333 s3 mb "s3://$$BUCKET" 2>&1) || mb_status=$$? && mb_status=$${mb_status:-0}
+        if [ "$$mb_status" -ne 0 ] && ! echo "$$mb_out" | grep -q "BucketAlready"; then
+          echo "bucket-init: failed to create bucket $$BUCKET: $$mb_out" >&2
+          exit 1
+        fi
+        echo "bucket-init: bucket $$BUCKET ready"
 
   backend:
     build:
@@ -55,7 +141,7 @@ services:
       LOG_PRETTY: 'false'
       DATABASE_URL: postgres://${POSTGRES_USER:-hashhive}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hashhive}
       REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://seaweedfs:8333
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET: ${S3_BUCKET:-hashhive}
@@ -67,8 +153,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
+      seaweedfs:
         condition: service_healthy
+      # The backend reads the bucket on first request; block startup until
+      # bucket-init has successfully created it, otherwise the first S3
+      # call (and the health probe) hits `NoSuchBucket` until the operator
+      # retries.
+      bucket-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/health']
       interval: 15s
@@ -90,4 +182,4 @@ services:
 volumes:
   pgdata:
   redisdata:
-  miniodata:
+  seaweedfsdata:

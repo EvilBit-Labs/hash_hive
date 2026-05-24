@@ -44,7 +44,7 @@ bun install
 # Copy environment files
 cp packages/backend/.env.example packages/backend/.env
 
-# Start infrastructure services (PostgreSQL, Redis, MinIO)
+# Start infrastructure services (PostgreSQL, Redis, SeaweedFS)
 docker compose up -d
 ```
 
@@ -97,7 +97,7 @@ Use `just` commands for convenience:
 just dev              # Start all services
 just dev-backend      # Start backend only
 just dev-frontend     # Start frontend only
-just docker-up        # Start infrastructure (PostgreSQL, Redis, MinIO)
+just docker-up        # Start infrastructure (PostgreSQL, Redis, SeaweedFS)
 ```
 
 Or use bun directly:
@@ -234,11 +234,11 @@ refactor: simplify task distribution logic
 - Connection: `localhost:6379`
 - GUI: Use RedisInsight or redis-cli (`just redis-cli`)
 
-### MinIO
+### SeaweedFS (object store)
 
-- API: <http://localhost:9000>
-- Console: <http://localhost:9001>
-- Credentials: minioadmin/minioadmin
+- S3 API: <http://localhost:9000>
+- Master UI: <http://localhost:9333>
+- Credentials: minioadmin/minioadmin (kept from the MinIO era for back-compat; the SeaweedFS IAM config at `docker/seaweedfs/s3-iam.json` accepts the same values)
 
 ## Troubleshooting
 

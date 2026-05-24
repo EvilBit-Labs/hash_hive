@@ -1,10 +1,14 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-// Mock checkMinioHealth so the health test does not require a running MinIO endpoint
+// Mock the object-store probe so the health test does not require a running
+// S3-compatible endpoint. The legacy `checkMinioHealth` re-export is also
+// stubbed for back-compat coverage; both point at the same fixture.
+const probeStub = mock(() =>
+  Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
+);
 mock.module('../../src/config/storage.js', () => ({
-  checkMinioHealth: mock(() =>
-    Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
-  ),
+  checkObjectStoreHealth: probeStub,
+  checkMinioHealth: probeStub,
   s3: {},
   uploadFile: mock(),
   downloadFile: mock(),
@@ -34,16 +38,18 @@ describe('GET /health', () => {
     expect(['connected', 'disconnected']).toContain(body['services']['database']['status']);
   });
 
-  it('should include MinIO health status', async () => {
+  it('should include object-store health status under the legacy `minio` wire key', async () => {
+    // The wire key stays `minio` across the SeaweedFS swap so the dashboard
+    // and any external probe consumers do not need a coupled release.
     const res = await app.request('/health');
     expect(VALID_HTTP_STATUSES).toContain(res.status);
 
     const body = await res.json();
-    const minio = body['services']['minio'];
-    expect(minio).toBeDefined();
-    expect(minio['status']).toBe('connected');
-    expect(typeof minio['bucket']).toBe('string');
-    expect(minio['bucket'].length).toBeGreaterThan(0);
+    const objectStore = body['services']['minio'];
+    expect(objectStore).toBeDefined();
+    expect(objectStore['status']).toBe('connected');
+    expect(typeof objectStore['bucket']).toBe('string');
+    expect(objectStore['bucket'].length).toBeGreaterThan(0);
   });
 
   it('should expose services.queues.queues map (api-contract-3)', async () => {

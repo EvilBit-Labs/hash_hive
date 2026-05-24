@@ -29,7 +29,7 @@ HashHive is a 2026 TypeScript reimplementation of CipherSwarm, running on Bun wi
 
 - **Database**: PostgreSQL with Drizzle ORM (primary data store)
 - **Task Queue**: Redis + BullMQ for async job processing (hash list parsing, task generation, heartbeat monitoring)
-- **Storage**: MinIO (S3-compatible) for binary artifacts (hash lists, wordlists, rulelists, masklists)
+- **Storage**: SeaweedFS (S3-compatible, Apache-2.0) for binary artifacts (hash lists, wordlists, rulelists, masklists). The application layer talks the S3 API only, so SeaweedFS is swappable for AWS S3 in hosted deployments.
 - **Configuration**: Environment variables + centralized config module
 
 ### Tooling

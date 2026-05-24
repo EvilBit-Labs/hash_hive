@@ -81,7 +81,13 @@ export async function getPresignedUrl(
   );
 }
 
-export async function checkMinioHealth(signal?: AbortSignal): Promise<{
+/**
+ * Probes the configured object store (SeaweedFS in dev / air-gapped prod,
+ * AWS S3 anywhere else) by issuing a `HeadBucket` against `S3_BUCKET`.
+ * Returns `{status, bucket}` so the caller's structured log carries the
+ * bucket name regardless of outcome.
+ */
+export async function checkObjectStoreHealth(signal?: AbortSignal): Promise<{
   status: 'connected' | 'disconnected';
   bucket: string;
 }> {
@@ -99,11 +105,18 @@ export async function checkMinioHealth(signal?: AbortSignal): Promise<{
     // reading.
     const isAbort = err instanceof Error && err.name === 'AbortError';
     if (!isAbort) {
-      logger.warn({ err, bucket: env.S3_BUCKET }, 'minio health check failed');
+      logger.warn({ err, bucket: env.S3_BUCKET }, 'object store health check failed');
     }
     return { status: 'disconnected', bucket: env.S3_BUCKET };
   }
 }
+
+/**
+ * @deprecated Renamed to `checkObjectStoreHealth` after the SeaweedFS swap;
+ * kept for one PR cycle so any external consumer (none expected in this
+ * monorepo) keeps compiling. Remove when no callers remain.
+ */
+export const checkMinioHealth = checkObjectStoreHealth;
 
 export async function createMultipartUpload(
   key: string,

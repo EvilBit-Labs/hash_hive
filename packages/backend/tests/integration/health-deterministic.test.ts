@@ -74,10 +74,14 @@ if (IS_ISOLATED) {
     getSystemHealth: mock(async () => buildSystemHealth()),
   }));
 
+  const probeStub = mock(() =>
+    Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
+  );
   mock.module('../../src/config/storage.js', () => ({
-    checkMinioHealth: mock(() =>
-      Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
-    ),
+    // `health.ts` imports `checkObjectStoreHealth`; `checkMinioHealth` is
+    // a legacy alias kept for back-compat. Both point at the same stub.
+    checkObjectStoreHealth: probeStub,
+    checkMinioHealth: probeStub,
     s3: {},
     uploadFile: mock(),
     downloadFile: mock(),

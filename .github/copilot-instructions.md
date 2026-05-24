@@ -21,7 +21,7 @@ HashHive is a TypeScript reimplementation of CipherSwarm, a distributed password
 - `AgentService` - Registration, heartbeat, capability detection
 - `CampaignService` - Campaign lifecycle, DAG validation, attack configuration
 - `TaskDistributionService` - Keyspace partitioning, task generation, assignment
-- `ResourceService` - File uploads to MinIO, hash list parsing coordination
+- `ResourceService` - File uploads to the S3-compatible object store (SeaweedFS in dev / air-gapped prod), hash list parsing coordination
 - `HashAnalysisService` - Hash-type identification, hashcat mode mapping
 - `EventService` - WebSocket broadcasting for real-time dashboard updates
 
@@ -41,7 +41,7 @@ HashHive is a TypeScript reimplementation of CipherSwarm, a distributed password
 ```bash
 # Quick start
 bun install                       # Install all workspace deps
-docker compose up -d              # Start PostgreSQL, Redis, MinIO
+docker compose up -d              # Start PostgreSQL, Redis, SeaweedFS
 bun dev                           # Start backend + frontend
 
 # Or use just commands
@@ -111,7 +111,7 @@ bun --filter backend test         # Backend tests
 # docker-compose.yml provides:
 PostgreSQL: localhost:5432        # Primary datastore
 Redis: localhost:6379             # BullMQ queues + caching
-MinIO: localhost:9000/9001        # S3-compatible storage (minioadmin/minioadmin)
+SeaweedFS: localhost:9000 (S3), 9333 (master)  # S3-compatible object storage (minioadmin/minioadmin)
 ```
 
 ## Naming Conventions

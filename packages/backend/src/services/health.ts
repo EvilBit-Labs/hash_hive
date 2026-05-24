@@ -17,12 +17,21 @@
 import { sql } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
-import { checkMinioHealth } from '../config/storage.js';
+import { checkObjectStoreHealth } from '../config/storage.js';
 import { db } from '../db/index.js';
 import { getQueueManager } from '../queue/context.js';
 
 export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
 
+/**
+ * Component names exposed on the wire (`components.<name>` on
+ * `/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
+ * `'minio'` is preserved as the wire identifier across the SeaweedFS swap
+ * so frontend consumers (see `packages/frontend/src/hooks/use-system-health.ts`)
+ * keep working without a coupled release. Internal symbols are migrated
+ * to neutral terminology (`checkObjectStoreHealth`) where doing so does
+ * not touch the wire.
+ */
 export type ComponentName = 'database' | 'redis' | 'minio' | 'queues';
 
 /**
@@ -210,7 +219,7 @@ export async function probeMinio(deps: MinioProbeDeps, signal?: AbortSignal): Pr
   if (result.status !== 'connected') {
     return {
       status: 'unhealthy',
-      message: `minio bucket ${result.bucket} unreachable`,
+      message: `object store bucket ${result.bucket} unreachable`,
       detail: { bucket: result.bucket },
     };
   }
@@ -323,7 +332,7 @@ function buildDefaultProbes(): {
       // qm.getHealth().
       status: () => qm?.getRedisStatus() ?? 'disconnected',
     },
-    minio: { check: checkMinioHealth },
+    minio: { check: checkObjectStoreHealth },
     queues: {
       health: async () => {
         if (!qm) {

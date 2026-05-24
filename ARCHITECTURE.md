@@ -4,7 +4,7 @@ HashHive is a distributed hash cracking management system that orchestrates [has
 
 ## Production Context
 
-This system runs in an **air-gapped private lab** with no Internet access. The only supported deployment method is **Docker Compose** -- all services (backend, frontend, PostgreSQL, Redis, MinIO) run as containers that must operate without external network connectivity. All images, dependencies, and resources must be fully self-contained.
+This system runs in an **air-gapped private lab** with no Internet access. The only supported deployment method is **Docker Compose** -- all services (backend, frontend, PostgreSQL, Redis, SeaweedFS) run as containers that must operate without external network connectivity. All images, dependencies, and resources must be fully self-contained.
 
 **Scale:** Minimum 10 cracking nodes with ~25x RTX 4090 GPU capacity. Individual attack resources (wordlists, masklists, rulelists) can exceed 100 GB -- all upload, storage, download, and streaming pipelines must handle files at this scale without full-file buffering. The agent API handles periodic bursts when rigs submit cracked hashes, request work units, and send heartbeats. The web dashboard serves 1-3 concurrent human users.
 
@@ -18,7 +18,7 @@ Optimize for correctness, clarity, and developer experience -- not premature sca
 | Backend | Hono on `Bun.serve()` | Not Express, not Fastify |
 | Database | PostgreSQL + Drizzle ORM | Primary data store |
 | Task queue | Redis + BullMQ | Async processing (hash list parsing, task generation, heartbeat monitoring) |
-| Object storage | MinIO (S3-compatible) | Binary artifacts (hash lists, wordlists, rulelists, masklists) |
+| Object storage | SeaweedFS (S3-compatible, Apache-2.0) | Binary artifacts (hash lists, wordlists, rulelists, masklists). Application talks only to the S3 API, so SeaweedFS is swappable for AWS S3 |
 | Frontend | React 19 + Vite | Not Next.js, not CRA |
 | UI | Tailwind CSS + shadcn/ui | Catppuccin Macchiato dark theme |
 | Server state | TanStack Query v5 | Data fetching and caching |
@@ -56,7 +56,7 @@ The backend is a Bun + Hono + TypeScript service:
 - `AgentService`: registration, capability detection, heartbeat handling
 - `CampaignService`: campaign lifecycle, DAG validation, attack configuration
 - `TaskDistributionService`: keyspace partitioning, task generation, assignment
-- `ResourceService`: file uploads to MinIO, hash list parsing coordination
+- `ResourceService`: file uploads to the S3-compatible object store (SeaweedFS in dev / air-gapped prod), hash list parsing coordination
 - `HashAnalysisService`: hash-type identification, hashcat mode mapping
 - `EventService`: WebSocket broadcasting for real-time dashboard updates (in-memory v1, Redis pub/sub extension path)
 
