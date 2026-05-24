@@ -21,7 +21,7 @@ HashHive is a distributed password cracking platform that orchestrates hashcat a
 
 ## Operational Context
 
-- **Air-gapped production environment**: The only supported deployment method is **Docker Compose**. All services (backend, frontend, PostgreSQL, Redis, MinIO) run as containers that MUST operate without Internet access. All container images, dependencies, and resources must be fully self-contained. Development and testing occur on Internet-connected systems, but no runtime functionality may depend on external network access.
+- **Air-gapped production environment**: The only supported deployment method is **Docker Compose**. All services (backend, frontend, PostgreSQL, Redis, SeaweedFS) run as containers that MUST operate without Internet access. All container images, dependencies, and resources must be fully self-contained. Development and testing occur on Internet-connected systems, but no runtime functionality may depend on external network access.
 - **Private lab environment**: Minimum 10 cracking nodes (~25x RTX 4090 GPU capacity), not publicly exposed. Current dev baseline is 7 rigs, but production target is 10+.
 - **Large attack resources**: Individual wordlists, masklists, and rulelists can exceed 100 GB. Upload, storage, download, and streaming pipelines must handle files of this scale without full-file buffering. S3 multipart upload/download and chunked transfer are required, not optional.
 - **Low sustained load**: Periodic bursts when rigs submit results, request work, and send heartbeats

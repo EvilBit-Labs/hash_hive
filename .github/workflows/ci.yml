@@ -1,7 +1,7 @@
 name: CI
-"on":
+'on':
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 jobs:
@@ -17,8 +17,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - run: just install
-      - name: Run CI check
-        run: just ci-check
+      # This job owns format/lint/type-check/build + unit/integration tests.
+      # The `e2e-tests` job owns Playwright. `just ci-check` runs both locally
+      # as the pre-push gate, but in CI they're split so e2e browser install
+      # only happens where needed.
+      - name: Quality gates and unit tests
+        run: just check && just test
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0

@@ -1,5 +1,6 @@
-import type { CreateAttackRequest } from '@hashhive/shared';
-import { create } from 'zustand';
+import type { CreateAttackRequest } from '@hashhive/shared'
+
+import { create } from 'zustand'
 
 /**
  * Wizard-local attack shape. Derived from the canonical wire schema in
@@ -12,30 +13,30 @@ import { create } from 'zustand';
  * IDs. The submit path remaps them to real IDs before POSTing.
  */
 export type AttackConfig = Omit<CreateAttackRequest, 'dependencies'> & {
-  dependencies: number[];
-};
+  dependencies: number[]
+}
 
 interface WizardState {
-  step: number;
+  step: number
   // Step 1: Basic info
-  name: string;
-  description: string;
-  priority: number;
-  hashListId: number | null;
+  name: string
+  description: string
+  priority: number
+  hashListId: number | null
   // Step 2: Attacks
-  attacks: AttackConfig[];
+  attacks: AttackConfig[]
   // Actions
-  setStep: (step: number) => void;
-  setBasicInfo: (info: { name: string; description: string; priority: number }) => void;
-  setHashListId: (id: number | null) => void;
-  addAttack: (attack: AttackConfig) => void;
-  removeAttack: (index: number) => void;
-  updateAttack: (index: number, attack: AttackConfig) => void;
+  setStep: (step: number) => void
+  setBasicInfo: (info: { name: string; description: string; priority: number }) => void
+  setHashListId: (id: number | null) => void
+  addAttack: (attack: AttackConfig) => void
+  removeAttack: (index: number) => void
+  updateAttack: (index: number, attack: AttackConfig) => void
   /** Adds a dependency: attack at attackIndex depends on attack at dependsOnIndex. */
-  addDependency: (attackIndex: number, dependsOnIndex: number) => void;
+  addDependency: (attackIndex: number, dependsOnIndex: number) => void
   /** Removes a dependency from attack at attackIndex. */
-  removeDependency: (attackIndex: number, dependsOnIndex: number) => void;
-  reset: () => void;
+  removeDependency: (attackIndex: number, dependsOnIndex: number) => void
+  reset: () => void
 }
 
 const initialState = {
@@ -45,7 +46,7 @@ const initialState = {
   priority: 5,
   hashListId: null as number | null,
   attacks: [] as AttackConfig[],
-};
+}
 
 export const useCampaignWizard = create<WizardState>((set) => ({
   ...initialState,
@@ -85,4 +86,4 @@ export const useCampaignWizard = create<WizardState>((set) => ({
       ),
     })),
   reset: () => set(initialState),
-}));
+}))

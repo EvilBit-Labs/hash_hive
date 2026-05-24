@@ -1,7 +1,7 @@
 # Validate and number headings in markdown files
+number   = true
 validate = true
-number = true
 
 [plugin.mkdocs]
 align_semantic_breaks_in_lists = true
-ignore_missing_references = true
+ignore_missing_references      = true

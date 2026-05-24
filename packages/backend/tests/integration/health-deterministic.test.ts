@@ -20,28 +20,30 @@
  * behind the env var and skipped. See `tasks.test.ts` and
  * `queue-manager.test.ts` for the prior pattern this mirrors.
  */
-import { afterAll, describe, expect, it, mock, test } from 'bun:test';
-import type { ComponentHealth, SystemHealth } from '../../src/services/health.js';
+import { afterAll, describe, expect, it, mock, test } from 'bun:test'
+
+import type { ComponentHealth, SystemHealth } from '../../src/services/health.js'
+
 import {
   __resetSystemHealthCache,
   HEALTH_VERSION,
   legacyPublicEnvelope,
-} from '../../src/services/health.js';
+} from '../../src/services/health.js'
 
-const IS_ISOLATED = process.env['HEALTH_DETERMINISTIC_TEST_ISOLATED'] === '1';
+const IS_ISOLATED = process.env['HEALTH_DETERMINISTIC_TEST_ISOLATED'] === '1'
 
-let mockedAggregateStatus: SystemHealth['status'] = 'healthy';
+let mockedAggregateStatus: SystemHealth['status'] = 'healthy'
 
 function buildComponent(status: ComponentHealth['status']): ComponentHealth {
   if (status === 'healthy') {
-    return { status: 'healthy', durationMs: 1, detail: { bucket: 'hashhive-test' } };
+    return { status: 'healthy', durationMs: 1, detail: { bucket: 'hashhive-test' } }
   }
   return {
     status,
     message: `${status} probe`,
     durationMs: 1,
     detail: { bucket: 'hashhive-test' },
-  };
+  }
 }
 
 function buildSystemHealth(): SystemHealth {
@@ -55,7 +57,7 @@ function buildSystemHealth(): SystemHealth {
       minio: buildComponent('healthy'),
       queues: buildComponent(mockedAggregateStatus === 'degraded' ? 'degraded' : 'healthy'),
     },
-  };
+  }
 }
 
 // Install mocks ONLY when the isolated-phase env var is set. Without
@@ -72,66 +74,67 @@ if (IS_ISOLATED) {
     HEALTH_VERSION,
     __resetSystemHealthCache,
     getSystemHealth: mock(async () => buildSystemHealth()),
-  }));
+  }))
 
+  const probeStub = mock(() =>
+    Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
+  )
   mock.module('../../src/config/storage.js', () => ({
-    checkMinioHealth: mock(() =>
-      Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
-    ),
+    checkObjectStoreHealth: probeStub,
     s3: {},
     uploadFile: mock(),
     downloadFile: mock(),
     deleteFile: mock(),
     getPresignedUrl: mock(),
-  }));
+  }))
 }
 
 // Static import; under the isolated-phase gate the mocks above already
 // fired before this evaluates, so `app` sees the mocked `getSystemHealth`.
 // Under the non-isolated run the real `app` loads but the test bodies
 // below are skipped, so the real module isn't exercised here either.
-import { app } from '../../src/index.js';
+import { app } from '../../src/index.js'
 
 if (!IS_ISOLATED) {
   describe.skip('health-deterministic (skipped — runs in isolated phase)', () => {
-    test('runs only with HEALTH_DETERMINISTIC_TEST_ISOLATED=1', () => {});
-  });
+    test('runs only with HEALTH_DETERMINISTIC_TEST_ISOLATED=1', () => {})
+  })
 } else {
   // Defensive cleanup. Even with the env-var gate the suite restores
   // mocks at end so a future change that runs additional files in the
   // same isolated process won't pick up our overrides.
   afterAll(() => {
-    mock.restore();
-  });
+    mock.restore()
+  })
 
   describe('GET /health — deterministic 200 vs 503', () => {
     it('returns 200 with body status="ok" when service reports healthy', async () => {
-      mockedAggregateStatus = 'healthy';
-      const res = await app.request('/health');
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body['status']).toBe('ok');
-      expect(body['aggregateStatus']).toBe('healthy');
-    });
+      mockedAggregateStatus = 'healthy'
+      const res = await app.request('/health')
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['status']).toBe('ok')
+      expect(body['aggregateStatus']).toBe('healthy')
+    })
 
     it('returns 200 with body status="degraded" when service reports degraded', async () => {
-      mockedAggregateStatus = 'degraded';
-      const res = await app.request('/health');
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body['status']).toBe('degraded');
-      expect(body['aggregateStatus']).toBe('degraded');
-    });
+      mockedAggregateStatus = 'degraded'
+      const res = await app.request('/health')
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['status']).toBe('degraded')
+      expect(body['aggregateStatus']).toBe('degraded')
+    })
 
     it('returns 503 with body aggregateStatus="unhealthy" when service reports unhealthy', async () => {
-      mockedAggregateStatus = 'unhealthy';
-      const res = await app.request('/health');
-      expect(res.status).toBe(503);
-      const body = (await res.json()) as Record<string, unknown>;
+      mockedAggregateStatus = 'unhealthy'
+      const res = await app.request('/health')
+      expect(res.status).toBe(503)
+      const body = (await res.json()) as Record<string, unknown>
       // Body's coarse `status` collapses to 'degraded' for backward compat
-      expect(body['status']).toBe('degraded');
+      expect(body['status']).toBe('degraded')
       // But aggregateStatus carries the full three-tier signal
-      expect(body['aggregateStatus']).toBe('unhealthy');
-    });
-  });
+      expect(body['aggregateStatus']).toBe('unhealthy')
+    })
+  })
 }

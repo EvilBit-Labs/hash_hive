@@ -27,24 +27,101 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
+  # Object storage. SeaweedFS replaces MinIO (MinIO upstream archived 2026-04-25;
+  # SeaweedFS is Apache-2.0 and the consensus OSS replacement). The S3 API surface
+  # is identical from the application's perspective -- @aws-sdk/client-s3 with
+  # `forcePathStyle: true` works against either.
+  #
+  # Port mapping: host 9000 -> container 8333 so existing developer `.env` files
+  # pointing at `S3_ENDPOINT=http://localhost:9000` keep working unchanged.
+  # Host 9333 exposes the SeaweedFS master HTTP UI (replaces the MinIO console).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.27
     ports:
-      - '9000:9000'
-      - '9001:9001'
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      - '9000:8333' # S3 API (container 8333 mapped to host 9000)
+      - '127.0.0.1:9333:9333' # Master HTTP UI / admin (bound to loopback;
+        # the master `/cluster/status` page is
+        # unauthenticated so we keep it off the LAN)
     volumes:
-      - miniodata:/data
-    command: server /data --console-address ":9001"
+      - seaweedfsdata:/data
+      - ./docker/seaweedfs/s3-iam.json:/etc/seaweedfs/s3.json:ro
+    command: >-
+      server
+      -s3
+      -s3.config=/etc/seaweedfs/s3.json
+      -dir=/data
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/ready']
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:9333/cluster/status || exit 1']
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
+
+  # One-shot sidecar that creates the configured bucket on first boot.
+  # SeaweedFS does not auto-create buckets from credentials the way MinIO did,
+  # so this container runs `aws s3 mb` against the SeaweedFS S3 endpoint and
+  # exits. `set -e` propagates any failure so retry-exhaustion or auth errors
+  # exit non-zero rather than silently masking with a "bucket ready" log.
+  # Re-runs are idempotent: a `BucketAlready*` error is treated as success.
+  bucket-init:
+    image: amazon/aws-cli:2.27.8
+    restart: 'no'
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      # Default to the dev IAM credentials but honor an operator override
+      # from `.env` so credential-rotation testing works without editing
+      # the compose file. Mirrors the prod compose pattern.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: us-east-1
+      BUCKET: ${S3_BUCKET:-hashhive}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        # Probe loop captures stderr so we can fast-fail on auth errors
+        # (config drift between bucket-init and the SeaweedFS IAM file)
+        # within a few seconds instead of timing out after 60s.
+        ready=0
+        last_err=""
+        for i in $$(seq 1 30); do
+          if err=$$(aws --cli-connect-timeout 3 --endpoint-url http://seaweedfs:8333 s3 ls 2>&1 >/dev/null); then
+            ready=1
+            break
+          fi
+          last_err="$$err"
+          case "$$err" in
+            *InvalidAccessKeyId*|*SignatureDoesNotMatch*|*AccessDenied*)
+              echo "bucket-init: auth error from seaweedfs — IAM config (docker/seaweedfs/s3-iam.json) likely out of sync with AWS_ACCESS_KEY_ID. Aborting." >&2
+              echo "bucket-init: stderr was: $$err" >&2
+              exit 1
+              ;;
+          esac
+          echo "bucket-init: waiting for seaweedfs s3 endpoint... ($$i/30)"
+          sleep 2
+        done
+        if [ "$$ready" -ne 1 ]; then
+          echo "bucket-init: seaweedfs s3 endpoint did not become ready within 60s; last_err: $$last_err" >&2
+          exit 1
+        fi
+        # Idempotent-success markers across AWS S3 and SeaweedFS variants.
+        mb_out=$$(aws --endpoint-url http://seaweedfs:8333 s3 mb "s3://$$BUCKET" 2>&1) || mb_status=$$? && mb_status=$${mb_status:-0}
+        if [ "$$mb_status" -ne 0 ]; then
+          case "$$mb_out" in
+            *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*|*"bucket already exists"*|*"already exists"*)
+              echo "bucket-init: bucket $$BUCKET already exists (idempotent re-run)"
+              ;;
+            *)
+              echo "bucket-init: failed to create bucket $$BUCKET (exit=$$mb_status): $$mb_out" >&2
+              exit 1
+              ;;
+          esac
+        fi
+        echo "bucket-init: bucket $$BUCKET ready"
 
 volumes:
   pgdata:
   redisdata:
-  miniodata:
+  seaweedfsdata:

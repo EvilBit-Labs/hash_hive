@@ -13,9 +13,9 @@ export const ATTACK_MODES = [
   { value: 3, label: 'Mask' },
   { value: 6, label: 'Hybrid (wordlist + mask)' },
   { value: 7, label: 'Hybrid (mask + wordlist)' },
-] as const;
+] as const
 
-export type AttackModeValue = (typeof ATTACK_MODES)[number]['value'];
+export type AttackModeValue = (typeof ATTACK_MODES)[number]['value']
 
 /**
  * Returns the human-readable label for a hashcat attack mode value, or
@@ -24,6 +24,6 @@ export type AttackModeValue = (typeof ATTACK_MODES)[number]['value'];
  * the dropdown does not enumerate without breaking the UI.
  */
 export function attackModeLabel(value: number): string {
-  const match = ATTACK_MODES.find((mode) => mode.value === value);
-  return match ? match.label : `Mode ${value}`;
+  const match = ATTACK_MODES.find((mode) => mode.value === value)
+  return match ? match.label : `Mode ${value}`
 }

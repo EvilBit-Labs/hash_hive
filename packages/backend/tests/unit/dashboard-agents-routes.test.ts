@@ -6,17 +6,17 @@
  * `/agents/:id/tasks` endpoint, which is a security-relevant path the
  * service-level review flagged as needing explicit coverage.
  */
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test'
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
 
-const ADMIN_COOKIE = 'hh.session_token=valid-admin-session';
+const ADMIN_COOKIE = 'hh.session_token=valid-admin-session'
 
 mock.module('../../src/lib/auth.js', () => ({
   auth: {
     api: {
       getSession: async ({ headers }: { headers: Headers }) => {
-        const cookie = headers.get('cookie') ?? '';
+        const cookie = headers.get('cookie') ?? ''
         if (cookie.includes('valid-admin-session')) {
           return {
             user: {
@@ -32,30 +32,30 @@ mock.module('../../src/lib/auth.js', () => ({
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
             },
-          };
+          }
         }
-        return null;
+        return null
       },
     },
     handler: async () => new Response('ok'),
   },
-}));
+}))
 
 // ─── Mock Auth Service Layer (project membership) ────────────────────
 
 mock.module('../../src/services/auth.js', () => ({
   getUserWithProjects: async (userId: number) => {
     if (userId === 1) {
-      return { id: 1, projects: [{ projectId: 1, roles: ['admin'] }] };
+      return { id: 1, projects: [{ projectId: 1, roles: ['admin'] }] }
     }
-    return null;
+    return null
   },
   findProjectMembership: async (userId: number, projectId: number) => {
-    if (projectId !== 1) return null;
-    if (userId === 1) return { projectId: 1, roles: ['admin'] };
-    return null;
+    if (projectId !== 1) return null
+    if (userId === 1) return { projectId: 1, roles: ['admin'] }
+    return null
   },
-}));
+}))
 
 // ─── Mock the Agents Service Layer ───────────────────────────────────
 
@@ -74,7 +74,7 @@ const mockGetAgentById = mock(async (id: number) => {
       updatedAt: new Date(),
       authToken: 'tok',
       crackerVersion: null,
-    };
+    }
   }
   if (id === 200) {
     // Foreign-project agent — same numeric id space, different project.
@@ -90,10 +90,10 @@ const mockGetAgentById = mock(async (id: number) => {
       updatedAt: new Date(),
       authToken: 'tok',
       crackerVersion: null,
-    };
+    }
   }
-  return null;
-});
+  return null
+})
 
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
@@ -101,7 +101,7 @@ mock.module('../../src/services/agents.js', () => ({
   getBenchmarksForAgent: mock(async () => []),
   listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
   updateAgent: mock(async () => null),
-}));
+}))
 
 mock.module('../../src/services/tasks.js', () => ({
   listTasksByAgent: mock(async () => [
@@ -117,7 +117,7 @@ mock.module('../../src/services/tasks.js', () => ({
       assignedAt: null,
     },
   ]),
-}));
+}))
 
 // ─── Mock DB / Storage / Redis (route handlers don't reach these, but
 // the module graph wants them resolvable) ─────────────────────────────
@@ -136,62 +136,62 @@ mock.module('../../src/db/index.js', () => ({
     update: () => ({ set: () => ({ where: () => ({ returning: () => Promise.resolve([]) }) }) }),
   },
   client: {},
-}));
+}))
 
 mock.module('ioredis', () => ({
   default: class MockRedis {
     ping() {
-      return Promise.resolve('PONG');
+      return Promise.resolve('PONG')
     }
     on() {
-      return this;
+      return this
     }
     disconnect() {}
   },
-}));
+}))
 
-import { app } from '../../src/index.js';
+import { app } from '../../src/index.js'
 
-const DASH_AGENTS = '/api/v1/dashboard/agents';
+const DASH_AGENTS = '/api/v1/dashboard/agents'
 
 describe('Dashboard agents routes: project isolation', () => {
   it('GET /:id/tasks returns 404 when agent belongs to a different project', async () => {
     const res = await app.request(`${DASH_AGENTS}/200/tasks`, {
       headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
-    });
-    expect(res.status).toBe(404);
-    const body = (await res.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe('RESOURCE_NOT_FOUND');
-  });
+    })
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
+  })
 
   it('GET /:id/tasks returns 200 for an agent in the active project', async () => {
     const res = await app.request(`${DASH_AGENTS}/100/tasks`, {
       headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { tasks: unknown[] };
-    expect(Array.isArray(body.tasks)).toBe(true);
-    expect(body.tasks.length).toBe(1);
-  });
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { tasks: unknown[] }
+    expect(Array.isArray(body.tasks)).toBe(true)
+    expect(body.tasks.length).toBe(1)
+  })
 
   it('GET /:id/tasks returns 400 for a non-numeric id', async () => {
     const res = await app.request(`${DASH_AGENTS}/not-a-number/tasks`, {
       headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe('VALIDATION_ERROR');
-  });
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('VALIDATION_ERROR')
+  })
 
   it('GET /:id/tasks returns 404 when the agent does not exist', async () => {
     const res = await app.request(`${DASH_AGENTS}/9999/tasks`, {
       headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
-    });
-    expect(res.status).toBe(404);
-  });
+    })
+    expect(res.status).toBe(404)
+  })
 
   it('GET /:id/tasks returns 401 without a session cookie', async () => {
-    const res = await app.request(`${DASH_AGENTS}/100/tasks`);
-    expect(res.status).toBe(401);
-  });
-});
+    const res = await app.request(`${DASH_AGENTS}/100/tasks`)
+    expect(res.status).toBe(401)
+  })
+})

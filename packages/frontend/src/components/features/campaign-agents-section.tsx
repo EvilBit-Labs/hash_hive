@@ -1,16 +1,17 @@
-import type { CampaignActiveAgent } from '../../hooks/use-dashboard';
-import { readTaskPercentage } from '../../lib/campaign-progress';
-import { EmptyState } from '../ui/empty-state';
-import { ProgressBar } from '../ui/progress-bar';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table';
+import type { CampaignActiveAgent } from '../../hooks/use-dashboard'
+
+import { readTaskPercentage } from '../../lib/campaign-progress'
+import { EmptyState } from '../ui/empty-state'
+import { ProgressBar } from '../ui/progress-bar'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table'
 
 interface CampaignAgentsSectionProps {
-  agents: ReadonlyArray<CampaignActiveAgent>;
+  agents: ReadonlyArray<CampaignActiveAgent>
 }
 
 function formatSpeed(speedHs: number | null): string {
-  if (speedHs === null || !Number.isFinite(speedHs)) return '--';
-  return `${Math.round(speedHs).toLocaleString()} H/s`;
+  if (speedHs === null || !Number.isFinite(speedHs)) return '--'
+  return `${Math.round(speedHs).toLocaleString()} H/s`
 }
 
 /**
@@ -29,7 +30,7 @@ function formatSpeed(speedHs: number | null): string {
  */
 export function CampaignAgentsSection({ agents }: CampaignAgentsSectionProps) {
   if (agents.length === 0) {
-    return <EmptyState message="No agents currently working on this campaign." />;
+    return <EmptyState message="No agents currently working on this campaign." />
   }
 
   return (
@@ -44,11 +45,11 @@ export function CampaignAgentsSection({ agents }: CampaignAgentsSectionProps) {
       </TableHead>
       <TableBody>
         {agents.map((agent) => {
-          const taskPct = readTaskPercentage(agent.progress);
+          const taskPct = readTaskPercentage(agent.progress)
           return (
             <TableRow key={`${agent.agentId}-${agent.taskId}`}>
               <Td className="text-sm">{agent.agentName}</Td>
-              <Td className="font-mono text-xs text-muted-foreground">
+              <Td className="text-muted-foreground font-mono text-xs">
                 Attack #{agent.attackId} - mode {agent.attackMode}
               </Td>
               <Td className="min-w-[120px]">
@@ -58,13 +59,13 @@ export function CampaignAgentsSection({ agents }: CampaignAgentsSectionProps) {
                   ariaLabel={`${agent.agentName} task progress`}
                 />
               </Td>
-              <Td className="font-mono text-xs text-muted-foreground">
+              <Td className="text-muted-foreground font-mono text-xs">
                 {formatSpeed(agent.speedHs)}
               </Td>
             </TableRow>
-          );
+          )
         })}
       </TableBody>
     </Table>
-  );
+  )
 }

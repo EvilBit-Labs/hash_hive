@@ -14,16 +14,26 @@
  * from getSystemHealth().
  */
 
-import { sql } from 'drizzle-orm';
-import { env } from '../config/env.js';
-import { logger } from '../config/logger.js';
-import { checkMinioHealth } from '../config/storage.js';
-import { db } from '../db/index.js';
-import { getQueueManager } from '../queue/context.js';
+import { sql } from 'drizzle-orm'
 
-export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
+import { env } from '../config/env.js'
+import { logger } from '../config/logger.js'
+import { checkObjectStoreHealth } from '../config/storage.js'
+import { db } from '../db/index.js'
+import { getQueueManager } from '../queue/context.js'
 
-export type ComponentName = 'database' | 'redis' | 'minio' | 'queues';
+export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy'
+
+/**
+ * Component names exposed on the wire (`components.<name>` on
+ * `/api/v1/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
+ * `'minio'` is preserved as the wire identifier across the SeaweedFS swap
+ * so frontend consumers (see `packages/frontend/src/hooks/use-system-health.ts`)
+ * keep working without a coupled release. Internal symbols are migrated
+ * to neutral terminology (`checkObjectStoreHealth`) where doing so does
+ * not touch the wire.
+ */
+export type ComponentName = 'database' | 'redis' | 'minio' | 'queues'
 
 /**
  * Probe result shape without a `durationMs` field — that field is
@@ -33,20 +43,20 @@ export type ComponentName = 'database' | 'redis' | 'minio' | 'queues';
  */
 export type ProbeResult =
   | { status: 'healthy'; message?: string; detail?: Record<string, unknown> }
-  | { status: 'degraded' | 'unhealthy'; message: string; detail?: Record<string, unknown> };
+  | { status: 'degraded' | 'unhealthy'; message: string; detail?: Record<string, unknown> }
 
 /**
  * Full ComponentHealth — ProbeResult plus the durationMs measurement
  * runProbe attaches. Discriminated by status so callers rendering
  * non-healthy components get `message` typed as required.
  */
-export type ComponentHealth = ProbeResult & { durationMs: number };
+export type ComponentHealth = ProbeResult & { durationMs: number }
 
 export interface SystemHealth {
-  status: ComponentStatus;
-  timestamp: string;
-  version: string;
-  components: Record<ComponentName, ComponentHealth>;
+  status: ComponentStatus
+  timestamp: string
+  version: string
+  components: Record<ComponentName, ComponentHealth>
 }
 
 /**
@@ -57,7 +67,7 @@ export interface SystemHealth {
  * Control API spec at packages/openapi/control-api.yaml for the
  * matching `info.version` it documents.
  */
-export const HEALTH_VERSION = '1.1.0';
+export const HEALTH_VERSION = '1.1.0'
 
 // Threshold semantics for the entire module: warn comparisons use `>=`
 // (inclusive boundary). "Warn at 10000" means 10000 is already the warn
@@ -70,10 +80,10 @@ export const HEALTH_VERSION = '1.1.0';
 export function aggregateStatus(
   components: Record<ComponentName, ComponentHealth>
 ): ComponentStatus {
-  const statuses = Object.values(components).map((c) => c.status);
-  if (statuses.includes('unhealthy')) return 'unhealthy';
-  if (statuses.includes('degraded')) return 'degraded';
-  return 'healthy';
+  const statuses = Object.values(components).map((c) => c.status)
+  if (statuses.includes('unhealthy')) return 'unhealthy'
+  if (statuses.includes('degraded')) return 'degraded'
+  return 'healthy'
 }
 
 /**
@@ -94,22 +104,22 @@ export async function runProbe(
   probeFn: (signal: AbortSignal) => Promise<ProbeResult>,
   timeoutMs: number
 ): Promise<ComponentHealth> {
-  const startedAt = Date.now();
-  const ac = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now()
+  const ac = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const result = await Promise.race<ProbeResult>([
       probeFn(ac.signal),
       new Promise<ProbeResult>((_, reject) => {
         timer = setTimeout(() => {
-          ac.abort();
-          reject(new Error('PROBE_TIMEOUT'));
-        }, timeoutMs);
+          ac.abort()
+          reject(new Error('PROBE_TIMEOUT'))
+        }, timeoutMs)
       }),
-    ]);
-    return { ...result, durationMs: Date.now() - startedAt };
+    ])
+    return { ...result, durationMs: Date.now() - startedAt }
   } catch (err) {
-    const isTimeout = err instanceof Error && err.message === 'PROBE_TIMEOUT';
+    const isTimeout = err instanceof Error && err.message === 'PROBE_TIMEOUT'
     // Distinguish operator-actionable infra failures (network, auth,
     // bucket missing) from programming errors. The latter still get
     // coerced to `unhealthy` so the report contract holds, but they
@@ -120,14 +130,14 @@ export async function runProbe(
       err instanceof ReferenceError ||
       err instanceof SyntaxError ||
       err instanceof RangeError ||
-      err instanceof URIError;
+      err instanceof URIError
     if (isProgrammingError) {
       logger.error(
         { err, probe: name },
         'health probe threw a programming error — likely a bug, not infra'
-      );
+      )
     } else if (!isTimeout) {
-      logger.warn({ err, probe: name }, 'health probe failed');
+      logger.warn({ err, probe: name }, 'health probe failed')
     }
     // Programming errors carry stack-revealing messages (e.g.
     // "Cannot read properties of undefined (reading 'foo')") that
@@ -140,59 +150,59 @@ export async function runProbe(
         ? 'probe failed: internal error'
         : err instanceof Error
           ? err.message
-          : 'probe failed';
+          : 'probe failed'
     return {
       status: 'unhealthy',
       message,
       durationMs: Date.now() - startedAt,
-    };
+    }
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer) clearTimeout(timer)
   }
 }
 
 // ─── Probe Implementations ──────────────────────────────────────────
 
 export interface DatabaseProbeDeps {
-  ping: () => Promise<unknown>;
-  poolStats: () => Promise<{ used: number; max: number }>;
+  ping: () => Promise<unknown>
+  poolStats: () => Promise<{ used: number; max: number }>
 }
 
 export async function probeDatabase(
   deps: DatabaseProbeDeps,
   warnPct: number
 ): Promise<ProbeResult> {
-  await deps.ping();
-  const { used, max } = await deps.poolStats();
-  const pct = max > 0 ? (used / max) * 100 : 0;
+  await deps.ping()
+  const { used, max } = await deps.poolStats()
+  const pct = max > 0 ? (used / max) * 100 : 0
   // Report the unrounded percentage so the displayed value never
   // disagrees with the threshold check. Previously detail.connectionsPct
   // could read 80 while the underlying 79.6% kept the status healthy,
   // which was confusing for operators reading the number alone.
-  const detail = { connectionsUsed: used, connectionsMax: max, connectionsPct: pct };
+  const detail = { connectionsUsed: used, connectionsMax: max, connectionsPct: pct }
   if (pct >= warnPct) {
     return {
       status: 'degraded',
       message: `database connection pool ${pct.toFixed(1)}% full (${used}/${max}) at or above warn threshold ${warnPct}%`,
       detail,
-    };
+    }
   }
-  return { status: 'healthy', detail };
+  return { status: 'healthy', detail }
 }
 
 export interface RedisProbeDeps {
   /** Returns 'connected' iff the Redis client is in the ready state. */
-  status: () => 'connected' | 'disconnected';
+  status: () => 'connected' | 'disconnected'
 }
 
 export async function probeRedis(deps: RedisProbeDeps): Promise<ProbeResult> {
   if (deps.status() !== 'connected') {
-    return { status: 'unhealthy', message: 'redis connection not ready' };
+    return { status: 'unhealthy', message: 'redis connection not ready' }
   }
-  return { status: 'healthy' };
+  return { status: 'healthy' }
 }
 
-export interface MinioProbeDeps {
+export interface ObjectStoreProbeDeps {
   /**
    * Probe the bucket. The optional `signal` is wired through to the S3
    * client so a timeout in `runProbe` actually aborts the underlying
@@ -200,34 +210,37 @@ export interface MinioProbeDeps {
    * after the wrapper resolves.
    */
   check: (signal?: AbortSignal) => Promise<{
-    status: 'connected' | 'disconnected';
-    bucket: string;
-  }>;
+    status: 'connected' | 'disconnected'
+    bucket: string
+  }>
 }
 
-export async function probeMinio(deps: MinioProbeDeps, signal?: AbortSignal): Promise<ProbeResult> {
-  const result = await deps.check(signal);
+export async function probeObjectStore(
+  deps: ObjectStoreProbeDeps,
+  signal?: AbortSignal
+): Promise<ProbeResult> {
+  const result = await deps.check(signal)
   if (result.status !== 'connected') {
     return {
       status: 'unhealthy',
-      message: `minio bucket ${result.bucket} unreachable`,
+      message: `object store bucket ${result.bucket} unreachable`,
       detail: { bucket: result.bucket },
-    };
+    }
   }
-  return { status: 'healthy', detail: { bucket: result.bucket } };
+  return { status: 'healthy', detail: { bucket: result.bucket } }
 }
 
 export interface QueueStat {
-  waiting: number;
-  active: number;
-  failed: number;
+  waiting: number
+  active: number
+  failed: number
 }
 
 export interface QueuesProbeDeps {
   health: () => Promise<{
-    status: 'connected' | 'disconnected';
-    queues: Record<string, QueueStat>;
-  }>;
+    status: 'connected' | 'disconnected'
+    queues: Record<string, QueueStat>
+  }>
 }
 
 export async function probeQueues(
@@ -235,22 +248,22 @@ export async function probeQueues(
   warnDepth: number,
   warnFailed: number
 ): Promise<ProbeResult> {
-  const result = await deps.health();
+  const result = await deps.health()
   if (result.status !== 'connected') {
     return {
       status: 'unhealthy',
       message: 'queue manager not connected to redis',
       detail: { queues: {} },
-    };
+    }
   }
 
-  const offenders: string[] = [];
+  const offenders: string[] = []
   for (const [name, stats] of Object.entries(result.queues)) {
     if (stats.waiting >= warnDepth) {
-      offenders.push(`${name} waiting=${stats.waiting} >= ${warnDepth}`);
+      offenders.push(`${name} waiting=${stats.waiting} >= ${warnDepth}`)
     }
     if (stats.failed >= warnFailed) {
-      offenders.push(`${name} failed=${stats.failed} >= ${warnFailed}`);
+      offenders.push(`${name} failed=${stats.failed} >= ${warnFailed}`)
     }
   }
 
@@ -259,10 +272,10 @@ export async function probeQueues(
       status: 'degraded',
       message: `queue thresholds exceeded: ${offenders.join('; ')}`,
       detail: { queues: result.queues, offenders },
-    };
+    }
   }
 
-  return { status: 'healthy', detail: { queues: result.queues } };
+  return { status: 'healthy', detail: { queues: result.queues } }
 }
 
 // ─── Default Production Wiring ──────────────────────────────────────
@@ -271,46 +284,46 @@ export async function probeQueues(
 // safe to cache for the lifetime of the process. Caching it eliminates
 // one of the three sequential round-trips probeDatabase otherwise pays
 // per tick.
-let cachedMaxConnections: number | null = null;
+let cachedMaxConnections: number | null = null
 
 async function defaultDatabasePoolStats(): Promise<{ used: number; max: number }> {
   const usedRows = (await db.execute(
     sql`SELECT count(*)::int AS used FROM pg_stat_activity WHERE datname = current_database()`
-  )) as unknown as Array<{ used: number }>;
+  )) as unknown as Array<{ used: number }>
 
-  let max = cachedMaxConnections;
+  let max = cachedMaxConnections
   if (max === null) {
     const maxRows = (await db.execute(
       sql`SELECT setting::int AS max FROM pg_settings WHERE name = 'max_connections'`
-    )) as unknown as Array<{ max: number }>;
-    const candidate = maxRows[0]?.max;
+    )) as unknown as Array<{ max: number }>
+    const candidate = maxRows[0]?.max
     // Validate before caching: a Postgres misconfiguration or a future
     // schema-change in pg_settings could return 0/NaN/non-integer; we'd
     // poison the cache for the lifetime of the process.
     if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate > 0) {
-      cachedMaxConnections = candidate;
-      max = candidate;
+      cachedMaxConnections = candidate
+      max = candidate
     } else {
-      logger.warn({ candidate }, 'pg_settings returned unexpected max_connections; not caching');
-      max = 1;
+      logger.warn({ candidate }, 'pg_settings returned unexpected max_connections; not caching')
+      max = 1
     }
   }
-  const used = usedRows[0]?.used ?? 0;
-  return { used, max };
+  const used = usedRows[0]?.used ?? 0
+  return { used, max }
 }
 
 /** Test-only: clears the max_connections cache (e.g. between Postgres versions). */
 export function __resetMaxConnectionsCache(): void {
-  cachedMaxConnections = null;
+  cachedMaxConnections = null
 }
 
 function buildDefaultProbes(): {
-  database: DatabaseProbeDeps;
-  redis: RedisProbeDeps;
-  minio: MinioProbeDeps;
-  queues: QueuesProbeDeps;
+  database: DatabaseProbeDeps
+  redis: RedisProbeDeps
+  minio: ObjectStoreProbeDeps
+  queues: QueuesProbeDeps
 } {
-  const qm = getQueueManager();
+  const qm = getQueueManager()
   return {
     database: {
       ping: () => db.execute(sql`SELECT 1`),
@@ -323,16 +336,16 @@ function buildDefaultProbes(): {
       // qm.getHealth().
       status: () => qm?.getRedisStatus() ?? 'disconnected',
     },
-    minio: { check: checkMinioHealth },
+    minio: { check: checkObjectStoreHealth },
     queues: {
       health: async () => {
         if (!qm) {
-          return { status: 'disconnected', queues: {} };
+          return { status: 'disconnected', queues: {} }
         }
-        return qm.getHealth();
+        return qm.getHealth()
       },
     },
-  };
+  }
 }
 
 // ─── Public Entry Point ─────────────────────────────────────────────
@@ -340,34 +353,34 @@ function buildDefaultProbes(): {
 export interface SystemHealthOptions {
   /** Override probes for testing. */
   probes?: {
-    database?: DatabaseProbeDeps;
-    redis?: RedisProbeDeps;
-    minio?: MinioProbeDeps;
-    queues?: QueuesProbeDeps;
-  };
+    database?: DatabaseProbeDeps
+    redis?: RedisProbeDeps
+    minio?: ObjectStoreProbeDeps
+    queues?: QueuesProbeDeps
+  }
   /** Override thresholds for testing. */
   thresholds?: {
-    probeTimeoutMs?: number;
-    queueWarnDepth?: number;
-    queueWarnFailed?: number;
-    dbConnectionWarnPct?: number;
-  };
+    probeTimeoutMs?: number
+    queueWarnDepth?: number
+    queueWarnFailed?: number
+    dbConnectionWarnPct?: number
+  }
 }
 
 async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
-  const defaults = buildDefaultProbes();
+  const defaults = buildDefaultProbes()
   const probes = {
     database: opts.probes?.database ?? defaults.database,
     redis: opts.probes?.redis ?? defaults.redis,
     minio: opts.probes?.minio ?? defaults.minio,
     queues: opts.probes?.queues ?? defaults.queues,
-  };
+  }
   const thresholds = {
     probeTimeoutMs: opts.thresholds?.probeTimeoutMs ?? env.HEALTH_PROBE_TIMEOUT_MS,
     queueWarnDepth: opts.thresholds?.queueWarnDepth ?? env.HEALTH_QUEUE_WARN_DEPTH,
     queueWarnFailed: opts.thresholds?.queueWarnFailed ?? env.HEALTH_QUEUE_WARN_FAILED,
     dbConnectionWarnPct: opts.thresholds?.dbConnectionWarnPct ?? env.HEALTH_DB_CONNECTION_WARN_PCT,
-  };
+  }
 
   const [database, redis, minio, queues] = await Promise.all([
     // probeFn signatures all accept (signal: AbortSignal) so runProbe
@@ -380,21 +393,25 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
       thresholds.probeTimeoutMs
     ),
     runProbe('redis', () => probeRedis(probes.redis), thresholds.probeTimeoutMs),
-    runProbe('minio', (signal) => probeMinio(probes.minio, signal), thresholds.probeTimeoutMs),
+    runProbe(
+      'minio',
+      (signal) => probeObjectStore(probes.minio, signal),
+      thresholds.probeTimeoutMs
+    ),
     runProbe(
       'queues',
       () => probeQueues(probes.queues, thresholds.queueWarnDepth, thresholds.queueWarnFailed),
       thresholds.probeTimeoutMs
     ),
-  ]);
+  ])
 
-  const components: Record<ComponentName, ComponentHealth> = { database, redis, minio, queues };
+  const components: Record<ComponentName, ComponentHealth> = { database, redis, minio, queues }
   return {
     status: aggregateStatus(components),
     timestamp: new Date().toISOString(),
     version: HEALTH_VERSION,
     components,
-  };
+  }
 }
 
 // ─── Caching layer ──────────────────────────────────────────────────
@@ -410,14 +427,14 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
 // `opts.probes` or `opts.thresholds` (i.e. tests using injected probes)
 // so unit tests remain deterministic and isolated.
 
-const HEALTH_CACHE_TTL_MS = 5_000;
-let cachedHealth: { value: SystemHealth; expiresAt: number } | null = null;
-let inFlightHealth: Promise<SystemHealth> | null = null;
+const HEALTH_CACHE_TTL_MS = 5_000
+let cachedHealth: { value: SystemHealth; expiresAt: number } | null = null
+let inFlightHealth: Promise<SystemHealth> | null = null
 
 /** Test-only: clears the module-level cache. */
 export function __resetSystemHealthCache(): void {
-  cachedHealth = null;
-  inFlightHealth = null;
+  cachedHealth = null
+  inFlightHealth = null
 }
 
 export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<SystemHealth> {
@@ -425,29 +442,29 @@ export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<S
   // calls are deterministic and must not see stale state from prior
   // tests or production calls.
   if (opts.probes || opts.thresholds) {
-    return executeProbes(opts);
+    return executeProbes(opts)
   }
 
-  const now = Date.now();
+  const now = Date.now()
   if (cachedHealth && cachedHealth.expiresAt > now) {
-    return cachedHealth.value;
+    return cachedHealth.value
   }
 
   // In-flight dedup: concurrent callers under load share one execution.
   if (inFlightHealth) {
-    return inFlightHealth;
+    return inFlightHealth
   }
 
   inFlightHealth = executeProbes(opts)
     .then((value) => {
-      cachedHealth = { value, expiresAt: Date.now() + HEALTH_CACHE_TTL_MS };
-      return value;
+      cachedHealth = { value, expiresAt: Date.now() + HEALTH_CACHE_TTL_MS }
+      return value
     })
     .finally(() => {
-      inFlightHealth = null;
-    });
+      inFlightHealth = null
+    })
 
-  return inFlightHealth;
+  return inFlightHealth
 }
 
 /**
@@ -488,44 +505,48 @@ export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<S
  * on queues) are added by intersection on the specific entry below.
  */
 type LegacyServiceGuards = {
-  message?: never;
-  detail?: never;
-};
+  message?: never
+  detail?: never
+}
 
 export interface LegacyHealthEnvelope {
-  status: 'ok' | 'degraded';
+  status: 'ok' | 'degraded'
   /** Three-tier aggregate: healthy | degraded | unhealthy. */
-  aggregateStatus: ComponentStatus;
-  timestamp: string;
-  version: string;
+  aggregateStatus: ComponentStatus
+  timestamp: string
+  version: string
   services: {
-    database: LegacyServiceGuards & { status: 'connected' | 'disconnected' };
-    redis: LegacyServiceGuards & { status: 'connected' | 'disconnected' };
+    database: LegacyServiceGuards & { status: 'connected' | 'disconnected' }
+    redis: LegacyServiceGuards & { status: 'connected' | 'disconnected' }
     minio: LegacyServiceGuards & {
-      status: 'connected' | 'disconnected';
-      bucket?: string;
-    };
+      status: 'connected' | 'disconnected'
+      bucket: string
+    }
     queues: LegacyServiceGuards & {
-      status: 'connected' | 'disconnected';
-      queues: Record<string, { waiting: number; active: number; failed: number }>;
-    };
-  };
+      status: 'connected' | 'disconnected'
+      queues: Record<string, { waiting: number; active: number; failed: number }>
+    }
+  }
 }
 
 function legacyServiceStatus(s: ComponentStatus): 'connected' | 'disconnected' {
-  return s === 'unhealthy' ? 'disconnected' : 'connected';
+  return s === 'unhealthy' ? 'disconnected' : 'connected'
 }
 
 function extractQueueStats(
   detail: Record<string, unknown> | undefined
 ): Record<string, { waiting: number; active: number; failed: number }> {
-  const raw = detail?.['queues'];
-  if (!raw || typeof raw !== 'object') return {};
-  return raw as Record<string, { waiting: number; active: number; failed: number }>;
+  const raw = detail?.['queues']
+  if (!raw || typeof raw !== 'object') return {}
+  return raw as Record<string, { waiting: number; active: number; failed: number }>
 }
 
 export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope {
-  const minioBucket = health.components.minio.detail?.['bucket'] as string | undefined;
+  // Preserve the pre-#109 `services.minio.bucket` contract even when the
+  // probe timed out before setting `detail` — fall back to env.S3_BUCKET so
+  // monitors that read `body.services.minio.bucket.length` keep working.
+  const minioBucket =
+    (health.components.minio.detail?.['bucket'] as string | undefined) ?? env.S3_BUCKET
   return {
     status: health.status === 'healthy' ? 'ok' : 'degraded',
     aggregateStatus: health.status,
@@ -536,12 +557,12 @@ export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope
       redis: { status: legacyServiceStatus(health.components.redis.status) },
       minio: {
         status: legacyServiceStatus(health.components.minio.status),
-        ...(minioBucket ? { bucket: minioBucket } : {}),
+        bucket: minioBucket,
       },
       queues: {
         status: legacyServiceStatus(health.components.queues.status),
         queues: extractQueueStats(health.components.queues.detail),
       },
     },
-  };
+  }
 }

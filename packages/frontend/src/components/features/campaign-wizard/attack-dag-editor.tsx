@@ -6,27 +6,29 @@ import ReactFlow, {
   type Node as FlowNode,
   type NodeChange,
   type OnConnect,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import { attackModeLabel } from '../../../lib/attack-modes';
-import type { AttackConfig } from '../../../stores/campaign-wizard';
-import { ErrorBanner } from '../../ui/error-banner';
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+
+import type { AttackConfig } from '../../../stores/campaign-wizard'
+
+import { attackModeLabel } from '../../../lib/attack-modes'
+import { ErrorBanner } from '../../ui/error-banner'
 
 /** Catppuccin red - matches --ctp-red / --destructive token. */
-const CYCLE_EDGE_COLOR = 'hsl(351, 74%, 73%)';
+const CYCLE_EDGE_COLOR = 'hsl(351, 74%, 73%)'
 
 interface AttackDagEditorProps {
-  attacks: readonly AttackConfig[];
-  nodes: FlowNode[];
-  edges: Edge[];
-  cycle: number[] | undefined;
-  isValid: boolean;
-  onNodesChange: (changes: NodeChange[]) => void;
-  onEdgesChange: (changes: EdgeChange[]) => void;
-  onConnect: OnConnect;
-  onEdgesDelete: (edges: Edge[]) => void;
-  onNodeClick: (event: unknown, node: { id: string }) => void;
-  onNodeContextMenu: (event: { preventDefault: () => void }, node: { id: string }) => void;
+  attacks: readonly AttackConfig[]
+  nodes: FlowNode[]
+  edges: Edge[]
+  cycle: number[] | undefined
+  isValid: boolean
+  onNodesChange: (changes: NodeChange[]) => void
+  onEdgesChange: (changes: EdgeChange[]) => void
+  onConnect: OnConnect
+  onEdgesDelete: (edges: Edge[]) => void
+  onNodeClick: (event: unknown, node: { id: string }) => void
+  onNodeContextMenu: (event: { preventDefault: () => void }, node: { id: string }) => void
 }
 
 /**
@@ -50,24 +52,24 @@ export function AttackDagEditor({
 }: AttackDagEditorProps) {
   const cycleLabels = cycle
     ?.map((i) => {
-      const attack = attacks[i];
-      return attack ? `#${i} ${attackModeLabel(attack.mode)}` : `#${i}`;
+      const attack = attacks[i]
+      return attack ? `#${i} ${attackModeLabel(attack.mode)}` : `#${i}`
     })
-    .join(', ');
+    .join(', ')
 
   const styledEdges = isValid
     ? edges
     : edges.map((e) => {
-        const sourceIdx = Number(e.source);
-        const targetIdx = Number(e.target);
-        const inCycle = cycle?.includes(sourceIdx) && cycle?.includes(targetIdx);
-        return inCycle ? { ...e, style: { stroke: CYCLE_EDGE_COLOR, strokeWidth: 2 } } : e;
-      });
+        const sourceIdx = Number(e.source)
+        const targetIdx = Number(e.target)
+        const inCycle = cycle?.includes(sourceIdx) && cycle?.includes(targetIdx)
+        return inCycle ? { ...e, style: { stroke: CYCLE_EDGE_COLOR, strokeWidth: 2 } } : e
+      })
 
   return (
     <div className="w-3/5 space-y-2">
       <h3 className="text-sm font-medium">Dependency Graph</h3>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground text-xs">
         Drag edges between attacks to set dependencies. Arrow from A -&gt; B means B depends on A.
       </p>
       {!isValid && (
@@ -76,7 +78,7 @@ export function AttackDagEditor({
           className="text-xs"
         />
       )}
-      <div className="h-[400px] rounded-md border border-surface-0 bg-crust">
+      <div className="border-surface-0 bg-crust h-[400px] rounded-md border">
         {attacks.length > 0 ? (
           <ReactFlow
             nodes={nodes}
@@ -94,11 +96,11 @@ export function AttackDagEditor({
             <Controls />
           </ReactFlow>
         ) : (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+          <div className="text-muted-foreground flex h-full items-center justify-center text-xs">
             Add attacks to see the dependency graph
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }

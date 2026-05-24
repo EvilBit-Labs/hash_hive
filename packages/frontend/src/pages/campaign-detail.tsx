@@ -1,23 +1,24 @@
-import { lazy, Suspense, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
-import { CampaignAgentsSection } from '../components/features/campaign-agents-section';
-import { CampaignTaskStats } from '../components/features/campaign-task-stats';
-import { PermissionGuard } from '../components/features/permission-guard';
-import { PriorityBadge } from '../components/features/priority-badge';
-import { StatusBadge } from '../components/features/status-badge';
-import { Button } from '../components/ui/button';
-import { ConfirmDialog } from '../components/ui/confirm-dialog';
-import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { PageHeader } from '../components/ui/page-header';
-import { ProgressBar } from '../components/ui/progress-bar';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
-import { TextLink } from '../components/ui/text-link';
-import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns';
-import { useCampaignDetail } from '../hooks/use-dashboard';
-import { computeEta } from '../lib/campaign-eta';
-import { readCampaignPercentage } from '../lib/campaign-progress';
-import { Permission } from '../lib/permissions';
+import { lazy, Suspense, useState } from 'react'
+import { useNavigate, useParams } from 'react-router'
+
+import { CampaignAgentsSection } from '../components/features/campaign-agents-section'
+import { CampaignTaskStats } from '../components/features/campaign-task-stats'
+import { PermissionGuard } from '../components/features/permission-guard'
+import { PriorityBadge } from '../components/features/priority-badge'
+import { StatusBadge } from '../components/features/status-badge'
+import { Button } from '../components/ui/button'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
+import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { PageHeader } from '../components/ui/page-header'
+import { ProgressBar } from '../components/ui/progress-bar'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
+import { TextLink } from '../components/ui/text-link'
+import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
+import { useCampaignDetail } from '../hooks/use-dashboard'
+import { computeEta } from '../lib/campaign-eta'
+import { readCampaignPercentage } from '../lib/campaign-progress'
+import { Permission } from '../lib/permissions'
 
 // Lazy-load the DAG view so reactflow's bundle weight is only paid when
 // the detail page is actually visited.
@@ -25,18 +26,18 @@ const CampaignDagView = lazy(() =>
   import('../components/features/campaign-dag-view').then((m) => ({
     default: m.CampaignDagView,
   }))
-);
+)
 
-type ConfirmAction = 'stop' | 'delete' | null;
+type ConfirmAction = 'stop' | 'delete' | null
 
 export function CampaignDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const campaignId = Number(id);
-  const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>()
+  const campaignId = Number(id)
+  const navigate = useNavigate()
 
-  const { data, isLoading, isError, error } = useCampaignDetail(campaignId);
-  const lifecycle = useCampaignLifecycle();
-  const del = useCampaignDelete();
+  const { data, isLoading, isError, error } = useCampaignDetail(campaignId)
+  const lifecycle = useCampaignLifecycle()
+  const del = useCampaignDelete()
 
   // Real-time updates: the shared useEvents hook mounted by EventsProvider
   // (in AppLayout) already invalidates ['campaign', campaignId] for every
@@ -44,65 +45,65 @@ export function CampaignDetailPage() {
   // campaignId, so this detail page automatically refetches without a
   // local subscription.
 
-  const [confirm, setConfirm] = useState<ConfirmAction>(null);
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction>(null)
+  const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   function handleStart() {
-    setErrorBanner(null);
+    setErrorBanner(null)
     // The detail page already shows full campaign context, so Start does
     // not need an interstitial confirmation modal.
     lifecycle.mutate(
       { campaignId, action: 'start' },
       {
         onError: (err) => {
-          // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-          console.error('[campaign-detail] start failed', { campaignId, err });
-          setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign');
+          // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+          console.error('[campaign-detail] start failed', { campaignId, err })
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to start campaign')
         },
       }
-    );
+    )
   }
 
   function handlePause() {
-    setErrorBanner(null);
+    setErrorBanner(null)
     lifecycle.mutate(
       { campaignId, action: 'pause' },
       {
         onError: (err) => {
-          // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-          console.error('[campaign-detail] pause failed', { campaignId, err });
-          setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign');
+          // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+          console.error('[campaign-detail] pause failed', { campaignId, err })
+          setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign')
         },
       }
-    );
+    )
   }
 
   async function confirmStop() {
     try {
-      await lifecycle.mutateAsync({ campaignId, action: 'stop' });
-      setConfirm(null);
+      await lifecycle.mutateAsync({ campaignId, action: 'stop' })
+      setConfirm(null)
     } catch (err) {
-      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-      console.error('[campaign-detail] stop failed', { campaignId, err });
-      setErrorBanner(err instanceof Error ? err.message : 'Failed to stop campaign');
+      // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+      console.error('[campaign-detail] stop failed', { campaignId, err })
+      setErrorBanner(err instanceof Error ? err.message : 'Failed to stop campaign')
     }
   }
 
   async function confirmDelete() {
     try {
-      await del.mutateAsync({ campaignId });
-      setConfirm(null);
-      navigate('/campaigns');
+      await del.mutateAsync({ campaignId })
+      setConfirm(null)
+      void navigate('/campaigns')
     } catch (err) {
-      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-      console.error('[campaign-detail] delete failed', { campaignId, err });
-      setErrorBanner(err instanceof Error ? err.message : 'Failed to delete campaign');
+      // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+      console.error('[campaign-detail] delete failed', { campaignId, err })
+      setErrorBanner(err instanceof Error ? err.message : 'Failed to delete campaign')
     }
   }
 
   function cancelConfirm() {
-    if (lifecycle.isPending || del.isPending) return;
-    setConfirm(null);
+    if (lifecycle.isPending || del.isPending) return
+    setConfirm(null)
   }
 
   if (!Number.isInteger(campaignId) || campaignId <= 0) {
@@ -113,11 +114,11 @@ export function CampaignDetailPage() {
         </TextLink>
         <ErrorBanner message="Invalid campaign id in URL." />
       </div>
-    );
+    )
   }
 
   if (isLoading) {
-    return <EmptyState message="Loading campaign..." />;
+    return <EmptyState message="Loading campaign..." />
   }
 
   if (isError) {
@@ -128,7 +129,7 @@ export function CampaignDetailPage() {
         </TextLink>
         <ErrorBanner message={error instanceof Error ? error.message : 'Failed to load campaign'} />
       </div>
-    );
+    )
   }
 
   if (!data) {
@@ -139,17 +140,17 @@ export function CampaignDetailPage() {
         </TextLink>
         <EmptyState message="Campaign not found." />
       </div>
-    );
+    )
   }
 
-  const { campaign, attacks, taskStats, activeAgents } = data;
-  const percentage = readCampaignPercentage(campaign.progress);
-  const eta = computeEta(taskStats, activeAgents);
+  const { campaign, attacks, taskStats, activeAgents } = data
+  const percentage = readCampaignPercentage(campaign.progress)
+  const eta = computeEta(taskStats, activeAgents)
 
-  const canStart = campaign.status === 'draft' || campaign.status === 'paused';
-  const canPause = campaign.status === 'running';
-  const canStop = campaign.status === 'running' || campaign.status === 'paused';
-  const canDelete = campaign.status === 'draft';
+  const canStart = campaign.status === 'draft' || campaign.status === 'paused'
+  const canPause = campaign.status === 'running'
+  const canStop = campaign.status === 'running' || campaign.status === 'paused'
+  const canDelete = campaign.status === 'draft'
 
   return (
     <div className="space-y-6">
@@ -211,7 +212,7 @@ export function CampaignDetailPage() {
         </div>
 
         {campaign.description && (
-          <p className="text-sm text-muted-foreground">{campaign.description}</p>
+          <p className="text-muted-foreground text-sm">{campaign.description}</p>
         )}
       </div>
 
@@ -222,7 +223,7 @@ export function CampaignDetailPage() {
           <h3 id="progress-heading" className="text-sm font-medium">
             Progress
           </h3>
-          <p className="font-mono text-xs tabular-nums text-muted-foreground">
+          <p className="text-muted-foreground font-mono text-xs tabular-nums">
             ETA: <span data-testid="campaign-eta">{eta}</span>
           </p>
         </div>
@@ -275,10 +276,10 @@ export function CampaignDetailPage() {
                   <Td>
                     <StatusBadge status={attack.status} />
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {attack.wordlistId ? `#${attack.wordlistId}` : '-'}
                   </Td>
-                  <Td className="font-mono text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground font-mono text-xs">
                     {attack.dependencies?.length ? attack.dependencies.join(', ') : 'None'}
                   </Td>
                 </TableRow>
@@ -288,7 +289,7 @@ export function CampaignDetailPage() {
         )}
       </section>
 
-      <div className="space-y-1 border-t border-surface-0/50 pt-4 text-xs text-muted-foreground">
+      <div className="border-surface-0/50 text-muted-foreground space-y-1 border-t pt-4 text-xs">
         <p>Created {new Date(campaign.createdAt).toLocaleString()}</p>
         {campaign.startedAt && <p>Started {new Date(campaign.startedAt).toLocaleString()}</p>}
         {campaign.completedAt && <p>Completed {new Date(campaign.completedAt).toLocaleString()}</p>}
@@ -316,5 +317,5 @@ export function CampaignDetailPage() {
         onCancel={cancelConfirm}
       />
     </div>
-  );
+  )
 }

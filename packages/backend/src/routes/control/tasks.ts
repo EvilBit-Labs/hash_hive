@@ -3,16 +3,18 @@
  * (assign / report) belongs to the agent API.
  */
 
-import { Hono } from 'hono';
-import { z } from 'zod';
-import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
-import { problemResponse } from '../../lib/problem-details.js';
-import { getCampaignById } from '../../services/campaigns.js';
-import { getTaskById, listTasks } from '../../services/tasks.js';
-import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js';
+import { Hono } from 'hono'
+import { z } from 'zod'
 
-export const controlTaskRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
+
+import { paginate, paginationQuerySchema } from '../../lib/pagination.js'
+import { problemResponse } from '../../lib/problem-details.js'
+import { getCampaignById } from '../../services/campaigns.js'
+import { getTaskById, listTasks } from '../../services/tasks.js'
+import { controlErrorResponse, parseIdParam, requireProjectMembership } from './helpers.js'
+
+export const controlTaskRoutes = new Hono<AppEnv>()
 
 // `campaignId` is REQUIRED — the dashboard tasks service does not
 // enforce project scoping by itself, so the caller must name a campaign
@@ -24,43 +26,43 @@ const taskFilterSchema = z.object({
   agentId: z.coerce.number().int().positive().optional(),
   campaignId: z.coerce.number().int().positive(),
   attackId: z.coerce.number().int().positive().optional(),
-});
+})
 
 controlTaskRoutes.get('/', async (c) => {
   try {
-    const { projectId } = await requireProjectMembership(c);
-    const params = Object.fromEntries(new URL(c.req.url).searchParams);
-    const query = paginationQuerySchema.parse(params);
-    const filters = taskFilterSchema.parse(params);
+    const { projectId } = await requireProjectMembership(c)
+    const params = Object.fromEntries(new URL(c.req.url).searchParams)
+    const query = paginationQuerySchema.parse(params)
+    const filters = taskFilterSchema.parse(params)
 
-    const campaign = await getCampaignById(filters.campaignId);
+    const campaign = await getCampaignById(filters.campaignId)
     if (!campaign || campaign.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'campaign not found');
+      return problemResponse(c, 404, 'not_found', 'campaign not found')
     }
 
     const { tasks, total } = await listTasks({
       ...filters,
       limit: query.limit,
       offset: query.offset,
-    });
-    return c.json(paginate(tasks, total, query));
+    })
+    return c.json(paginate(tasks, total, query))
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})
 
 controlTaskRoutes.get('/:id', async (c) => {
   try {
-    const { projectId } = await requireProjectMembership(c);
-    const id = parseIdParam(c.req.param('id'));
-    const task = await getTaskById(id);
-    if (!task) return problemResponse(c, 404, 'not_found', 'task not found');
-    const campaign = await getCampaignById(task.campaignId);
+    const { projectId } = await requireProjectMembership(c)
+    const id = parseIdParam(c.req.param('id'))
+    const task = await getTaskById(id)
+    if (!task) return problemResponse(c, 404, 'not_found', 'task not found')
+    const campaign = await getCampaignById(task.campaignId)
     if (!campaign || campaign.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'task not found');
+      return problemResponse(c, 404, 'not_found', 'task not found')
     }
-    return c.json(task);
+    return c.json(task)
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})

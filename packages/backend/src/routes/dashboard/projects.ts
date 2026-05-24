@@ -1,8 +1,11 @@
-import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
-import { z } from 'zod';
-import { requireSession } from '../../middleware/auth.js';
-import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js';
+import { zValidator } from '@hono/zod-validator'
+import { Hono } from 'hono'
+import { z } from 'zod'
+
+import type { AppEnv } from '../../types.js'
+
+import { requireSession } from '../../middleware/auth.js'
+import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js'
 import {
   addUserToProject,
   createProject,
@@ -12,13 +15,12 @@ import {
   removeUserFromProject,
   updateMemberRoles,
   updateProject,
-} from '../../services/projects.js';
-import type { AppEnv } from '../../types.js';
+} from '../../services/projects.js'
 
-const projectRoutes = new Hono<AppEnv>();
+const projectRoutes = new Hono<AppEnv>()
 
 // All project routes require session auth
-projectRoutes.use('*', requireSession);
+projectRoutes.use('*', requireSession)
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
@@ -29,49 +31,49 @@ const createProjectSchema = z.object({
     .max(255)
     .regex(/^[a-z0-9-]+$/),
   settings: z.record(z.string(), z.unknown()).optional(),
-});
+})
 
 const updateProjectSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
-});
+})
 
 const addMemberSchema = z.object({
   userId: z.number().int().positive(),
   roles: z.array(z.enum(['admin', 'contributor', 'viewer'])).min(1),
-});
+})
 
 const updateRolesSchema = z.object({
   roles: z.array(z.enum(['admin', 'contributor', 'viewer'])).min(1),
-});
+})
 
 // GET /projects — list projects for current user
 projectRoutes.get('/', async (c) => {
-  const { userId } = c.get('currentUser');
-  const result = await getUserProjects(userId);
-  return c.json({ projects: result });
-});
+  const { userId } = c.get('currentUser')
+  const result = await getUserProjects(userId)
+  return c.json({ projects: result })
+})
 
 // POST /projects — create a new project
 projectRoutes.post('/', zValidator('json', createProjectSchema), async (c) => {
-  const { userId } = c.get('currentUser');
-  const data = c.req.valid('json');
-  const project = await createProject({ ...data, createdBy: userId });
-  return c.json({ project }, 201);
-});
+  const { userId } = c.get('currentUser')
+  const data = c.req.valid('json')
+  const project = await createProject({ ...data, createdBy: userId })
+  return c.json({ project }, 201)
+})
 
 // GET /projects/:projectId — get project details
 projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
-  const projectId = Number(c.req.param('projectId'));
-  const project = await getProjectById(projectId);
+  const projectId = Number(c.req.param('projectId'))
+  const project = await getProjectById(projectId)
 
   if (!project) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404);
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
   }
 
-  return c.json({ project });
-});
+  return c.json({ project })
+})
 
 // PATCH /projects/:projectId — update project (admin only)
 projectRoutes.patch(
@@ -79,24 +81,24 @@ projectRoutes.patch(
   requireParamProjectRole('admin'),
   zValidator('json', updateProjectSchema),
   async (c) => {
-    const projectId = Number(c.req.param('projectId'));
-    const data = c.req.valid('json');
-    const project = await updateProject(projectId, data);
+    const projectId = Number(c.req.param('projectId'))
+    const data = c.req.valid('json')
+    const project = await updateProject(projectId, data)
 
     if (!project) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404);
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
     }
 
-    return c.json({ project });
+    return c.json({ project })
   }
-);
+)
 
 // GET /projects/:projectId/members — list project members
 projectRoutes.get('/:projectId/members', requireParamProjectAccess(), async (c) => {
-  const projectId = Number(c.req.param('projectId'));
-  const members = await getProjectMembers(projectId);
-  return c.json({ members });
-});
+  const projectId = Number(c.req.param('projectId'))
+  const members = await getProjectMembers(projectId)
+  return c.json({ members })
+})
 
 // POST /projects/:projectId/members — add a member (admin only)
 projectRoutes.post(
@@ -104,12 +106,12 @@ projectRoutes.post(
   requireParamProjectRole('admin'),
   zValidator('json', addMemberSchema),
   async (c) => {
-    const projectId = Number(c.req.param('projectId'));
-    const { userId, roles } = c.req.valid('json');
-    const membership = await addUserToProject(projectId, userId, roles);
-    return c.json({ membership }, 201);
+    const projectId = Number(c.req.param('projectId'))
+    const { userId, roles } = c.req.valid('json')
+    const membership = await addUserToProject(projectId, userId, roles)
+    return c.json({ membership }, 201)
   }
-);
+)
 
 // PATCH /projects/:projectId/members/:userId — update roles (admin only)
 projectRoutes.patch(
@@ -117,33 +119,30 @@ projectRoutes.patch(
   requireParamProjectRole('admin'),
   zValidator('json', updateRolesSchema),
   async (c) => {
-    const projectId = Number(c.req.param('projectId'));
-    const userId = Number(c.req.param('userId'));
-    const { roles } = c.req.valid('json');
-    const membership = await updateMemberRoles(projectId, userId, roles);
+    const projectId = Number(c.req.param('projectId'))
+    const userId = Number(c.req.param('userId'))
+    const { roles } = c.req.valid('json')
+    const membership = await updateMemberRoles(projectId, userId, roles)
 
     if (!membership) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } },
-        404
-      );
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
     }
 
-    return c.json({ membership });
+    return c.json({ membership })
   }
-);
+)
 
 // DELETE /projects/:projectId/members/:userId — remove a member (admin only)
 projectRoutes.delete('/:projectId/members/:userId', requireParamProjectRole('admin'), async (c) => {
-  const projectId = Number(c.req.param('projectId'));
-  const userId = Number(c.req.param('userId'));
-  const removed = await removeUserFromProject(projectId, userId);
+  const projectId = Number(c.req.param('projectId'))
+  const userId = Number(c.req.param('userId'))
+  const removed = await removeUserFromProject(projectId, userId)
 
   if (!removed) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404);
+    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
   }
 
-  return c.json({ success: true });
-});
+  return c.json({ success: true })
+})
 
-export { projectRoutes };
+export { projectRoutes }

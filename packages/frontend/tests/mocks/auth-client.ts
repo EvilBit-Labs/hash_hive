@@ -1,12 +1,12 @@
-import { mock } from 'bun:test';
+import { mock } from 'bun:test'
 
 interface MockSession {
-  user: { id: string; name: string; email: string; emailVerified: boolean; image: string | null };
-  session: { id: string; userId: string; token: string; expiresAt: Date };
+  user: { id: string; name: string; email: string; emailVerified: boolean; image: string | null }
+  session: { id: string; userId: string; token: string; expiresAt: Date }
 }
 
-let mockSessionData: MockSession | null = null;
-let mockIsPending = false;
+let mockSessionData: MockSession | null = null
+let mockIsPending = false
 
 /**
  * Mock the BetterAuth React client for frontend tests.
@@ -27,7 +27,7 @@ export function setupAuthClientMock() {
       signOut: mock(async () => ({ data: null, error: null })),
       $Infer: {},
     },
-  }));
+  }))
 }
 
 /** Set the mock session to an authenticated user. */
@@ -46,21 +46,21 @@ export function setMockSession(overrides?: { id?: string; email?: string; name?:
       token: 'tok-1',
       expiresAt: new Date(Date.now() + 3600000),
     },
-  };
+  }
 }
 
 /** Set the mock session to unauthenticated. */
 export function clearMockSession() {
-  mockSessionData = null;
+  mockSessionData = null
 }
 
 /** Set the mock session to pending (loading). */
 export function setMockPending(pending: boolean) {
-  mockIsPending = pending;
+  mockIsPending = pending
 }
 
 /** Reset all mock session state. */
 export function resetMockSession() {
-  mockSessionData = null;
-  mockIsPending = false;
+  mockSessionData = null
+  mockIsPending = false
 }

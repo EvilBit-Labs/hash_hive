@@ -25,62 +25,65 @@
  * doesn't see noise on every poll).
  */
 
-import { type ConnectionOptions, Worker } from 'bullmq';
-import type Redis from 'ioredis';
-import { logger } from '../../config/logger.js';
-import { QUEUE_NAMES } from '../../config/queue.js';
-import { broadcastSystemHealth } from '../../services/events.js';
+import type Redis from 'ioredis'
+
+import { type ConnectionOptions, Worker } from 'bullmq'
+
+import type { HealthMonitorJob } from '../types.js'
+
+import { logger } from '../../config/logger.js'
+import { QUEUE_NAMES } from '../../config/queue.js'
+import { broadcastSystemHealth } from '../../services/events.js'
 import {
   type ComponentHealth,
   type ComponentName,
   type ComponentStatus,
   getSystemHealth,
-} from '../../services/health.js';
-import type { HealthMonitorJob } from '../types.js';
-import { attachWorkerMetrics } from './metrics.js';
+} from '../../services/health.js'
+import { attachWorkerMetrics } from './metrics.js'
 
-const COMPONENTS: ComponentName[] = ['database', 'redis', 'minio', 'queues'];
-const REDIS_KEY_PREFIX = 'health:last-status:';
-const REDIS_KEY_TTL_SEC = 24 * 60 * 60;
+const COMPONENTS: ComponentName[] = ['database', 'redis', 'minio', 'queues']
+const REDIS_KEY_PREFIX = 'health:last-status:'
+const REDIS_KEY_TTL_SEC = 24 * 60 * 60
 
 export interface HealthMonitorDeps {
   /**
    * Reads in-memory last-known-status for the component. Returns null
    * only on a fresh-boot tick before Redis is queried.
    */
-  readMemoryStatus: (component: ComponentName) => ComponentStatus | null;
+  readMemoryStatus: (component: ComponentName) => ComponentStatus | null
   /** Writes the new status to in-memory cache. */
-  writeMemoryStatus: (component: ComponentName, status: ComponentStatus) => void;
+  writeMemoryStatus: (component: ComponentName, status: ComponentStatus) => void
   /**
    * Reads the Redis-backed status. Used only when in-memory has no prior
    * state for a component (post-boot seeding). Failure returns null, which
    * is the same as no prior state.
    */
-  readRedisStatus: (component: ComponentName) => Promise<ComponentStatus | null>;
+  readRedisStatus: (component: ComponentName) => Promise<ComponentStatus | null>
   /**
    * Best-effort write to Redis. Failure is logged but never propagates —
    * the in-memory cache is authoritative for transition detection.
    */
-  writeRedisStatus: (component: ComponentName, status: ComponentStatus) => Promise<void>;
+  writeRedisStatus: (component: ComponentName, status: ComponentStatus) => Promise<void>
   /** Reports a component status transition to subscribed clients. */
-  broadcast: (component: ComponentName, status: ComponentStatus, message?: string) => void;
+  broadcast: (component: ComponentName, status: ComponentStatus, message?: string) => void
   /** Produces the current SystemHealth report. */
-  fetchHealth: () => Promise<{ components: Record<ComponentName, ComponentHealth> }>;
+  fetchHealth: () => Promise<{ components: Record<ComponentName, ComponentHealth> }>
 }
 
 export interface HealthMonitorTickResult {
   /** Components whose status flipped this tick (broadcasts emitted). */
-  transitioned: ComponentName[];
+  transitioned: ComponentName[]
   /** Components seen for the first time since worker start (no broadcast). */
-  initialized: ComponentName[];
+  initialized: ComponentName[]
   /** Components whose status was unchanged. */
-  unchanged: ComponentName[];
+  unchanged: ComponentName[]
   /**
    * Set when the tick was aborted because `getSystemHealth()` threw. Lets
    * downstream observers (and the metrics-listener `'Job completed'` log)
    * distinguish a healthy completion from a swallowed failure.
    */
-  skipped?: { reason: string };
+  skipped?: { reason: string }
 }
 
 /**
@@ -90,60 +93,60 @@ export interface HealthMonitorTickResult {
 export async function runHealthMonitorTick(
   deps: HealthMonitorDeps
 ): Promise<HealthMonitorTickResult> {
-  let report: { components: Record<ComponentName, ComponentHealth> };
+  let report: { components: Record<ComponentName, ComponentHealth> }
   try {
-    report = await deps.fetchHealth();
+    report = await deps.fetchHealth()
   } catch (err) {
     // Swallow so a bad tick doesn't flood BullMQ's failed-jobs metric; mark
     // the result `skipped` so the completion log doesn't read as healthy.
-    logger.error({ err }, 'health monitor: getSystemHealth threw — skipping tick');
+    logger.error({ err }, 'health monitor: getSystemHealth threw — skipping tick')
     return {
       transitioned: [],
       initialized: [],
       unchanged: [],
       skipped: { reason: 'getSystemHealth threw' },
-    };
+    }
   }
 
-  const result: HealthMonitorTickResult = { transitioned: [], initialized: [], unchanged: [] };
+  const result: HealthMonitorTickResult = { transitioned: [], initialized: [], unchanged: [] }
 
   for (const component of COMPONENTS) {
-    const current = report.components[component];
+    const current = report.components[component]
 
     // In-memory is authoritative for transition detection. Only fall
     // through to Redis on a cache miss (post-boot first tick for this
     // component) so the worker survives Redis outages without losing
     // transition signal — see the module docstring for the failure
     // mode this is guarding against.
-    let last: ComponentStatus | null = deps.readMemoryStatus(component);
+    let last: ComponentStatus | null = deps.readMemoryStatus(component)
     if (last === null) {
       try {
-        last = await deps.readRedisStatus(component);
+        last = await deps.readRedisStatus(component)
       } catch (err) {
-        logger.warn({ err, component }, 'health monitor: failed to seed status from Redis');
+        logger.warn({ err, component }, 'health monitor: failed to seed status from Redis')
       }
     }
 
     if (last === null) {
-      result.initialized.push(component);
+      result.initialized.push(component)
     } else if (last !== current.status) {
-      result.transitioned.push(component);
+      result.transitioned.push(component)
       try {
-        deps.broadcast(component, current.status, current.message);
+        deps.broadcast(component, current.status, current.message)
       } catch (err) {
-        logger.error({ err, component }, 'health monitor: broadcast failed');
+        logger.error({ err, component }, 'health monitor: broadcast failed')
       }
     } else {
-      result.unchanged.push(component);
+      result.unchanged.push(component)
     }
 
     // Update in-memory first (always succeeds; authoritative).
-    deps.writeMemoryStatus(component, current.status);
+    deps.writeMemoryStatus(component, current.status)
     // Best-effort Redis mirror so the next worker boot has prior state.
     try {
-      await deps.writeRedisStatus(component, current.status);
+      await deps.writeRedisStatus(component, current.status)
     } catch (err) {
-      logger.warn({ err, component }, 'health monitor: failed to mirror status to Redis');
+      logger.warn({ err, component }, 'health monitor: failed to mirror status to Redis')
     }
   }
 
@@ -151,7 +154,7 @@ export async function runHealthMonitorTick(
   // even without a transition.
   const componentSummary = Object.fromEntries(
     Object.entries(report.components).map(([k, v]) => [k, v.status])
-  );
+  )
   logger.info(
     {
       transitioned: result.transitioned,
@@ -159,9 +162,9 @@ export async function runHealthMonitorTick(
       components: componentSummary,
     },
     'health monitor tick'
-  );
+  )
 
-  return result;
+  return result
 }
 
 /**
@@ -170,46 +173,46 @@ export async function runHealthMonitorTick(
  * shares the same cache across ticks.
  */
 function buildProductionDeps(connection: Redis): HealthMonitorDeps {
-  const memoryCache = new Map<ComponentName, ComponentStatus>();
+  const memoryCache = new Map<ComponentName, ComponentStatus>()
   return {
     readMemoryStatus: (component) => memoryCache.get(component) ?? null,
     writeMemoryStatus: (component, status) => {
-      memoryCache.set(component, status);
+      memoryCache.set(component, status)
     },
     readRedisStatus: async (component) => {
-      const value = await connection.get(`${REDIS_KEY_PREFIX}${component}`);
+      const value = await connection.get(`${REDIS_KEY_PREFIX}${component}`)
       if (value === 'healthy' || value === 'degraded' || value === 'unhealthy') {
-        return value;
+        return value
       }
-      return null;
+      return null
     },
     writeRedisStatus: async (component, status) => {
-      await connection.set(`${REDIS_KEY_PREFIX}${component}`, status, 'EX', REDIS_KEY_TTL_SEC);
+      await connection.set(`${REDIS_KEY_PREFIX}${component}`, status, 'EX', REDIS_KEY_TTL_SEC)
     },
     broadcast: (component, status, message) => {
-      broadcastSystemHealth(component, status, message);
+      broadcastSystemHealth(component, status, message)
     },
     fetchHealth: () => getSystemHealth(),
-  };
+  }
 }
 
 export function createHealthMonitorWorker(connection: Redis): Worker<HealthMonitorJob> {
-  const deps = buildProductionDeps(connection);
+  const deps = buildProductionDeps(connection)
 
   const worker = new Worker<HealthMonitorJob>(
     QUEUE_NAMES.HEALTH_MONITOR,
     async (job) => {
-      logger.debug({ jobId: job.id, triggeredAt: job.data.triggeredAt }, 'health monitor job');
-      return runHealthMonitorTick(deps);
+      logger.debug({ jobId: job.id, triggeredAt: job.data.triggeredAt }, 'health monitor job')
+      return runHealthMonitorTick(deps)
     },
     // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
     { connection: connection as unknown as ConnectionOptions }
-  );
+  )
 
   attachWorkerMetrics(worker, {
     queueName: QUEUE_NAMES.HEALTH_MONITOR,
     failureMessage: 'health monitor job failed',
-  });
+  })
 
-  return worker;
+  return worker
 }

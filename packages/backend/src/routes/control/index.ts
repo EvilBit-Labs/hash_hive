@@ -9,31 +9,33 @@
  * middleware uniformly.
  */
 
-import { Hono } from 'hono';
-import { requireApiKey } from '../../middleware/api-key.js';
-import type { AppEnv } from '../../types.js';
-import { controlAgentRoutes } from './agents.js';
-import { controlAttackRoutes } from './attacks.js';
-import { controlCampaignRoutes } from './campaigns.js';
-import { controlHashListRoutes } from './hashlists.js';
-import { controlHealthRoutes } from './health.js';
-import { controlProjectRoutes } from './projects.js';
-import { controlResourceRoutes } from './resources.js';
-import { controlStatsRoutes } from './stats.js';
-import { controlTaskRoutes } from './tasks.js';
-import { controlUserRoutes } from './users.js';
+import { Hono } from 'hono'
 
-export const controlRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
 
-controlRoutes.use('*', requireApiKey);
+import { requireApiKey } from '../../middleware/api-key.js'
+import { controlAgentRoutes } from './agents.js'
+import { controlAttackRoutes } from './attacks.js'
+import { controlCampaignRoutes } from './campaigns.js'
+import { controlHashListRoutes } from './hashlists.js'
+import { controlHealthRoutes } from './health.js'
+import { controlProjectRoutes } from './projects.js'
+import { controlResourceRoutes } from './resources.js'
+import { controlStatsRoutes } from './stats.js'
+import { controlTaskRoutes } from './tasks.js'
+import { controlUserRoutes } from './users.js'
 
-controlRoutes.route('/health', controlHealthRoutes);
-controlRoutes.route('/projects', controlProjectRoutes);
-controlRoutes.route('/users', controlUserRoutes);
-controlRoutes.route('/hashlists', controlHashListRoutes);
-controlRoutes.route('/stats', controlStatsRoutes);
-controlRoutes.route('/resources', controlResourceRoutes);
-controlRoutes.route('/campaigns', controlCampaignRoutes);
-controlRoutes.route('/attacks', controlAttackRoutes);
-controlRoutes.route('/agents', controlAgentRoutes);
-controlRoutes.route('/tasks', controlTaskRoutes);
+export const controlRoutes = new Hono<AppEnv>()
+
+controlRoutes.use('*', requireApiKey)
+
+controlRoutes.route('/health', controlHealthRoutes)
+controlRoutes.route('/projects', controlProjectRoutes)
+controlRoutes.route('/users', controlUserRoutes)
+controlRoutes.route('/hashlists', controlHashListRoutes)
+controlRoutes.route('/stats', controlStatsRoutes)
+controlRoutes.route('/resources', controlResourceRoutes)
+controlRoutes.route('/campaigns', controlCampaignRoutes)
+controlRoutes.route('/attacks', controlAttackRoutes)
+controlRoutes.route('/agents', controlAgentRoutes)
+controlRoutes.route('/tasks', controlTaskRoutes)

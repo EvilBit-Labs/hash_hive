@@ -1,18 +1,18 @@
-import { ConnectionIndicator } from '../components/features/connection-indicator';
-import { useEventsConnection } from '../components/features/events-provider';
-import { StatCard } from '../components/features/stat-card';
-import { SystemHealthCard } from '../components/features/system-health-card';
-import { EmptyState } from '../components/ui/empty-state';
-import { PageHeader } from '../components/ui/page-header';
-import { useDashboardStats } from '../hooks/use-dashboard';
-import { useUiStore } from '../stores/ui';
+import { ConnectionIndicator } from '../components/features/connection-indicator'
+import { useEventsConnection } from '../components/features/events-provider'
+import { StatCard } from '../components/features/stat-card'
+import { SystemHealthCard } from '../components/features/system-health-card'
+import { EmptyState } from '../components/ui/empty-state'
+import { PageHeader } from '../components/ui/page-header'
+import { useDashboardStats } from '../hooks/use-dashboard'
+import { useUiStore } from '../stores/ui'
 
 export function DashboardPage() {
-  const { selectedProjectId } = useUiStore();
-  const { data: stats, isLoading } = useDashboardStats();
+  const { selectedProjectId } = useUiStore()
+  const { data: stats, isLoading } = useDashboardStats()
 
   // The shared WS subscription lives in <EventsProvider> at the layout root.
-  const { connected } = useEventsConnection();
+  const { connected } = useEventsConnection()
 
   if (!selectedProjectId) {
     return (
@@ -20,7 +20,7 @@ export function DashboardPage() {
         <PageHeader>Dashboard</PageHeader>
         <EmptyState message="Select a project to view its dashboard." />
       </div>
-    );
+    )
   }
 
   return (
@@ -67,5 +67,5 @@ export function DashboardPage() {
 
       <SystemHealthCard />
     </div>
-  );
+  )
 }

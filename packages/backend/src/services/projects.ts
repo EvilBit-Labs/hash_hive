@@ -1,13 +1,14 @@
-import { projects, projectUsers } from '@hashhive/shared';
-import { and, count, desc, eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import { projects, projectUsers } from '@hashhive/shared'
+import { and, count, desc, eq } from 'drizzle-orm'
+
+import { db } from '../db/index.js'
 
 export async function createProject(data: {
-  name: string;
-  description?: string | undefined;
-  slug: string;
-  settings?: Record<string, unknown> | undefined;
-  createdBy: number;
+  name: string
+  description?: string | undefined
+  slug: string
+  settings?: Record<string, unknown> | undefined
+  createdBy: number
 }) {
   return db.transaction(async (tx) => {
     const [project] = await tx
@@ -19,10 +20,10 @@ export async function createProject(data: {
         settings: data.settings ?? {},
         createdBy: data.createdBy,
       })
-      .returning();
+      .returning()
 
     if (!project) {
-      return null;
+      return null
     }
 
     // Add the creator as admin
@@ -30,15 +31,15 @@ export async function createProject(data: {
       userId: data.createdBy,
       projectId: project.id,
       roles: ['admin'],
-    });
+    })
 
-    return project;
-  });
+    return project
+  })
 }
 
 export async function getProjectById(projectId: number) {
-  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-  return project ?? null;
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+  return project ?? null
 }
 
 export async function getUserProjects(userId: number) {
@@ -54,7 +55,7 @@ export async function getUserProjects(userId: number) {
     })
     .from(projectUsers)
     .innerJoin(projects, eq(projectUsers.projectId, projects.id))
-    .where(eq(projectUsers.userId, userId));
+    .where(eq(projectUsers.userId, userId))
 }
 
 /**
@@ -78,8 +79,8 @@ export async function findUserProjectById(userId: number, projectId: number) {
     .from(projectUsers)
     .innerJoin(projects, eq(projectUsers.projectId, projects.id))
     .where(and(eq(projectUsers.userId, userId), eq(projects.id, projectId)))
-    .limit(1);
-  return row ?? null;
+    .limit(1)
+  return row ?? null
 }
 
 /**
@@ -91,7 +92,7 @@ export async function getUserProjectsPaginated(
   userId: number,
   opts: { limit: number; offset: number }
 ) {
-  const whereClause = eq(projectUsers.userId, userId);
+  const whereClause = eq(projectUsers.userId, userId)
   const [items, countResult] = await Promise.all([
     db
       .select({
@@ -110,43 +111,43 @@ export async function getUserProjectsPaginated(
       .limit(opts.limit)
       .offset(opts.offset),
     db.select({ value: count() }).from(projectUsers).where(whereClause),
-  ]);
-  return { items, total: Number(countResult[0]?.value ?? 0) };
+  ])
+  return { items, total: Number(countResult[0]?.value ?? 0) }
 }
 
 export async function updateProject(
   projectId: number,
   data: {
-    name?: string | undefined;
-    description?: string | undefined;
-    settings?: Record<string, unknown> | undefined;
+    name?: string | undefined
+    description?: string | undefined
+    settings?: Record<string, unknown> | undefined
   }
 ) {
   const [updated] = await db
     .update(projects)
     .set({ ...data, updatedAt: new Date() })
     .where(eq(projects.id, projectId))
-    .returning();
+    .returning()
 
-  return updated ?? null;
+  return updated ?? null
 }
 
 export async function addUserToProject(projectId: number, userId: number, roles: string[]) {
   const [membership] = await db
     .insert(projectUsers)
     .values({ projectId, userId, roles })
-    .returning();
+    .returning()
 
-  return membership ?? null;
+  return membership ?? null
 }
 
 export async function removeUserFromProject(projectId: number, userId: number) {
   const [removed] = await db
     .delete(projectUsers)
     .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
-    .returning();
+    .returning()
 
-  return removed ?? null;
+  return removed ?? null
 }
 
 export async function getProjectMembers(projectId: number) {
@@ -157,7 +158,7 @@ export async function getProjectMembers(projectId: number) {
       createdAt: projectUsers.createdAt,
     })
     .from(projectUsers)
-    .where(eq(projectUsers.projectId, projectId));
+    .where(eq(projectUsers.projectId, projectId))
 }
 
 export async function updateMemberRoles(projectId: number, userId: number, roles: string[]) {
@@ -165,7 +166,7 @@ export async function updateMemberRoles(projectId: number, userId: number, roles
     .update(projectUsers)
     .set({ roles })
     .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
-    .returning();
+    .returning()
 
-  return updated ?? null;
+  return updated ?? null
 }

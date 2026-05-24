@@ -1,17 +1,18 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { screen } from '@testing-library/react';
-import { HardwareProfileCard } from '../../src/components/features/hardware-profile-card';
-import { cleanupAll, renderWithProviders } from '../test-utils';
+import { screen } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'bun:test'
+
+import { HardwareProfileCard } from '../../src/components/features/hardware-profile-card'
+import { cleanupAll, renderWithProviders } from '../test-utils'
 
 // cleanupAll() also resets Zustand stores, which is the project-wide
 // convention; bare `cleanup` only touches the DOM.
-afterEach(cleanupAll);
+afterEach(cleanupAll)
 
 describe('HardwareProfileCard', () => {
   it('renders empty state when profile is null', () => {
-    renderWithProviders(<HardwareProfileCard profile={null} />);
-    expect(screen.getByText('No hardware profile reported yet.')).toBeDefined();
-  });
+    renderWithProviders(<HardwareProfileCard profile={null} />)
+    expect(screen.getByText('No hardware profile reported yet.')).toBeDefined()
+  })
 
   it('renders known shape with OS, CPU, RAM, GPU sections', () => {
     renderWithProviders(
@@ -24,26 +25,26 @@ describe('HardwareProfileCard', () => {
           hashcatVersion: '6.2.6',
         }}
       />
-    );
+    )
 
-    expect(screen.getByText('OS')).toBeDefined();
-    expect(screen.getByText('Linux')).toBeDefined();
-    expect(screen.getByText('CPU')).toBeDefined();
-    expect(screen.getByText('AMD Ryzen 9 7950X')).toBeDefined();
-    expect(screen.getByText('RAM')).toBeDefined();
-    expect(screen.getByText('GPUs (1)')).toBeDefined();
-    expect(screen.getByText('RTX 4090')).toBeDefined();
-    expect(screen.getByText('6.2.6')).toBeDefined();
-  });
+    expect(screen.getByText('OS')).toBeDefined()
+    expect(screen.getByText('Linux')).toBeDefined()
+    expect(screen.getByText('CPU')).toBeDefined()
+    expect(screen.getByText('AMD Ryzen 9 7950X')).toBeDefined()
+    expect(screen.getByText('RAM')).toBeDefined()
+    expect(screen.getByText('GPUs (1)')).toBeDefined()
+    expect(screen.getByText('RTX 4090')).toBeDefined()
+    expect(screen.getByText('6.2.6')).toBeDefined()
+  })
 
   it('renders raw profile disclosure for unknown shapes', () => {
-    renderWithProviders(<HardwareProfileCard profile={{ legacyKey: 'someValue' }} />);
-    expect(screen.getByText('Raw profile (unknown shape)')).toBeDefined();
-  });
+    renderWithProviders(<HardwareProfileCard profile={{ legacyKey: 'someValue' }} />)
+    expect(screen.getByText('Raw profile (unknown shape)')).toBeDefined()
+  })
 
   it('renders GPU empty message when gpus is an empty array', () => {
-    renderWithProviders(<HardwareProfileCard profile={{ gpus: [] }} />);
-    expect(screen.getByText('GPUs (0)')).toBeDefined();
-    expect(screen.getByText('No GPUs reported.')).toBeDefined();
-  });
-});
+    renderWithProviders(<HardwareProfileCard profile={{ gpus: [] }} />)
+    expect(screen.getByText('GPUs (0)')).toBeDefined()
+    expect(screen.getByText('No GPUs reported.')).toBeDefined()
+  })
+})

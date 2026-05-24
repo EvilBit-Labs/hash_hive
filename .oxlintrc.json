@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import"],
+  "categories": {
+    "correctness": "error",
+    "perf": "warn",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "import/no-named-as-default-member": "off",
+    "import/no-unassigned-import": "off",
+    "react/jsx-no-useless-fragment": "warn"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "**/dist/**",
+    "**/.turbo/**",
+    "**/node_modules/**",
+    "test-results/**",
+    "playwright-report/**",
+    ".playwright-mcp/**",
+    "packages/shared/src/db/migrations/**",
+    "packages/backend/dist/**"
+  ],
+  "overrides": [
+    {
+      "files": ["tests/**", "**/tests/**", "e2e/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "typescript/no-unsafe-type-assertion": "off",
+        "no-await-in-loop": "off",
+        "typescript/no-misused-spread": "off",
+        "oxc/no-map-spread": "off",
+        "no-shadow": "off",
+        "typescript/no-unnecessary-type-assertion": "off"
+      }
+    },
+    {
+      "files": ["scripts/**", "packages/*/scripts/**"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
+    },
+    {
+      "files": ["packages/frontend/e2e/**"],
+      "rules": {
+        "unicorn/consistent-function-scoping": "off"
+      }
+    }
+  ]
+}

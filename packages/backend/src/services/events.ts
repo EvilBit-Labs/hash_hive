@@ -1,5 +1,6 @@
-import { logger } from '../config/logger.js';
-import type { ComponentName, ComponentStatus } from './health.js';
+import type { ComponentName, ComponentStatus } from './health.js'
+
+import { logger } from '../config/logger.js'
 
 /**
  * FUTURE: Redis Pub/Sub Extension for Multi-Instance Deployments
@@ -32,7 +33,7 @@ export type ProjectEventType =
   | 'campaign_status'
   | 'task_update'
   | 'crack_result'
-  | 'resource_update';
+  | 'resource_update'
 
 /**
  * System-wide event types — `broadcastSystemEvent()` bypasses project
@@ -40,9 +41,9 @@ export type ProjectEventType =
  * that affect every operator regardless of which project they have
  * selected (system health, future global maintenance notices, etc.).
  */
-export type SystemEventType = 'system_health';
+export type SystemEventType = 'system_health'
 
-export type EventType = ProjectEventType | SystemEventType;
+export type EventType = ProjectEventType | SystemEventType
 
 /**
  * Sentinel projectId carried on AppEvent payloads for system-wide events.
@@ -54,8 +55,8 @@ export type EventType = ProjectEventType | SystemEventType;
  * mismatched (type, projectId) pairs at compile time — see AppEvent
  * below.
  */
-export const SYSTEM_EVENT_PROJECT_ID = 0 as const;
-export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID;
+export const SYSTEM_EVENT_PROJECT_ID = 0 as const
+export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID
 
 /**
  * Discriminated union over event scope. Project events carry a real
@@ -77,26 +78,26 @@ export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID;
  */
 export type AppEvent =
   | {
-      type: ProjectEventType;
-      projectId: number;
-      data: Record<string, unknown>;
-      timestamp: string;
+      type: ProjectEventType
+      projectId: number
+      data: Record<string, unknown>
+      timestamp: string
     }
   | {
-      type: SystemEventType;
-      projectId: SystemEventProjectId;
-      data: Record<string, unknown>;
-      timestamp: string;
-    };
+      type: SystemEventType
+      projectId: SystemEventProjectId
+      data: Record<string, unknown>
+      timestamp: string
+    }
 
-export type ProjectAppEvent = Extract<AppEvent, { type: ProjectEventType }>;
+export type ProjectAppEvent = Extract<AppEvent, { type: ProjectEventType }>
 
 // ─── Connection Registry ────────────────────────────────────────────
 
 interface WebSocketClient {
-  ws: { send: (data: string) => void; readyState: number };
-  projectIds: Set<number>;
-  subscribedTypes: Set<EventType>;
+  ws: { send: (data: string) => void; readyState: number }
+  projectIds: Set<number>
+  subscribedTypes: Set<EventType>
 }
 
 // MUST stay in sync with the EventType union above. There's no way to
@@ -111,62 +112,62 @@ const ALL_EVENT_TYPES: EventType[] = [
   'crack_result',
   'resource_update',
   'system_health',
-];
+]
 
-let clientIdCounter = 0;
-const clients = new Map<number, WebSocketClient>();
+let clientIdCounter = 0
+const clients = new Map<number, WebSocketClient>()
 
 export function registerClient(
   ws: WebSocketClient['ws'],
   projectIds: number[],
   eventTypes?: EventType[]
 ): number {
-  const id = ++clientIdCounter;
+  const id = ++clientIdCounter
   clients.set(id, {
     ws,
     projectIds: new Set(projectIds),
     subscribedTypes: new Set(eventTypes ?? ALL_EVENT_TYPES),
-  });
-  logger.debug({ clientId: id, projectIds, eventTypes }, 'WebSocket client registered');
-  return id;
+  })
+  logger.debug({ clientId: id, projectIds, eventTypes }, 'WebSocket client registered')
+  return id
 }
 
 export function unregisterClient(clientId: number) {
-  clients.delete(clientId);
-  logger.debug({ clientId }, 'WebSocket client unregistered');
+  clients.delete(clientId)
+  logger.debug({ clientId }, 'WebSocket client unregistered')
 }
 
 export function getClientCount(): number {
-  return clients.size;
+  return clients.size
 }
 
 // ─── Event Broadcasting ─────────────────────────────────────────────
 
 // Throttle: track last emit time per event type + project
-const lastEmitTimes = new Map<string, number>();
-const THROTTLE_MS = 250; // Max 4 events/sec per type+project
+const lastEmitTimes = new Map<string, number>()
+const THROTTLE_MS = 250 // Max 4 events/sec per type+project
 
 // Throttle map maintenance: how often to prune entries that no longer
 // matter (background pulse) and what age qualifies an entry for pruning.
 // Both are 60s so the worst-case dwell of an inactive throttle key is
 // ~120s — short enough for a few hundred KB cap, long enough to absorb
 // bursts without thrashing.
-const THROTTLE_PRUNE_INTERVAL_MS = 60_000;
-const THROTTLE_ENTRY_MAX_AGE_MS = 60_000;
+const THROTTLE_PRUNE_INTERVAL_MS = 60_000
+const THROTTLE_ENTRY_MAX_AGE_MS = 60_000
 
 // Periodically prune stale entries to prevent unbounded growth.
 // `.unref()` so the timer doesn't keep the event loop alive on its own —
 // a Node process with no other pending work (test teardown, graceful
 // shutdown) can exit cleanly instead of waiting for the next pulse.
 const pruneInterval = setInterval(() => {
-  const cutoff = Date.now() - THROTTLE_ENTRY_MAX_AGE_MS;
+  const cutoff = Date.now() - THROTTLE_ENTRY_MAX_AGE_MS
   for (const [key, time] of lastEmitTimes) {
     if (time < cutoff) {
-      lastEmitTimes.delete(key);
+      lastEmitTimes.delete(key)
     }
   }
-}, THROTTLE_PRUNE_INTERVAL_MS);
-pruneInterval.unref();
+}, THROTTLE_PRUNE_INTERVAL_MS)
+pruneInterval.unref()
 
 /**
  * Test-only: clears the module-level client registry and throttle map
@@ -175,9 +176,9 @@ pruneInterval.unref();
  * WS subscribers.
  */
 export function __resetEventsForTesting(): void {
-  clients.clear();
-  lastEmitTimes.clear();
-  clientIdCounter = 0;
+  clients.clear()
+  lastEmitTimes.clear()
+  clientIdCounter = 0
 }
 
 /**
@@ -188,49 +189,49 @@ export function __resetEventsForTesting(): void {
  * SYSTEM_EVENT_PROJECT_ID in its projectIds set.
  */
 export function emit(event: ProjectAppEvent) {
-  const throttleKey = `${event.type}:${event.projectId}`;
-  const now = Date.now();
-  const lastEmit = lastEmitTimes.get(throttleKey) ?? 0;
+  const throttleKey = `${event.type}:${event.projectId}`
+  const now = Date.now()
+  const lastEmit = lastEmitTimes.get(throttleKey) ?? 0
 
   if (now - lastEmit < THROTTLE_MS) {
-    return; // Throttled
+    return // Throttled
   }
-  lastEmitTimes.set(throttleKey, now);
+  lastEmitTimes.set(throttleKey, now)
 
-  const payload = JSON.stringify(event);
-  let delivered = 0;
+  const payload = JSON.stringify(event)
+  let delivered = 0
 
   for (const [clientId, client] of clients) {
     // Check project scope
     if (!client.projectIds.has(event.projectId)) {
-      continue;
+      continue
     }
 
     // Check event type subscription
     if (!client.subscribedTypes.has(event.type)) {
-      continue;
+      continue
     }
 
     // Check connection is open (WebSocket OPEN = 1)
     if (client.ws.readyState !== 1) {
-      clients.delete(clientId);
-      continue;
+      clients.delete(clientId)
+      continue
     }
 
     try {
-      client.ws.send(payload);
-      delivered++;
+      client.ws.send(payload)
+      delivered++
     } catch (err) {
       logger.warn(
         { err, clientId, type: event.type, projectId: event.projectId },
         'WebSocket send failed; dropping client'
-      );
-      clients.delete(clientId);
+      )
+      clients.delete(clientId)
     }
   }
 
   if (delivered > 0) {
-    logger.debug({ type: event.type, projectId: event.projectId, delivered }, 'event broadcasted');
+    logger.debug({ type: event.type, projectId: event.projectId, delivered }, 'event broadcasted')
   }
 }
 
@@ -247,7 +248,7 @@ export function emitAgentError(projectId: number, agentId: number, severity: str
     projectId,
     data: { agentId, severity },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 export function emitAgentStatus(projectId: number, agentId: number, status: string) {
@@ -256,7 +257,7 @@ export function emitAgentStatus(projectId: number, agentId: number, status: stri
     projectId,
     data: { agentId, status },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 export function emitCampaignStatus(projectId: number, campaignId: number, status: string) {
@@ -265,7 +266,7 @@ export function emitCampaignStatus(projectId: number, campaignId: number, status
     projectId,
     data: { campaignId, status },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 export function emitTaskUpdate(
@@ -273,9 +274,9 @@ export function emitTaskUpdate(
   taskId: number,
   status: string,
   options?: {
-    agentId?: number | null | undefined;
-    campaignId?: number | null | undefined;
-    progress?: Record<string, unknown> | undefined;
+    agentId?: number | null | undefined
+    campaignId?: number | null | undefined
+    progress?: Record<string, unknown> | undefined
   }
 ) {
   emit({
@@ -293,7 +294,7 @@ export function emitTaskUpdate(
       ...(options?.progress ? { progress: options.progress } : {}),
     },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 export function emitCrackResult(projectId: number, hashListId: number, count: number) {
@@ -302,7 +303,7 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
     projectId,
     data: { hashListId, crackedCount: count },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 // ─── System-wide Broadcast (issue #109) ─────────────────────────────
@@ -331,29 +332,29 @@ export function broadcastSystemEvent(type: SystemEventType, data: Record<string,
     projectId: SYSTEM_EVENT_PROJECT_ID,
     data,
     timestamp: new Date().toISOString(),
-  };
-  const payload = JSON.stringify(event);
-  let delivered = 0;
+  }
+  const payload = JSON.stringify(event)
+  let delivered = 0
 
   for (const [clientId, client] of clients) {
     if (!client.subscribedTypes.has(type)) {
-      continue;
+      continue
     }
     if (client.ws.readyState !== 1) {
-      clients.delete(clientId);
-      continue;
+      clients.delete(clientId)
+      continue
     }
     try {
-      client.ws.send(payload);
-      delivered++;
+      client.ws.send(payload)
+      delivered++
     } catch (err) {
-      logger.warn({ err, clientId, type }, 'WebSocket send failed; dropping client');
-      clients.delete(clientId);
+      logger.warn({ err, clientId, type }, 'WebSocket send failed; dropping client')
+      clients.delete(clientId)
     }
   }
 
   if (delivered > 0) {
-    logger.debug({ type, delivered }, 'system event broadcasted');
+    logger.debug({ type, delivered }, 'system event broadcasted')
   }
 }
 
@@ -371,5 +372,5 @@ export function broadcastSystemHealth(
     component,
     status,
     ...(message ? { message } : {}),
-  });
+  })
 }

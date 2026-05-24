@@ -9,10 +9,11 @@ import {
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { env } from './env.js';
-import { logger } from './logger.js';
+} from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+
+import { env } from './env.js'
+import { logger } from './logger.js'
 
 export const s3 = new S3Client({
   endpoint: env.S3_ENDPOINT,
@@ -22,7 +23,7 @@ export const s3 = new S3Client({
     secretAccessKey: env.S3_SECRET_KEY,
   },
   forcePathStyle: true,
-});
+})
 
 export async function uploadFile(
   key: string,
@@ -37,7 +38,7 @@ export async function uploadFile(
       Body: body,
       ContentType: contentType,
     })
-  );
+  )
 }
 
 export async function downloadFile(key: string, bucket?: string) {
@@ -46,7 +47,7 @@ export async function downloadFile(key: string, bucket?: string) {
       Bucket: bucket ?? env.S3_BUCKET,
       Key: key,
     })
-  );
+  )
 }
 
 export async function deleteFile(key: string, bucket?: string) {
@@ -55,11 +56,11 @@ export async function deleteFile(key: string, bucket?: string) {
       Bucket: bucket ?? env.S3_BUCKET,
       Key: key,
     })
-  );
+  )
 }
 
 function sanitizeFilename(filename: string): string {
-  return filename.replace(/["\r\n;]/g, '_');
+  return filename.replace(/["\r\n;]/g, '_')
 }
 
 export async function getPresignedUrl(
@@ -67,7 +68,7 @@ export async function getPresignedUrl(
   expiresIn = 3600,
   opts?: { bucket?: string; filename?: string }
 ): Promise<string> {
-  const safeFilename = opts?.filename ? sanitizeFilename(opts.filename) : undefined;
+  const safeFilename = opts?.filename ? sanitizeFilename(opts.filename) : undefined
   return getSignedUrl(
     s3,
     new GetObjectCommand({
@@ -78,30 +79,36 @@ export async function getPresignedUrl(
         : {}),
     }),
     { expiresIn }
-  );
+  )
 }
 
-export async function checkMinioHealth(signal?: AbortSignal): Promise<{
-  status: 'connected' | 'disconnected';
-  bucket: string;
+/**
+ * Probes the configured object store (SeaweedFS in dev / air-gapped prod,
+ * AWS S3 anywhere else) by issuing a `HeadBucket` against `S3_BUCKET`.
+ * Returns `{status, bucket}` so the caller's structured log carries the
+ * bucket name regardless of outcome.
+ */
+export async function checkObjectStoreHealth(signal?: AbortSignal): Promise<{
+  status: 'connected' | 'disconnected'
+  bucket: string
 }> {
   try {
     // Only attach `abortSignal` when actually provided —
     // exactOptionalPropertyTypes refuses `{ abortSignal: undefined }`.
-    const opts = signal ? { abortSignal: signal } : undefined;
-    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }), opts);
-    return { status: 'connected', bucket: env.S3_BUCKET };
+    const opts = signal ? { abortSignal: signal } : undefined
+    await s3.send(new HeadBucketCommand({ Bucket: env.S3_BUCKET }), opts)
+    return { status: 'connected', bucket: env.S3_BUCKET }
   } catch (err) {
     // Suppress noisy timeout aborts (the probe wrapper already logs and
     // marks the component unhealthy). Log everything else server-side
     // so a persistent S3/auth/bucket regression is visible in
     // production logs, not silently masked behind a 'disconnected'
     // reading.
-    const isAbort = err instanceof Error && err.name === 'AbortError';
+    const isAbort = err instanceof Error && err.name === 'AbortError'
     if (!isAbort) {
-      logger.warn({ err, bucket: env.S3_BUCKET }, 'minio health check failed');
+      logger.warn({ err, bucket: env.S3_BUCKET }, 'object store health check failed')
     }
-    return { status: 'disconnected', bucket: env.S3_BUCKET };
+    return { status: 'disconnected', bucket: env.S3_BUCKET }
   }
 }
 
@@ -116,11 +123,11 @@ export async function createMultipartUpload(
       Key: key,
       ContentType: contentType,
     })
-  );
+  )
   if (!response.UploadId) {
-    throw new Error('Failed to initiate multipart upload: no UploadId returned');
+    throw new Error('Failed to initiate multipart upload: no UploadId returned')
   }
-  return response.UploadId;
+  return response.UploadId
 }
 
 export async function uploadPart(
@@ -139,11 +146,11 @@ export async function uploadPart(
       Body: body,
       ContentLength: body.byteLength,
     })
-  );
+  )
   if (!response.ETag) {
-    throw new Error(`No ETag returned for part ${partNumber}`);
+    throw new Error(`No ETag returned for part ${partNumber}`)
   }
-  return response.ETag;
+  return response.ETag
 }
 
 export async function completeMultipartUpload(
@@ -163,7 +170,7 @@ export async function completeMultipartUpload(
           .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
       },
     })
-  );
+  )
 }
 
 export async function abortMultipartUpload(
@@ -177,7 +184,7 @@ export async function abortMultipartUpload(
       Key: key,
       UploadId: uploadId,
     })
-  );
+  )
 }
 
 export async function listParts(
@@ -185,8 +192,8 @@ export async function listParts(
   uploadId: string,
   bucket?: string
 ): Promise<Array<{ partNumber: number; etag: string; size: number }>> {
-  const allParts: Array<{ partNumber: number; etag: string; size: number }> = [];
-  let partNumberMarker: string | undefined;
+  const allParts: Array<{ partNumber: number; etag: string; size: number }> = []
+  let partNumberMarker: string | undefined
 
   while (true) {
     const response = await s3.send(
@@ -196,7 +203,7 @@ export async function listParts(
         UploadId: uploadId,
         PartNumberMarker: partNumberMarker,
       })
-    );
+    )
 
     for (const part of response.Parts ?? []) {
       if (part.PartNumber != null && part.ETag) {
@@ -204,14 +211,14 @@ export async function listParts(
           partNumber: part.PartNumber,
           etag: part.ETag,
           size: part.Size ?? 0,
-        });
+        })
       }
     }
 
-    if (!response.IsTruncated) break;
+    if (!response.IsTruncated) break
     partNumberMarker =
-      response.NextPartNumberMarker != null ? String(response.NextPartNumberMarker) : undefined;
+      response.NextPartNumberMarker != null ? String(response.NextPartNumberMarker) : undefined
   }
 
-  return allParts;
+  return allParts
 }

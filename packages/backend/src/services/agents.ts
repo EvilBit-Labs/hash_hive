@@ -4,38 +4,40 @@ import type {
   AgentHeartbeatError,
   AgentWorstSeverity,
   SelectAgentBenchmark,
-} from '@hashhive/shared';
-import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { emitAgentError, emitAgentStatus } from './events.js';
+} from '@hashhive/shared'
+
+import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { emitAgentError, emitAgentStatus } from './events.js'
 
 // SelectAgent from @hashhive/shared is the zod-strict shape (jsonb as Json),
 // but Drizzle's row selection narrows jsonb to `unknown`. Deriving from
 // getAgentById's return shape keeps AgentListRow assignable from the raw row
 // without bouncing through a Json cast.
-type SelectedAgent = NonNullable<Awaited<ReturnType<typeof getAgentById>>>;
+type SelectedAgent = NonNullable<Awaited<ReturnType<typeof getAgentById>>>
 
 export type AgentListRow = SelectedAgent & {
-  errorCount24h: number;
-  worstSeverity24h: AgentWorstSeverity;
-  currentTask: AgentCurrentTask | null;
-};
+  errorCount24h: number
+  worstSeverity24h: AgentWorstSeverity
+  currentTask: AgentCurrentTask | null
+}
 
 // currentTask on the list response only shows tasks the agent is actively
 // executing — pending tasks (queued for an agent but not yet started) are not
 // surfaced here. The detail page's listTasksByAgent intentionally includes
 // 'pending' (see AGENT_TASK_ACTIVE_STATUSES in services/tasks.ts) so operators
 // can see the full queue for one agent.
-const ACTIVE_TASK_STATUSES = ['assigned', 'running'] as const;
+const ACTIVE_TASK_STATUSES = ['assigned', 'running'] as const
 
 // Severity policy for the 24h error badge.
 // `info`/`debug`/`notice` and other unknown severities intentionally do not
 // contribute to the count or the badge color — the SQL `count(*) FILTER`
 // applies the same allowlist, so the two layers can't drift.
-export const FATAL_SEVERITIES = ['fatal', 'critical', 'error'];
-export const WARNING_SEVERITIES = ['warning'];
+export const FATAL_SEVERITIES = ['fatal', 'critical', 'error']
+export const WARNING_SEVERITIES = ['warning']
 
 /**
  * Classify a severity-allowlist hit pair into the three-state badge.
@@ -43,12 +45,12 @@ export const WARNING_SEVERITIES = ['warning'];
  * the database.
  */
 export function classifyWorstSeverity(opts: {
-  hasFatal: boolean;
-  hasWarning: boolean;
+  hasFatal: boolean
+  hasWarning: boolean
 }): AgentWorstSeverity {
-  if (opts.hasFatal) return 'fatal';
-  if (opts.hasWarning) return 'warning';
-  return null;
+  if (opts.hasFatal) return 'fatal'
+  if (opts.hasWarning) return 'warning'
+  return null
 }
 
 /**
@@ -57,35 +59,35 @@ export function classifyWorstSeverity(opts: {
  * aggregateRecentErrors so tests can pin the policy without a database.
  */
 export function classifyRecentErrors(rows: { severity: string }[]): {
-  count: number;
-  worstSeverity: AgentWorstSeverity;
+  count: number
+  worstSeverity: AgentWorstSeverity
 } {
-  let hasFatal = false;
-  let hasWarning = false;
-  let count = 0;
+  let hasFatal = false
+  let hasWarning = false
+  let count = 0
   for (const row of rows) {
-    const lower = row.severity.toLowerCase();
-    const isFatal = FATAL_SEVERITIES.includes(lower);
-    const isWarning = WARNING_SEVERITIES.includes(lower);
-    if (isFatal || isWarning) count += 1;
-    if (isFatal) hasFatal = true;
-    if (isWarning) hasWarning = true;
+    const lower = row.severity.toLowerCase()
+    const isFatal = FATAL_SEVERITIES.includes(lower)
+    const isWarning = WARNING_SEVERITIES.includes(lower)
+    if (isFatal || isWarning) count += 1
+    if (isFatal) hasFatal = true
+    if (isWarning) hasWarning = true
   }
   return {
     count,
     worstSeverity: classifyWorstSeverity({ hasFatal, hasWarning }),
-  };
+  }
 }
 
 interface ActiveTaskRow {
-  taskId: number;
-  status: string;
-  campaignId: number;
-  campaignName: string;
-  attackId: number;
-  attackMode: number;
-  startedAt?: Date | string | null | undefined;
-  assignedAt?: Date | string | null | undefined;
+  taskId: number
+  status: string
+  campaignId: number
+  campaignName: string
+  attackId: number
+  attackMode: number
+  startedAt?: Date | string | null | undefined
+  assignedAt?: Date | string | null | undefined
 }
 
 /**
@@ -97,24 +99,24 @@ export function pickCurrentTaskByAgent(
   rows: (ActiveTaskRow & { agentId: number | null })[]
 ): Map<number, AgentCurrentTask> {
   const ts = (v: Date | string | null | undefined): number => {
-    if (!v) return 0;
-    if (v instanceof Date) return v.getTime();
-    const t = new Date(v).getTime();
-    return Number.isFinite(t) ? t : 0;
-  };
+    if (!v) return 0
+    if (v instanceof Date) return v.getTime()
+    const t = new Date(v).getTime()
+    return Number.isFinite(t) ? t : 0
+  }
   const sorted = [...rows]
     .filter((r): r is ActiveTaskRow & { agentId: number } => r.agentId !== null)
     .sort((a, b) => {
-      const statusRank = (s: string) => (s === 'running' ? 0 : 1);
-      const byStatus = statusRank(a.status) - statusRank(b.status);
-      if (byStatus !== 0) return byStatus;
-      const byStarted = ts(b.startedAt) - ts(a.startedAt);
-      if (byStarted !== 0) return byStarted;
-      return ts(b.assignedAt) - ts(a.assignedAt);
-    });
-  const map = new Map<number, AgentCurrentTask>();
+      const statusRank = (s: string) => (s === 'running' ? 0 : 1)
+      const byStatus = statusRank(a.status) - statusRank(b.status)
+      if (byStatus !== 0) return byStatus
+      const byStarted = ts(b.startedAt) - ts(a.startedAt)
+      if (byStarted !== 0) return byStarted
+      return ts(b.assignedAt) - ts(a.assignedAt)
+    })
+  const map = new Map<number, AgentCurrentTask>()
   for (const row of sorted) {
-    if (map.has(row.agentId)) continue;
+    if (map.has(row.agentId)) continue
     map.set(row.agentId, {
       id: row.taskId,
       campaignId: row.campaignId,
@@ -122,42 +124,42 @@ export function pickCurrentTaskByAgent(
       attackId: row.attackId,
       attackMode: row.attackMode,
       status: row.status,
-    });
+    })
   }
-  return map;
+  return map
 }
 
 export async function getAgentById(agentId: number) {
-  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
-  return agent ?? null;
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1)
+  return agent ?? null
 }
 
 export async function listAgents(filters: {
-  projectId?: number | undefined;
-  status?: string | undefined;
-  limit?: number | undefined;
-  offset?: number | undefined;
+  projectId?: number | undefined
+  status?: string | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }): Promise<{
-  agents: AgentListRow[];
-  total: number;
-  limit: number;
-  offset: number;
+  agents: AgentListRow[]
+  total: number
+  limit: number
+  offset: number
 }> {
-  let query = db.select().from(agents).$dynamic();
+  let query = db.select().from(agents).$dynamic()
 
-  const conditions = [];
+  const conditions = []
   if (filters.projectId) {
-    conditions.push(eq(agents.projectId, filters.projectId));
+    conditions.push(eq(agents.projectId, filters.projectId))
   }
   if (filters.status) {
-    conditions.push(eq(agents.status, filters.status));
+    conditions.push(eq(agents.status, filters.status))
   }
   if (conditions.length > 0) {
-    query = query.where(and(...conditions));
+    query = query.where(and(...conditions))
   }
 
-  const limit = filters.limit ?? 50;
-  const offset = filters.offset ?? 0;
+  const limit = filters.limit ?? 50
+  const offset = filters.offset ?? 0
 
   const [results, countResult] = await Promise.all([
     query.limit(limit).offset(offset).orderBy(desc(agents.lastSeenAt)),
@@ -165,42 +167,42 @@ export async function listAgents(filters: {
       .select({ count: sql<number>`count(*)` })
       .from(agents)
       .where(conditions.length > 0 ? and(...conditions) : undefined),
-  ]);
+  ])
 
-  const agentIds = results.map((a) => a.id);
+  const agentIds = results.map((a) => a.id)
   const [errorAggregates, currentTasks] = await Promise.all([
     aggregateRecentErrors(agentIds),
     fetchCurrentTasks(agentIds),
-  ]);
+  ])
 
   const enriched: AgentListRow[] = results.map((agent) => ({
     ...agent,
     errorCount24h: errorAggregates.get(agent.id)?.count ?? 0,
     worstSeverity24h: errorAggregates.get(agent.id)?.worstSeverity ?? null,
     currentTask: currentTasks.get(agent.id) ?? null,
-  }));
+  }))
 
   return {
     agents: enriched,
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
-  };
+  }
 }
 
 async function aggregateRecentErrors(
   agentIds: number[]
 ): Promise<Map<number, { count: number; worstSeverity: AgentWorstSeverity }>> {
-  const map = new Map<number, { count: number; worstSeverity: AgentWorstSeverity }>();
+  const map = new Map<number, { count: number; worstSeverity: AgentWorstSeverity }>()
   if (agentIds.length === 0) {
-    return map;
+    return map
   }
 
   // Server-side aggregation: bounded wire size at one row per agent, regardless
   // of how many errors a noisy agent emits. Unknown severities (info/debug/...)
   // are excluded from `count` and from the `hasWarning` / `hasFatal` flags.
-  const fatalArray = sql`ARRAY[${sql.raw(FATAL_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
-  const warningArray = sql`ARRAY[${sql.raw(WARNING_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`;
+  const fatalArray = sql`ARRAY[${sql.raw(FATAL_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`
+  const warningArray = sql`ARRAY[${sql.raw(WARNING_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`
 
   const rows = await db
     .select({
@@ -216,29 +218,29 @@ async function aggregateRecentErrors(
         sql`${agentErrors.createdAt} >= now() - interval '24 hours'`
       )
     )
-    .groupBy(agentErrors.agentId);
+    .groupBy(agentErrors.agentId)
 
   for (const row of rows) {
-    const count = Number(row.count ?? 0);
-    if (count === 0) continue;
+    const count = Number(row.count ?? 0)
+    if (count === 0) continue
     map.set(row.agentId, {
       count,
       worstSeverity: classifyWorstSeverity({
         hasFatal: Boolean(row.hasFatal),
         hasWarning: Boolean(row.hasWarning),
       }),
-    });
+    })
   }
 
-  return map;
+  return map
 }
 
 async function fetchCurrentTasks(
   agentIds: number[]
 ): Promise<Map<number, AgentListRow['currentTask']>> {
-  const map = new Map<number, AgentListRow['currentTask']>();
+  const map = new Map<number, AgentListRow['currentTask']>()
   if (agentIds.length === 0) {
-    return map;
+    return map
   }
 
   const rows = await db
@@ -265,14 +267,14 @@ async function fetchCurrentTasks(
       sql`CASE WHEN ${tasks.status} = 'running' THEN 0 ELSE 1 END`,
       desc(tasks.startedAt),
       desc(tasks.assignedAt)
-    );
+    )
 
-  const selected = pickCurrentTaskByAgent(rows);
+  const selected = pickCurrentTaskByAgent(rows)
   for (const [agentId, task] of selected) {
-    map.set(agentId, task);
+    map.set(agentId, task)
   }
 
-  return map;
+  return map
 }
 
 /**
@@ -286,12 +288,12 @@ async function fetchCurrentTasks(
  *   different from the agent's current row (e.g., `'offline' -> 'online'`
  *   when the agent comes back from the heartbeat-monitor sweep).
  */
-export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status';
+export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status'
 
 // Anchored to `AgentHeartbeat['status']` so the service layer cannot
 // drift from the zod boundary.
-type HeartbeatStatusLiteral = AgentHeartbeat['status'];
-type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
+type HeartbeatStatusLiteral = AgentHeartbeat['status']
+type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error'
 
 /**
  * Discriminated union: a heartbeat either resolves to a no-op transition
@@ -301,17 +303,17 @@ type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error';
  */
 export type HeartbeatTransition =
   | {
-      kind: 'noop';
-      effectiveStatus: ResolvedStatusLiteral;
-      isFatalError: boolean;
+      kind: 'noop'
+      effectiveStatus: ResolvedStatusLiteral
+      isFatalError: boolean
     }
   | {
-      kind: 'transition';
-      effectiveStatus: ResolvedStatusLiteral;
-      isFatalError: boolean;
-      reason: StatusTransitionReason;
-      fromStatus: string;
-    };
+      kind: 'transition'
+      effectiveStatus: ResolvedStatusLiteral
+      isFatalError: boolean
+      reason: StatusTransitionReason
+      fromStatus: string
+    }
 
 /**
  * Pure decision: given the payload status, optional error severity, and
@@ -324,12 +326,12 @@ export type HeartbeatTransition =
  * `processHeartbeat` is just the wiring around this decision.
  */
 export function decideHeartbeatTransition(input: {
-  payloadStatus: HeartbeatStatusLiteral;
-  errorSeverity?: AgentHeartbeatError['severity'] | undefined;
-  priorStatus: string | null;
+  payloadStatus: HeartbeatStatusLiteral
+  errorSeverity?: AgentHeartbeatError['severity'] | undefined
+  priorStatus: string | null
 }): HeartbeatTransition {
-  const isFatalError = input.errorSeverity === 'fatal';
-  const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus;
+  const isFatalError = input.errorSeverity === 'fatal'
+  const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus
 
   // Audit-log only real transitions. No-op heartbeats (status unchanged)
   // happen on every agent heartbeat poll — logging them would dominate
@@ -337,7 +339,7 @@ export function decideHeartbeatTransition(input: {
   // no-op since the caller's UPDATE will match zero rows; the
   // missing-row case is surfaced by processHeartbeat instead.
   if (input.priorStatus === null || input.priorStatus === effectiveStatus) {
-    return { kind: 'noop', effectiveStatus, isFatalError };
+    return { kind: 'noop', effectiveStatus, isFatalError }
   }
 
   return {
@@ -346,7 +348,7 @@ export function decideHeartbeatTransition(input: {
     isFatalError,
     reason: isFatalError ? 'fatal_error' : 'heartbeat_status',
     fromStatus: input.priorStatus,
-  };
+  }
 }
 
 /**
@@ -362,28 +364,28 @@ export function decideHeartbeatTransition(input: {
  * agent — the heartbeat must stay alive so the agent can keep checking
  * in even if a downstream module is misbehaving.
  */
-let cachedHandleTaskFailure: typeof import('./tasks.js').handleTaskFailure | null = null;
+let cachedHandleTaskFailure: typeof import('./tasks.js').handleTaskFailure | null = null
 
 async function getHandleTaskFailure(): Promise<
   typeof import('./tasks.js').handleTaskFailure | null
 > {
   if (cachedHandleTaskFailure != null) {
-    return cachedHandleTaskFailure;
+    return cachedHandleTaskFailure
   }
   try {
-    const mod = await import('./tasks.js');
+    const mod = await import('./tasks.js')
     if (typeof mod.handleTaskFailure !== 'function') {
       logger.error(
         { exportType: typeof mod.handleTaskFailure },
         'handleTaskFailure export is not a function — possible circular-import edge'
-      );
-      return null;
+      )
+      return null
     }
-    cachedHandleTaskFailure = mod.handleTaskFailure;
-    return cachedHandleTaskFailure;
+    cachedHandleTaskFailure = mod.handleTaskFailure
+    return cachedHandleTaskFailure
   } catch (err) {
-    logger.error({ err }, 'Failed to lazy-import handleTaskFailure from ./tasks.js');
-    return null;
+    logger.error({ err }, 'Failed to lazy-import handleTaskFailure from ./tasks.js')
+    return null
   }
 }
 
@@ -396,28 +398,28 @@ async function getHandleTaskFailure(): Promise<
  * high-priority hint rather than 500-ing the heartbeat.
  */
 let cachedBuildCapabilityPredicate: typeof import('./tasks.js').buildCapabilityPredicate | null =
-  null;
+  null
 
 async function getBuildCapabilityPredicate(): Promise<
   typeof import('./tasks.js').buildCapabilityPredicate | null
 > {
   if (cachedBuildCapabilityPredicate != null) {
-    return cachedBuildCapabilityPredicate;
+    return cachedBuildCapabilityPredicate
   }
   try {
-    const mod = await import('./tasks.js');
+    const mod = await import('./tasks.js')
     if (typeof mod.buildCapabilityPredicate !== 'function') {
       logger.error(
         { exportType: typeof mod.buildCapabilityPredicate },
         'buildCapabilityPredicate export is not a function — possible circular-import edge'
-      );
-      return null;
+      )
+      return null
     }
-    cachedBuildCapabilityPredicate = mod.buildCapabilityPredicate;
-    return cachedBuildCapabilityPredicate;
+    cachedBuildCapabilityPredicate = mod.buildCapabilityPredicate
+    return cachedBuildCapabilityPredicate
   } catch (err) {
-    logger.error({ err }, 'Failed to lazy-import buildCapabilityPredicate from ./tasks.js');
-    return null;
+    logger.error({ err }, 'Failed to lazy-import buildCapabilityPredicate from ./tasks.js')
+    return null
   }
 }
 
@@ -427,7 +429,7 @@ async function getBuildCapabilityPredicate(): Promise<
  * each heartbeat. Operators see one warn per agent until the agent
  * announces real capabilities.
  */
-const warnedEmptyCapsAgentIds = new Set<number>();
+const warnedEmptyCapsAgentIds = new Set<number>()
 
 /**
  * Test-only reset for the warned-agent guard. Integration tests that
@@ -437,15 +439,15 @@ const warnedEmptyCapsAgentIds = new Set<number>();
  * from a known empty state.
  */
 export function __resetWarnedEmptyCapsForTesting(): void {
-  warnedEmptyCapsAgentIds.clear();
+  warnedEmptyCapsAgentIds.clear()
 }
 
 function logStatusTransition(opts: {
-  agentId: number;
-  projectId: number;
-  fromStatus: string;
-  toStatus: string;
-  reason: StatusTransitionReason;
+  agentId: number
+  projectId: number
+  fromStatus: string
+  toStatus: string
+  reason: StatusTransitionReason
 }): void {
   logger.info(
     {
@@ -456,7 +458,7 @@ function logStatusTransition(opts: {
       reason: opts.reason,
     },
     'Agent status transition'
-  );
+  )
 }
 
 /**
@@ -497,9 +499,9 @@ const SECRET_KEY_NAMES = new Set([
   'x_auth_token',
   'x_api_key',
   'x_access_token',
-]);
-const SCRUBBED_VALUE = '[REDACTED]';
-const SCRUB_MAX_DEPTH = 6;
+])
+const SCRUBBED_VALUE = '[REDACTED]'
+const SCRUB_MAX_DEPTH = 6
 
 /**
  * Decide whether a key carries a secret value and must be redacted.
@@ -516,15 +518,15 @@ export function isSecretKey(key: string): boolean {
   const normalized = key
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase()
-    .replace(/[-\s]+/g, '_');
-  if (SECRET_KEY_NAMES.has(normalized)) return true;
+    .replace(/[-\s]+/g, '_')
+  if (SECRET_KEY_NAMES.has(normalized)) return true
   // Trailing-secret suffix: `db_password`, `customer_secret`,
   // `x_auth_token` etc. Match only when the last underscore-separated
   // word is a known secret name; this keeps `password_age` (a duration
   // counter, not the password itself) out of scope.
-  const parts = normalized.split('_');
-  const last = parts[parts.length - 1];
-  return !!last && SECRET_KEY_NAMES.has(last);
+  const parts = normalized.split('_')
+  const last = parts[parts.length - 1]
+  return !!last && SECRET_KEY_NAMES.has(last)
 }
 
 /**
@@ -539,20 +541,20 @@ export function isSecretKey(key: string): boolean {
  * agent_errors row.
  */
 export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
-  if (depth > SCRUB_MAX_DEPTH) return SCRUBBED_VALUE;
-  if (value === null || typeof value !== 'object') return value;
+  if (depth > SCRUB_MAX_DEPTH) return SCRUBBED_VALUE
+  if (value === null || typeof value !== 'object') return value
   if (Array.isArray(value)) {
-    return value.map((item) => scrubAgentErrorContext(item, depth + 1));
+    return value.map((item) => scrubAgentErrorContext(item, depth + 1))
   }
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = {}
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     if (isSecretKey(key)) {
-      out[key] = SCRUBBED_VALUE;
+      out[key] = SCRUBBED_VALUE
     } else {
-      out[key] = scrubAgentErrorContext(raw, depth + 1);
+      out[key] = scrubAgentErrorContext(raw, depth + 1)
     }
   }
-  return out;
+  return out
 }
 
 /**
@@ -574,19 +576,19 @@ async function verifyTaskOwnership(
   agentId: number,
   taskId: number | undefined
 ): Promise<number | undefined> {
-  if (taskId === undefined) return undefined;
+  if (taskId === undefined) return undefined
   const [row] = await dbClient
     .select({ id: tasks.id })
     .from(tasks)
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
     .for('update')
-    .limit(1);
-  if (row) return row.id;
+    .limit(1)
+  if (row) return row.id
   logger.warn(
     { agentId, taskId },
     'Heartbeat referenced currentTask.taskId not owned by this agent; dropping task linkage'
-  );
-  return undefined;
+  )
+  return undefined
 }
 
 export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
@@ -605,17 +607,17 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
       .from(agents)
       .where(eq(agents.id, agentId))
       .for('update')
-      .limit(1);
+      .limit(1)
 
-    const priorStatus = priorRow?.status ?? null;
+    const priorStatus = priorRow?.status ?? null
 
     const transition = decideHeartbeatTransition({
       payloadStatus: data.status,
       errorSeverity: data.error?.severity,
       priorStatus,
-    });
+    })
 
-    const ownedTaskId = await verifyTaskOwnership(tx, agentId, data.currentTask?.taskId);
+    const ownedTaskId = await verifyTaskOwnership(tx, agentId, data.currentTask?.taskId)
 
     if (data.error) {
       await logAgentError(
@@ -634,35 +636,31 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
           suppressEvent: true,
         },
         tx
-      );
+      )
     }
 
     const updates: Record<string, unknown> = {
       status: transition.effectiveStatus,
       lastSeenAt: new Date(),
       updatedAt: new Date(),
-    };
-    if (data.capabilities) updates['capabilities'] = data.capabilities;
-    if (data.deviceInfo) updates['hardwareProfile'] = data.deviceInfo;
+    }
+    if (data.capabilities) updates['capabilities'] = data.capabilities
+    if (data.deviceInfo) updates['hardwareProfile'] = data.deviceInfo
 
-    const [updated] = await tx
-      .update(agents)
-      .set(updates)
-      .where(eq(agents.id, agentId))
-      .returning();
+    const [updated] = await tx.update(agents).set(updates).where(eq(agents.id, agentId)).returning()
 
-    return { updated, transition, priorStatus };
-  });
+    return { updated, transition, priorStatus }
+  })
 
-  const { updated, transition } = txResult;
+  const { updated, transition } = txResult
 
   // Post-commit emits + audit log. If the transaction rolled back,
   // none of these fire and SSE listeners stay consistent.
   if (updated) {
     if (data.error) {
-      emitAgentError(updated.projectId, updated.id, data.error.severity);
+      emitAgentError(updated.projectId, updated.id, data.error.severity)
     }
-    emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus);
+    emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus)
 
     if (transition.kind === 'transition') {
       logStatusTransition({
@@ -671,7 +669,7 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
         fromStatus: transition.fromStatus,
         toStatus: transition.effectiveStatus,
         reason: transition.reason,
-      });
+      })
     }
   } else {
     // Auth middleware verified the agent's bearer token, so the row was
@@ -681,7 +679,7 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
     logger.warn(
       { agentId, status: transition.effectiveStatus },
       'Heartbeat for an agent row that no longer exists'
-    );
+    )
   }
 
   // Fail the agent's active tasks on fatal-error heartbeats. Each task
@@ -692,23 +690,23 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   // DB work (including transactional retries) and nesting drizzle
   // transactions inside the same connection produces savepoint churn
   // we don't need here.
-  let taskFailureSummary: { attempted: number; failed: number } | undefined;
+  let taskFailureSummary: { attempted: number; failed: number } | undefined
   if (transition.isFatalError) {
     const activeTasks = await db
       .select({ id: tasks.id })
       .from(tasks)
-      .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`));
+      .where(and(eq(tasks.agentId, agentId), sql`${tasks.status} IN ('assigned', 'running')`))
 
-    const handleTaskFailure = await getHandleTaskFailure();
-    let failed = 0;
+    const handleTaskFailure = await getHandleTaskFailure()
+    let failed = 0
     if (handleTaskFailure === null) {
       // Lazy import failed - count every active task as failed-to-fail so the
       // summary still gives operators a non-zero failure count to investigate.
-      failed = activeTasks.length;
+      failed = activeTasks.length
       logger.error(
         { agentId, attempted: activeTasks.length },
         'handleTaskFailure unavailable on fatal heartbeat; active tasks left in their current status until the sweep reaps them'
-      );
+      )
     } else {
       for (const activeTask of activeTasks) {
         try {
@@ -716,17 +714,17 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
             activeTask.id,
             agentId,
             data.error?.message ?? 'Agent fatal error'
-          );
+          )
         } catch (err) {
-          failed += 1;
+          failed += 1
           logger.error(
             { err, agentId, taskId: activeTask.id },
             'handleTaskFailure threw during fatal-heartbeat fan-out; sibling tasks continue'
-          );
+          )
         }
       }
     }
-    taskFailureSummary = { attempted: activeTasks.length, failed };
+    taskFailureSummary = { attempted: activeTasks.length, failed }
   }
 
   // Check if there are high-priority pending tasks for this agent's project.
@@ -737,11 +735,11 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   // Gated on online/benchmarked status because assignNextTask refuses to
   // assign to any other status, so suggesting work to an agent in 'error'
   // or 'offline' is both useless and misleading.
-  let hasHighPriorityTasks = false;
-  const isClaimEligible = updated?.status === 'online' || updated?.status === 'benchmarked';
+  let hasHighPriorityTasks = false
+  const isClaimEligible = updated?.status === 'online' || updated?.status === 'benchmarked'
   if (updated && isClaimEligible) {
-    const rawCaps = updated.capabilities;
-    const capsIsObject = rawCaps !== null && typeof rawCaps === 'object' && !Array.isArray(rawCaps);
+    const rawCaps = updated.capabilities
+    const capsIsObject = rawCaps !== null && typeof rawCaps === 'object' && !Array.isArray(rawCaps)
     // An agent that has not yet announced is operationally equivalent to one
     // with malformed capabilities: `buildCapabilityPredicate` would emit a
     // filter that excludes every real hashcat task (every task carries a
@@ -753,32 +751,32 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
       capsIsObject &&
       Array.isArray((rawCaps as Record<string, unknown>)['hashModes']) &&
       ((rawCaps as Record<string, unknown>)['hashModes'] as unknown[]).some((m) => {
-        const n = Number(m);
-        return Number.isFinite(n) && Number.isInteger(n);
-      });
+        const n = Number(m)
+        return Number.isFinite(n) && Number.isInteger(n)
+      })
     if (!capsIsObject || !hasUsableHashModes) {
       if (!warnedEmptyCapsAgentIds.has(agentId)) {
-        warnedEmptyCapsAgentIds.add(agentId);
+        warnedEmptyCapsAgentIds.add(agentId)
         const capabilitiesType = !capsIsObject
           ? rawCaps === null
             ? 'null'
             : typeof rawCaps
-          : 'object-without-usable-hashModes';
+          : 'object-without-usable-hashModes'
         logger.warn(
           { agentId, capabilitiesType },
           'Agent has empty or non-object capabilities — high-priority hint disabled until announce'
-        );
+        )
       }
     } else {
-      const buildCapabilityPredicate = await getBuildCapabilityPredicate();
+      const buildCapabilityPredicate = await getBuildCapabilityPredicate()
       if (buildCapabilityPredicate === null) {
         // Lazy import failed; degrade by omitting the hint. The agent will
         // still pick up work through the normal claim path on the next
         // /tasks/next call — the hint is a latency optimization, not a
         // correctness requirement.
       } else {
-        const agentCaps = rawCaps as Record<string, unknown>;
-        const capabilityPredicate = buildCapabilityPredicate(agentCaps);
+        const agentCaps = rawCaps as Record<string, unknown>
+        const capabilityPredicate = buildCapabilityPredicate(agentCaps)
         const [highPriority] = await db
           .select({ id: tasks.id })
           .from(tasks)
@@ -791,8 +789,8 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
               capabilityPredicate
             )
           )
-          .limit(1);
-        hasHighPriorityTasks = !!highPriority;
+          .limit(1)
+        hasHighPriorityTasks = !!highPriority
       }
     }
   }
@@ -801,27 +799,27 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
     agent: updated ?? null,
     hasHighPriorityTasks,
     ...(taskFailureSummary ? { taskFailureSummary } : {}),
-  };
+  }
 }
 
 export async function updateAgent(
   agentId: number,
   data: {
-    name?: string | undefined;
-    status?: string | undefined;
+    name?: string | undefined
+    status?: string | undefined
   }
 ) {
   const [updated] = await db
     .update(agents)
     .set({ ...data, updatedAt: new Date() })
     .where(eq(agents.id, agentId))
-    .returning();
+    .returning()
 
   if (updated && data.status) {
-    emitAgentStatus(updated.projectId, updated.id, data.status);
+    emitAgentStatus(updated.projectId, updated.id, data.status)
   }
 
-  return updated ?? null;
+  return updated ?? null
 }
 
 /**
@@ -833,26 +831,26 @@ export async function updateAgent(
  * participate in an outer transaction (`processHeartbeat`) without
  * widening to `any`.
  */
-type DbClient = Pick<typeof db, 'insert' | 'select' | 'update' | 'delete'>;
+type DbClient = Pick<typeof db, 'insert' | 'select' | 'update' | 'delete'>
 
 export async function logAgentError(
   data: {
-    agentId: number;
-    severity: string;
-    message: string;
-    context?: Record<string, unknown> | undefined;
-    taskId?: number | undefined;
+    agentId: number
+    severity: string
+    message: string
+    context?: Record<string, unknown> | undefined
+    taskId?: number | undefined
     // Optional projectId pass-through: hot-path callers (processHeartbeat)
     // already know it and pass it in to avoid an extra SELECT on every
     // error-bearing heartbeat. Callers that don't have it (e.g., the
     // standalone POST /api/v1/agent/errors handler, which only has agentId)
     // can omit it and the function falls back to a DB lookup.
-    projectId?: number | undefined;
+    projectId?: number | undefined
     // When true, the SSE `emitAgentError` is skipped. processHeartbeat
     // sets this so the event fires AFTER the outer transaction commits,
     // preventing listeners from reacting to a state the DB later rolls
     // back. Standalone callers (POST /errors) leave it false.
-    suppressEvent?: boolean | undefined;
+    suppressEvent?: boolean | undefined
   },
   dbClient: DbClient = db
 ) {
@@ -865,7 +863,7 @@ export async function logAgentError(
       context: data.context ?? {},
       taskId: data.taskId ?? null,
     })
-    .returning();
+    .returning()
 
   // Surface the insertion on the event stream so the detail page's
   // error log refreshes in real time. Use the dedicated `agent_error`
@@ -874,18 +872,18 @@ export async function logAgentError(
   // projectId)`, so reusing `agent_status` would silently drop a new
   // error event if a heartbeat just fired for the same project.
   if (error) {
-    if (data.suppressEvent) return error;
-    let projectId = data.projectId;
+    if (data.suppressEvent) return error
+    let projectId = data.projectId
     if (projectId === undefined) {
       const [agent] = await dbClient
         .select({ projectId: agents.projectId })
         .from(agents)
         .where(eq(agents.id, data.agentId))
-        .limit(1);
-      projectId = agent?.projectId;
+        .limit(1)
+      projectId = agent?.projectId
     }
     if (projectId !== undefined) {
-      emitAgentError(projectId, data.agentId, data.severity);
+      emitAgentError(projectId, data.agentId, data.severity)
     } else {
       // The row was persisted but we can't route the SSE event without a
       // projectId — should only happen if the agent row was deleted
@@ -894,7 +892,7 @@ export async function logAgentError(
       logger.warn(
         { agentId: data.agentId, severity: data.severity },
         'Agent error persisted but project lookup failed; SSE event skipped'
-      );
+      )
     }
   } else {
     // An INSERT that returns no row means RETURNING was suppressed —
@@ -903,18 +901,18 @@ export async function logAgentError(
     logger.error(
       { agentId: data.agentId, severity: data.severity },
       'agent_errors insert returned no row; downstream event skipped'
-    );
+    )
   }
 
-  return error ?? null;
+  return error ?? null
 }
 
 export async function getAgentErrors(
   agentId: number,
   opts: { limit?: number | undefined; offset?: number | undefined }
 ) {
-  const limit = opts.limit ?? 20;
-  const offset = opts.offset ?? 0;
+  const limit = opts.limit ?? 20
+  const offset = opts.offset ?? 0
 
   return db
     .select()
@@ -922,23 +920,23 @@ export async function getAgentErrors(
     .where(eq(agentErrors.agentId, agentId))
     .orderBy(desc(agentErrors.createdAt))
     .limit(limit)
-    .offset(offset);
+    .offset(offset)
 }
 
 export async function submitBenchmarks(
   agentId: number,
   entries: ReadonlyArray<{
-    readonly hashcatMode: number;
-    readonly hashType: string;
-    readonly speedHs: number;
-    readonly deviceName: string;
+    readonly hashcatMode: number
+    readonly hashType: string
+    readonly speedHs: number
+    readonly deviceName: string
   }>,
   crackerVersion?: string
 ) {
-  const now = new Date();
+  const now = new Date()
 
   // Deduplicate by hashcatMode -- last entry wins (defense-in-depth; schema also rejects duplicates)
-  const deduped = [...new Map(entries.map((e) => [e.hashcatMode, e] as const)).values()];
+  const deduped = [...new Map(entries.map((e) => [e.hashcatMode, e] as const)).values()]
 
   // Benchmark insert + agent status update must be atomic
   const rows = await db.transaction(async (tx) => {
@@ -963,7 +961,7 @@ export async function submitBenchmarks(
           benchmarkedAt: sql`excluded.benchmarked_at`,
         },
       })
-      .returning();
+      .returning()
 
     // Atomically transition to 'benchmarked' only if agent is not busy.
     // The WHERE clause guards against a race where the agent became busy
@@ -973,23 +971,23 @@ export async function submitBenchmarks(
       updatedAt: now,
       status: 'benchmarked' as const,
       ...(crackerVersion !== undefined ? { crackerVersion } : {}),
-    };
+    }
 
     await tx
       .update(agents)
       .set(agentUpdates)
-      .where(and(eq(agents.id, agentId), sql`${agents.status} != 'busy'`));
+      .where(and(eq(agents.id, agentId), sql`${agents.status} != 'busy'`))
 
-    return inserted;
-  });
+    return inserted
+  })
 
   // Event emission is best-effort, outside the transaction
-  const agent = await getAgentById(agentId);
+  const agent = await getAgentById(agentId)
   if (agent) {
-    emitAgentStatus(agent.projectId, agent.id, agent.status);
+    emitAgentStatus(agent.projectId, agent.id, agent.status)
   }
 
-  return rows;
+  return rows
 }
 
 export async function getBenchmarksForAgent(agentId: number): Promise<SelectAgentBenchmark[]> {
@@ -997,7 +995,7 @@ export async function getBenchmarksForAgent(agentId: number): Promise<SelectAgen
     .select()
     .from(agentBenchmarks)
     .where(eq(agentBenchmarks.agentId, agentId))
-    .orderBy(desc(agentBenchmarks.benchmarkedAt));
+    .orderBy(desc(agentBenchmarks.benchmarkedAt))
 }
 
 export async function getAgentBenchmarkForMode(
@@ -1008,6 +1006,6 @@ export async function getAgentBenchmarkForMode(
     .select()
     .from(agentBenchmarks)
     .where(and(eq(agentBenchmarks.agentId, agentId), eq(agentBenchmarks.hashcatMode, hashcatMode)))
-    .limit(1);
-  return row ?? null;
+    .limit(1)
+  return row ?? null
 }

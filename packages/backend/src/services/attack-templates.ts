@@ -1,11 +1,12 @@
-import { attackTemplates } from '@hashhive/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import { attackTemplates } from '@hashhive/shared'
+import { and, desc, eq, sql } from 'drizzle-orm'
+
+import { db } from '../db/index.js'
 
 export class DuplicateAttackTemplateNameError extends Error {
   constructor(name: string) {
-    super(`An attack template named "${name}" already exists in this project`);
-    this.name = 'DuplicateAttackTemplateNameError';
+    super(`An attack template named "${name}" already exists in this project`)
+    this.name = 'DuplicateAttackTemplateNameError'
   }
 }
 
@@ -15,22 +16,22 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     'code' in error &&
     (error as { code: unknown }).code === '23505'
-  );
+  )
 }
 
 // ─── Attack Template CRUD ──────────────────────────────────────────
 
 export async function listAttackTemplates(filters: {
-  projectId: number;
-  limit?: number | undefined;
-  offset?: number | undefined;
+  projectId: number
+  limit?: number | undefined
+  offset?: number | undefined
 }) {
-  const conditions = [eq(attackTemplates.projectId, filters.projectId)];
+  const conditions = [eq(attackTemplates.projectId, filters.projectId)]
 
-  const limit = filters.limit ?? 50;
-  const offset = filters.offset ?? 0;
+  const limit = filters.limit ?? 50
+  const offset = filters.offset ?? 0
 
-  const whereClause = and(...conditions);
+  const whereClause = and(...conditions)
 
   const [templates, countResult] = await Promise.all([
     db
@@ -40,15 +41,18 @@ export async function listAttackTemplates(filters: {
       .limit(limit)
       .offset(offset)
       .orderBy(desc(attackTemplates.createdAt)),
-    db.select({ count: sql<number>`count(*)` }).from(attackTemplates).where(whereClause),
-  ]);
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(attackTemplates)
+      .where(whereClause),
+  ])
 
   return {
     templates,
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
-  };
+  }
 }
 
 export async function getAttackTemplateById(id: number) {
@@ -56,22 +60,22 @@ export async function getAttackTemplateById(id: number) {
     .select()
     .from(attackTemplates)
     .where(eq(attackTemplates.id, id))
-    .limit(1);
-  return template ?? null;
+    .limit(1)
+  return template ?? null
 }
 
 export async function createAttackTemplate(data: {
-  projectId: number;
-  name: string;
-  description?: string | null | undefined;
-  mode: number;
-  hashTypeId?: number | null | undefined;
-  wordlistId?: number | null | undefined;
-  rulelistId?: number | null | undefined;
-  masklistId?: number | null | undefined;
-  advancedConfiguration?: Record<string, unknown> | null | undefined;
-  tags?: string[] | undefined;
-  createdBy?: number | undefined;
+  projectId: number
+  name: string
+  description?: string | null | undefined
+  mode: number
+  hashTypeId?: number | null | undefined
+  wordlistId?: number | null | undefined
+  rulelistId?: number | null | undefined
+  masklistId?: number | null | undefined
+  advancedConfiguration?: Record<string, unknown> | null | undefined
+  tags?: string[] | undefined
+  createdBy?: number | undefined
 }) {
   try {
     const [template] = await db
@@ -90,29 +94,29 @@ export async function createAttackTemplate(data: {
         tags: data.tags ?? [],
         createdBy: data.createdBy ?? null,
       })
-      .returning();
+      .returning()
 
-    return template ?? null;
+    return template ?? null
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new DuplicateAttackTemplateNameError(data.name);
+      throw new DuplicateAttackTemplateNameError(data.name)
     }
-    throw error;
+    throw error
   }
 }
 
 export async function updateAttackTemplate(
   id: number,
   data: {
-    name?: string | undefined;
-    description?: string | null | undefined;
-    mode?: number | undefined;
-    hashTypeId?: number | null | undefined;
-    wordlistId?: number | null | undefined;
-    rulelistId?: number | null | undefined;
-    masklistId?: number | null | undefined;
-    advancedConfiguration?: Record<string, unknown> | null | undefined;
-    tags?: string[] | undefined;
+    name?: string | undefined
+    description?: string | null | undefined
+    mode?: number | undefined
+    hashTypeId?: number | null | undefined
+    wordlistId?: number | null | undefined
+    rulelistId?: number | null | undefined
+    masklistId?: number | null | undefined
+    advancedConfiguration?: Record<string, unknown> | null | undefined
+    tags?: string[] | undefined
   }
 ) {
   try {
@@ -120,30 +124,30 @@ export async function updateAttackTemplate(
       .update(attackTemplates)
       .set({ ...data, updatedAt: new Date() })
       .where(eq(attackTemplates.id, id))
-      .returning();
+      .returning()
 
-    return updated ?? null;
+    return updated ?? null
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new DuplicateAttackTemplateNameError(data.name ?? '');
+      throw new DuplicateAttackTemplateNameError(data.name ?? '')
     }
-    throw error;
+    throw error
   }
 }
 
 export async function deleteAttackTemplate(id: number) {
-  const [deleted] = await db.delete(attackTemplates).where(eq(attackTemplates.id, id)).returning();
-  return deleted ?? null;
+  const [deleted] = await db.delete(attackTemplates).where(eq(attackTemplates.id, id)).returning()
+  return deleted ?? null
 }
 
 /** Extract an attack-creation payload from an already-fetched template. */
 export function extractAttackPayload(template: {
-  mode: number;
-  hashTypeId: number | null;
-  wordlistId: number | null;
-  rulelistId: number | null;
-  masklistId: number | null;
-  advancedConfiguration: unknown;
+  mode: number
+  hashTypeId: number | null
+  wordlistId: number | null
+  rulelistId: number | null
+  masklistId: number | null
+  advancedConfiguration: unknown
 }) {
   return {
     mode: template.mode,
@@ -152,5 +156,5 @@ export function extractAttackPayload(template: {
     rulelistId: template.rulelistId,
     masklistId: template.masklistId,
     advancedConfiguration: template.advancedConfiguration,
-  };
+  }
 }

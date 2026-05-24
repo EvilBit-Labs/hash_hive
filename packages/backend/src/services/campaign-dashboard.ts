@@ -15,11 +15,12 @@ import {
   type CampaignTaskStats,
   campaigns,
   tasks,
-} from '@hashhive/shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { emitCampaignStatus } from './events.js';
+} from '@hashhive/shared'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { emitCampaignStatus } from './events.js'
 
 // ─── Task statistics ────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export async function getCampaignTaskStats(campaignId: number): Promise<Campaign
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId))
-    .groupBy(tasks.status);
+    .groupBy(tasks.status)
 
   const stats: CampaignTaskStats = {
     total: 0,
@@ -53,44 +54,44 @@ export async function getCampaignTaskStats(campaignId: number): Promise<Campaign
     running: 0,
     completed: 0,
     failed: 0,
-  };
+  }
 
   for (const row of rows) {
-    const n = Number(row.n ?? 0);
-    stats.total += n;
+    const n = Number(row.n ?? 0)
+    stats.total += n
     switch (row.status) {
       case 'pending':
-        stats.pending += n;
-        break;
+        stats.pending += n
+        break
       case 'assigned':
       case 'running':
-        stats.running += n;
-        break;
+        stats.running += n
+        break
       case 'completed':
       case 'exhausted':
-        stats.completed += n;
-        break;
+        stats.completed += n
+        break
       case 'failed':
       case 'cancelled':
         // Cancelled tasks count toward `failed` so ETA's
         // `remaining = total - completed - failed` math stays correct.
         // Operators see cancelled tasks as "not coming back" in the
         // same way failed tasks are.
-        stats.failed += n;
-        break;
+        stats.failed += n
+        break
       default:
         // Unknown statuses count only toward `total`; add explicit
         // folding here when the schema grows.
-        break;
+        break
     }
   }
 
-  return stats;
+  return stats
 }
 
 // ─── Active agents ──────────────────────────────────────────────────
 
-const ACTIVE_AGENTS_LIMIT = 50;
+const ACTIVE_AGENTS_LIMIT = 50
 
 /**
  * Active agents working on a campaign right now. Joins tasks that are
@@ -122,12 +123,12 @@ export async function listActiveAgentsByCampaign(
       )
     )
     .orderBy(asc(tasks.id))
-    .limit(ACTIVE_AGENTS_LIMIT);
+    .limit(ACTIVE_AGENTS_LIMIT)
 
   return rows.map((row) => {
-    const progress = row.progress as Record<string, unknown> | null;
-    const rawSpeed = progress && typeof progress === 'object' ? progress['speedHs'] : null;
-    const speedHsValid = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed);
+    const progress = row.progress as Record<string, unknown> | null
+    const rawSpeed = progress && typeof progress === 'object' ? progress['speedHs'] : null
+    const speedHsValid = typeof rawSpeed === 'number' && Number.isFinite(rawSpeed)
     if (rawSpeed !== undefined && rawSpeed !== null && !speedHsValid) {
       // Surface protocol drift: agent reported a speed but it wasn't a
       // finite number. ETA computation treats it as null; the warn
@@ -136,7 +137,7 @@ export async function listActiveAgentsByCampaign(
       logger.warn(
         { agentId: row.agentId, taskId: row.taskId, rawSpeed },
         'listActiveAgentsByCampaign: dropping non-finite speedHs from active agent'
-      );
+      )
     }
     return {
       agentId: row.agentId,
@@ -146,8 +147,8 @@ export async function listActiveAgentsByCampaign(
       attackMode: row.attackMode,
       progress: row.progress,
       speedHs: speedHsValid ? (rawSpeed as number) : null,
-    };
-  });
+    }
+  })
 }
 
 // ─── Draft-only delete ──────────────────────────────────────────────
@@ -155,7 +156,7 @@ export async function listActiveAgentsByCampaign(
 export type DeleteCampaignResult =
   | { kind: 'deleted'; id: number; projectId: number }
   | { kind: 'not_found' }
-  | { kind: 'not_draft'; status: string };
+  | { kind: 'not_draft'; status: string }
 
 /**
  * Delete a campaign if and only if its status is `draft`. Attacks and
@@ -172,7 +173,7 @@ export type DeleteCampaignResult =
 export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
   class StatusFlippedDuringDelete extends Error {
     constructor(public readonly observedStatus: string) {
-      super('campaign status flipped before draft-only delete completed');
+      super('campaign status flipped before draft-only delete completed')
     }
   }
 
@@ -182,17 +183,17 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
         .select({ status: campaigns.status })
         .from(campaigns)
         .where(eq(campaigns.id, id))
-        .limit(1);
+        .limit(1)
       if (!existing) {
-        return { kind: 'not_found' } as const;
+        return { kind: 'not_found' } as const
       }
       if (existing.status !== 'draft') {
-        return { kind: 'not_draft', status: existing.status } as const;
+        return { kind: 'not_draft', status: existing.status } as const
       }
 
       // Remove child rows (FKs are RESTRICT by default).
-      await tx.delete(tasks).where(eq(tasks.campaignId, id));
-      await tx.delete(attacks).where(eq(attacks.campaignId, id));
+      await tx.delete(tasks).where(eq(tasks.campaignId, id))
+      await tx.delete(attacks).where(eq(attacks.campaignId, id))
 
       // Atomic guard: only delete the campaign row if it is *still*
       // in draft. A concurrent transition that flipped the status
@@ -202,30 +203,30 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
       const deleted = await tx
         .delete(campaigns)
         .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
-        .returning();
-      const row = deleted[0];
+        .returning()
+      const row = deleted[0]
       if (!row) {
         const [current] = await tx
           .select({ status: campaigns.status })
           .from(campaigns)
           .where(eq(campaigns.id, id))
-          .limit(1);
-        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown');
+          .limit(1)
+        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown')
       }
-      return { kind: 'deleted', id: row.id, projectId: row.projectId } as const;
-    });
+      return { kind: 'deleted', id: row.id, projectId: row.projectId } as const
+    })
 
     // Emit a status event so other connected clients (and the
     // originating dashboard's stats card) drop the deleted campaign
     // without waiting for the next poll cycle.
     if (result.kind === 'deleted') {
-      emitCampaignStatus(result.projectId, result.id, 'deleted');
+      emitCampaignStatus(result.projectId, result.id, 'deleted')
     }
-    return result;
+    return result
   } catch (err) {
     if (err instanceof StatusFlippedDuringDelete) {
-      return { kind: 'not_draft', status: err.observedStatus };
+      return { kind: 'not_draft', status: err.observedStatus }
     }
-    throw err;
+    throw err
   }
 }

@@ -10,7 +10,7 @@ import {
   timestamp,
   uniqueIndex,
   varchar,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/pg-core'
 
 // ─── Identity & Access ──────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ export const users = pgTable('users', {
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+})
 
 export const projects = pgTable('projects', {
   id: serial('id').primaryKey(),
@@ -38,7 +38,7 @@ export const projects = pgTable('projects', {
   createdBy: integer('created_by').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+})
 
 export const projectUsers = pgTable(
   'project_users',
@@ -54,7 +54,7 @@ export const projectUsers = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex('project_users_user_project_idx').on(table.userId, table.projectId)]
-);
+)
 
 // ─── BetterAuth Tables ──────────────────────────────────────────────
 
@@ -73,7 +73,7 @@ export const baSessions = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('ba_sessions_user_id_idx').on(table.userId)]
-);
+)
 
 export const baAccounts = pgTable(
   'ba_accounts',
@@ -102,7 +102,7 @@ export const baAccounts = pgTable(
     index('ba_accounts_user_id_idx').on(table.userId),
     uniqueIndex('ba_accounts_user_id_provider_id_idx').on(table.userId, table.providerId),
   ]
-);
+)
 
 export const baVerifications = pgTable(
   'ba_verifications',
@@ -115,7 +115,7 @@ export const baVerifications = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('ba_verifications_identifier_idx').on(table.identifier)]
-);
+)
 
 // ─── Agents & Telemetry ─────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ export const operatingSystems = pgTable('operating_systems', {
   name: varchar('name', { length: 255 }).notNull(),
   version: varchar('version', { length: 100 }),
   platform: varchar('platform', { length: 100 }),
-});
+})
 
 export const agents = pgTable(
   'agents',
@@ -160,7 +160,7 @@ export const agents = pgTable(
     index('agents_status_idx').on(table.status),
     index('agents_auth_token_idx').on(table.authToken),
   ]
-);
+)
 
 export const agentErrors = pgTable(
   'agent_errors',
@@ -189,7 +189,7 @@ export const agentErrors = pgTable(
     // single-column agent_id index, which is dropped in the migration.
     index('agent_errors_agent_id_created_at_idx').on(table.agentId, table.createdAt.desc()),
   ]
-);
+)
 
 export const agentBenchmarks = pgTable(
   'agent_benchmarks',
@@ -208,7 +208,7 @@ export const agentBenchmarks = pgTable(
     index('agent_benchmarks_agent_id_idx').on(table.agentId),
     uniqueIndex('agent_benchmarks_agent_id_hashcat_mode_idx').on(table.agentId, table.hashcatMode),
   ]
-);
+)
 
 // ─── Resources ──────────────────────────────────────────────────────
 
@@ -218,7 +218,7 @@ export const hashTypes = pgTable('hash_types', {
   hashcatMode: integer('hashcat_mode').notNull().unique(),
   category: varchar('category', { length: 100 }),
   example: text('example'),
-});
+})
 
 export const hashLists = pgTable(
   'hash_lists',
@@ -240,7 +240,7 @@ export const hashLists = pgTable(
     index('hash_lists_project_id_idx').on(table.projectId),
     index('hash_lists_status_idx').on(table.status),
   ]
-);
+)
 
 export const hashItems = pgTable(
   'hash_items',
@@ -266,7 +266,7 @@ export const hashItems = pgTable(
     index('hash_items_campaign_id_idx').on(table.campaignId),
     index('hash_items_hash_list_cracked_idx').on(table.hashListId, table.crackedAt),
   ]
-);
+)
 
 export const wordLists = pgTable('word_lists', {
   id: serial('id').primaryKey(),
@@ -280,7 +280,7 @@ export const wordLists = pgTable('word_lists', {
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+})
 
 export const ruleLists = pgTable('rule_lists', {
   id: serial('id').primaryKey(),
@@ -294,7 +294,7 @@ export const ruleLists = pgTable('rule_lists', {
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+})
 
 export const maskLists = pgTable('mask_lists', {
   id: serial('id').primaryKey(),
@@ -308,7 +308,7 @@ export const maskLists = pgTable('mask_lists', {
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+})
 
 // ─── Attack Templates ──────────────────────────────────────────────
 
@@ -336,7 +336,7 @@ export const attackTemplates = pgTable(
     uniqueIndex('attack_templates_project_name_idx').on(table.projectId, table.name),
     index('attack_templates_project_id_idx').on(table.projectId),
   ]
-);
+)
 
 // ─── Campaign Orchestration ─────────────────────────────────────────
 
@@ -363,7 +363,7 @@ export const campaigns = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('campaigns_project_id_status_idx').on(table.projectId, table.status)]
-);
+)
 
 export const attacks = pgTable(
   'attacks',
@@ -388,7 +388,7 @@ export const attacks = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('attacks_campaign_id_idx').on(table.campaignId)]
-);
+)
 
 export const tasks = pgTable(
   'tasks',
@@ -421,7 +421,7 @@ export const tasks = pgTable(
     index('tasks_status_campaign_id_idx').on(table.status, table.campaignId),
     index('tasks_campaign_id_status_idx').on(table.campaignId, table.status),
   ]
-);
+)
 
 // ─── Cracker Binaries ───────────────────────────────────────────────
 
@@ -446,4 +446,4 @@ export const crackerBinaries = pgTable(
     index('cracker_binaries_engine_platform_idx').on(table.engine, table.platform),
     index('cracker_binaries_is_active_idx').on(table.isActive),
   ]
-);
+)

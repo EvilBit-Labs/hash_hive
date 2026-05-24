@@ -14,18 +14,20 @@
  * iteration), which fall back to the standard Control API RFC9457 envelope.
  */
 
-import { Hono } from 'hono';
-import { getSystemHealth } from '../../services/health.js';
-import type { AppEnv } from '../../types.js';
-import { controlErrorResponse } from './helpers.js';
+import { Hono } from 'hono'
 
-export const controlHealthRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
+
+import { getSystemHealth } from '../../services/health.js'
+import { controlErrorResponse } from './helpers.js'
+
+export const controlHealthRoutes = new Hono<AppEnv>()
 
 controlHealthRoutes.get('/', async (c) => {
   try {
-    const health = await getSystemHealth();
-    return c.json(health);
+    const health = await getSystemHealth()
+    return c.json(health)
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})

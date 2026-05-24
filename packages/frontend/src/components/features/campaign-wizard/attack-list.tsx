@@ -1,12 +1,13 @@
-import { attackModeLabel } from '../../../lib/attack-modes';
-import { cn } from '../../../lib/utils';
-import type { AttackConfig } from '../../../stores/campaign-wizard';
+import type { AttackConfig } from '../../../stores/campaign-wizard'
+
+import { attackModeLabel } from '../../../lib/attack-modes'
+import { cn } from '../../../lib/utils'
 
 interface AttackListProps {
-  attacks: readonly AttackConfig[];
-  editingIndex: number | null;
-  onEdit: (idx: number) => void;
-  onRemove: (idx: number) => void;
+  attacks: readonly AttackConfig[]
+  editingIndex: number | null
+  onEdit: (idx: number) => void
+  onRemove: (idx: number) => void
 }
 
 /**
@@ -15,29 +16,29 @@ interface AttackListProps {
  * ID before backend creation, so `key={i}` is the only choice.
  */
 export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackListProps) {
-  if (attacks.length === 0) return null;
+  if (attacks.length === 0) return null
 
   return (
     <div className="space-y-2">
       <h3 className="text-sm font-medium">Configured Attacks</h3>
       {attacks.map((attack, i) => (
         <div
-          // biome-ignore lint/suspicious/noArrayIndexKey: attacks have no stable ID before creation
+          // oxlint-disable-next-line react/no-array-index-key -- attacks have no stable ID before creation
           key={i}
-          className="flex items-center justify-between rounded-md border border-surface-0 bg-surface-0/30 p-3"
+          className="border-surface-0 bg-surface-0/30 flex items-center justify-between rounded-md border p-3"
         >
           <div className="text-xs">
             <span className="font-mono font-medium">
               #{i} {attackModeLabel(attack.mode)}
             </span>
             {attack.wordlistId && (
-              <span className="ml-2 text-muted-foreground">Wordlist #{attack.wordlistId}</span>
+              <span className="text-muted-foreground ml-2">Wordlist #{attack.wordlistId}</span>
             )}
             {attack.rulelistId && (
-              <span className="ml-2 text-muted-foreground">Rulelist #{attack.rulelistId}</span>
+              <span className="text-muted-foreground ml-2">Rulelist #{attack.rulelistId}</span>
             )}
             {attack.dependencies.length > 0 && (
-              <span className="ml-2 text-muted-foreground">
+              <span className="text-muted-foreground ml-2">
                 Deps: [{attack.dependencies.join(', ')}]
               </span>
             )}
@@ -47,7 +48,7 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
               type="button"
               onClick={() => onEdit(i)}
               className={cn(
-                'text-xs hover:text-foreground',
+                'hover:text-foreground text-xs',
                 editingIndex === i ? 'text-primary' : 'text-muted-foreground'
               )}
             >
@@ -56,7 +57,7 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
             <button
               type="button"
               onClick={() => onRemove(i)}
-              className="text-xs text-destructive hover:text-destructive/80"
+              className="text-destructive hover:text-destructive/80 text-xs"
             >
               Remove
             </button>
@@ -64,5 +65,5 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
         </div>
       ))}
     </div>
-  );
+  )
 }

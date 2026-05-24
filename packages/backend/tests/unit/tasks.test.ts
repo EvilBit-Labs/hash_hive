@@ -1,22 +1,22 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 // This file must run in isolation (own bun:test process) to avoid module cache
 // poisoning from agent-api-contract.test.ts. The package.json test script runs
 // it first with TASKS_TEST_ISOLATED=1, then runs the full suite where this file
 // is skipped via the guard below.
-const isIsolated = process.env['TASKS_TEST_ISOLATED'] === '1';
+const isIsolated = process.env['TASKS_TEST_ISOLATED'] === '1'
 
 // Declared at module scope so mocks are accessible in describe/beforeEach blocks.
 // Assigned inside the `if (isIsolated)` guard where mock.module runs.
-let mockFrom: ReturnType<typeof mock>;
-let mockWhere: ReturnType<typeof mock>;
-let mockLimit: ReturnType<typeof mock>;
-let mockExecute: ReturnType<typeof mock>;
-let mockGetAgentBenchmarkForMode: ReturnType<typeof mock>;
-let mockUpdateSet: ReturnType<typeof mock>;
-let mockUpdateWhere: ReturnType<typeof mock>;
-let mockEmitTaskUpdate: ReturnType<typeof mock>;
-let mockUpdateCampaignProgress: ReturnType<typeof mock>;
+let mockFrom: ReturnType<typeof mock>
+let mockWhere: ReturnType<typeof mock>
+let mockLimit: ReturnType<typeof mock>
+let mockExecute: ReturnType<typeof mock>
+let mockGetAgentBenchmarkForMode: ReturnType<typeof mock>
+let mockUpdateSet: ReturnType<typeof mock>
+let mockUpdateWhere: ReturnType<typeof mock>
+let mockEmitTaskUpdate: ReturnType<typeof mock>
+let mockUpdateCampaignProgress: ReturnType<typeof mock>
 
 if (isIsolated) {
   // ─── Config / logger mocks (prevent env validation during import) ──
@@ -30,7 +30,7 @@ if (isIsolated) {
       BETTER_AUTH_SECRET: 'test-betterauth-secret-must-be-at-least-32-characters',
       NODE_ENV: 'test',
     },
-  }));
+  }))
 
   mock.module('../../src/config/logger.js', () => ({
     logger: {
@@ -39,22 +39,22 @@ if (isIsolated) {
       error: mock(),
       debug: mock(),
     },
-  }));
+  }))
 
   // ─── DB mock ────────────────────────────────────────────────────────
-  mockFrom = mock(() => ({ where: mockWhere, innerJoin: mock() }));
-  mockWhere = mock(() => ({ limit: mockLimit, innerJoin: mock() }));
-  mockLimit = mock(() => Promise.resolve([]));
-  mockExecute = mock(() => Promise.resolve([]));
-  const mockSelect = mock(() => ({ from: mockFrom }));
+  mockFrom = mock(() => ({ where: mockWhere, innerJoin: mock() }))
+  mockWhere = mock(() => ({ limit: mockLimit, innerJoin: mock() }))
+  mockLimit = mock(() => Promise.resolve([]))
+  mockExecute = mock(() => Promise.resolve([]))
+  const mockSelect = mock(() => ({ from: mockFrom }))
 
   // Update-call captures shared with the reassignStaleTasks tests. Default
   // implementation is a chain that returns nothing; the rebalance tests
   // override `mockUpdateSet` to record each call's payload.
-  mockUpdateSet = mock(() => ({ where: mockUpdateWhere }));
+  mockUpdateSet = mock(() => ({ where: mockUpdateWhere }))
   mockUpdateWhere = mock(() => ({
     returning: mock(() => Promise.resolve([])),
-  }));
+  }))
 
   mock.module('../../src/db/index.js', () => ({
     db: {
@@ -66,44 +66,43 @@ if (isIsolated) {
       update: mock(() => ({ set: mockUpdateSet })),
       transaction: mock(),
     },
-  }));
+  }))
 
-  mockEmitTaskUpdate = mock();
+  mockEmitTaskUpdate = mock()
   mock.module('../../src/services/events.js', () => ({
     emitCrackResult: mock(),
     emitTaskUpdate: mockEmitTaskUpdate,
-  }));
+  }))
 
-  mockUpdateCampaignProgress = mock();
+  mockUpdateCampaignProgress = mock()
   mock.module('../../src/services/campaigns.js', () => ({
     updateCampaignProgress: mockUpdateCampaignProgress,
-  }));
+  }))
 
-  mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null));
+  mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null))
   mock.module('../../src/services/agents.js', () => ({
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
-  }));
+  }))
 
-  const { assignNextTask, handleTaskFailure, reassignStaleTasks } = await import(
-    '../../src/services/tasks.js'
-  );
-  const { db } = await import('../../src/db/index.js');
+  const { assignNextTask, handleTaskFailure, reassignStaleTasks } =
+    await import('../../src/services/tasks.js')
+  const { db } = await import('../../src/db/index.js')
 
   describe('assignNextTask', () => {
     beforeEach(() => {
-      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }));
-      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }));
-      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }));
-      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]));
-      mockExecute.mockReset().mockImplementation(() => Promise.resolve([]));
-      mockGetAgentBenchmarkForMode.mockReset().mockImplementation(() => Promise.resolve(null));
-    });
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }))
+      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }))
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }))
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
+      mockExecute.mockReset().mockImplementation(() => Promise.resolve([]))
+      mockGetAgentBenchmarkForMode.mockReset().mockImplementation(() => Promise.resolve(null))
+    })
 
     test('returns null when agent does not exist', async () => {
-      mockLimit.mockResolvedValueOnce([]);
-      const result = await assignNextTask(999);
-      expect(result).toBeNull();
-    });
+      mockLimit.mockResolvedValueOnce([])
+      const result = await assignNextTask(999)
+      expect(result).toBeNull()
+    })
 
     test('returns null when agent is not online', async () => {
       mockLimit.mockResolvedValueOnce([
@@ -113,10 +112,10 @@ if (isIsolated) {
           status: 'offline',
           capabilities: { gpu: true, hashModes: [0, 1000] },
         },
-      ]);
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-    });
+      ])
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+    })
 
     test('returns null when no matching tasks (capabilities mismatch) via DB predicate', async () => {
       mockLimit.mockResolvedValueOnce([
@@ -126,15 +125,15 @@ if (isIsolated) {
           status: 'online',
           capabilities: { gpu: false, hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]);
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-      expect(mockExecute).toHaveBeenCalled();
-    });
+      ])
+      mockExecute.mockResolvedValueOnce([])
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+      expect(mockExecute).toHaveBeenCalled()
+    })
 
     test('assigns task when agent capabilities match via DB predicate', async () => {
-      const now = new Date();
+      const now = new Date()
       const rawDbRow = {
         id: 42,
         attack_id: 10,
@@ -152,7 +151,7 @@ if (isIsolated) {
         retry_count: 0,
         created_at: now,
         updated_at: now,
-      };
+      }
       const expectedCamelCase = {
         id: 42,
         attackId: 10,
@@ -175,7 +174,7 @@ if (isIsolated) {
         retryCount: 0,
         createdAt: now,
         updatedAt: now,
-      };
+      }
 
       mockLimit.mockResolvedValueOnce([
         {
@@ -184,17 +183,17 @@ if (isIsolated) {
           status: 'online',
           capabilities: { gpu: true, hashModes: [0, 1000, 3000] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([rawDbRow]);
+      ])
+      mockExecute.mockResolvedValueOnce([rawDbRow])
 
-      const result = await assignNextTask(1);
-      expect(result).not.toBeNull();
-      expect(result).toEqual(expectedCamelCase);
-      expect(mockExecute).toHaveBeenCalled();
-    });
+      const result = await assignNextTask(1)
+      expect(result).not.toBeNull()
+      expect(result).toEqual(expectedCamelCase)
+      expect(mockExecute).toHaveBeenCalled()
+    })
 
     test('assigns task to agent with benchmarked status', async () => {
-      const now = new Date();
+      const now = new Date()
       const rawDbRow = {
         id: 50,
         attack_id: 11,
@@ -211,7 +210,7 @@ if (isIsolated) {
         failure_reason: null,
         created_at: now,
         updated_at: now,
-      };
+      }
 
       mockLimit.mockResolvedValueOnce([
         {
@@ -220,22 +219,22 @@ if (isIsolated) {
           status: 'benchmarked',
           capabilities: { gpu: true, hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([rawDbRow]);
+      ])
+      mockExecute.mockResolvedValueOnce([rawDbRow])
 
-      const result = await assignNextTask(2);
-      expect(result).not.toBeNull();
-      expect(result!.id).toBe(50);
-      expect(result!.workRange).toHaveProperty('agentSpeedHs');
-    });
+      const result = await assignNextTask(2)
+      expect(result).not.toBeNull()
+      expect(result!.id).toBe(50)
+      expect(result!.workRange).toHaveProperty('agentSpeedHs')
+    })
 
     test('returns null for non-eligible agent statuses', async () => {
       for (const status of ['offline', 'busy', 'error']) {
-        mockLimit.mockResolvedValueOnce([{ id: 3, projectId: 1, status, capabilities: {} }]);
-        const result = await assignNextTask(3);
-        expect(result).toBeNull();
+        mockLimit.mockResolvedValueOnce([{ id: 3, projectId: 1, status, capabilities: {} }])
+        const result = await assignNextTask(3)
+        expect(result).toBeNull()
       }
-    });
+    })
 
     // diagnoseAssignmentSkip helper - covers the skip-reason path that fires
     // when the atomic CTE returns no rows. The helper queries the count of
@@ -251,14 +250,14 @@ if (isIsolated) {
           status: 'online',
           capabilities: { hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]); // CTE returns no claim
+      ])
+      mockExecute.mockResolvedValueOnce([]) // CTE returns no claim
       // Diagnostic count #1 (any pending in project): 0 -> no_pending_tasks.
-      mockLimit.mockResolvedValueOnce([{ n: 0 }]);
+      mockLimit.mockResolvedValueOnce([{ n: 0 }])
 
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-    });
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+    })
 
     test('skip-diagnosis: no_matching_capability when pending tasks exist but capabilities mismatch', async () => {
       mockLimit.mockResolvedValueOnce([
@@ -268,15 +267,15 @@ if (isIsolated) {
           status: 'online',
           capabilities: { hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
+      ])
+      mockExecute.mockResolvedValueOnce([]) // CTE: no claim
       // Diagnostic #1: 5 pending; diagnostic #2: 0 matching.
-      mockLimit.mockResolvedValueOnce([{ n: 5 }]);
-      mockLimit.mockResolvedValueOnce([{ n: 0 }]);
+      mockLimit.mockResolvedValueOnce([{ n: 5 }])
+      mockLimit.mockResolvedValueOnce([{ n: 0 }])
 
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-    });
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+    })
 
     test('skip-diagnosis: claim_race_lost when matching tasks exist but were locked', async () => {
       mockLimit.mockResolvedValueOnce([
@@ -286,14 +285,14 @@ if (isIsolated) {
           status: 'online',
           capabilities: { hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
-      mockLimit.mockResolvedValueOnce([{ n: 5 }]); // any-pending: 5
-      mockLimit.mockResolvedValueOnce([{ n: 3 }]); // matching: 3 -> race lost
+      ])
+      mockExecute.mockResolvedValueOnce([]) // CTE: no claim
+      mockLimit.mockResolvedValueOnce([{ n: 5 }]) // any-pending: 5
+      mockLimit.mockResolvedValueOnce([{ n: 3 }]) // matching: 3 -> race lost
 
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-    });
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+    })
 
     test('skip-diagnosis: diagnostic failure falls back to claim_race_lost', async () => {
       // The diagnostic is wrapped in try/catch so a DB blip during the
@@ -307,17 +306,17 @@ if (isIsolated) {
           status: 'online',
           capabilities: { hashModes: [0] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]); // CTE: no claim
+      ])
+      mockExecute.mockResolvedValueOnce([]) // CTE: no claim
       // Diagnostic query rejects -> caught, fallback to claim_race_lost log.
-      mockLimit.mockImplementationOnce(() => Promise.reject(new Error('db blip')));
+      mockLimit.mockImplementationOnce(() => Promise.reject(new Error('db blip')))
 
-      const result = await assignNextTask(1);
-      expect(result).toBeNull();
-    });
+      const result = await assignNextTask(1)
+      expect(result).toBeNull()
+    })
 
     test('uses benchmark speed when available', async () => {
-      const now = new Date();
+      const now = new Date()
       const rawDbRow = {
         id: 60,
         attack_id: 12,
@@ -334,7 +333,7 @@ if (isIsolated) {
         failure_reason: null,
         created_at: now,
         updated_at: now,
-      };
+      }
 
       mockLimit.mockResolvedValueOnce([
         {
@@ -343,20 +342,20 @@ if (isIsolated) {
           status: 'online',
           capabilities: { gpu: true, hashModes: [1000] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([rawDbRow]);
+      ])
+      mockExecute.mockResolvedValueOnce([rawDbRow])
       mockGetAgentBenchmarkForMode.mockResolvedValueOnce({
         speedHs: 5_000_000,
-      });
+      })
 
-      const result = await assignNextTask(1);
-      expect(result).not.toBeNull();
-      expect(result!.workRange.agentSpeedHs).toBe(5_000_000);
-      expect(mockGetAgentBenchmarkForMode).toHaveBeenCalledWith(1, 1000);
-    });
+      const result = await assignNextTask(1)
+      expect(result).not.toBeNull()
+      expect(result!.workRange.agentSpeedHs).toBe(5_000_000)
+      expect(mockGetAgentBenchmarkForMode).toHaveBeenCalledWith(1, 1000)
+    })
 
     test('falls back to DEFAULT_AGENT_SPEED_HS when no benchmark exists', async () => {
-      const now = new Date();
+      const now = new Date()
       const rawDbRow = {
         id: 61,
         attack_id: 13,
@@ -373,7 +372,7 @@ if (isIsolated) {
         failure_reason: null,
         created_at: now,
         updated_at: now,
-      };
+      }
 
       mockLimit.mockResolvedValueOnce([
         {
@@ -382,14 +381,14 @@ if (isIsolated) {
           status: 'online',
           capabilities: { gpu: true, hashModes: [9999] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([rawDbRow]);
-      mockGetAgentBenchmarkForMode.mockResolvedValueOnce(null);
+      ])
+      mockExecute.mockResolvedValueOnce([rawDbRow])
+      mockGetAgentBenchmarkForMode.mockResolvedValueOnce(null)
 
-      const result = await assignNextTask(1);
-      expect(result).not.toBeNull();
-      expect(result!.workRange.agentSpeedHs).toBe(1_000_000);
-    });
+      const result = await assignNextTask(1)
+      expect(result).not.toBeNull()
+      expect(result!.workRange.agentSpeedHs).toBe(1_000_000)
+    })
 
     test('uses SQL-level predicate, not app-layer filtering', async () => {
       mockLimit.mockResolvedValueOnce([
@@ -399,15 +398,15 @@ if (isIsolated) {
           status: 'online',
           capabilities: { gpu: false, hashModes: [0, 100] },
         },
-      ]);
-      mockExecute.mockResolvedValueOnce([]);
+      ])
+      mockExecute.mockResolvedValueOnce([])
 
-      await assignNextTask(1);
+      await assignNextTask(1)
 
-      expect(mockExecute).toHaveBeenCalledTimes(1);
-      expect((db as Record<string, unknown>)['transaction']).not.toHaveBeenCalled();
-    });
-  });
+      expect(mockExecute).toHaveBeenCalledTimes(1)
+      expect((db as Record<string, unknown>)['transaction']).not.toHaveBeenCalled()
+    })
+  })
 
   // ─── reassignStaleTasks ───────────────────────────────────────────
   //
@@ -425,23 +424,23 @@ if (isIsolated) {
     // two-step chain that returns the seeded stale-task array from the final
     // .where() call.
     function seedStaleTasks(rows: unknown[]) {
-      const whereReturning = mock(() => Promise.resolve(rows));
-      const secondInnerJoin = mock(() => ({ where: whereReturning }));
-      const firstInnerJoin = mock(() => ({ innerJoin: secondInnerJoin }));
+      const whereReturning = mock(() => Promise.resolve(rows))
+      const secondInnerJoin = mock(() => ({ where: whereReturning }))
+      const firstInnerJoin = mock(() => ({ innerJoin: secondInnerJoin }))
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: firstInnerJoin,
         where: mock(),
-      }));
+      }))
     }
 
     // Captures every .set() payload so each test can assert which branch fired.
-    let setCalls: Array<Record<string, unknown>>;
+    let setCalls: Array<Record<string, unknown>>
     beforeEach(() => {
-      setCalls = [];
+      setCalls = []
       mockUpdateSet.mockReset().mockImplementation((payload: Record<string, unknown>) => {
-        setCalls.push(payload);
-        return { where: mockUpdateWhere };
-      });
+        setCalls.push(payload)
+        return { where: mockUpdateWhere }
+      })
       // Sweep branches now gate event emission and counter increments on
       // `.returning()` rowcount > 0 — the default mock must report a row
       // matched so the existing happy-path tests still observe the side
@@ -449,10 +448,10 @@ if (isIsolated) {
       // this to return [].
       mockUpdateWhere.mockReset().mockImplementation(() => ({
         returning: mock(() => Promise.resolve([{ id: 1 }])),
-      }));
-      mockEmitTaskUpdate.mockReset();
-      mockUpdateCampaignProgress.mockReset();
-    });
+      }))
+      mockEmitTaskUpdate.mockReset()
+      mockUpdateCampaignProgress.mockReset()
+    })
 
     test('marks task failed when keyspaceProgress equals total (un-acked completion)', async () => {
       // Agent reported 100% progress but never sent the explicit completion
@@ -467,9 +466,9 @@ if (isIsolated) {
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: { keyspaceProgress: 1000 }, // exactly equals total
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -477,11 +476,11 @@ if (isIsolated) {
         failedOverrun: 1,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
-      expect(setCalls[0]?.['status']).toBe('failed');
-      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
-    });
+      })
+      expect(setCalls).toHaveLength(1)
+      expect(setCalls[0]?.['status']).toBe('failed')
+      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun')
+    })
 
     test('marks task failed when keyspaceProgress overruns total', async () => {
       seedStaleTasks([
@@ -493,9 +492,9 @@ if (isIsolated) {
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: { keyspaceProgress: 5000 }, // 5x the chunk size
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -503,12 +502,12 @@ if (isIsolated) {
         failedOverrun: 1,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
-      expect(setCalls[0]?.['status']).toBe('failed');
-      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun');
-      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
-    });
+      })
+      expect(setCalls).toHaveLength(1)
+      expect(setCalls[0]?.['status']).toBe('failed')
+      expect(setCalls[0]?.['failureReason']).toBe('keyspace_progress_overrun')
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date)
+    })
 
     test('trims workRange.start forward on partial progress', async () => {
       seedStaleTasks([
@@ -520,9 +519,9 @@ if (isIsolated) {
           workRange: { start: 0, end: 1_000_000, total: 1_000_000 },
           progress: { keyspaceProgress: 250_000 }, // 25% done
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -530,22 +529,22 @@ if (isIsolated) {
         failedOverrun: 0,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
-      expect(setCalls[0]?.['status']).toBe('pending');
-      expect(setCalls[0]?.['agentId']).toBe(null);
-      expect(setCalls[0]?.['assignedAt']).toBe(null);
-      expect(setCalls[0]?.['startedAt']).toBe(null);
+      })
+      expect(setCalls).toHaveLength(1)
+      expect(setCalls[0]?.['status']).toBe('pending')
+      expect(setCalls[0]?.['agentId']).toBe(null)
+      expect(setCalls[0]?.['assignedAt']).toBe(null)
+      expect(setCalls[0]?.['startedAt']).toBe(null)
       // workRange.start advanced from 0 -> 250_000, end unchanged, total recomputed.
-      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
-      expect(wr['start']).toBe(250_000);
-      expect(wr['end']).toBe(1_000_000);
-      expect(wr['total']).toBe(750_000);
+      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>
+      expect(wr['start']).toBe(250_000)
+      expect(wr['end']).toBe(1_000_000)
+      expect(wr['total']).toBe(750_000)
       // Reported progress reset so the next agent starts at 0 within the trimmed range.
-      expect(setCalls[0]?.['progress']).toEqual({});
+      expect(setCalls[0]?.['progress']).toEqual({})
       // Retry counter bumped via SQL expression (`tasks.retry_count + 1`).
-      expect(setCalls[0]?.['retryCount']).toBeDefined();
-    });
+      expect(setCalls[0]?.['retryCount']).toBeDefined()
+    })
 
     test('falls through to reset-to-pending on 0% progress', async () => {
       seedStaleTasks([
@@ -557,9 +556,9 @@ if (isIsolated) {
           workRange: { start: 0, end: 1000, total: 1000 },
           progress: {},
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 1,
@@ -567,18 +566,18 @@ if (isIsolated) {
         failedOverrun: 0,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
+      })
+      expect(setCalls).toHaveLength(1)
       // Existing reset path: clear claim metadata but leave workRange/progress alone.
-      expect(setCalls[0]?.['status']).toBe('pending');
-      expect(setCalls[0]?.['agentId']).toBe(null);
-      expect(setCalls[0]?.['assignedAt']).toBe(null);
-      expect(setCalls[0]?.['startedAt']).toBe(null);
-      expect(setCalls[0]?.['workRange']).toBeUndefined();
-      expect(setCalls[0]?.['progress']).toBeUndefined();
+      expect(setCalls[0]?.['status']).toBe('pending')
+      expect(setCalls[0]?.['agentId']).toBe(null)
+      expect(setCalls[0]?.['assignedAt']).toBe(null)
+      expect(setCalls[0]?.['startedAt']).toBe(null)
+      expect(setCalls[0]?.['workRange']).toBeUndefined()
+      expect(setCalls[0]?.['progress']).toBeUndefined()
       // Retry counter bumped via SQL expression (`tasks.retry_count + 1`).
-      expect(setCalls[0]?.['retryCount']).toBeDefined();
-    });
+      expect(setCalls[0]?.['retryCount']).toBeDefined()
+    })
 
     test('handles string-encoded workRange values (bigint overflow case)', async () => {
       // Mask attack: keyspace is 10^20, agent reported 10^18 progress.
@@ -596,9 +595,9 @@ if (isIsolated) {
           },
           progress: { keyspaceProgress: '1000000000000000000' }, // 1e18
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -606,29 +605,29 @@ if (isIsolated) {
         failedOverrun: 0,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
-      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>;
+      })
+      expect(setCalls).toHaveLength(1)
+      const wr = setCalls[0]?.['workRange'] as Record<string, unknown>
       // New start = 0 + 1e18 = "1000000000000000000" (decimal string, bigint-safe).
-      expect(wr['start']).toBe('1000000000000000000');
+      expect(wr['start']).toBe('1000000000000000000')
       // End unchanged.
-      expect(wr['end']).toBe('100000000000000000000');
+      expect(wr['end']).toBe('100000000000000000000')
       // Total = 1e20 - 1e18, still well above MAX_SAFE_INTEGER -> string.
-      expect(wr['total']).toBe('99000000000000000000');
-    });
+      expect(wr['total']).toBe('99000000000000000000')
+    })
 
     test('emits zero counts when no stale tasks exist', async () => {
-      seedStaleTasks([]);
-      const result = await reassignStaleTasks();
+      seedStaleTasks([])
+      const result = await reassignStaleTasks()
       expect(result).toEqual({
         reassigned: 0,
         rebalanced: 0,
         failedOverrun: 0,
         failedMaxRetries: 0,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(0);
-    });
+      })
+      expect(setCalls).toHaveLength(0)
+    })
 
     test('terminal-fails partial-progress task when retry budget exhausted', async () => {
       seedStaleTasks([
@@ -641,9 +640,9 @@ if (isIsolated) {
           progress: { keyspaceProgress: 250_000 }, // partial-progress branch
           retryCount: 3, // at MAX_RETRIES — exceededRetries is true
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -651,19 +650,19 @@ if (isIsolated) {
         failedOverrun: 0,
         failedMaxRetries: 1,
         errored: 0,
-      });
-      expect(setCalls).toHaveLength(1);
-      expect(setCalls[0]?.['status']).toBe('failed');
-      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
-      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
+      })
+      expect(setCalls).toHaveLength(1)
+      expect(setCalls[0]?.['status']).toBe('failed')
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded')
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date)
       // Terminal fail must not touch workRange/progress — the row is dead.
-      expect(setCalls[0]?.['workRange']).toBeUndefined();
-      expect(setCalls[0]?.['progress']).toBeUndefined();
+      expect(setCalls[0]?.['workRange']).toBeUndefined()
+      expect(setCalls[0]?.['progress']).toBeUndefined()
       expect(mockEmitTaskUpdate).toHaveBeenCalledWith(9, 77, 'failed', {
         campaignId: 42,
-      });
-      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(42);
-    });
+      })
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(42)
+    })
 
     test('terminal-fails zero-progress task when retry budget exhausted', async () => {
       seedStaleTasks([
@@ -676,9 +675,9 @@ if (isIsolated) {
           progress: {}, // 0% / unreadable
           retryCount: 4, // above cap (defensive bound)
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
       expect(result).toEqual({
         reassigned: 0,
@@ -686,14 +685,14 @@ if (isIsolated) {
         failedOverrun: 0,
         failedMaxRetries: 1,
         errored: 0,
-      });
-      expect(setCalls[0]?.['status']).toBe('failed');
-      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
+      })
+      expect(setCalls[0]?.['status']).toBe('failed')
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded')
       expect(mockEmitTaskUpdate).toHaveBeenCalledWith(9, 78, 'failed', {
         campaignId: 43,
-      });
-      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(43);
-    });
+      })
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(43)
+    })
 
     test('does NOT terminal-fail at the boundary (retryCount = MAX_RETRIES - 1)', async () => {
       // Boundary guard: predicate is `>= MAX_RETRIES`, so retryCount=2 must
@@ -708,15 +707,15 @@ if (isIsolated) {
           progress: { keyspaceProgress: 250 },
           retryCount: 2,
         },
-      ]);
+      ])
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
-      expect(result.failedMaxRetries).toBe(0);
-      expect(result.rebalanced).toBe(1);
-      expect(setCalls[0]?.['status']).toBe('pending');
-      expect(setCalls[0]?.['failureReason']).toBeUndefined();
-    });
+      expect(result.failedMaxRetries).toBe(0)
+      expect(result.rebalanced).toBe(1)
+      expect(setCalls[0]?.['status']).toBe('pending')
+      expect(setCalls[0]?.['failureReason']).toBeUndefined()
+    })
 
     test('isolates per-task errors so siblings still process', async () => {
       // Three stale tasks; the second's UPDATE rejects. The first and third
@@ -749,27 +748,27 @@ if (isIsolated) {
           progress: {},
           retryCount: 0,
         },
-      ]);
+      ])
 
       // Sweep paths now call `.where(...).returning({id})`. The second
       // per-task UPDATE rejects from `.returning()` so the try/catch path
       // is exercised; the first and third resolve with a single-row array
       // so the success path runs.
-      let callIdx = 0;
+      let callIdx = 0
       mockUpdateWhere.mockReset().mockImplementation(() => {
-        const i = callIdx++;
+        const i = callIdx++
         if (i === 1) {
-          return { returning: mock(() => Promise.reject(new Error('db blip'))) };
+          return { returning: mock(() => Promise.reject(new Error('db blip'))) }
         }
-        return { returning: mock(() => Promise.resolve([{ id: 1 }])) };
-      });
+        return { returning: mock(() => Promise.resolve([{ id: 1 }])) }
+      })
 
-      const result = await reassignStaleTasks();
+      const result = await reassignStaleTasks()
 
-      expect(result.reassigned).toBe(2);
-      expect(result.errored).toBe(1);
-    });
-  });
+      expect(result.reassigned).toBe(2)
+      expect(result.errored).toBe(1)
+    })
+  })
 
   // ─── handleTaskFailure ────────────────────────────────────────────
   //
@@ -777,24 +776,24 @@ if (isIsolated) {
   // result_stats.retryCount to the new tasks.retry_count column, and the
   // terminal-fail branch that now also refreshes the campaign aggregate.
   describe('handleTaskFailure', () => {
-    let setCalls: Array<Record<string, unknown>>;
+    let setCalls: Array<Record<string, unknown>>
 
     beforeEach(() => {
-      setCalls = [];
-      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }));
-      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }));
-      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }));
-      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]));
+      setCalls = []
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }))
+      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }))
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }))
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
       mockUpdateSet.mockReset().mockImplementation((payload: Record<string, unknown>) => {
-        setCalls.push(payload);
-        return { where: mockUpdateWhere };
-      });
+        setCalls.push(payload)
+        return { where: mockUpdateWhere }
+      })
       mockUpdateWhere.mockReset().mockImplementation(() => ({
         returning: mock(() => Promise.resolve([])),
-      }));
-      mockEmitTaskUpdate.mockReset();
-      mockUpdateCampaignProgress.mockReset();
-    });
+      }))
+      mockEmitTaskUpdate.mockReset()
+      mockUpdateCampaignProgress.mockReset()
+    })
 
     test('retries (sets retryCount = current + 1) when below MAX_RETRIES', async () => {
       const task = {
@@ -803,28 +802,28 @@ if (isIsolated) {
         campaignId: 12,
         resultStats: { lastFailure: 'prior' },
         retryCount: 1,
-      };
+      }
       // First .limit() returns the task; second returns the campaign.
-      mockLimit.mockResolvedValueOnce([task]);
-      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      mockLimit.mockResolvedValueOnce([task])
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }])
       mockUpdateWhere.mockImplementationOnce(() => ({
         returning: mock(() =>
           Promise.resolve([{ ...task, status: 'pending', retryCount: 2, agentId: null }])
         ),
-      }));
+      }))
 
-      const result = await handleTaskFailure(50, 8, 'agent_timeout');
+      const result = await handleTaskFailure(50, 8, 'agent_timeout')
 
-      expect(result).toMatchObject({ retried: true });
-      expect(setCalls).toHaveLength(1);
-      expect(setCalls[0]?.['status']).toBe('pending');
-      expect(setCalls[0]?.['retryCount']).toBe(2);
-      expect(setCalls[0]?.['failureReason']).toBe('agent_timeout');
+      expect(result).toMatchObject({ retried: true })
+      expect(setCalls).toHaveLength(1)
+      expect(setCalls[0]?.['status']).toBe('pending')
+      expect(setCalls[0]?.['retryCount']).toBe(2)
+      expect(setCalls[0]?.['failureReason']).toBe('agent_timeout')
       // result_stats.retryCount must NOT be written anymore.
-      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>;
-      expect(stats['retryCount']).toBeUndefined();
-      expect(stats['lastFailure']).toBe('agent_timeout');
-    });
+      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>
+      expect(stats['retryCount']).toBeUndefined()
+      expect(stats['lastFailure']).toBe('agent_timeout')
+    })
 
     test('terminal-fails when retryCount equals MAX_RETRIES and refreshes campaign', async () => {
       const task = {
@@ -833,34 +832,34 @@ if (isIsolated) {
         campaignId: 12,
         resultStats: {},
         retryCount: 3,
-      };
-      mockLimit.mockResolvedValueOnce([task]);
-      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      }
+      mockLimit.mockResolvedValueOnce([task])
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }])
       mockUpdateWhere.mockImplementationOnce(() => ({
         returning: mock(() => Promise.resolve([{ ...task, status: 'failed' }])),
-      }));
+      }))
 
-      const result = await handleTaskFailure(51, 9, 'agent_timeout');
+      const result = await handleTaskFailure(51, 9, 'agent_timeout')
 
-      expect(result).toMatchObject({ retried: false });
-      expect(setCalls[0]?.['status']).toBe('failed');
+      expect(result).toMatchObject({ retried: false })
+      expect(setCalls[0]?.['status']).toBe('failed')
       // Stable terminal code so this row is distinguishable from a one-shot
       // failure with the same agent-reported reason; sweep terminal branches
       // use the same code so both paths look identical to downstream code.
-      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded');
+      expect(setCalls[0]?.['failureReason']).toBe('max_retries_exceeded')
       // The agent-reported reason that tipped the budget is preserved in
       // resultStats.lastFailure for debugging.
-      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>;
-      expect(stats['lastFailure']).toBe('agent_timeout');
-      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date);
+      const stats = setCalls[0]?.['resultStats'] as Record<string, unknown>
+      expect(stats['lastFailure']).toBe('agent_timeout')
+      expect(setCalls[0]?.['completedAt']).toBeInstanceOf(Date)
       expect(mockEmitTaskUpdate).toHaveBeenCalledWith(3, 51, 'failed', {
         agentId: 9,
         campaignId: 12,
-      });
+      })
       // Terminal fail must refresh the campaign aggregate so the dashboard
       // does not lag a sweep cycle (symmetric with the sweep terminal-fail).
-      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(12);
-    });
+      expect(mockUpdateCampaignProgress).toHaveBeenCalledWith(12)
+    })
 
     test('reads retryCount from the column, not result_stats (back-compat)', async () => {
       // A row migrated from the legacy schema may still carry a stale
@@ -873,21 +872,21 @@ if (isIsolated) {
         campaignId: 12,
         resultStats: { retryCount: 99, lastFailure: 'stale_legacy_value' },
         retryCount: 0,
-      };
-      mockLimit.mockResolvedValueOnce([task]);
-      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]);
+      }
+      mockLimit.mockResolvedValueOnce([task])
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }])
       mockUpdateWhere.mockImplementationOnce(() => ({
         returning: mock(() => Promise.resolve([{ ...task, retryCount: 1 }])),
-      }));
+      }))
 
-      const result = await handleTaskFailure(52, 10, 'agent_timeout');
+      const result = await handleTaskFailure(52, 10, 'agent_timeout')
 
       // Despite resultStats.retryCount=99, the column says 0 -> still retry.
-      expect(result).toMatchObject({ retried: true });
-      expect(setCalls[0]?.['retryCount']).toBe(1);
-      expect(setCalls[0]?.['status']).toBe('pending');
-    });
-  });
+      expect(result).toMatchObject({ retried: true })
+      expect(setCalls[0]?.['retryCount']).toBe(1)
+      expect(setCalls[0]?.['status']).toBe('pending')
+    })
+  })
 
   // ─── generateTasksForAttack ───────────────────────────────────────
   //
@@ -895,7 +894,7 @@ if (isIsolated) {
   // fleet benchmarks -> pickChunkSize -> bigint chunk walk -> insert.
   // The pure helpers (`calculateAttackKeyspace`, `pickChunkSize`) have
   // their own unit tests; these tests exercise the integration glue.
-  const { generateTasksForAttack } = await import('../../src/services/tasks.js');
+  const { generateTasksForAttack } = await import('../../src/services/tasks.js')
 
   describe('generateTasksForAttack', () => {
     // The select chain we have to satisfy:
@@ -910,20 +909,20 @@ if (isIsolated) {
     // dedicated chain for the fleet-benchmark query. Insert returns are
     // captured via a separate mock so chunk emission can be asserted.
 
-    let insertValuesArg: unknown;
-    let mockInsert: ReturnType<typeof mock>;
+    let insertValuesArg: unknown
+    let mockInsert: ReturnType<typeof mock>
 
     beforeEach(() => {
-      insertValuesArg = undefined;
-      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }));
-      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }));
-      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }));
-      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]));
+      insertValuesArg = undefined
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }))
+      mockFrom.mockReset().mockImplementation(() => ({ where: mockWhere, innerJoin: mock() }))
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit, innerJoin: mock() }))
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
 
       // Replace db.insert so we can capture the values array.
       mockInsert = mock((_table: unknown) => ({
         values: mock((rows: unknown) => {
-          insertValuesArg = rows;
+          insertValuesArg = rows
           // Return a fake .returning() that resolves to the inserted rows
           // with synthetic ids, matching real drizzle behavior.
           return {
@@ -937,11 +936,11 @@ if (isIsolated) {
                   : [{ ...(rows as Record<string, unknown>), id: 1000 }]
               )
             ),
-          };
+          }
         }),
-      }));
-      (db as Record<string, unknown>)['insert'] = mockInsert;
-    });
+      }))
+      ;(db as Record<string, unknown>)['insert'] = mockInsert
+    })
 
     test('mode 3 mask attack with computed keyspace inserts the right chunks', async () => {
       // attack row
@@ -957,32 +956,32 @@ if (isIsolated) {
           keyspace: null,
           advancedConfiguration: { mask: '?d?d?d?d' }, // 10^4 = 10_000
         },
-      ]);
+      ])
       // No wordlist / rulelist / masklist lookups for mode 3 with no IDs.
       // Next call is the fleet benchmark query; seed an empty fleet so
       // pickChunkSize falls back to FALLBACK_CHUNK_SIZE (10_000_000), which
       // exceeds the 10_000 keyspace - chunks should clamp at totalKeyspace.
-      const benchmarkWhereReturning = mock(() => Promise.resolve([]));
+      const benchmarkWhereReturning = mock(() => Promise.resolve([]))
       mockFrom.mockImplementationOnce(() => ({
         where: mockWhere,
         innerJoin: mock(),
-      }));
+      }))
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
-      }));
+      }))
 
-      const result = await generateTasksForAttack(7);
+      const result = await generateTasksForAttack(7)
 
       // 10_000 keyspace, fallback chunk 10_000_000 -> single chunk.
-      expect(result).toMatchObject({ count: 1 });
-      expect(Array.isArray(insertValuesArg)).toBe(true);
-      const rows = insertValuesArg as Array<Record<string, unknown>>;
-      expect(rows).toHaveLength(1);
-      const range = rows[0]?.['workRange'] as Record<string, unknown>;
-      expect(range['start']).toBe(0);
-      expect(range['end']).toBe(10000);
-      expect(range['total']).toBe(10000);
-    });
+      expect(result).toMatchObject({ count: 1 })
+      expect(Array.isArray(insertValuesArg)).toBe(true)
+      const rows = insertValuesArg as Array<Record<string, unknown>>
+      expect(rows).toHaveLength(1)
+      const range = rows[0]?.['workRange'] as Record<string, unknown>
+      expect(range['start']).toBe(0)
+      expect(range['end']).toBe(10000)
+      expect(range['total']).toBe(10000)
+    })
 
     test('non-empty fleet benchmarks size the chunks (fleet-aware path)', async () => {
       // attack row: mode 3 mask `?d?d?d?d?d?d` = 10^6 = 1_000_000 keyspace.
@@ -998,33 +997,45 @@ if (isIsolated) {
           keyspace: null,
           advancedConfiguration: { mask: '?d?d?d?d?d?d' },
         },
-      ]);
+      ])
       // Fleet benchmark: single agent at 1000 H/s. pickChunkSize -> 1000 * 60 =
       // 60_000 per chunk. Total = 1_000_000 -> 17 chunks (16 full + 1 trailing
       // 40_000-unit chunk).
-      const benchmarkWhereReturning = mock(() => Promise.resolve([{ speedHs: 1000 }]));
+      const benchmarkWhereReturning = mock(() => Promise.resolve([{ speedHs: 1000 }]))
       mockFrom.mockImplementationOnce(() => ({
         where: mockWhere,
         innerJoin: mock(),
-      }));
+      }))
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: mock(() => ({ where: benchmarkWhereReturning })),
-      }));
+      }))
 
-      const result = await generateTasksForAttack(11);
+      const result = await generateTasksForAttack(11)
 
-      expect(result).toMatchObject({ count: 17 });
-      const rows = insertValuesArg as Array<Record<string, unknown>>;
-      expect(rows).toHaveLength(17);
+      expect(result).toMatchObject({ count: 17 })
+      const rows = insertValuesArg as Array<Record<string, unknown>>
+      expect(rows).toHaveLength(17)
       // Each full chunk is exactly speedHs * targetSeconds = 60_000.
-      const firstChunk = rows[0]?.['workRange'] as Record<string, unknown>;
-      expect(firstChunk['start']).toBe(0);
-      expect(firstChunk['end']).toBe(60_000);
-      expect(firstChunk['total']).toBe(60_000);
+      const firstChunk = rows[0]?.['workRange'] as Record<string, unknown>
+      expect(firstChunk['start']).toBe(0)
+      expect(firstChunk['end']).toBe(60_000)
+      expect(firstChunk['total']).toBe(60_000)
       // Last chunk holds the trailing remainder, capped at totalKeyspace.
-      const lastChunk = rows[16]?.['workRange'] as Record<string, unknown>;
-      expect(lastChunk['end']).toBe(1_000_000);
-    });
+      const lastChunk = rows[16]?.['workRange'] as Record<string, unknown>
+      expect(lastChunk['end']).toBe(1_000_000)
+    })
+
+    test('rejects non-positive or non-integer chunkSize before any DB work', async () => {
+      // Validation runs at the function boundary, ahead of the attack lookup,
+      // so we don't need to seed any mocks. Each invalid value must throw a
+      // descriptive Error and never reach the BigInt math or division below.
+      const invalid: Array<number> = [0, -1, -1_000_000, Number.NaN, Number.POSITIVE_INFINITY, 1.5]
+      for (const value of invalid) {
+        await expect(generateTasksForAttack(7, { chunkSize: value })).rejects.toThrow(
+          /opts\.chunkSize must be a positive integer/
+        )
+      }
+    })
 
     test('returns single placeholder task when keyspace cannot be computed', async () => {
       // Mode 1 (combination) needs secondaryWordlistRows which the schema
@@ -1042,33 +1053,33 @@ if (isIsolated) {
           keyspace: null,
           advancedConfiguration: {},
         },
-      ]);
+      ])
       // Wordlist lookup returns a row, but mode 1 still falls through.
-      mockLimit.mockResolvedValueOnce([{ lineCount: 5000 }]);
+      mockLimit.mockResolvedValueOnce([{ lineCount: 5000 }])
 
-      const result = await generateTasksForAttack(8);
-      expect(result).toMatchObject({ count: 1 });
+      const result = await generateTasksForAttack(8)
+      expect(result).toMatchObject({ count: 1 })
       // Placeholder path passes a single object to .values(...), not an array.
       const row = (Array.isArray(insertValuesArg) ? insertValuesArg[0] : insertValuesArg) as Record<
         string,
         unknown
-      >;
-      const range = row?.['workRange'] as Record<string, unknown>;
-      expect(range['start']).toBe(0);
-      expect(range['end']).toBe(0);
-      expect(range['total']).toBe(0);
-    });
-  });
+      >
+      const range = row?.['workRange'] as Record<string, unknown>
+      expect(range['start']).toBe(0)
+      expect(range['end']).toBe(0)
+      expect(range['total']).toBe(0)
+    })
+  })
 } else {
   // Skipped in full suite — already validated in isolated first-phase run.
   // Using describe.skip so bun:test doesn't report zero tests from this file.
   describe.skip('assignNextTask (skipped — runs in isolated phase)', () => {
-    test.skip('see isolated run', () => {});
-  });
+    test.skip('see isolated run', () => {})
+  })
   describe.skip('reassignStaleTasks (skipped — runs in isolated phase)', () => {
-    test.skip('see isolated run', () => {});
-  });
+    test.skip('see isolated run', () => {})
+  })
   describe.skip('generateTasksForAttack (skipped — runs in isolated phase)', () => {
-    test.skip('see isolated run', () => {});
-  });
+    test.skip('see isolated run', () => {})
+  })
 }

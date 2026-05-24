@@ -21,7 +21,7 @@ HashHive is a TypeScript reimplementation of CipherSwarm, a distributed password
 - `AgentService` - Registration, heartbeat, capability detection
 - `CampaignService` - Campaign lifecycle, DAG validation, attack configuration
 - `TaskDistributionService` - Keyspace partitioning, task generation, assignment
-- `ResourceService` - File uploads to MinIO, hash list parsing coordination
+- `ResourceService` - File uploads to the S3-compatible object store (SeaweedFS in dev / air-gapped prod), hash list parsing coordination
 - `HashAnalysisService` - Hash-type identification, hashcat mode mapping
 - `EventService` - WebSocket broadcasting for real-time dashboard updates
 
@@ -41,7 +41,7 @@ HashHive is a TypeScript reimplementation of CipherSwarm, a distributed password
 ```bash
 # Quick start
 bun install                       # Install all workspace deps
-docker compose up -d              # Start PostgreSQL, Redis, MinIO
+docker compose up -d              # Start PostgreSQL, Redis, SeaweedFS
 bun dev                           # Start backend + frontend
 
 # Or use just commands
@@ -68,9 +68,9 @@ bun --filter backend test         # Backend tests
 
 ### Formatting & Linting
 
-- **Biome** for linting and formatting (not ESLint, not Prettier)
+- **oxlint + oxfmt** for linting and formatting (not ESLint, not Prettier, not Biome); **taplo** for TOML
 - Run `just format` or `bun run format` to format all files
-- pre-commit hooks run Biome checks and type checking
+- pre-commit hooks run oxfmt + taplo format checks, oxlint, and type checking
 
 ### Error Handling
 
@@ -111,7 +111,7 @@ bun --filter backend test         # Backend tests
 # docker-compose.yml provides:
 PostgreSQL: localhost:5432        # Primary datastore
 Redis: localhost:6379             # BullMQ queues + caching
-MinIO: localhost:9000/9001        # S3-compatible storage (minioadmin/minioadmin)
+SeaweedFS: localhost:9000 (S3), 9333 (master)  # S3-compatible object storage (minioadmin/minioadmin)
 ```
 
 ## Naming Conventions
@@ -128,7 +128,7 @@ MinIO: localhost:9000/9001        # S3-compatible storage (minioadmin/minioadmin
 - **`exactOptionalPropertyTypes`:** Use spread `...(val ? {k: val} : {})` not `k: val ?? undefined`
 - **`noUncheckedIndexedAccess`:** All `arr[i]` returns `T | undefined` — guard with null check
 - **`noPropertyAccessFromIndexSignature`:** Use `obj['key']` bracket notation for index signatures
-- **Biome `useLiteralKeys: "off"`:** Must stay off — conflicts with TS setting above
+- **Bracket notation for index signatures:** `obj['key']` not `obj.key` under `noPropertyAccessFromIndexSignature` — oxlint's `typescript/no-unnecessary-type-assertion` should not be silenced for these accesses
 - **Don't skip Zod validation** — validate all external input
 - **Don't commit secrets** — use .env files (gitignored)
 - **Agent API changes require OpenAPI spec updates** — keep contract in sync

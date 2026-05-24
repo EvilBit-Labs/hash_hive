@@ -1,0 +1,29 @@
+# Taplo (TOML formatter) config. oxfmt has no TOML alignment knobs
+# (per https://oxc.rs/docs/guide/usage/formatter/config-file-reference.html);
+# taplo handles `mise.toml` and any future TOML files. `oxfmt` ignores
+# TOMLs via `.oxfmtrc.json` so the two formatters don't fight.
+
+exclude = [
+  "node_modules/**",
+  "**/node_modules/**",
+  "dist/**",
+  "**/dist/**",
+  ".turbo/**",
+  "**/.turbo/**",
+]
+include = [ "**/*.toml" ]
+
+[formatting]
+# Pad `=` so adjacent keys align in a column.
+align_entries = true
+# Pad inline comments to align across consecutive lines.
+align_comments = true
+# Match the rest of the toolchain (oxfmt uses 100).
+array_auto_collapse  = true
+array_auto_expand    = true
+array_trailing_comma = true
+column_width         = 100
+compact_arrays       = false
+indent_string        = "  "
+reorder_keys         = true
+trailing_newline     = true

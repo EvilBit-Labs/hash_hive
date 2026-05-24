@@ -7,11 +7,12 @@
  * createCampaignWithAttacks, the standalone attack-write routes) keep
  * importing through the `services/campaigns.ts` facade.
  */
-import { hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared';
-import { and, eq, inArray } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import { hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import { and, eq, inArray } from 'drizzle-orm'
 
-type ResourceLookupKey = 'hashListId' | 'hashTypeId' | 'wordlistId' | 'rulelistId' | 'masklistId';
+import { db } from '../db/index.js'
+
+type ResourceLookupKey = 'hashListId' | 'hashTypeId' | 'wordlistId' | 'rulelistId' | 'masklistId'
 
 // Each of the 5 resource tables is a Drizzle pgTable carrying an
 // integer `id` column and (for everything except hashTypes) a
@@ -24,16 +25,16 @@ type ResourceTable =
   | typeof hashTypes
   | typeof wordLists
   | typeof ruleLists
-  | typeof maskLists;
+  | typeof maskLists
 
 interface ResourceLookupSpec {
-  table: ResourceTable;
+  table: ResourceTable
   idColumn:
     | typeof hashLists.id
     | typeof hashTypes.id
     | typeof wordLists.id
     | typeof ruleLists.id
-    | typeof maskLists.id;
+    | typeof maskLists.id
   // hashTypes is global (no `projectId` column), so this is nullable
   // and the helper switches off it.
   projectIdColumn:
@@ -41,8 +42,8 @@ interface ResourceLookupSpec {
     | typeof wordLists.projectId
     | typeof ruleLists.projectId
     | typeof maskLists.projectId
-    | null;
-  label: string;
+    | null
+  label: string
 }
 
 const RESOURCE_LOOKUPS: Record<ResourceLookupKey, ResourceLookupSpec> = {
@@ -76,19 +77,19 @@ const RESOURCE_LOOKUPS: Record<ResourceLookupKey, ResourceLookupSpec> = {
     projectIdColumn: maskLists.projectId,
     label: 'masklist',
   },
-};
+}
 
 async function lookupExistingIds(
   spec: ResourceLookupSpec,
   wanted: readonly number[],
   projectId: number
 ): Promise<Set<number>> {
-  if (wanted.length === 0) return new Set();
+  if (wanted.length === 0) return new Set()
   const whereClause = spec.projectIdColumn
     ? and(inArray(spec.idColumn, [...wanted]), eq(spec.projectIdColumn, projectId))
-    : inArray(spec.idColumn, [...wanted]);
-  const rows = await db.select({ id: spec.idColumn }).from(spec.table).where(whereClause);
-  return new Set(rows.map((r) => r.id));
+    : inArray(spec.idColumn, [...wanted])
+  const rows = await db.select({ id: spec.idColumn }).from(spec.table).where(whereClause)
+  return new Set(rows.map((r) => r.id))
 }
 
 /**
@@ -116,10 +117,10 @@ async function lookupExistingIds(
 export async function validateCampaignResources(
   campaign: { projectId: number; hashListId: number | null },
   campaignAttacks: ReadonlyArray<{
-    hashTypeId?: number | null | undefined;
-    wordlistId?: number | null | undefined;
-    rulelistId?: number | null | undefined;
-    masklistId?: number | null | undefined;
+    hashTypeId?: number | null | undefined
+    wordlistId?: number | null | undefined
+    rulelistId?: number | null | undefined
+    masklistId?: number | null | undefined
   }>
 ): Promise<{ valid: true } | { valid: false; missing: string[] }> {
   // Collect dedup'd id lists per resource type. Null campaign.hashListId
@@ -131,13 +132,13 @@ export async function validateCampaignResources(
     wordlistId: dedupIds(campaignAttacks, 'wordlistId'),
     rulelistId: dedupIds(campaignAttacks, 'rulelistId'),
     masklistId: dedupIds(campaignAttacks, 'masklistId'),
-  };
+  }
 
   const lookupKeys = (Object.keys(RESOURCE_LOOKUPS) as ResourceLookupKey[]).filter(
     (k) => wanted[k].length > 0
-  );
+  )
   if (lookupKeys.length === 0) {
-    return { valid: true };
+    return { valid: true }
   }
 
   // Run in parallel — every lookup is a single indexed SELECT.
@@ -146,29 +147,29 @@ export async function validateCampaignResources(
       key,
       foundIds: await lookupExistingIds(RESOURCE_LOOKUPS[key], wanted[key], campaign.projectId),
     }))
-  );
+  )
 
-  const missing: string[] = [];
+  const missing: string[] = []
   for (const { key, foundIds } of results) {
-    const label = RESOURCE_LOOKUPS[key].label;
+    const label = RESOURCE_LOOKUPS[key].label
     for (const id of wanted[key]) {
       if (!foundIds.has(id)) {
-        missing.push(`${label}(${id})`);
+        missing.push(`${label}(${id})`)
       }
     }
   }
 
-  return missing.length === 0 ? { valid: true } : { valid: false, missing };
+  return missing.length === 0 ? { valid: true } : { valid: false, missing }
 }
 
 function dedupIds<T extends Record<string, unknown>>(
   rows: ReadonlyArray<T>,
   key: keyof T
 ): number[] {
-  const out = new Set<number>();
+  const out = new Set<number>()
   for (const row of rows) {
-    const v = row[key];
-    if (typeof v === 'number') out.add(v);
+    const v = row[key]
+    if (typeof v === 'number') out.add(v)
   }
-  return Array.from(out);
+  return Array.from(out)
 }

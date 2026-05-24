@@ -44,7 +44,7 @@ bun install
 # Copy environment files
 cp packages/backend/.env.example packages/backend/.env
 
-# Start infrastructure services (PostgreSQL, Redis, MinIO)
+# Start infrastructure services (PostgreSQL, Redis, SeaweedFS)
 docker compose up -d
 ```
 
@@ -97,7 +97,7 @@ Use `just` commands for convenience:
 just dev              # Start all services
 just dev-backend      # Start backend only
 just dev-frontend     # Start frontend only
-just docker-up        # Start infrastructure (PostgreSQL, Redis, MinIO)
+just docker-up        # Start infrastructure (PostgreSQL, Redis, SeaweedFS)
 ```
 
 Or use bun directly:
@@ -112,9 +112,9 @@ docker compose up -d         # Infrastructure
 ### Code Quality
 
 ```bash
-just lint                # Lint all code (Biome)
-just format              # Format code (Biome)
-just format-check        # Check formatting
+just lint                # Lint all code (oxlint, type-aware)
+just format              # Format code (oxfmt + taplo)
+just format-check        # Check formatting (oxfmt --check + taplo --check)
 just type-check          # TypeScript type check
 ```
 
@@ -153,7 +153,7 @@ just ci-check            # lint + format-check + type-check + build + test
 
 ### Code Style
 
-- **Biome** for linting and formatting (not ESLint, not Prettier)
+- **oxlint + oxfmt** for linting and formatting (not ESLint, not Prettier, not Biome); **taplo** for TOML
 - 2 spaces for indentation
 - Single quotes for strings
 - Trailing commas
@@ -178,7 +178,7 @@ just ci-check            # lint + format-check + type-check + build + test
 
 The project uses [pre-commit](https://pre-commit.com) for automated quality checks:
 
-- Biome format and lint checks
+- oxfmt + taplo format checks and oxlint lint checks
 - TypeScript type checking
 - Trailing whitespace and file hygiene
 
@@ -234,11 +234,11 @@ refactor: simplify task distribution logic
 - Connection: `localhost:6379`
 - GUI: Use RedisInsight or redis-cli (`just redis-cli`)
 
-### MinIO
+### SeaweedFS object store
 
-- API: <http://localhost:9000>
-- Console: <http://localhost:9001>
-- Credentials: minioadmin/minioadmin
+- S3 API: <http://localhost:9000>
+- Master UI: <http://127.0.0.1:9333> (loopback-only; the master `/cluster/status` page is unauthenticated)
+- Credentials: minioadmin/minioadmin (kept from the MinIO era for back-compat; the SeaweedFS IAM config at `docker/seaweedfs/s3-iam.json` accepts the same values)
 
 ## Troubleshooting
 

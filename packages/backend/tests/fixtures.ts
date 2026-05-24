@@ -15,64 +15,64 @@ import type {
   InsertProject,
   InsertTask,
   InsertUser,
-} from '@hashhive/shared';
+} from '@hashhive/shared'
 
-let counter = 0;
+let counter = 0
 function nextId() {
-  return ++counter;
+  return ++counter
 }
 
 /** Reset the counter between test suites if needed. */
 export function resetFixtures() {
-  counter = 0;
+  counter = 0
 }
 
 // ─── Users ──────────────────────────────────────────────────────────
 
 export function buildUser(overrides: Partial<InsertUser> = {}): InsertUser {
-  const n = nextId();
+  const n = nextId()
   return {
     email: `user-${n}@test.local`,
     passwordHash: '$2b$12$dummyHashForTesting000000000000000000000000000000',
     name: `Test User ${n}`,
     status: 'active',
     ...overrides,
-  };
+  }
 }
 
 // ─── Projects ───────────────────────────────────────────────────────
 
 export function buildProject(overrides: Partial<InsertProject> = {}): InsertProject {
-  const n = nextId();
+  const n = nextId()
   return {
     name: `Test Project ${n}`,
     slug: `test-project-${n}`,
     ...overrides,
-  };
+  }
 }
 
 // ─── Agents ─────────────────────────────────────────────────────────
 
 export function buildAgent(overrides: Partial<InsertAgent> & { projectId: number }): InsertAgent {
-  const n = nextId();
+  const n = nextId()
   return {
     name: `Agent ${n}`,
     authToken: `test-agent-token-${n}-${crypto.randomUUID()}`,
     status: 'offline',
     ...overrides,
-  };
+  }
 }
 
 // ─── Hash Types ─────────────────────────────────────────────────────
 
 export function buildHashType(overrides: Partial<InsertHashType> = {}): InsertHashType {
-  const n = nextId();
+  const n = nextId()
   return {
     name: `Hash Type ${n}`,
     hashcatMode: 10000 + n,
     category: 'Test',
     ...overrides,
-  };
+  }
 }
 
 // ─── Hash Lists ─────────────────────────────────────────────────────
@@ -80,13 +80,13 @@ export function buildHashType(overrides: Partial<InsertHashType> = {}): InsertHa
 export function buildHashList(
   overrides: Partial<InsertHashList> & { projectId: number }
 ): InsertHashList {
-  const n = nextId();
+  const n = nextId()
   return {
     name: `Hash List ${n}`,
     source: 'upload',
     status: 'ready',
     ...overrides,
-  };
+  }
 }
 
 // ─── Hash Items ─────────────────────────────────────────────────────
@@ -94,11 +94,11 @@ export function buildHashList(
 export function buildHashItem(
   overrides: Partial<InsertHashItem> & { hashListId: number }
 ): InsertHashItem {
-  const n = nextId();
+  const n = nextId()
   return {
     hashValue: `${n}d41402abc4b2a76b9719d911017c592`.slice(0, 32),
     ...overrides,
-  };
+  }
 }
 
 // ─── Campaigns ──────────────────────────────────────────────────────
@@ -106,13 +106,13 @@ export function buildHashItem(
 export function buildCampaign(
   overrides: Partial<InsertCampaign> & { projectId: number; hashListId: number }
 ): InsertCampaign {
-  const n = nextId();
+  const n = nextId()
   return {
     name: `Campaign ${n}`,
     status: 'draft',
     priority: 5,
     ...overrides,
-  };
+  }
 }
 
 // ─── Attacks ────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ export function buildAttack(
     mode: 0,
     status: 'pending',
     ...overrides,
-  };
+  }
 }
 
 // ─── Tasks ──────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ export function buildTask(
   return {
     status: 'pending',
     ...overrides,
-  };
+  }
 }
 
 // ─── Token Helpers ──────────────────────────────────────────────────
@@ -147,5 +147,5 @@ export function buildTask(
  * For integration tests with a seeded database, pass the agent's actual authToken.
  */
 export function agentToken(token = 'test-agent-preshared-token'): string {
-  return token;
+  return token
 }

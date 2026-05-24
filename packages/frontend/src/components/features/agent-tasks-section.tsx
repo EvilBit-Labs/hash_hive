@@ -1,35 +1,36 @@
-import type { AgentTask } from '../../hooks/use-dashboard';
-import { EmptyState } from '../ui/empty-state';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table';
-import { TextLink } from '../ui/text-link';
-import { StatusBadge } from './status-badge';
+import type { AgentTask } from '../../hooks/use-dashboard'
+
+import { EmptyState } from '../ui/empty-state'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table'
+import { TextLink } from '../ui/text-link'
+import { StatusBadge } from './status-badge'
 
 interface AgentTasksSectionProps {
-  tasks: AgentTask[] | undefined;
-  isLoading: boolean;
-  isError?: boolean;
+  tasks: AgentTask[] | undefined
+  isLoading: boolean
+  isError?: boolean
 }
 
 function progressPercent(progress: Record<string, unknown>): string {
-  const value = progress['percent'] ?? progress['completed'] ?? progress['progress'];
-  if (value === undefined || value === null) return '-';
+  const value = progress['percent'] ?? progress['completed'] ?? progress['progress']
+  if (value === undefined || value === null) return '-'
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
-    console.warn('[AgentTasksSection] non-numeric progress.percent', value);
-    return 'invalid';
+    // oxlint-disable-next-line no-console -- surface protocol drift to operators
+    console.warn('[AgentTasksSection] non-numeric progress.percent', value)
+    return 'invalid'
   }
-  return `${Math.round(value)}%`;
+  return `${Math.round(value)}%`
 }
 
 function progressSpeed(progress: Record<string, unknown>): string {
-  const speed = progress['speedHs'] ?? progress['speed'];
-  if (speed === undefined || speed === null) return '-';
+  const speed = progress['speedHs'] ?? progress['speed']
+  if (speed === undefined || speed === null) return '-'
   if (typeof speed !== 'number' || !Number.isFinite(speed)) {
-    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
-    console.warn('[AgentTasksSection] non-numeric progress.speed', speed);
-    return 'invalid';
+    // oxlint-disable-next-line no-console -- surface protocol drift to operators
+    console.warn('[AgentTasksSection] non-numeric progress.speed', speed)
+    return 'invalid'
   }
-  return `${speed.toLocaleString()} H/s`;
+  return `${speed.toLocaleString()} H/s`
 }
 
 export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSectionProps) {
@@ -55,13 +56,13 @@ export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSecti
           </TableHead>
           <TableBody>
             {tasks.map((task) => {
-              const progress = task.progress ?? {};
+              const progress = task.progress ?? {}
               return (
                 <TableRow key={task.id}>
                   <Td className="text-sm">
                     <TextLink to={`/campaigns/${task.campaignId}`}>{task.campaignName}</TextLink>
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     Mode {task.attackMode} (#{task.attackId})
                   </Td>
                   <Td>
@@ -70,11 +71,11 @@ export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSecti
                   <Td className="font-mono text-xs">{progressPercent(progress)}</Td>
                   <Td className="font-mono text-xs">{progressSpeed(progress)}</Td>
                 </TableRow>
-              );
+              )
             })}
           </TableBody>
         </Table>
       )}
     </section>
-  );
+  )
 }

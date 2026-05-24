@@ -1,14 +1,17 @@
-import { type ConnectionOptions, Queue } from 'bullmq';
-import type Redis from 'ioredis';
-import { env } from '../config/env.js';
-import { logger } from '../config/logger.js';
-import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES, type QueueName } from '../config/queue.js';
-import { createRedisClient, getRedisStatus } from '../config/redis.js';
-import type { QueueJobMap } from './types.js';
+import type Redis from 'ioredis'
+
+import { type ConnectionOptions, Queue } from 'bullmq'
+
+import type { QueueJobMap } from './types.js'
+
+import { env } from '../config/env.js'
+import { logger } from '../config/logger.js'
+import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES, type QueueName } from '../config/queue.js'
+import { createRedisClient, getRedisStatus } from '../config/redis.js'
 
 export interface QueueHealth {
-  status: 'connected' | 'disconnected';
-  queues: Record<string, { waiting: number; active: number; failed: number }>;
+  status: 'connected' | 'disconnected'
+  queues: Record<string, { waiting: number; active: number; failed: number }>
 }
 
 /**
@@ -19,7 +22,7 @@ export interface QueueHealth {
  * threshold. Increasing this without bumping the assigned-at floor in
  * `reassignStaleTasks` would reintroduce the first-heartbeat race.
  */
-export const HEARTBEAT_SCHEDULER_INTERVAL_MS = 2 * 60 * 1000;
+export const HEARTBEAT_SCHEDULER_INTERVAL_MS = 2 * 60 * 1000
 
 /**
  * Manages BullMQ queues for the API process.
@@ -27,11 +30,11 @@ export const HEARTBEAT_SCHEDULER_INTERVAL_MS = 2 * 60 * 1000;
  * Workers run in dedicated processes — see worker-*.ts entrypoints.
  */
 export class QueueManager {
-  private connection: Redis;
-  private queues: Map<QueueName, Queue> = new Map();
+  private connection: Redis
+  private queues: Map<QueueName, Queue> = new Map()
 
   constructor() {
-    this.connection = createRedisClient('bullmq');
+    this.connection = createRedisClient('bullmq')
   }
 
   async init(): Promise<void> {
@@ -40,26 +43,26 @@ export class QueueManager {
     this.connection.on('ready', () => {
       if (this.queues.size === 0) {
         this.createQueues().catch((err) => {
-          logger.error({ err }, 'Failed to create queues after Redis reconnect');
-        });
+          logger.error({ err }, 'Failed to create queues after Redis reconnect')
+        })
       }
-    });
+    })
 
     try {
-      await this.connection.connect();
+      await this.connection.connect()
     } catch (err) {
-      logger.warn({ err }, 'Redis not available at startup — queues will be created on reconnect');
-      return;
+      logger.warn({ err }, 'Redis not available at startup — queues will be created on reconnect')
+      return
     }
 
     // Only create if the ready handler hasn't already done it
     if (this.queues.size === 0) {
-      await this.createQueues();
+      await this.createQueues()
     }
   }
 
   private async createQueues(): Promise<void> {
-    if (this.queues.size > 0) return;
+    if (this.queues.size > 0) return
 
     for (const name of Object.values(QUEUE_NAMES)) {
       // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
@@ -68,31 +71,31 @@ export class QueueManager {
         new Queue(name, {
           connection: this.connection as unknown as ConnectionOptions,
         })
-      );
+      )
     }
 
     // Schedule repeatable heartbeat monitor. See HEARTBEAT_SCHEDULER_INTERVAL_MS
     // for the rationale on the relationship to the offline threshold.
-    const heartbeatQueue = this.queues.get(QUEUE_NAMES.HEARTBEAT_MONITOR);
+    const heartbeatQueue = this.queues.get(QUEUE_NAMES.HEARTBEAT_MONITOR)
     if (heartbeatQueue) {
       await heartbeatQueue.upsertJobScheduler(
         'heartbeat-check',
         { every: HEARTBEAT_SCHEDULER_INTERVAL_MS },
         { data: { triggeredAt: new Date().toISOString() } }
-      );
+      )
     }
 
     // Schedule repeatable health monitor (issue #109).
-    const healthQueue = this.queues.get(QUEUE_NAMES.HEALTH_MONITOR);
+    const healthQueue = this.queues.get(QUEUE_NAMES.HEALTH_MONITOR)
     if (healthQueue) {
       await healthQueue.upsertJobScheduler(
         'health-check',
         { every: env.HEALTH_MONITOR_INTERVAL_MS },
         { data: { triggeredAt: new Date().toISOString() } }
-      );
+      )
     }
 
-    logger.info('Queue manager initialized');
+    logger.info('Queue manager initialized')
   }
 
   async enqueue<T extends QueueName>(
@@ -100,10 +103,10 @@ export class QueueManager {
     data: QueueJobMap[T],
     opts?: { priority?: number }
   ): Promise<boolean> {
-    const queue = this.queues.get(queueName);
+    const queue = this.queues.get(queueName)
     if (!queue) {
-      logger.warn({ queueName }, 'Queue not available — job not enqueued');
-      return false;
+      logger.warn({ queueName }, 'Queue not available — job not enqueued')
+      return false
     }
 
     try {
@@ -111,11 +114,11 @@ export class QueueManager {
         ...(opts?.priority ? { priority: opts.priority } : {}),
         attempts: DEFAULT_JOB_ATTEMPTS,
         backoff: { type: 'exponential', delay: 5_000 },
-      });
-      return true;
+      })
+      return true
     } catch (err) {
-      logger.error({ err, queueName }, 'Failed to enqueue job');
-      return false;
+      logger.error({ err, queueName }, 'Failed to enqueue job')
+      return false
     }
   }
 
@@ -126,17 +129,17 @@ export class QueueManager {
    * the Redis round-trips per health request.
    */
   getRedisStatus(): 'connected' | 'disconnected' {
-    return getRedisStatus(this.connection);
+    return getRedisStatus(this.connection)
   }
 
   async getHealth(): Promise<QueueHealth> {
-    const status = getRedisStatus(this.connection);
+    const status = getRedisStatus(this.connection)
 
     if (status !== 'connected') {
-      return { status: 'disconnected', queues: {} };
+      return { status: 'disconnected', queues: {} }
     }
 
-    const queueStats: Record<string, { waiting: number; active: number; failed: number }> = {};
+    const queueStats: Record<string, { waiting: number; active: number; failed: number }> = {}
 
     for (const [name, queue] of this.queues) {
       try {
@@ -144,25 +147,25 @@ export class QueueManager {
           queue.getWaitingCount(),
           queue.getActiveCount(),
           queue.getFailedCount(),
-        ]);
-        queueStats[name] = { waiting, active, failed };
+        ])
+        queueStats[name] = { waiting, active, failed }
       } catch {
-        queueStats[name] = { waiting: 0, active: 0, failed: 0 };
+        queueStats[name] = { waiting: 0, active: 0, failed: 0 }
       }
     }
 
-    return { status, queues: queueStats };
+    return { status, queues: queueStats }
   }
 
   async shutdown(): Promise<void> {
-    logger.info('Shutting down queue manager');
+    logger.info('Shutting down queue manager')
 
     // Close queues
-    await Promise.all([...this.queues.values()].map((q) => q.close()));
+    await Promise.all([...this.queues.values()].map((q) => q.close()))
 
     // Disconnect Redis
-    this.connection.disconnect();
+    this.connection.disconnect()
 
-    logger.info('Queue manager shut down');
+    logger.info('Queue manager shut down')
   }
 }

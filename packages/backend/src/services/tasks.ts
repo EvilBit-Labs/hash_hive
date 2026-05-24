@@ -1,4 +1,5 @@
-import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared';
+import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared'
+
 import {
   agentBenchmarks,
   agents,
@@ -9,21 +10,22 @@ import {
   ruleLists,
   tasks,
   wordLists,
-} from '@hashhive/shared';
-import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { getAgentBenchmarkForMode } from './agents.js';
-import { updateCampaignProgress } from './campaigns.js';
-import { pickChunkSize } from './chunk-sizing.js';
-import { emitCrackResult, emitTaskUpdate } from './events.js';
-import { calculateAttackKeyspace } from './keyspace.js';
+} from '@hashhive/shared'
+import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { getAgentBenchmarkForMode } from './agents.js'
+import { updateCampaignProgress } from './campaigns.js'
+import { pickChunkSize } from './chunk-sizing.js'
+import { emitCrackResult, emitTaskUpdate } from './events.js'
+import { calculateAttackKeyspace } from './keyspace.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
 
 // Below this threshold, workRange fields can be stored as JS Number safely
 // without losing precision (Number.MAX_SAFE_INTEGER = 2^53 - 1).
-const SAFE_NUMBER_THRESHOLD = BigInt(Number.MAX_SAFE_INTEGER);
+const SAFE_NUMBER_THRESHOLD = BigInt(Number.MAX_SAFE_INTEGER)
 
 /**
  * Pick the JSON representation of a bigint value: a JS Number when the value
@@ -33,7 +35,7 @@ const SAFE_NUMBER_THRESHOLD = BigInt(Number.MAX_SAFE_INTEGER);
  * overflow Number.MAX_SAFE_INTEGER.
  */
 function jsonSafeBigint(value: bigint): number | string {
-  return value <= SAFE_NUMBER_THRESHOLD ? Number(value) : value.toString();
+  return value <= SAFE_NUMBER_THRESHOLD ? Number(value) : value.toString()
 }
 
 /**
@@ -41,21 +43,21 @@ function jsonSafeBigint(value: bigint): number | string {
  * Used when generating tasks so agents can be matched by capability.
  */
 function deriveRequiredCapabilities(attack: {
-  mode: number;
-  advancedConfiguration: unknown;
+  mode: number
+  advancedConfiguration: unknown
 }): Record<string, unknown> {
-  const caps: Record<string, unknown> = {};
-  const config = (attack.advancedConfiguration ?? {}) as Record<string, unknown>;
+  const caps: Record<string, unknown> = {}
+  const config = (attack.advancedConfiguration ?? {}) as Record<string, unknown>
 
   // Attacks requiring GPU acceleration
   if (config['useGpu'] === true) {
-    caps['gpu'] = true;
+    caps['gpu'] = true
   }
 
   // Store the hashcat mode so agents can advertise supported modes
-  caps['hashcatMode'] = attack.mode;
+  caps['hashcatMode'] = attack.mode
 
-  return caps;
+  return caps
 }
 
 /**
@@ -86,7 +88,7 @@ async function getFleetBenchmarksForMode(
         eq(agents.projectId, projectId),
         sql`${agents.status} IN ('online', 'benchmarked', 'busy')`
       )
-    );
+    )
 }
 
 /**
@@ -99,43 +101,41 @@ async function getFleetBenchmarksForMode(
  * attacks fall through to the single-task path until that field exists.
  */
 async function loadKeyspaceInputs(attack: {
-  mode: number;
-  wordlistId: number | null;
-  rulelistId: number | null;
-  masklistId: number | null;
-  advancedConfiguration: unknown;
+  mode: number
+  wordlistId: number | null
+  rulelistId: number | null
+  masklistId: number | null
+  advancedConfiguration: unknown
 }): Promise<{
-  mode: number;
-  wordlistRows?: number;
-  rulelistRows?: number;
-  secondaryWordlistRows?: number;
-  mask?: string;
+  mode: number
+  wordlistRows?: number
+  rulelistRows?: number
+  secondaryWordlistRows?: number
+  mask?: string
 }> {
   const inputs: {
-    mode: number;
-    wordlistRows?: number;
-    rulelistRows?: number;
-    secondaryWordlistRows?: number;
-    mask?: string;
-  } = { mode: attack.mode };
+    mode: number
+    wordlistRows?: number
+    rulelistRows?: number
+    secondaryWordlistRows?: number
+    mask?: string
+  } = { mode: attack.mode }
 
   if (attack.wordlistId !== null) {
     const [row] = await db
       .select({ lineCount: wordLists.lineCount })
       .from(wordLists)
       .where(eq(wordLists.id, attack.wordlistId))
-      .limit(1);
-    if (row?.lineCount !== null && row?.lineCount !== undefined)
-      inputs.wordlistRows = row.lineCount;
+      .limit(1)
+    if (row?.lineCount !== null && row?.lineCount !== undefined) inputs.wordlistRows = row.lineCount
   }
   if (attack.rulelistId !== null) {
     const [row] = await db
       .select({ lineCount: ruleLists.lineCount })
       .from(ruleLists)
       .where(eq(ruleLists.id, attack.rulelistId))
-      .limit(1);
-    if (row?.lineCount !== null && row?.lineCount !== undefined)
-      inputs.rulelistRows = row.lineCount;
+      .limit(1)
+    if (row?.lineCount !== null && row?.lineCount !== undefined) inputs.rulelistRows = row.lineCount
   }
   if (attack.masklistId !== null) {
     // Masklist line count isn't the same as a mask string keyspace - a
@@ -145,16 +145,16 @@ async function loadKeyspaceInputs(attack: {
       .select({ id: maskLists.id })
       .from(maskLists)
       .where(eq(maskLists.id, attack.masklistId))
-      .limit(1);
+      .limit(1)
     if (row) {
       // No mask string here yet - masklist parsing is a follow-up.
     }
   }
   if (attack.advancedConfiguration && typeof attack.advancedConfiguration === 'object') {
-    const cfg = attack.advancedConfiguration as Record<string, unknown>;
-    if (typeof cfg['mask'] === 'string') inputs.mask = cfg['mask'];
+    const cfg = attack.advancedConfiguration as Record<string, unknown>
+    if (typeof cfg['mask'] === 'string') inputs.mask = cfg['mask']
   }
-  return inputs;
+  return inputs
 }
 
 /**
@@ -174,22 +174,38 @@ export async function generateTasksForAttack(
   attackId: number,
   opts: { chunkSize?: number | undefined } = {}
 ) {
-  const [attack] = await db.select().from(attacks).where(eq(attacks.id, attackId)).limit(1);
-  if (!attack) {
-    return { error: 'Attack not found' };
+  // Validate caller override up front: the chunk size feeds bigint division
+  // at the projected-chunks check and the loop step. Zero, negative, NaN,
+  // Infinity, or non-integer values would either throw inside `BigInt()`
+  // or trigger division-by-zero / produce a non-terminating chunk walk.
+  if (opts.chunkSize !== undefined) {
+    if (
+      !Number.isFinite(opts.chunkSize) ||
+      !Number.isInteger(opts.chunkSize) ||
+      opts.chunkSize <= 0
+    ) {
+      throw new Error(
+        `generateTasksForAttack: opts.chunkSize must be a positive integer, got ${String(opts.chunkSize)}`
+      )
+    }
   }
 
-  const requiredCapabilities = deriveRequiredCapabilities(attack);
+  const [attack] = await db.select().from(attacks).where(eq(attacks.id, attackId)).limit(1)
+  if (!attack) {
+    return { error: 'Attack not found' }
+  }
+
+  const requiredCapabilities = deriveRequiredCapabilities(attack)
 
   // Resolve total keyspace: prefer the stored value; compute when missing.
-  let totalKeyspaceStr = attack.keyspace?.trim() ?? '';
+  let totalKeyspaceStr = attack.keyspace?.trim() ?? ''
   if (!totalKeyspaceStr || totalKeyspaceStr === '0') {
-    const inputs = await loadKeyspaceInputs(attack);
-    const computed = calculateAttackKeyspace(inputs);
-    totalKeyspaceStr = computed ?? '';
+    const inputs = await loadKeyspaceInputs(attack)
+    const computed = calculateAttackKeyspace(inputs)
+    totalKeyspaceStr = computed ?? ''
   }
 
-  const totalKeyspace = totalKeyspaceStr ? BigInt(totalKeyspaceStr) : 0n;
+  const totalKeyspace = totalKeyspaceStr ? BigInt(totalKeyspaceStr) : 0n
   if (totalKeyspace <= 0n) {
     // No keyspace available - emit a single placeholder task so downstream
     // assignment / progress / failure paths still have a row to operate on.
@@ -202,18 +218,18 @@ export async function generateTasksForAttack(
         workRange: { start: 0, end: 0, total: 0 },
         requiredCapabilities,
       })
-      .returning();
+      .returning()
 
-    return { tasks: [task], count: 1 };
+    return { tasks: [task], count: 1 }
   }
 
   // Decide chunk size - caller override beats fleet-aware sizing for tests.
-  let chunkSize: bigint;
+  let chunkSize: bigint
   if (opts.chunkSize !== undefined) {
-    chunkSize = BigInt(opts.chunkSize);
+    chunkSize = BigInt(opts.chunkSize)
   } else {
-    const benchmarks = await getFleetBenchmarksForMode(attack.projectId, attack.mode);
-    chunkSize = BigInt(pickChunkSize({ totalKeyspace: totalKeyspaceStr, benchmarks }));
+    const benchmarks = await getFleetBenchmarksForMode(attack.projectId, attack.mode)
+    chunkSize = BigInt(pickChunkSize({ totalKeyspace: totalKeyspaceStr, benchmarks }))
   }
 
   // Cap chunk count to bound memory + DB-row inserts. A `?a^12` mask attack
@@ -223,30 +239,30 @@ export async function generateTasksForAttack(
   // keep generation finite - the trailing remainder becomes a single
   // oversized task that the heartbeat-monitor rebalance branch will split
   // further as agents make progress against it.
-  const MAX_CHUNKS_PER_ATTACK = 100_000n;
+  const MAX_CHUNKS_PER_ATTACK = 100_000n
   // Ceiling-div: the actual loop emits `ceil(totalKeyspace / chunkSize)`
   // chunks, so the comparison must use the same ceiling. With plain floor
   // div, `totalKeyspace = MAX*chunkSize + 1` would test as `> MAX_CHUNKS`
   // false (floor div gives exactly MAX) but the loop would emit MAX+1
   // chunks, blowing past the documented cap.
-  const projectedChunks = totalKeyspace / chunkSize + (totalKeyspace % chunkSize === 0n ? 0n : 1n);
+  const projectedChunks = totalKeyspace / chunkSize + (totalKeyspace % chunkSize === 0n ? 0n : 1n)
   if (projectedChunks > MAX_CHUNKS_PER_ATTACK) {
-    chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK;
-    if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n;
+    chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK
+    if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n
   }
 
   const chunks: Array<{
-    start: number | string;
-    end: number | string;
-    total: number | string;
-  }> = [];
+    start: number | string
+    end: number | string
+    total: number | string
+  }> = []
   for (let start = 0n; start < totalKeyspace; start += chunkSize) {
-    const end = start + chunkSize > totalKeyspace ? totalKeyspace : start + chunkSize;
+    const end = start + chunkSize > totalKeyspace ? totalKeyspace : start + chunkSize
     chunks.push({
       start: jsonSafeBigint(start),
       end: jsonSafeBigint(end),
       total: jsonSafeBigint(end - start),
-    });
+    })
   }
 
   const createdTasks = await db
@@ -260,9 +276,9 @@ export async function generateTasksForAttack(
         requiredCapabilities,
       }))
     )
-    .returning();
+    .returning()
 
-  return { tasks: createdTasks, count: createdTasks.length };
+  return { tasks: createdTasks, count: createdTasks.length }
 }
 
 // ─── Task Assignment ────────────────────────────────────────────────
@@ -276,18 +292,18 @@ export async function generateTasksForAttack(
  * - Hash mode compatibility: task's `hashcatMode` value must be in agent's `hashModes` array
  */
 export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQL {
-  const hasGpu = agentCaps['gpu'] === true;
-  const rawHashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : [];
+  const hasGpu = agentCaps['gpu'] === true
+  const rawHashModes = Array.isArray(agentCaps['hashModes']) ? agentCaps['hashModes'] : []
   // Sanitize to finite integers only — NaN, Infinity, non-numeric strings are dropped
   const hashModes = rawHashModes
     .map((m: unknown) => Number(m))
-    .filter((n): n is number => Number.isFinite(n) && Number.isInteger(n));
+    .filter((n): n is number => Number.isFinite(n) && Number.isInteger(n))
 
   // GPU check: if the task requires GPU, the agent must have it.
   // If the agent has GPU, this is always satisfied. If not, exclude GPU-requiring tasks.
   const gpuCondition = hasGpu
     ? sql`TRUE`
-    : sql`NOT (${tasks.requiredCapabilities}->>'gpu' = 'true')`;
+    : sql`NOT (${tasks.requiredCapabilities}->>'gpu' = 'true')`
 
   // Hash mode check: the task's required hashcatMode must be in the agent's hashModes array.
   // If agent advertises no hashModes (or all were invalid), only tasks without a hashcatMode requirement pass.
@@ -297,12 +313,12 @@ export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQ
           ${tasks.requiredCapabilities}->>'hashcatMode' IS NULL
           OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${hashModes}::int[])
         )`
-      : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`;
+      : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`
 
-  return sql`(${gpuCondition} AND ${hashModeCondition})`;
+  return sql`(${gpuCondition} AND ${hashModeCondition})`
 }
 
-const DEFAULT_AGENT_SPEED_HS = 1_000_000; // 1 MH/s fallback when no benchmark exists
+const DEFAULT_AGENT_SPEED_HS = 1_000_000 // 1 MH/s fallback when no benchmark exists
 
 /**
  * When `assignNextTask`'s atomic claim returns no rows, decide why so the
@@ -328,9 +344,9 @@ async function diagnoseAssignmentSkip(
         sql`${tasks.agentId} IS NULL`,
         eq(campaigns.projectId, projectId)
       )
-    );
+    )
   if (!pendingTotal || pendingTotal.n === 0) {
-    return 'no_pending_tasks';
+    return 'no_pending_tasks'
   }
 
   // Count pending+unassigned tasks the agent's capabilities actually match.
@@ -345,14 +361,14 @@ async function diagnoseAssignmentSkip(
         eq(campaigns.projectId, projectId),
         capabilityPredicate
       )
-    );
+    )
   if (!matching || matching.n === 0) {
-    return 'no_matching_capability';
+    return 'no_matching_capability'
   }
 
   // Matching candidates exist but the CTE returned zero rows - every
   // candidate must have been locked by a concurrent claimant.
-  return 'claim_race_lost';
+  return 'claim_race_lost'
 }
 
 /**
@@ -364,7 +380,7 @@ type AssignmentSkipReason =
   | 'agent_not_eligible' // agent missing, offline, or status outside the eligible set
   | 'no_pending_tasks' // project has no pending tasks at all
   | 'no_matching_capability' // pending tasks exist but none match the agent's caps
-  | 'claim_race_lost'; // candidate locked by another claimant via SKIP LOCKED
+  | 'claim_race_lost' // candidate locked by another claimant via SKIP LOCKED
 
 function logAssignmentSkip(
   agentId: number,
@@ -374,14 +390,14 @@ function logAssignmentSkip(
   logger.info(
     { event: 'task_assignment', kind: 'skipped', agentId, projectId, reason },
     'task assignment skipped'
-  );
+  )
 }
 
 function logAssignmentSuccess(agentId: number, projectId: number, taskId: number): void {
   logger.info(
     { event: 'task_assignment', kind: 'assigned', agentId, projectId, taskId },
     'task assigned'
-  );
+  )
 }
 
 /**
@@ -398,15 +414,15 @@ function logAssignmentSuccess(agentId: number, projectId: number, taskId: number
  */
 export async function assignNextTask(agentId: number): Promise<AssignedTask | null> {
   // Verify agent exists and is online or benchmarked
-  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1)
   if (!agent || (agent.status !== 'online' && agent.status !== 'benchmarked')) {
-    logAssignmentSkip(agentId, agent?.projectId ?? null, 'agent_not_eligible');
-    return null;
+    logAssignmentSkip(agentId, agent?.projectId ?? null, 'agent_not_eligible')
+    return null
   }
 
-  const projectId = agent.projectId;
-  const agentCaps = (agent.capabilities ?? {}) as Record<string, unknown>;
-  const capabilityPredicate = buildCapabilityPredicate(agentCaps);
+  const projectId = agent.projectId
+  const agentCaps = (agent.capabilities ?? {}) as Record<string, unknown>
+  const capabilityPredicate = buildCapabilityPredicate(agentCaps)
 
   // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED
   const result = await db.execute(sql`
@@ -435,9 +451,9 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
               ${tasks.requiredCapabilities}, ${tasks.assignedAt}, ${tasks.startedAt},
               ${tasks.completedAt}, ${tasks.failureReason}, ${tasks.retryCount},
               ${tasks.createdAt}, ${tasks.updatedAt}
-  `);
+  `)
 
-  const row = result[0] as Record<string, unknown> | undefined;
+  const row = result[0] as Record<string, unknown> | undefined
   if (!row) {
     // Distinguish "nothing pending in this project" from "pending exists
     // but none match this agent" from "candidate locked by a peer". The
@@ -447,48 +463,48 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     // Best-effort: if the diagnostic itself errors (e.g. a transient DB
     // issue), still emit a skip log with a generic reason rather than
     // turning the diagnostic into a new failure mode.
-    let reason: AssignmentSkipReason = 'claim_race_lost';
+    let reason: AssignmentSkipReason = 'claim_race_lost'
     try {
-      reason = await diagnoseAssignmentSkip(projectId, capabilityPredicate);
+      reason = await diagnoseAssignmentSkip(projectId, capabilityPredicate)
     } catch (err: unknown) {
       logger.warn(
         { err, agentId, projectId },
         'assignment skip diagnosis failed; logging claim_race_lost as best guess'
-      );
+      )
     }
-    logAssignmentSkip(agentId, projectId, reason);
-    return null;
+    logAssignmentSkip(agentId, projectId, reason)
+    return null
   }
-  logAssignmentSuccess(agentId, projectId, row['id'] as number);
+  logAssignmentSuccess(agentId, projectId, row['id'] as number)
 
   // Extract hashcatMode from the task's required capabilities for benchmark lookup
   // Accept both numeric and numeric-string values (legacy/external inserts may store as string)
-  const requiredCaps = row['required_capabilities'] as Record<string, unknown> | null;
-  const rawHashcatMode = requiredCaps?.['hashcatMode'];
+  const requiredCaps = row['required_capabilities'] as Record<string, unknown> | null
+  const rawHashcatMode = requiredCaps?.['hashcatMode']
   const parsedMode =
     typeof rawHashcatMode === 'number'
       ? rawHashcatMode
       : typeof rawHashcatMode === 'string'
         ? Number(rawHashcatMode)
-        : Number.NaN;
+        : Number.NaN
   const taskHashcatMode =
-    Number.isFinite(parsedMode) && Number.isInteger(parsedMode) ? parsedMode : null;
+    Number.isFinite(parsedMode) && Number.isInteger(parsedMode) ? parsedMode : null
 
   // Look up the agent's benchmark speed for this hash mode.
   // Wrapped in try-catch because the task is already claimed via FOR UPDATE SKIP LOCKED -
   // a benchmark lookup failure must not orphan the assigned task.
-  let agentSpeedHs = DEFAULT_AGENT_SPEED_HS;
+  let agentSpeedHs = DEFAULT_AGENT_SPEED_HS
   if (taskHashcatMode !== null) {
     try {
-      const benchmark = await getAgentBenchmarkForMode(agentId, taskHashcatMode);
+      const benchmark = await getAgentBenchmarkForMode(agentId, taskHashcatMode)
       if (benchmark) {
-        agentSpeedHs = benchmark.speedHs;
+        agentSpeedHs = benchmark.speedHs
       }
     } catch (err: unknown) {
       logger.warn(
         { err, agentId, hashcatMode: taskHashcatMode },
         'Benchmark lookup failed after task assignment - using default speed'
-      );
+      )
     }
   }
 
@@ -501,9 +517,9 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     status: row['status'] as string,
     workRange: {
       ...((row['work_range'] as {
-        start: number | string;
-        end: number | string;
-        total: number | string;
+        start: number | string
+        end: number | string
+        total: number | string
       } | null) ?? {
         start: 0,
         end: 0,
@@ -522,7 +538,7 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     retryCount: row['retry_count'] as number,
     createdAt: row['created_at'] as Date,
     updatedAt: row['updated_at'] as Date,
-  };
+  }
 }
 
 // ─── Task Progress & Results ────────────────────────────────────────
@@ -531,15 +547,15 @@ export async function updateTaskProgress(
   taskId: number,
   agentId: number,
   data: {
-    status: string;
+    status: string
     progress?:
       | {
-          keyspaceProgress?: number | string | undefined;
-          speed?: number | undefined;
-          temperature?: number | undefined;
+          keyspaceProgress?: number | string | undefined
+          speed?: number | undefined
+          temperature?: number | undefined
         }
-      | undefined;
-    results?: Array<{ hashValue: string; plaintext: string }> | undefined;
+      | undefined
+    results?: Array<{ hashValue: string; plaintext: string }> | undefined
   }
 ) {
   // Single JOIN: verify task ownership and resolve campaign context in one query
@@ -555,27 +571,27 @@ export async function updateTaskProgress(
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
-    .limit(1);
+    .limit(1)
 
   if (!taskRow) {
-    return { error: 'Task not found or not assigned to this agent' };
+    return { error: 'Task not found or not assigned to this agent' }
   }
 
   const updates: Record<string, unknown> = {
     status: data.status,
     updatedAt: new Date(),
-  };
+  }
 
   if (data.progress) {
-    updates['progress'] = data.progress;
+    updates['progress'] = data.progress
   }
 
   if (data.status === 'running' && !taskRow.startedAt) {
-    updates['startedAt'] = new Date();
+    updates['startedAt'] = new Date()
   }
 
   if (data.status === 'completed' || data.status === 'exhausted') {
-    updates['completedAt'] = new Date();
+    updates['completedAt'] = new Date()
   }
 
   // Update task status — re-verify ownership in the write path (TOCTOU defense)
@@ -583,10 +599,10 @@ export async function updateTaskProgress(
     .update(tasks)
     .set(updates)
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
-    .returning();
+    .returning()
 
   if (!updated) {
-    return { error: 'Task was reassigned during update' };
+    return { error: 'Task was reassigned during update' }
   }
 
   // Insert cracked hash results if submitted
@@ -598,7 +614,7 @@ export async function updateTaskProgress(
         resultCount: data.results.length,
       },
       'Cannot store crack results: campaign has no associated hash list'
-    );
+    )
   }
 
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
@@ -627,9 +643,9 @@ export async function updateTaskProgress(
             taskId: sql`EXCLUDED.task_id`,
             agentId: sql`EXCLUDED.agent_id`,
           },
-        });
+        })
 
-      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length);
+      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
     } catch (err) {
       logger.error(
         {
@@ -640,8 +656,8 @@ export async function updateTaskProgress(
           resultCount: data.results.length,
         },
         'Failed to insert crack results'
-      );
-      return { error: 'Failed to store crack results' };
+      )
+      return { error: 'Failed to store crack results' }
     }
   }
 
@@ -650,10 +666,10 @@ export async function updateTaskProgress(
     agentId,
     campaignId: taskRow.campaignId,
     progress: data.progress,
-  });
-  await updateCampaignProgress(taskRow.campaignId);
+  })
+  await updateCampaignProgress(taskRow.campaignId)
 
-  return { task: updated };
+  return { task: updated }
 }
 
 // ─── Task Retry & Failure Handling ──────────────────────────────────
@@ -664,27 +680,27 @@ export async function updateTaskProgress(
  * (`handleTaskFailure` or the stale-task sweep) is marked terminal.
  * Exported so callers and tests can reason about the same bound.
  */
-export const MAX_RETRIES = 3;
+export const MAX_RETRIES = 3
 
 export async function handleTaskFailure(taskId: number, agentId: number, reason: string) {
   const [task] = await db
     .select()
     .from(tasks)
     .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
-    .limit(1);
+    .limit(1)
   if (!task) {
-    return { error: 'Task not found or not assigned to this agent' };
+    return { error: 'Task not found or not assigned to this agent' }
   }
 
-  const resultStats = (task.resultStats as Record<string, unknown>) ?? {};
-  const { retryCount } = task;
+  const resultStats = (task.resultStats as Record<string, unknown>) ?? {}
+  const { retryCount } = task
 
   // Derive projectId from the campaign for event emission
   const [campaign] = await db
     .select({ projectId: campaigns.projectId })
     .from(campaigns)
     .where(eq(campaigns.id, task.campaignId))
-    .limit(1);
+    .limit(1)
 
   if (retryCount < MAX_RETRIES) {
     // Retry: reset task to pending with incremented retry count
@@ -701,7 +717,7 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
         updatedAt: new Date(),
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
-      .returning();
+      .returning()
 
     if (updated && campaign) {
       // Surface the agent that was just freed so listeners can refresh that
@@ -709,10 +725,10 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
       emitTaskUpdate(campaign.projectId, taskId, 'pending', {
         agentId,
         campaignId: task.campaignId,
-      });
+      })
     }
 
-    return { task: updated, retried: true };
+    return { task: updated, retried: true }
   }
 
   // Max retries exceeded — mark as failed permanently. Use the stable
@@ -741,21 +757,21 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
         sql`${tasks.status} IN ('assigned', 'running')`
       )
     )
-    .returning();
+    .returning()
 
   if (updated && campaign) {
     emitTaskUpdate(campaign.projectId, taskId, 'failed', {
       agentId,
       campaignId: task.campaignId,
-    });
+    })
     // Permanent fail changes the active-task count for the campaign; refresh
     // the aggregate so dashboards do not lag a sweep cycle. The sweep's
     // terminal-fail branches already do this — keep the two failure paths
     // symmetric so either subsystem keeps the aggregate honest.
-    await updateCampaignProgress(task.campaignId);
+    await updateCampaignProgress(task.campaignId)
   }
 
-  return { task: updated, retried: false };
+  return { task: updated, retried: false }
 }
 
 /**
@@ -765,17 +781,17 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
  * task as "fresh" rather than fail noisily.
  */
 function readKeyspaceProgress(progress: unknown): bigint {
-  if (progress === null || typeof progress !== 'object') return 0n;
-  const raw = (progress as Record<string, unknown>)['keyspaceProgress'];
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw));
+  if (progress === null || typeof progress !== 'object') return 0n
+  const raw = (progress as Record<string, unknown>)['keyspaceProgress']
+  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
   if (typeof raw === 'string') {
     try {
-      return BigInt(raw);
+      return BigInt(raw)
     } catch {
-      return 0n;
+      return 0n
     }
   }
-  return 0n;
+  return 0n
 }
 
 /**
@@ -784,17 +800,17 @@ function readKeyspaceProgress(progress: unknown): bigint {
  * mask-attack chunks beyond Number.MAX_SAFE_INTEGER).
  */
 function readWorkRangeField(workRange: unknown, key: string): bigint {
-  if (workRange === null || typeof workRange !== 'object') return 0n;
-  const raw = (workRange as Record<string, unknown>)[key];
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw));
+  if (workRange === null || typeof workRange !== 'object') return 0n
+  const raw = (workRange as Record<string, unknown>)[key]
+  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
   if (typeof raw === 'string') {
     try {
-      return BigInt(raw);
+      return BigInt(raw)
     } catch {
-      return 0n;
+      return 0n
     }
   }
-  return 0n;
+  return 0n
 }
 
 /**
@@ -803,14 +819,14 @@ function readWorkRangeField(workRange: unknown, key: string): bigint {
  * concurrent sweep already reaping the same row.
  */
 type StaleTaskRow = {
-  taskId: number;
-  agentId: number | null;
-  campaignId: number;
-  workRange: unknown;
-  progress: unknown;
-  projectId: number;
-  retryCount: number;
-};
+  taskId: number
+  agentId: number | null
+  campaignId: number
+  workRange: unknown
+  progress: unknown
+  projectId: number
+  retryCount: number
+}
 
 /**
  * Permanently fail a stale task and notify listeners. Three branches in
@@ -845,15 +861,15 @@ async function terminalFailStaleTask(
         staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
       )
     )
-    .returning({ id: tasks.id });
+    .returning({ id: tasks.id })
   if (updated.length === 0) {
-    return false;
+    return false
   }
   emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'failed', {
     campaignId: staleTask.campaignId,
-  });
-  await updateCampaignProgress(staleTask.campaignId);
-  return true;
+  })
+  await updateCampaignProgress(staleTask.campaignId)
+  return true
 }
 
 /**
@@ -878,7 +894,7 @@ async function terminalFailStaleTask(
  * does not strand the rest of the batch until the next sweep tick.
  */
 export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
-  const threshold = new Date(Date.now() - staleThresholdMs);
+  const threshold = new Date(Date.now() - staleThresholdMs)
 
   // Find tasks assigned to agents that haven't checked in. Carry workRange,
   // progress, projectId, campaignId, and retryCount so the rebalance branches
@@ -914,20 +930,20 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // (NULL < timestamp evaluates to NULL, which the filter rejects).
         sql`(${tasks.assignedAt} IS NULL OR ${tasks.assignedAt} < ${threshold})`
       )
-    );
+    )
 
-  let reassigned = 0;
-  let rebalanced = 0;
-  let failedOverrun = 0;
-  let failedMaxRetries = 0;
-  let errored = 0;
+  let reassigned = 0
+  let rebalanced = 0
+  let failedOverrun = 0
+  let failedMaxRetries = 0
+  let errored = 0
   for (const staleTask of staleTasks) {
     try {
-      const start = readWorkRangeField(staleTask.workRange, 'start');
-      const end = readWorkRangeField(staleTask.workRange, 'end');
-      const total = end > start ? end - start : 0n;
-      const keyspaceProgress = readKeyspaceProgress(staleTask.progress);
-      const exceededRetries = staleTask.retryCount >= MAX_RETRIES;
+      const start = readWorkRangeField(staleTask.workRange, 'start')
+      const end = readWorkRangeField(staleTask.workRange, 'end')
+      const total = end > start ? end - start : 0n
+      const keyspaceProgress = readKeyspaceProgress(staleTask.progress)
+      const exceededRetries = staleTask.retryCount >= MAX_RETRIES
 
       if (keyspaceProgress >= total && total > 0n) {
         // Agent reported as-much-or-more work than the chunk contains. Either
@@ -939,9 +955,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // helper actually changed a row — a concurrent sweep that already
         // processed this task makes the UPDATE a no-op.
         if (await terminalFailStaleTask(staleTask, 'keyspace_progress_overrun')) {
-          failedOverrun++;
+          failedOverrun++
         }
-        continue;
+        continue
       }
 
       if (keyspaceProgress > 0n && keyspaceProgress < total) {
@@ -950,14 +966,14 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           // handleTaskFailure's terminal branch; keep agentId so operators
           // can still see which agent dropped the task.
           if (await terminalFailStaleTask(staleTask, 'max_retries_exceeded')) {
-            failedMaxRetries++;
+            failedMaxRetries++
           }
-          continue;
+          continue
         }
 
         // Partial progress - trim workRange.start forward and re-pend.
-        const newStart = start + keyspaceProgress;
-        const newTotal = end - newStart;
+        const newStart = start + keyspaceProgress
+        const newTotal = end - newStart
         // Reset reported keyspaceProgress so the next agent starts from 0
         // within the trimmed range, but preserve auxiliary samples (speed,
         // temperature) so the dashboard's per-task telemetry doesn't
@@ -965,9 +981,9 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         const priorProgress =
           staleTask.progress && typeof staleTask.progress === 'object'
             ? (staleTask.progress as Record<string, unknown>)
-            : {};
-        const carriedProgress: Record<string, unknown> = { ...priorProgress };
-        delete carriedProgress['keyspaceProgress'];
+            : {}
+        const carriedProgress: Record<string, unknown> = { ...priorProgress }
+        delete carriedProgress['keyspaceProgress']
         const rebalanceUpdated = await db
           .update(tasks)
           .set({
@@ -991,24 +1007,24 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
               staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
             )
           )
-          .returning({ id: tasks.id });
+          .returning({ id: tasks.id })
         if (rebalanceUpdated.length === 0) {
-          continue;
+          continue
         }
         emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
           campaignId: staleTask.campaignId,
-        });
-        await updateCampaignProgress(staleTask.campaignId);
-        rebalanced++;
-        continue;
+        })
+        await updateCampaignProgress(staleTask.campaignId)
+        rebalanced++
+        continue
       }
 
       if (exceededRetries) {
         // 0% / unreadable progress but retry budget exhausted - permanent fail.
         if (await terminalFailStaleTask(staleTask, 'max_retries_exceeded')) {
-          failedMaxRetries++;
+          failedMaxRetries++
         }
-        continue;
+        continue
       }
 
       // 0% progress or unreadable range - reset to pending unchanged.
@@ -1029,17 +1045,17 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
           )
         )
-        .returning({ id: tasks.id });
+        .returning({ id: tasks.id })
       if (resetUpdated.length === 0) {
-        continue;
+        continue
       }
       emitTaskUpdate(staleTask.projectId, staleTask.taskId, 'pending', {
         campaignId: staleTask.campaignId,
-      });
-      await updateCampaignProgress(staleTask.campaignId);
-      reassigned++;
+      })
+      await updateCampaignProgress(staleTask.campaignId)
+      reassigned++
     } catch (err) {
-      errored += 1;
+      errored += 1
       logger.error(
         {
           err,
@@ -1049,49 +1065,49 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           projectId: staleTask.projectId,
         },
         'reassignStaleTasks: per-task processing threw — sibling stale tasks continue'
-      );
+      )
     }
   }
 
-  return { reassigned, rebalanced, failedOverrun, failedMaxRetries, errored };
+  return { reassigned, rebalanced, failedOverrun, failedMaxRetries, errored }
 }
 
 // ─── Task Queries ───────────────────────────────────────────────────
 
 export async function getTaskById(id: number) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
-  return task ?? null;
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1)
+  return task ?? null
 }
 
 export async function listTasks(filters: {
-  campaignId?: number | undefined;
-  attackId?: number | undefined;
-  agentId?: number | undefined;
-  status?: string | undefined;
-  limit?: number | undefined;
-  offset?: number | undefined;
+  campaignId?: number | undefined
+  attackId?: number | undefined
+  agentId?: number | undefined
+  status?: string | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }) {
-  let query = db.select().from(tasks).$dynamic();
+  let query = db.select().from(tasks).$dynamic()
 
-  const conditions = [];
+  const conditions = []
   if (filters.campaignId) {
-    conditions.push(eq(tasks.campaignId, filters.campaignId));
+    conditions.push(eq(tasks.campaignId, filters.campaignId))
   }
   if (filters.attackId) {
-    conditions.push(eq(tasks.attackId, filters.attackId));
+    conditions.push(eq(tasks.attackId, filters.attackId))
   }
   if (filters.agentId) {
-    conditions.push(eq(tasks.agentId, filters.agentId));
+    conditions.push(eq(tasks.agentId, filters.agentId))
   }
   if (filters.status) {
-    conditions.push(eq(tasks.status, filters.status));
+    conditions.push(eq(tasks.status, filters.status))
   }
   if (conditions.length > 0) {
-    query = query.where(and(...conditions));
+    query = query.where(and(...conditions))
   }
 
-  const limit = filters.limit ?? 50;
-  const offset = filters.offset ?? 0;
+  const limit = filters.limit ?? 50
+  const offset = filters.offset ?? 0
 
   const [results, countResult] = await Promise.all([
     query.limit(limit).offset(offset).orderBy(desc(tasks.createdAt)),
@@ -1099,14 +1115,14 @@ export async function listTasks(filters: {
       .select({ count: sql<number>`count(*)` })
       .from(tasks)
       .where(conditions.length > 0 ? and(...conditions) : undefined),
-  ]);
+  ])
 
   return {
     tasks: results,
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
-  };
+  }
 }
 
 // ─── Zap Endpoint (cracked hashes for a task) ───────────────────────
@@ -1122,7 +1138,7 @@ export async function getZapsForTask(
   projectId: number,
   opts: { since?: Date | undefined; limit?: number | undefined } = {}
 ): Promise<{ zaps: string[]; hasMore: boolean } | { error: string }> {
-  const fetchLimit = opts.limit ?? 10_000;
+  const fetchLimit = opts.limit ?? 10_000
 
   // Single JOIN: tasks -> campaigns to get hashListId + verify ownership + project scope
   const [taskRow] = await db
@@ -1135,21 +1151,21 @@ export async function getZapsForTask(
     .where(
       and(eq(tasks.id, taskId), eq(tasks.agentId, agentId), eq(campaigns.projectId, projectId))
     )
-    .limit(1);
+    .limit(1)
 
   if (!taskRow) {
-    return { error: 'Task not found or not assigned to this agent' };
+    return { error: 'Task not found or not assigned to this agent' }
   }
 
   if (!taskRow.hashListId) {
-    return { zaps: [], hasMore: false };
+    return { zaps: [], hasMore: false }
   }
 
   // Build conditions for cracked hash items
-  const conditions = [eq(hashItems.hashListId, taskRow.hashListId), isNotNull(hashItems.crackedAt)];
+  const conditions = [eq(hashItems.hashListId, taskRow.hashListId), isNotNull(hashItems.crackedAt)]
 
   if (opts.since) {
-    conditions.push(gt(hashItems.crackedAt, opts.since));
+    conditions.push(gt(hashItems.crackedAt, opts.since))
   }
 
   // Fetch limit+1 to detect hasMore
@@ -1158,18 +1174,18 @@ export async function getZapsForTask(
     .from(hashItems)
     .where(and(...conditions))
     .orderBy(hashItems.crackedAt)
-    .limit(fetchLimit + 1);
+    .limit(fetchLimit + 1)
 
-  const hasMore = rows.length > fetchLimit;
-  const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue);
+  const hasMore = rows.length > fetchLimit
+  const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue)
 
-  return { zaps, hasMore };
+  return { zaps, hasMore }
 }
 
 // ─── Per-Agent Task Listing ─────────────────────────────────────────
 
-export const AGENT_TASK_ACTIVE_STATUSES = ['pending', 'assigned', 'running'] as const;
-export type AgentTaskActiveStatus = (typeof AGENT_TASK_ACTIVE_STATUSES)[number];
+export const AGENT_TASK_ACTIVE_STATUSES = ['pending', 'assigned', 'running'] as const
+export type AgentTaskActiveStatus = (typeof AGENT_TASK_ACTIVE_STATUSES)[number]
 
 /**
  * Test-only: convert a raw join-row shape (same fields the SQL selects)
@@ -1179,22 +1195,22 @@ export type AgentTaskActiveStatus = (typeof AGENT_TASK_ACTIVE_STATUSES)[number];
  */
 export function projectAgentTaskRows(
   rows: ReadonlyArray<{
-    id: number;
-    campaignId: number;
-    campaignName: string;
-    attackId: number;
-    attackMode: number;
-    status: string;
-    progress: unknown;
-    startedAt: Date | string | null;
-    assignedAt: Date | string | null;
+    id: number
+    campaignId: number
+    campaignName: string
+    attackId: number
+    attackMode: number
+    status: string
+    progress: unknown
+    startedAt: Date | string | null
+    assignedAt: Date | string | null
   }>
 ): AgentTaskSummary[] {
   const iso = (v: Date | string | null): string | null => {
-    if (v === null) return null;
-    if (v instanceof Date) return v.toISOString();
-    return v;
-  };
+    if (v === null) return null
+    if (v instanceof Date) return v.toISOString()
+    return v
+  }
   return rows.map((row) => ({
     id: row.id,
     campaignId: row.campaignId,
@@ -1205,7 +1221,7 @@ export function projectAgentTaskRows(
     progress: (row.progress as Record<string, unknown> | null) ?? {},
     startedAt: iso(row.startedAt),
     assignedAt: iso(row.assignedAt),
-  }));
+  }))
 }
 
 /**
@@ -1232,7 +1248,7 @@ export async function listTasksByAgent(agentId: number): Promise<AgentTaskSummar
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .innerJoin(attacks, eq(tasks.attackId, attacks.id))
     .where(and(eq(tasks.agentId, agentId), inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])))
-    .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt));
+    .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt))
 
-  return projectAgentTaskRows(rows);
+  return projectAgentTaskRows(rows)
 }

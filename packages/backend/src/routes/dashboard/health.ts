@@ -7,18 +7,20 @@
  * card. No project scoping — health is system-wide.
  */
 
-import { Hono } from 'hono';
-import { requireSession } from '../../middleware/auth.js';
-import { getSystemHealth } from '../../services/health.js';
-import type { AppEnv } from '../../types.js';
+import { Hono } from 'hono'
 
-const healthRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
 
-healthRoutes.use('*', requireSession);
+import { requireSession } from '../../middleware/auth.js'
+import { getSystemHealth } from '../../services/health.js'
+
+const healthRoutes = new Hono<AppEnv>()
+
+healthRoutes.use('*', requireSession)
 
 healthRoutes.get('/', async (c) => {
-  const health = await getSystemHealth();
-  return c.json(health);
-});
+  const health = await getSystemHealth()
+  return c.json(health)
+})
 
-export { healthRoutes };
+export { healthRoutes }

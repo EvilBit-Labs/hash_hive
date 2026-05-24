@@ -19,6 +19,6 @@ export function makeAwaitableChain(
   defaultRows: unknown[],
   chain: Record<string, unknown>
 ): Promise<unknown[]> & Record<string, unknown> {
-  const promise = Promise.resolve(defaultRows);
-  return Object.assign(promise, chain);
+  const promise = Promise.resolve(defaultRows)
+  return Object.assign(promise, chain)
 }

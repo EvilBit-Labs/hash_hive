@@ -3,25 +3,25 @@
  * All factories return plain objects matching backend response shapes.
  */
 
-import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared';
+import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared'
 
 interface MockUser {
-  id: number;
-  email: string;
-  name: string;
-  status: string;
+  id: number
+  email: string
+  name: string
+  status: string
 }
 
 interface MockProject {
-  id: number;
-  name: string;
-  slug: string;
-  roles: string[];
+  id: number
+  name: string
+  slug: string
+  roles: string[]
 }
 
 interface MockLoginResponseOptions {
-  user?: Partial<MockUser>;
-  selectedProjectId?: number;
+  user?: Partial<MockUser>
+  selectedProjectId?: number
 }
 
 export function mockLoginResponse(options: MockLoginResponseOptions = {}) {
@@ -36,18 +36,18 @@ export function mockLoginResponse(options: MockLoginResponseOptions = {}) {
     ...(options.selectedProjectId !== undefined
       ? { selectedProjectId: options.selectedProjectId }
       : {}),
-  };
+  }
 }
 
 interface MockMeResponseOptions {
-  user?: Partial<MockUser>;
-  projectCount?: number;
-  projects?: MockProject[];
-  selectedProjectId?: number;
+  user?: Partial<MockUser>
+  projectCount?: number
+  projects?: MockProject[]
+  selectedProjectId?: number
 }
 
 export function mockMeResponse(options: MockMeResponseOptions = {}) {
-  const projectCount = options.projectCount ?? 2;
+  const projectCount = options.projectCount ?? 2
   const projects =
     options.projects ??
     Array.from({ length: projectCount }, (_, i) => ({
@@ -55,7 +55,7 @@ export function mockMeResponse(options: MockMeResponseOptions = {}) {
       name: `Project ${i + 1}`,
       slug: `project-${i + 1}`,
       roles: ['admin'],
-    }));
+    }))
 
   return {
     user: {
@@ -73,26 +73,26 @@ export function mockMeResponse(options: MockMeResponseOptions = {}) {
     ...(options.selectedProjectId !== undefined
       ? { selectedProjectId: options.selectedProjectId }
       : {}),
-  };
+  }
 }
 
 interface MockDashboardStatsOptions {
-  agents?: Partial<{ total: number; online: number; offline: number; error: number }>;
+  agents?: Partial<{ total: number; online: number; offline: number; error: number }>
   campaigns?: Partial<{
-    total: number;
-    draft: number;
-    running: number;
-    paused: number;
-    completed: number;
-  }>;
+    total: number
+    draft: number
+    running: number
+    paused: number
+    completed: number
+  }>
   tasks?: Partial<{
-    total: number;
-    pending: number;
-    running: number;
-    completed: number;
-    failed: number;
-  }>;
-  cracked?: Partial<{ total: number }>;
+    total: number
+    pending: number
+    running: number
+    completed: number
+    failed: number
+  }>
+  cracked?: Partial<{ total: number }>
 }
 
 export function mockDashboardStats(options: MockDashboardStatsOptions = {}) {
@@ -124,45 +124,45 @@ export function mockDashboardStats(options: MockDashboardStatsOptions = {}) {
       total: 42,
       ...options.cracked,
     },
-  };
+  }
 }
 
 interface MockProjectsResponseOptions {
-  count?: number;
-  projects?: Array<Partial<MockProject>>;
+  count?: number
+  projects?: Array<Partial<MockProject>>
 }
 
 export function mockProjectsResponse(options: MockProjectsResponseOptions = {}) {
-  const count = options.count ?? 2;
+  const count = options.count ?? 2
   return Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     name: `Project ${i + 1}`,
     slug: `project-${i + 1}`,
     roles: ['admin'],
     ...options.projects?.[i],
-  }));
+  }))
 }
 
 // --- Agent fixtures ---
 
 interface MockAgent {
-  id: number;
-  name: string;
-  status: string;
-  lastSeenAt: string | null;
-  projectId: number;
-  capabilities: Record<string, unknown> | null;
-  hardwareProfile: Record<string, unknown> | null;
-  createdAt: string;
+  id: number
+  name: string
+  status: string
+  lastSeenAt: string | null
+  projectId: number
+  capabilities: Record<string, unknown> | null
+  hardwareProfile: Record<string, unknown> | null
+  createdAt: string
 }
 
 interface MockAgentsResponseOptions {
-  count?: number;
-  agents?: Array<Partial<MockAgent>>;
+  count?: number
+  agents?: Array<Partial<MockAgent>>
 }
 
 export function mockAgentsResponse(options: MockAgentsResponseOptions = {}) {
-  const count = options.count ?? 3;
+  const count = options.count ?? 3
   const agents = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     name: `Agent ${i + 1}`,
@@ -173,12 +173,12 @@ export function mockAgentsResponse(options: MockAgentsResponseOptions = {}) {
     hardwareProfile: null,
     createdAt: new Date().toISOString(),
     ...options.agents?.[i],
-  }));
-  return { agents, total: agents.length };
+  }))
+  return { agents, total: agents.length }
 }
 
 interface MockAgentResponseOptions {
-  agent?: Partial<MockAgent>;
+  agent?: Partial<MockAgent>
 }
 
 export function mockAgentResponse(options: MockAgentResponseOptions = {}) {
@@ -194,25 +194,25 @@ export function mockAgentResponse(options: MockAgentResponseOptions = {}) {
       createdAt: new Date().toISOString(),
       ...options.agent,
     },
-  };
+  }
 }
 
 interface MockAgentError {
-  id: number;
-  agentId: number;
-  severity: string;
-  message: string;
-  metadata: Record<string, unknown> | null;
-  createdAt: string;
+  id: number
+  agentId: number
+  severity: string
+  message: string
+  metadata: Record<string, unknown> | null
+  createdAt: string
 }
 
 interface MockAgentErrorsResponseOptions {
-  count?: number;
-  errors?: Array<Partial<MockAgentError>>;
+  count?: number
+  errors?: Array<Partial<MockAgentError>>
 }
 
 export function mockAgentErrorsResponse(options: MockAgentErrorsResponseOptions = {}) {
-  const count = options.count ?? 2;
+  const count = options.count ?? 2
   const errors = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     agentId: 1,
@@ -221,32 +221,32 @@ export function mockAgentErrorsResponse(options: MockAgentErrorsResponseOptions 
     metadata: null,
     createdAt: new Date().toISOString(),
     ...options.errors?.[i],
-  }));
-  return { errors };
+  }))
+  return { errors }
 }
 
 // --- Campaign fixtures ---
 
 interface MockCampaign {
-  id: number;
-  name: string;
-  description: string | null;
-  status: string;
-  projectId: number;
-  hashListId: number;
-  priority: number;
-  createdAt: string;
-  startedAt: string | null;
-  completedAt: string | null;
+  id: number
+  name: string
+  description: string | null
+  status: string
+  projectId: number
+  hashListId: number
+  priority: number
+  createdAt: string
+  startedAt: string | null
+  completedAt: string | null
 }
 
 interface MockCampaignsResponseOptions {
-  count?: number;
-  campaigns?: Array<Partial<MockCampaign>>;
+  count?: number
+  campaigns?: Array<Partial<MockCampaign>>
 }
 
 export function mockCampaignsResponse(options: MockCampaignsResponseOptions = {}) {
-  const count = options.count ?? 3;
+  const count = options.count ?? 3
   const campaigns = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     name: `Campaign ${i + 1}`,
@@ -259,19 +259,19 @@ export function mockCampaignsResponse(options: MockCampaignsResponseOptions = {}
     startedAt: null,
     completedAt: null,
     ...options.campaigns?.[i],
-  }));
-  return { campaigns, total: campaigns.length };
+  }))
+  return { campaigns, total: campaigns.length }
 }
 
 interface MockAttack {
-  id: number;
-  campaignId: number;
-  mode: number;
-  status: string;
-  wordlistId: number | null;
-  rulelistId: number | null;
-  masklistId: number | null;
-  dependencies: number[] | null;
+  id: number
+  campaignId: number
+  mode: number
+  status: string
+  wordlistId: number | null
+  rulelistId: number | null
+  masklistId: number | null
+  dependencies: number[] | null
 }
 
 // Fixture shapes derive from the shared Zod-inferred wire types so test
@@ -279,10 +279,10 @@ interface MockAttack {
 // `@hashhive/shared`'s campaign-dashboard schemas.
 
 interface MockCampaignDetailResponseOptions {
-  campaign?: Partial<MockCampaign>;
-  attacks?: Array<Partial<MockAttack>>;
-  taskStats?: Partial<CampaignTaskStats>;
-  activeAgents?: Array<Partial<CampaignActiveAgent>>;
+  campaign?: Partial<MockCampaign>
+  attacks?: Array<Partial<MockAttack>>
+  taskStats?: Partial<CampaignTaskStats>
+  activeAgents?: Array<Partial<CampaignActiveAgent>>
 }
 
 export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOptions = {}) {
@@ -298,7 +298,7 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
     startedAt: null,
     completedAt: null,
     ...options.campaign,
-  };
+  }
 
   const attacks = options.attacks
     ? options.attacks.map((a, i) => ({
@@ -323,7 +323,7 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
           masklistId: null,
           dependencies: null,
         },
-      ];
+      ]
 
   const taskStats: CampaignTaskStats = {
     total: 0,
@@ -332,7 +332,7 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
     completed: 0,
     failed: 0,
     ...options.taskStats,
-  };
+  }
 
   const activeAgents = (options.activeAgents ?? []).map((agent, i) => ({
     agentId: i + 1,
@@ -343,30 +343,30 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
     progress: null,
     speedHs: null,
     ...agent,
-  }));
+  }))
 
-  return { campaign, attacks, taskStats, activeAgents };
+  return { campaign, attacks, taskStats, activeAgents }
 }
 
 // --- Resource fixtures ---
 
 interface MockHashList {
-  id: number;
-  name: string;
-  projectId: number;
-  hashTypeId: number | null;
-  hashCount: number;
-  crackedCount: number;
-  createdAt: string;
+  id: number
+  name: string
+  projectId: number
+  hashTypeId: number | null
+  hashCount: number
+  crackedCount: number
+  createdAt: string
 }
 
 interface MockHashListsResponseOptions {
-  count?: number;
-  hashLists?: Array<Partial<MockHashList>>;
+  count?: number
+  hashLists?: Array<Partial<MockHashList>>
 }
 
 export function mockHashListsResponse(options: MockHashListsResponseOptions = {}) {
-  const count = options.count ?? 2;
+  const count = options.count ?? 2
   const hashLists = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     name: `Hash List ${i + 1}`,
@@ -376,25 +376,25 @@ export function mockHashListsResponse(options: MockHashListsResponseOptions = {}
     crackedCount: 10 * (i + 1),
     createdAt: new Date().toISOString(),
     ...options.hashLists?.[i],
-  }));
-  return { hashLists };
+  }))
+  return { hashLists }
 }
 
 interface MockResource {
-  id: number;
-  name: string;
-  projectId: number;
-  fileRef: Record<string, unknown> | null;
-  createdAt: string;
+  id: number
+  name: string
+  projectId: number
+  fileRef: Record<string, unknown> | null
+  createdAt: string
 }
 
 interface MockResourcesResponseOptions {
-  count?: number;
-  resources?: Array<Partial<MockResource>>;
+  count?: number
+  resources?: Array<Partial<MockResource>>
 }
 
 export function mockResourcesResponse(options: MockResourcesResponseOptions = {}) {
-  const count = options.count ?? 2;
+  const count = options.count ?? 2
   const resources = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     name: `Resource ${i + 1}`,
@@ -402,21 +402,21 @@ export function mockResourcesResponse(options: MockResourcesResponseOptions = {}
     fileRef: null,
     createdAt: new Date().toISOString(),
     ...options.resources?.[i],
-  }));
-  return { resources, total: resources.length };
+  }))
+  return { resources, total: resources.length }
 }
 
 interface MockHashCandidate {
-  name: string;
-  hashcatMode: number;
-  category: string;
-  confidence: number;
+  name: string
+  hashcatMode: number
+  category: string
+  confidence: number
 }
 
 interface MockHashTypeGuessResponseOptions {
-  hashValue?: string;
-  candidates?: Array<Partial<MockHashCandidate>>;
-  identified?: boolean;
+  hashValue?: string
+  candidates?: Array<Partial<MockHashCandidate>>
+  identified?: boolean
 }
 
 export function mockHashTypeGuessResponse(options: MockHashTypeGuessResponseOptions = {}) {
@@ -435,35 +435,35 @@ export function mockHashTypeGuessResponse(options: MockHashTypeGuessResponseOpti
           { name: 'MD5', hashcatMode: 0, category: 'Raw Hash', confidence: 0.95 },
           { name: 'NTLM', hashcatMode: 1000, category: 'OS', confidence: 0.75 },
         ],
-  };
+  }
 }
 
 // --- Results fixtures ---
 
 interface MockCrackedResult {
-  id: number;
-  hashValue: string;
-  plaintext: string | null;
-  crackedAt: string | null;
-  hashListId: number;
-  hashListName: string;
-  campaignId: number | null;
-  campaignName: string;
-  attackId: number | null;
-  attackMode: number | null;
-  agentId: number | null;
+  id: number
+  hashValue: string
+  plaintext: string | null
+  crackedAt: string | null
+  hashListId: number
+  hashListName: string
+  campaignId: number | null
+  campaignName: string
+  attackId: number | null
+  attackMode: number | null
+  agentId: number | null
 }
 
 interface MockResultsResponseOptions {
-  count?: number;
-  results?: Array<Partial<MockCrackedResult>>;
-  total?: number;
-  limit?: number;
-  offset?: number;
+  count?: number
+  results?: Array<Partial<MockCrackedResult>>
+  total?: number
+  limit?: number
+  offset?: number
 }
 
 export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
-  const count = options.count ?? 3;
+  const count = options.count ?? 3
   const results = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     hashValue: `hash_${i + 1}_abcdef1234567890`,
@@ -477,11 +477,11 @@ export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
     attackMode: 0,
     agentId: 1,
     ...options.results?.[i],
-  }));
+  }))
   return {
     results,
     total: options.total ?? results.length,
     limit: options.limit ?? 50,
     offset: options.offset ?? 0,
-  };
+  }
 }

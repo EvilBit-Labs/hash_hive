@@ -1,50 +1,52 @@
-import { Hono } from 'hono';
-import { createBunWebSocket } from 'hono/bun';
-import { cors } from 'hono/cors';
-import { HTTPException } from 'hono/http-exception';
-import { env } from './config/env.js';
-import { logger } from './config/logger.js';
-import { auth } from './lib/auth.js';
-import { requestId } from './middleware/request-id.js';
-import { requestLogger } from './middleware/request-logger.js';
-import { securityHeaders } from './middleware/security-headers.js';
-import { getQueueManager, setQueueManager } from './queue/context.js';
-import { QueueManager } from './queue/manager.js';
-import { agentRoutes } from './routes/agent/index.js';
-import { controlRoutes } from './routes/control/index.js';
-import { dashboardAgentRoutes } from './routes/dashboard/agents.js';
-import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js';
-import { authRoutes } from './routes/dashboard/auth.js';
-import { campaignRoutes } from './routes/dashboard/campaigns.js';
-import { crackerRoutes } from './routes/dashboard/crackers.js';
-import { createEventRoutes } from './routes/dashboard/events.js';
-import { hashRoutes } from './routes/dashboard/hashes.js';
-import { healthRoutes as dashboardHealthRoutes } from './routes/dashboard/health.js';
-import { projectRoutes } from './routes/dashboard/projects.js';
-import { resourceRoutes } from './routes/dashboard/resources.js';
-import { resultsRoutes } from './routes/dashboard/results.js';
-import { statsRoutes } from './routes/dashboard/stats.js';
-import { taskRoutes } from './routes/dashboard/tasks.js';
-import { getSystemHealth, legacyPublicEnvelope } from './services/health.js';
-import type { AppEnv } from './types.js';
+import { Hono } from 'hono'
+import { createBunWebSocket } from 'hono/bun'
+import { cors } from 'hono/cors'
+import { HTTPException } from 'hono/http-exception'
 
-const { upgradeWebSocket, websocket } = createBunWebSocket();
+import type { AppEnv } from './types.js'
 
-const app = new Hono<AppEnv>();
-const eventRoutes = createEventRoutes(upgradeWebSocket);
+import { env } from './config/env.js'
+import { logger } from './config/logger.js'
+import { auth } from './lib/auth.js'
+import { requestId } from './middleware/request-id.js'
+import { requestLogger } from './middleware/request-logger.js'
+import { securityHeaders } from './middleware/security-headers.js'
+import { getQueueManager, setQueueManager } from './queue/context.js'
+import { QueueManager } from './queue/manager.js'
+import { agentRoutes } from './routes/agent/index.js'
+import { controlRoutes } from './routes/control/index.js'
+import { dashboardAgentRoutes } from './routes/dashboard/agents.js'
+import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js'
+import { authRoutes } from './routes/dashboard/auth.js'
+import { campaignRoutes } from './routes/dashboard/campaigns.js'
+import { crackerRoutes } from './routes/dashboard/crackers.js'
+import { createEventRoutes } from './routes/dashboard/events.js'
+import { hashRoutes } from './routes/dashboard/hashes.js'
+import { healthRoutes as dashboardHealthRoutes } from './routes/dashboard/health.js'
+import { projectRoutes } from './routes/dashboard/projects.js'
+import { resourceRoutes } from './routes/dashboard/resources.js'
+import { resultsRoutes } from './routes/dashboard/results.js'
+import { statsRoutes } from './routes/dashboard/stats.js'
+import { taskRoutes } from './routes/dashboard/tasks.js'
+import { getSystemHealth, legacyPublicEnvelope } from './services/health.js'
+
+const { upgradeWebSocket, websocket } = createBunWebSocket()
+
+const app = new Hono<AppEnv>()
+const eventRoutes = createEventRoutes(upgradeWebSocket)
 
 // ─── Global Middleware ──────────────────────────────────────────────
 
-app.use('*', requestId);
-app.use('*', securityHeaders);
-app.use('*', requestLogger);
+app.use('*', requestId)
+app.use('*', securityHeaders)
+app.use('*', requestLogger)
 app.use(
   '*',
   cors({
     origin: env.NODE_ENV === 'production' ? [] : ['http://localhost:3000'],
     credentials: true,
   })
-);
+)
 
 // ─── Health Check ───────────────────────────────────────────────────
 //
@@ -56,52 +58,52 @@ app.use(
 // transient warnings.
 
 app.get('/health', async (c) => {
-  const health = await getSystemHealth();
-  const envelope = legacyPublicEnvelope(health);
-  const httpStatus = health.status === 'unhealthy' ? 503 : 200;
-  return c.json(envelope, httpStatus);
-});
+  const health = await getSystemHealth()
+  const envelope = legacyPublicEnvelope(health)
+  const httpStatus = health.status === 'unhealthy' ? 503 : 200
+  return c.json(envelope, httpStatus)
+})
 
 // ─── BetterAuth Handler ──────────────────────────────────────────────
 
 app.on(['POST', 'GET'], '/api/auth/*', async (c) => {
   try {
-    return await auth.handler(c.req.raw);
+    return await auth.handler(c.req.raw)
   } catch (err) {
-    logger.error({ err, path: c.req.path }, 'BetterAuth handler error');
+    logger.error({ err, path: c.req.path }, 'BetterAuth handler error')
     return c.json(
       { error: { code: 'AUTH_SERVICE_ERROR', message: 'Authentication service error' } },
       500
-    );
+    )
   }
-});
+})
 
 // ─── Route Mounts ────────────────────────────────────────────────────
 
-app.route('/api/v1/dashboard/auth', authRoutes);
-app.route('/api/v1/dashboard/projects', projectRoutes);
-app.route('/api/v1/dashboard/agents', dashboardAgentRoutes);
-app.route('/api/v1/dashboard/resources', resourceRoutes);
-app.route('/api/v1/dashboard/hashes', hashRoutes);
-app.route('/api/v1/dashboard/attack-templates', attackTemplateRoutes);
-app.route('/api/v1/dashboard/campaigns', campaignRoutes);
-app.route('/api/v1/dashboard/tasks', taskRoutes);
-app.route('/api/v1/dashboard/stats', statsRoutes);
-app.route('/api/v1/dashboard/results', resultsRoutes);
-app.route('/api/v1/dashboard/events', eventRoutes);
-app.route('/api/v1/dashboard/crackers', crackerRoutes);
-app.route('/api/v1/dashboard/health', dashboardHealthRoutes);
+app.route('/api/v1/dashboard/auth', authRoutes)
+app.route('/api/v1/dashboard/projects', projectRoutes)
+app.route('/api/v1/dashboard/agents', dashboardAgentRoutes)
+app.route('/api/v1/dashboard/resources', resourceRoutes)
+app.route('/api/v1/dashboard/hashes', hashRoutes)
+app.route('/api/v1/dashboard/attack-templates', attackTemplateRoutes)
+app.route('/api/v1/dashboard/campaigns', campaignRoutes)
+app.route('/api/v1/dashboard/tasks', taskRoutes)
+app.route('/api/v1/dashboard/stats', statsRoutes)
+app.route('/api/v1/dashboard/results', resultsRoutes)
+app.route('/api/v1/dashboard/events', eventRoutes)
+app.route('/api/v1/dashboard/crackers', crackerRoutes)
+app.route('/api/v1/dashboard/health', dashboardHealthRoutes)
 
-app.route('/api/v1/agent', agentRoutes);
-app.route('/api/v1/control', controlRoutes);
+app.route('/api/v1/agent', agentRoutes)
+app.route('/api/v1/control', controlRoutes)
 
 // ─── Error Handler ──────────────────────────────────────────────────
 
-const CONTROL_PATH_PREFIX = '/api/v1/control/';
-const CONTROL_PROBLEM_CONTENT_TYPE = 'application/problem+json';
+const CONTROL_PATH_PREFIX = '/api/v1/control/'
+const CONTROL_PROBLEM_CONTENT_TYPE = 'application/problem+json'
 
 function isControlPath(path: string): boolean {
-  return path.startsWith(CONTROL_PATH_PREFIX) || path === '/api/v1/control';
+  return path.startsWith(CONTROL_PATH_PREFIX) || path === '/api/v1/control'
 }
 
 function controlProblemBody(
@@ -116,16 +118,16 @@ function controlProblemBody(
     status,
     detail,
     instance,
-  });
+  })
 }
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) {
-    return err.getResponse();
+    return err.getResponse()
   }
 
-  const reqId = c.get('requestId');
-  logger.error({ err, requestId: reqId, path: c.req.path }, 'unhandled error');
+  const reqId = c.get('requestId')
+  logger.error({ err, requestId: reqId, path: c.req.path }, 'unhandled error')
 
   // Never leak internal details (SQL queries, stack traces) to clients — even in dev.
   // The full error is already logged above; the client gets a safe generic message.
@@ -135,7 +137,7 @@ app.onError((err, c) => {
     return new Response(
       controlProblemBody(500, 'internal', 'An unexpected error occurred', c.req.path),
       { status: 500, headers: { 'content-type': CONTROL_PROBLEM_CONTENT_TYPE } }
-    );
+    )
   }
   return c.json(
     {
@@ -147,8 +149,8 @@ app.onError((err, c) => {
       },
     },
     500
-  );
-});
+  )
+})
 
 // ─── Not Found Handler ──────────────────────────────────────────────
 
@@ -162,7 +164,7 @@ app.notFound((c) => {
         c.req.path
       ),
       { status: 404, headers: { 'content-type': CONTROL_PROBLEM_CONTENT_TYPE } }
-    );
+    )
   }
   return c.json(
     {
@@ -173,39 +175,39 @@ app.notFound((c) => {
       },
     },
     404
-  );
-});
+  )
+})
 
 // ─── Start Server ───────────────────────────────────────────────────
 
-logger.info({ port: env.PORT, env: env.NODE_ENV }, 'starting server');
+logger.info({ port: env.PORT, env: env.NODE_ENV }, 'starting server')
 
 // ─── Queue Manager Init (non-blocking) ─────────────────────────────
 
-const queueManager = new QueueManager();
-setQueueManager(queueManager);
+const queueManager = new QueueManager()
+setQueueManager(queueManager)
 queueManager.init().catch((err) => {
-  logger.error({ err }, 'Queue manager init failed — queues unavailable');
-});
+  logger.error({ err }, 'Queue manager init failed — queues unavailable')
+})
 
 // ─── Graceful Shutdown ──────────────────────────────────────────────
 
 async function handleShutdown(signal: string) {
-  logger.info({ signal }, 'received shutdown signal, closing gracefully');
-  const qm = getQueueManager();
+  logger.info({ signal }, 'received shutdown signal, closing gracefully')
+  const qm = getQueueManager()
   if (qm) {
-    await qm.shutdown();
+    await qm.shutdown()
   }
-  process.exit(0);
+  process.exit(0)
 }
 
-process.on('SIGTERM', () => handleShutdown('SIGTERM'));
-process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'))
+process.on('SIGINT', () => handleShutdown('SIGINT'))
 
 export default {
   port: env.PORT,
   fetch: app.fetch,
   websocket,
-};
+}
 
-export { app, websocket };
+export { app, websocket }

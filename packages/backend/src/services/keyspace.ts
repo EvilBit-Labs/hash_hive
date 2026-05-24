@@ -16,15 +16,15 @@
 
 export interface CalculateAttackKeyspaceInput {
   /** Hashcat attack mode (-a flag). */
-  mode: number;
+  mode: number
   /** Row count of the primary wordlist (modes 0, 1, 6, 7). */
-  wordlistRows?: number;
+  wordlistRows?: number
   /** Row count of the rule list (multiplier on mode 0). */
-  rulelistRows?: number;
+  rulelistRows?: number
   /** Row count of the second wordlist (mode 1 combination only). */
-  secondaryWordlistRows?: number;
+  secondaryWordlistRows?: number
   /** Mask string (modes 3, 6, 7). */
-  mask?: string;
+  mask?: string
 }
 
 // Hashcat mask charset sizes for the standard ?-tokens. Keep this map narrow
@@ -39,7 +39,7 @@ const MASK_CHARSETS: Record<string, number> = {
   h: 16, // hex lowercase 0-9a-f
   H: 16, // hex uppercase 0-9A-F
   b: 256, // all bytes (0x00-0xff)
-};
+}
 
 /**
  * Parse a mask string into the product of its per-position charset sizes.
@@ -50,36 +50,36 @@ const MASK_CHARSETS: Record<string, number> = {
  * character (contributes 1, like any other literal).
  */
 function calculateMaskKeyspace(mask: string): bigint | null {
-  if (mask.length === 0) return null;
-  let product = 1n;
+  if (mask.length === 0) return null
+  let product = 1n
   for (let i = 0; i < mask.length; i++) {
-    const ch = mask[i];
+    const ch = mask[i]
     if (ch === '?') {
-      const token = mask[i + 1];
-      if (token === undefined) return null;
+      const token = mask[i + 1]
+      if (token === undefined) return null
       if (token === '?') {
         // `??` is a literal `?` - contributes 1, like any fixed character.
-        i += 1;
-        continue;
+        i += 1
+        continue
       }
-      const size = MASK_CHARSETS[token];
-      if (size === undefined) return null;
-      product *= BigInt(size);
-      i += 1; // skip the token char
+      const size = MASK_CHARSETS[token]
+      if (size === undefined) return null
+      product *= BigInt(size)
+      i += 1 // skip the token char
     } else {
       // Literal character contributes 1 (fixed in that position).
     }
   }
-  return product;
+  return product
 }
 
 export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): string | null {
   switch (input.mode) {
     case 0: {
       // Straight: wordlist * max(rules, 1)
-      if (input.wordlistRows === undefined || input.wordlistRows <= 0) return null;
-      const rules = input.rulelistRows && input.rulelistRows > 0 ? input.rulelistRows : 1;
-      return (BigInt(input.wordlistRows) * BigInt(rules)).toString();
+      if (input.wordlistRows === undefined || input.wordlistRows <= 0) return null
+      const rules = input.rulelistRows && input.rulelistRows > 0 ? input.rulelistRows : 1
+      return (BigInt(input.wordlistRows) * BigInt(rules)).toString()
     }
     case 1: {
       // Combination: wordlistA * wordlistB
@@ -89,32 +89,32 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
         input.secondaryWordlistRows === undefined ||
         input.secondaryWordlistRows <= 0
       ) {
-        return null;
+        return null
       }
-      return (BigInt(input.wordlistRows) * BigInt(input.secondaryWordlistRows)).toString();
+      return (BigInt(input.wordlistRows) * BigInt(input.secondaryWordlistRows)).toString()
     }
     case 3: {
       // Mask: product of per-position charset sizes
-      if (!input.mask) return null;
-      const maskKs = calculateMaskKeyspace(input.mask);
-      return maskKs === null ? null : maskKs.toString();
+      if (!input.mask) return null
+      const maskKs = calculateMaskKeyspace(input.mask)
+      return maskKs === null ? null : maskKs.toString()
     }
     case 6: {
       // Hybrid wordlist + mask: wordlist * mask
-      if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null;
-      const maskKs = calculateMaskKeyspace(input.mask);
-      if (maskKs === null) return null;
-      return (BigInt(input.wordlistRows) * maskKs).toString();
+      if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
+      const maskKs = calculateMaskKeyspace(input.mask)
+      if (maskKs === null) return null
+      return (BigInt(input.wordlistRows) * maskKs).toString()
     }
     case 7: {
       // Hybrid mask + wordlist: mask * wordlist
-      if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null;
-      const maskKs = calculateMaskKeyspace(input.mask);
-      if (maskKs === null) return null;
-      return (maskKs * BigInt(input.wordlistRows)).toString();
+      if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
+      const maskKs = calculateMaskKeyspace(input.mask)
+      if (maskKs === null) return null
+      return (maskKs * BigInt(input.wordlistRows)).toString()
     }
     default:
       // Unknown / unsupported mode - caller falls back to single-task path.
-      return null;
+      return null
   }
 }

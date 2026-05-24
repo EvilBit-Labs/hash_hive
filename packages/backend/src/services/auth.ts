@@ -4,10 +4,11 @@ import {
   projects,
   projectUsers,
   users,
-} from '@hashhive/shared';
-import { and, eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { API_KEY_PREFIX, generateApiKey } from '../lib/api-key.js';
+} from '@hashhive/shared'
+import { and, eq } from 'drizzle-orm'
+
+import { db } from '../db/index.js'
+import { API_KEY_PREFIX, generateApiKey } from '../lib/api-key.js'
 
 /** Checks if a user is a member of a project. Returns the membership row or null. */
 export async function findProjectMembership(userId: number, projectId: number) {
@@ -15,14 +16,14 @@ export async function findProjectMembership(userId: number, projectId: number) {
     .select()
     .from(projectUsers)
     .where(and(eq(projectUsers.userId, userId), eq(projectUsers.projectId, projectId)))
-    .limit(1);
-  return membership ?? null;
+    .limit(1)
+  return membership ?? null
 }
 
 export async function getUserWithProjects(userId: number) {
-  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
   if (!user) {
-    return null;
+    return null
   }
 
   const memberships = await db
@@ -34,7 +35,7 @@ export async function getUserWithProjects(userId: number) {
     })
     .from(projectUsers)
     .innerJoin(projects, eq(projectUsers.projectId, projects.id))
-    .where(eq(projectUsers.userId, userId));
+    .where(eq(projectUsers.userId, userId))
 
   return {
     user: {
@@ -49,7 +50,7 @@ export async function getUserWithProjects(userId: number) {
       slug: m.projectSlug,
       roles: m.roles,
     })),
-  };
+  }
 }
 
 // ─── API Key Management ─────────────────────────────────────────────
@@ -62,7 +63,7 @@ export async function getUserWithProjects(userId: number) {
  * UI drift if the prefix shape ever changes.
  */
 function prefixForUser(userId: number): string {
-  return `${API_KEY_PREFIX}_${userId}_…`;
+  return `${API_KEY_PREFIX}_${userId}_…`
 }
 
 /**
@@ -71,11 +72,11 @@ function prefixForUser(userId: number): string {
  * thing that gets persisted.
  */
 export async function issueUserApiKey(userId: number): Promise<IssueApiKeyResponse> {
-  const { token, hash } = await generateApiKey(userId);
+  const { token, hash } = await generateApiKey(userId)
   await db
     .update(users)
     .set({ apiKeyHash: hash, apiKeyLastUsedAt: null, updatedAt: new Date() })
-    .where(eq(users.id, userId));
+    .where(eq(users.id, userId))
   return {
     token,
     metadata: {
@@ -83,14 +84,14 @@ export async function issueUserApiKey(userId: number): Promise<IssueApiKeyRespon
       prefix: prefixForUser(userId),
       lastUsedAt: null,
     },
-  };
+  }
 }
 
 export async function revokeUserApiKey(userId: number): Promise<void> {
   await db
     .update(users)
     .set({ apiKeyHash: null, apiKeyLastUsedAt: null, updatedAt: new Date() })
-    .where(eq(users.id, userId));
+    .where(eq(users.id, userId))
 }
 
 export async function getUserApiKeyMetadata(userId: number): Promise<ApiKeyMetadata> {
@@ -101,14 +102,14 @@ export async function getUserApiKeyMetadata(userId: number): Promise<ApiKeyMetad
     })
     .from(users)
     .where(eq(users.id, userId))
-    .limit(1);
+    .limit(1)
 
   if (!row?.apiKeyHash) {
-    return { hasKey: false };
+    return { hasKey: false }
   }
   return {
     hasKey: true,
     prefix: prefixForUser(userId),
     lastUsedAt: row.apiKeyLastUsedAt ? row.apiKeyLastUsedAt.toISOString() : null,
-  };
+  }
 }

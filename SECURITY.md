@@ -32,7 +32,7 @@ The security model assumes:
 - Agents are trusted and authenticated via secure tokens
 - Network communication occurs within a controlled perimeter
 - Object storage (S3-compatible) is secured and access-controlled
-- MongoDB and Redis instances are isolated on private networks
+- PostgreSQL and Redis instances are isolated on private networks
 - Physical or network-level access controls protect the deployment
 
 **Internet Exposure Warning**: HashHive lacks the security hardening required for internet-facing deployments. Exposing HashHive to the internet will result in serious security vulnerabilities. Use VPN, SSH tunneling, or other secure remote access methods if external access is required.
@@ -107,7 +107,7 @@ When deploying HashHive, follow these security guidelines:
 - **Never expose HashHive to the internet** - deploy on isolated LANs only
 - Use firewall rules to restrict access to authorized networks
 - Use TLS/SSL for HTTP traffic if operating on untrusted LAN segments
-- Isolate MongoDB, Redis, and MinIO on private networks
+- Isolate PostgreSQL, Redis, and the object store on private networks
 - Enable authentication and access controls on all infrastructure services
 - Regularly update dependencies and base container images
 - Use secrets management solutions (e.g., HashiCorp Vault, AWS Secrets Manager)

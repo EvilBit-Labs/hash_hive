@@ -45,7 +45,7 @@ _Why it serves the approach:_ Dumb workers only work if the protocol is rock-sol
 
 ### Resource Pipeline
 
-Chunked upload (64MB chunks, 100GB+ files), MinIO buckets per resource type, hash-list parsing as async BullMQ job, presigned URLs for direct agent downloads, `hash_items` dedup via unique `(hashListId, hashValue)` constraint.
+Chunked upload (64MB chunks, 100GB+ files), object-store buckets per resource type (SeaweedFS in dev / air-gapped prod, AWS S3 in hosted envs), hash-list parsing as async BullMQ job, presigned URLs for direct agent downloads, `hash_items` dedup via unique `(hashListId, hashValue)` constraint.
 
 _Why it serves the approach:_ Complex multi-stage campaigns require multi-GB wordlists, rulelists, and masklists delivered to rigs without buffering. Air-gapped delivery is non-negotiable.
 

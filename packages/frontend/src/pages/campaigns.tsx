@@ -1,47 +1,48 @@
-import { campaignSortFieldSchema, campaignSortOrderSchema } from '@hashhive/shared';
-import { useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { campaignSortFieldSchema, campaignSortOrderSchema } from '@hashhive/shared'
+import { useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+
 import {
   type CampaignActionId,
   CampaignActionsMenu,
-} from '../components/features/campaign-actions-menu';
-import { PermissionGuard } from '../components/features/permission-guard';
-import { PriorityBadge } from '../components/features/priority-badge';
-import { StatusBadge } from '../components/features/status-badge';
-import { buttonVariants } from '../components/ui/button';
-import { ConfirmDialog } from '../components/ui/confirm-dialog';
-import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { PageHeader } from '../components/ui/page-header';
-import { ProgressBar } from '../components/ui/progress-bar';
-import { Select } from '../components/ui/select';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
-import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns';
+} from '../components/features/campaign-actions-menu'
+import { PermissionGuard } from '../components/features/permission-guard'
+import { PriorityBadge } from '../components/features/priority-badge'
+import { StatusBadge } from '../components/features/status-badge'
+import { buttonVariants } from '../components/ui/button'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
+import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { PageHeader } from '../components/ui/page-header'
+import { ProgressBar } from '../components/ui/progress-bar'
+import { Select } from '../components/ui/select'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
+import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
 import {
   type CampaignSortField,
   type CampaignSortOrder,
   type UseCampaignsOptions,
   useCampaigns,
-} from '../hooks/use-dashboard';
-import { readCampaignPercentage } from '../lib/campaign-progress';
-import { Permission } from '../lib/permissions';
-import { useUiStore } from '../stores/ui';
+} from '../hooks/use-dashboard'
+import { readCampaignPercentage } from '../lib/campaign-progress'
+import { Permission } from '../lib/permissions'
+import { useUiStore } from '../stores/ui'
 
-type ConfirmAction = 'start' | 'stop' | 'delete' | null;
-type LifecycleAction = 'start' | 'pause' | 'stop';
+type ConfirmAction = 'start' | 'stop' | 'delete' | null
+type LifecycleAction = 'start' | 'pause' | 'stop'
 
 interface CampaignRow {
-  id: number;
-  name: string;
-  status: string;
-  priority: number;
-  hashListId: number;
+  id: number
+  name: string
+  status: string
+  priority: number
+  hashListId: number
   progress?: {
-    percentage?: number;
-    overallProgress?: number;
-    hashProgress?: { percentage: number };
-  } | null;
-  createdAt: string;
+    percentage?: number
+    overallProgress?: number
+    hashProgress?: { percentage: number }
+  } | null
+  createdAt: string
 }
 
 const PRIORITY_FILTER_OPTIONS = [
@@ -49,10 +50,10 @@ const PRIORITY_FILTER_OPTIONS = [
   { label: 'High', value: '1' },
   { label: 'Normal', value: '5' },
   { label: 'Low', value: '10' },
-] as const;
+] as const
 
-type CampaignPriorityValue = 1 | 5 | 10;
-const ALLOWED_PRIORITIES = new Set<CampaignPriorityValue>([1, 5, 10]);
+type CampaignPriorityValue = 1 | 5 | 10
+const ALLOWED_PRIORITIES = new Set<CampaignPriorityValue>([1, 5, 10])
 
 /**
  * Clamp the URL search params to the known allowlists before they
@@ -63,51 +64,51 @@ const ALLOWED_PRIORITIES = new Set<CampaignPriorityValue>([1, 5, 10]);
  * a safe default and emit a console warn so protocol drift is visible.
  */
 function safeSortField(raw: string | null): CampaignSortField {
-  const parsed = campaignSortFieldSchema.safeParse(raw);
-  return parsed.success ? parsed.data : 'createdAt';
+  const parsed = campaignSortFieldSchema.safeParse(raw)
+  return parsed.success ? parsed.data : 'createdAt'
 }
 
 function safeSortOrder(raw: string | null): CampaignSortOrder {
-  const parsed = campaignSortOrderSchema.safeParse(raw);
-  return parsed.success ? parsed.data : 'desc';
+  const parsed = campaignSortOrderSchema.safeParse(raw)
+  return parsed.success ? parsed.data : 'desc'
 }
 
 function safePriority(raw: string | null): CampaignPriorityValue | undefined {
-  if (!raw) return undefined;
-  const n = Number(raw) as CampaignPriorityValue;
-  return Number.isInteger(n) && ALLOWED_PRIORITIES.has(n) ? n : undefined;
+  if (!raw) return undefined
+  const n = Number(raw) as CampaignPriorityValue
+  return Number.isInteger(n) && ALLOWED_PRIORITIES.has(n) ? n : undefined
 }
 
 const SORT_FIELD_OPTIONS: Array<{ label: string; value: CampaignSortField }> = [
   { label: 'Created', value: 'createdAt' },
   { label: 'Name', value: 'name' },
   { label: 'Priority', value: 'priority' },
-];
+]
 
 export function CampaignsPage() {
-  const { selectedProjectId } = useUiStore();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { selectedProjectId } = useUiStore()
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Read raw params first, then sanitize. The raw values feed the
   // controlled-select state; the sanitized values feed the API call.
-  const status = searchParams.get('status') ?? '';
-  const priorityRaw = searchParams.get('priority') ?? '';
-  const sortRaw = searchParams.get('sort');
-  const orderRaw = searchParams.get('order');
+  const status = searchParams.get('status') ?? ''
+  const priorityRaw = searchParams.get('priority') ?? ''
+  const sortRaw = searchParams.get('sort')
+  const orderRaw = searchParams.get('order')
 
-  const sortParam = safeSortField(sortRaw);
-  const orderParam = safeSortOrder(orderRaw);
-  const priorityParam = safePriority(priorityRaw);
+  const sortParam = safeSortField(sortRaw)
+  const orderParam = safeSortOrder(orderRaw)
+  const priorityParam = safePriority(priorityRaw)
 
   const queryOptions = useMemo<UseCampaignsOptions>(() => {
-    const opts: UseCampaignsOptions = { sort: sortParam, order: orderParam };
-    if (status) opts.status = status;
-    if (priorityParam !== undefined) opts.priority = priorityParam;
-    return opts;
-  }, [status, priorityParam, sortParam, orderParam]);
+    const opts: UseCampaignsOptions = { sort: sortParam, order: orderParam }
+    if (status) opts.status = status
+    if (priorityParam !== undefined) opts.priority = priorityParam
+    return opts
+  }, [status, priorityParam, sortParam, orderParam])
 
-  const { data, isLoading, isError, error } = useCampaigns(queryOptions);
+  const { data, isLoading, isError, error } = useCampaigns(queryOptions)
 
   // Real-time updates: the shared useEvents hook mounted by EventsProvider
   // (in AppLayout) already invalidates ['campaigns', selectedProjectId] on
@@ -117,24 +118,24 @@ export function CampaignsPage() {
   const [confirm, setConfirm] = useState<{ action: ConfirmAction; campaign: CampaignRow | null }>({
     action: null,
     campaign: null,
-  });
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  })
+  const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
-  const lifecycle = useCampaignLifecycle();
-  const del = useCampaignDelete();
+  const lifecycle = useCampaignLifecycle()
+  const del = useCampaignDelete()
 
   function updateParam(key: string, value: string) {
-    const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setSearchParams(next, { replace: true });
+    const next = new URLSearchParams(searchParams)
+    if (value) next.set(key, value)
+    else next.delete(key)
+    setSearchParams(next, { replace: true })
   }
 
   function handleAction(campaign: CampaignRow, action: CampaignActionId) {
-    setErrorBanner(null);
+    setErrorBanner(null)
     if (action === 'view') {
-      navigate(`/campaigns/${campaign.id}`);
-      return;
+      void navigate(`/campaigns/${campaign.id}`)
+      return
     }
     if (action === 'pause') {
       // Pause is spec'd to fire without a confirmation modal. Pass the
@@ -143,43 +144,43 @@ export function CampaignsPage() {
         { campaignId: campaign.id, action: 'pause' },
         {
           onError: (err) => {
-            // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-            console.error('[campaigns] pause failed', { campaignId: campaign.id, err });
-            setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign');
+            // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+            console.error('[campaigns] pause failed', { campaignId: campaign.id, err })
+            setErrorBanner(err instanceof Error ? err.message : 'Failed to pause campaign')
           },
         }
-      );
-      return;
+      )
+      return
     }
     if (action === 'start' || action === 'stop' || action === 'delete') {
-      setConfirm({ action, campaign });
+      setConfirm({ action, campaign })
     }
   }
 
   async function confirmAction() {
-    if (!confirm.action || !confirm.campaign) return;
-    const { action, campaign } = confirm;
+    if (!confirm.action || !confirm.campaign) return
+    const { action, campaign } = confirm
     try {
       if (action === 'delete') {
-        await del.mutateAsync({ campaignId: campaign.id });
+        await del.mutateAsync({ campaignId: campaign.id })
       } else {
-        const lifecycleAction: LifecycleAction = action;
+        const lifecycleAction: LifecycleAction = action
         await lifecycle.mutateAsync({
           campaignId: campaign.id,
           action: lifecycleAction,
-        });
+        })
       }
-      setConfirm({ action: null, campaign: null });
+      setConfirm({ action: null, campaign: null })
     } catch (err) {
-      // biome-ignore lint/suspicious/noConsole: surface unexpected mutation failures for forensics
-      console.error('[campaigns] action failed', { action, campaignId: campaign.id, err });
-      setErrorBanner(err instanceof Error ? err.message : `Failed to ${action} campaign`);
+      // oxlint-disable-next-line no-console -- surface unexpected mutation failures for forensics
+      console.error('[campaigns] action failed', { action, campaignId: campaign.id, err })
+      setErrorBanner(err instanceof Error ? err.message : `Failed to ${action} campaign`)
     }
   }
 
   function cancelConfirm() {
-    if (lifecycle.isPending || del.isPending) return;
-    setConfirm({ action: null, campaign: null });
+    if (lifecycle.isPending || del.isPending) return
+    setConfirm({ action: null, campaign: null })
   }
 
   if (!selectedProjectId) {
@@ -188,10 +189,10 @@ export function CampaignsPage() {
         <PageHeader>Campaigns</PageHeader>
         <EmptyState message="Select a project to view campaigns." />
       </div>
-    );
+    )
   }
 
-  const campaigns = (data?.campaigns as CampaignRow[] | undefined) ?? [];
+  const campaigns = (data?.campaigns as CampaignRow[] | undefined) ?? []
 
   return (
     <div className="space-y-6">
@@ -281,10 +282,10 @@ export function CampaignsPage() {
             </TableHead>
             <TableBody>
               {campaigns.map((campaign) => {
-                const percentage = readCampaignPercentage(campaign.progress);
+                const percentage = readCampaignPercentage(campaign.progress)
                 return (
                   <TableRow key={campaign.id}>
-                    <Td className="text-sm font-medium text-foreground">
+                    <Td className="text-foreground text-sm font-medium">
                       <Link
                         to={`/campaigns/${campaign.id}`}
                         className="hover:text-primary hover:underline"
@@ -304,14 +305,14 @@ export function CampaignsPage() {
                         size="thin"
                         ariaLabel={`${campaign.name} progress`}
                       />
-                      <span className="mt-1 block font-mono text-xs tabular-nums text-muted-foreground">
+                      <span className="text-muted-foreground mt-1 block font-mono text-xs tabular-nums">
                         {(percentage <= 1 ? percentage * 100 : percentage).toFixed(1)}%
                       </span>
                     </Td>
-                    <Td className="font-mono text-xs text-muted-foreground">
+                    <Td className="text-muted-foreground font-mono text-xs">
                       #{campaign.hashListId}
                     </Td>
-                    <Td className="text-xs text-muted-foreground">
+                    <Td className="text-muted-foreground text-xs">
                       {new Date(campaign.createdAt).toLocaleDateString()}
                     </Td>
                     <Td>
@@ -323,7 +324,7 @@ export function CampaignsPage() {
                       </PermissionGuard>
                     </Td>
                   </TableRow>
-                );
+                )
               })}
             </TableBody>
           </Table>
@@ -370,5 +371,5 @@ export function CampaignsPage() {
         onCancel={cancelConfirm}
       />
     </div>
-  );
+  )
 }

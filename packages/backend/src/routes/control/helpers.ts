@@ -15,15 +15,18 @@
  *    exception messages on the 500 path.
  */
 
-import type { Context } from 'hono';
-import { HTTPException } from 'hono/http-exception';
-import { z } from 'zod';
-import { logger } from '../../config/logger.js';
-import { mapZodError, problemResponse } from '../../lib/problem-details.js';
-import { findProjectMembership } from '../../services/auth.js';
-import type { AppEnv } from '../../types.js';
+import type { Context } from 'hono'
 
-type Role = 'admin' | 'contributor' | 'viewer';
+import { HTTPException } from 'hono/http-exception'
+import { z } from 'zod'
+
+import type { AppEnv } from '../../types.js'
+
+import { logger } from '../../config/logger.js'
+import { mapZodError, problemResponse } from '../../lib/problem-details.js'
+import { findProjectMembership } from '../../services/auth.js'
+
+type Role = 'admin' | 'contributor' | 'viewer'
 
 /** Throwable that maps cleanly to a problem-details response. */
 export class ControlApiError extends Error {
@@ -37,14 +40,14 @@ export class ControlApiError extends Error {
       | 'project_not_selected',
     message: string
   ) {
-    super(message);
-    this.name = 'ControlApiError';
+    super(message)
+    this.name = 'ControlApiError'
   }
 }
 
 export interface ControlMembership {
-  projectId: number;
-  roles: string[];
+  projectId: number
+  roles: string[]
 }
 
 /**
@@ -56,20 +59,20 @@ export interface ControlMembership {
  * for users listing, contributor or admin for write paths).
  */
 export async function requireProjectMembership(c: Context<AppEnv>): Promise<ControlMembership> {
-  const user = c.get('currentUser');
-  const projectId = user.projectId;
+  const user = c.get('currentUser')
+  const projectId = user.projectId
   if (!projectId) {
     throw new ControlApiError(
       400,
       'project_not_selected',
       'No project selected — include X-Project-Id header'
-    );
+    )
   }
-  const membership = await findProjectMembership(user.userId, projectId);
+  const membership = await findProjectMembership(user.userId, projectId)
   if (!membership) {
-    throw new ControlApiError(403, 'forbidden', 'Not a member of this project');
+    throw new ControlApiError(403, 'forbidden', 'Not a member of this project')
   }
-  return { projectId, roles: membership.roles ?? [] };
+  return { projectId, roles: membership.roles ?? [] }
 }
 
 /**
@@ -81,17 +84,17 @@ export async function requireProjectRole(
   c: Context<AppEnv>,
   ...roles: Role[]
 ): Promise<ControlMembership> {
-  const membership = await requireProjectMembership(c);
-  const ok = membership.roles.some((r) => roles.includes(r as Role));
+  const membership = await requireProjectMembership(c)
+  const ok = membership.roles.some((r) => roles.includes(r as Role))
   if (!ok) {
-    throw new ControlApiError(403, 'forbidden', `Requires one of: ${roles.join(', ')}`);
+    throw new ControlApiError(403, 'forbidden', `Requires one of: ${roles.join(', ')}`)
   }
-  return membership;
+  return membership
 }
 
 const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
-});
+})
 
 /**
  * Parse the `id` URL param as a positive integer. Throws the underlying
@@ -100,7 +103,7 @@ const idParamSchema = z.object({
  * consistent with the rest of the Control API.
  */
 export function parseIdParam(value: string | undefined): number {
-  return idParamSchema.parse({ id: value }).id;
+  return idParamSchema.parse({ id: value }).id
 }
 
 /**
@@ -128,9 +131,9 @@ export function controlValidationHook(
       'validation',
       'Invalid request',
       mapZodError(result.error as z.ZodError)
-    );
+    )
   }
-  return undefined;
+  return undefined
 }
 
 /**
@@ -145,17 +148,17 @@ export function controlValidationHook(
  */
 export function controlErrorResponse(c: Context<AppEnv>, err: unknown): Response {
   if (err instanceof ControlApiError) {
-    return problemResponse(c, err.status, err.code, err.message);
+    return problemResponse(c, err.status, err.code, err.message)
   }
   if (err instanceof z.ZodError) {
-    return problemResponse(c, 400, 'validation', 'Invalid request', mapZodError(err));
+    return problemResponse(c, 400, 'validation', 'Invalid request', mapZodError(err))
   }
   if (err instanceof HTTPException) {
-    return err.getResponse();
+    return err.getResponse()
   }
   // Normalize non-Error throws so the logger keeps both the original
   // type information and a usable Error shape.
-  const safe = err instanceof Error ? err : new Error(typeof err === 'string' ? err : String(err));
+  const safe = err instanceof Error ? err : new Error(typeof err === 'string' ? err : String(err))
   logger.error(
     {
       err: safe,
@@ -164,6 +167,6 @@ export function controlErrorResponse(c: Context<AppEnv>, err: unknown): Response
       path: c.req.path,
     },
     'control api unhandled error'
-  );
-  return problemResponse(c, 500, 'internal', 'An unexpected error occurred');
+  )
+  return problemResponse(c, 500, 'internal', 'An unexpected error occurred')
 }

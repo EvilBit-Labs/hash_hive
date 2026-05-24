@@ -1,3 +1,5 @@
+import { crackerBinaries, KNOWN_ENGINES, type KnownEngineName } from '@hashhive/shared'
+import { and, desc, eq, sql } from 'drizzle-orm'
 /**
  * Cracker binary registry — engine-aware, MinIO-backed, admin-managed.
  *
@@ -11,11 +13,10 @@
  * NOT project-scoped — they are global registry rows accessible to all
  * agents that opt in via the check-update endpoint.
  */
-import { randomUUID } from 'node:crypto';
-import { crackerBinaries, KNOWN_ENGINES, type KnownEngineName } from '@hashhive/shared';
-import { and, desc, eq } from 'drizzle-orm';
-import { env } from '../config/env.js';
-import { logger } from '../config/logger.js';
+import { randomUUID } from 'node:crypto'
+
+import { env } from '../config/env.js'
+import { logger } from '../config/logger.js'
 import {
   abortMultipartUpload,
   completeMultipartUpload,
@@ -24,13 +25,13 @@ import {
   getPresignedUrl,
   uploadFile,
   uploadPart,
-} from '../config/storage.js';
-import { db } from '../db/index.js';
+} from '../config/storage.js'
+import { db } from '../db/index.js'
 
-const DEFAULT_ENGINE: KnownEngineName = 'hashcat';
-const AGENT_DOWNLOAD_TTL_SECONDS = 6 * 3600; // 6 hours
-const DEFAULT_PART_SIZE = 64 * 1024 * 1024; // 64 MB
-const KNOWN_ENGINE_SET: ReadonlySet<string> = new Set(KNOWN_ENGINES);
+const DEFAULT_ENGINE: KnownEngineName = 'hashcat'
+const AGENT_DOWNLOAD_TTL_SECONDS = 6 * 3600 // 6 hours
+const DEFAULT_PART_SIZE = 64 * 1024 * 1024 // 64 MB
+const KNOWN_ENGINE_SET: ReadonlySet<string> = new Set(KNOWN_ENGINES)
 
 /**
  * Defense-in-depth cap on the direct upload path. The route layer
@@ -40,7 +41,7 @@ const KNOWN_ENGINE_SET: ReadonlySet<string> = new Set(KNOWN_ENGINES);
  * tooling) can't OOM the API by handing this function a multi-GB
  * `File`. Mirrors the route-layer constant.
  */
-export const CRACKER_DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+export const CRACKER_DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 /**
  * The persisted `fileRef` JSONB has three lifecycle states. Modeling them
@@ -51,23 +52,23 @@ export const CRACKER_DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 export type CrackerFileRef =
   | { state: 'pending' } // freshly-created row, no upload yet
   | {
-      state: 'uploading';
-      bucket: string;
-      key: string;
-      contentType: string;
-      name: string;
-      s3UploadId: string;
-      fileSize: number;
+      state: 'uploading'
+      bucket: string
+      key: string
+      contentType: string
+      name: string
+      s3UploadId: string
+      fileSize: number
     }
   | {
-      state: 'completed';
-      bucket: string;
-      key: string;
-      contentType: string;
-      size: number;
-      name: string;
-      uploadedAt: string;
-    };
+      state: 'completed'
+      bucket: string
+      key: string
+      contentType: string
+      size: number
+      name: string
+      uploadedAt: string
+    }
 
 /**
  * Read the JSONB column and project it into the discriminated union.
@@ -75,8 +76,8 @@ export type CrackerFileRef =
  * shape that doesn't match a known state.
  */
 function readFileRef(rawFileRef: unknown): CrackerFileRef {
-  if (!rawFileRef || typeof rawFileRef !== 'object') return { state: 'pending' };
-  const ref = rawFileRef as Record<string, unknown>;
+  if (!rawFileRef || typeof rawFileRef !== 'object') return { state: 'pending' }
+  const ref = rawFileRef as Record<string, unknown>
 
   // Completed uploads carry `uploadedAt` and `size` (number). Direct uploads
   // and finished multipart uploads both produce this shape.
@@ -95,7 +96,7 @@ function readFileRef(rawFileRef: unknown): CrackerFileRef {
       size: ref['size'],
       name: typeof ref['name'] === 'string' ? ref['name'] : '',
       uploadedAt: ref['uploadedAt'],
-    };
+    }
   }
 
   // In-progress multipart uploads carry `s3UploadId` and `fileSize`.
@@ -114,10 +115,10 @@ function readFileRef(rawFileRef: unknown): CrackerFileRef {
       name: typeof ref['name'] === 'string' ? ref['name'] : '',
       s3UploadId: ref['s3UploadId'],
       fileSize: ref['fileSize'],
-    };
+    }
   }
 
-  return { state: 'pending' };
+  return { state: 'pending' }
 }
 
 /**
@@ -126,13 +127,13 @@ function readFileRef(rawFileRef: unknown): CrackerFileRef {
  * route uses the same logic the service uses (DRY-bound).
  */
 export function normalizeEngineName(engine: string | undefined | null): string {
-  const trimmed = (engine ?? '').trim().toLowerCase();
-  return trimmed === '' ? DEFAULT_ENGINE : trimmed;
+  const trimmed = (engine ?? '').trim().toLowerCase()
+  return trimmed === '' ? DEFAULT_ENGINE : trimmed
 }
 
 /** Whether a normalized engine name is one the registry recognizes. */
 export function isKnownEngine(engine: string): engine is KnownEngineName {
-  return KNOWN_ENGINE_SET.has(engine);
+  return KNOWN_ENGINE_SET.has(engine)
 }
 
 /**
@@ -142,7 +143,7 @@ export function isKnownEngine(engine: string): engine is KnownEngineName {
  * driver's error message format changes.
  */
 export function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505'
 }
 
 // ─── CRUD ───────────────────────────────────────────────────────────
@@ -150,24 +151,24 @@ export function isUniqueViolation(err: unknown): boolean {
 export async function listCrackerBinaries(
   opts: { engine?: string | undefined; includeInactive?: boolean | undefined } = {}
 ) {
-  const conditions = [];
+  const conditions = []
   if (opts.engine !== undefined) {
-    conditions.push(eq(crackerBinaries.engine, normalizeEngineName(opts.engine)));
+    conditions.push(eq(crackerBinaries.engine, normalizeEngineName(opts.engine)))
   }
   if (!opts.includeInactive) {
-    conditions.push(eq(crackerBinaries.isActive, true));
+    conditions.push(eq(crackerBinaries.isActive, true))
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const query = db.select().from(crackerBinaries);
+  const where = conditions.length > 0 ? and(...conditions) : undefined
+  const query = db.select().from(crackerBinaries)
   return where
     ? query.where(where).orderBy(desc(crackerBinaries.createdAt))
-    : query.orderBy(desc(crackerBinaries.createdAt));
+    : query.orderBy(desc(crackerBinaries.createdAt))
 }
 
 export async function getCrackerBinaryById(id: number) {
-  const [row] = await db.select().from(crackerBinaries).where(eq(crackerBinaries.id, id)).limit(1);
-  return row ?? null;
+  const [row] = await db.select().from(crackerBinaries).where(eq(crackerBinaries.id, id)).limit(1)
+  return row ?? null
 }
 
 /**
@@ -182,25 +183,25 @@ export class CrackerBinaryValidationError extends Error {
     public readonly field: 'version' | 'platform' | 'engine',
     message: string
   ) {
-    super(message);
-    this.name = 'CrackerBinaryValidationError';
+    super(message)
+    this.name = 'CrackerBinaryValidationError'
   }
 }
 
 export async function createCrackerBinary(data: {
-  engine: string;
-  version: string;
-  platform: string;
+  engine: string
+  version: string
+  platform: string
 }) {
-  const engine = normalizeEngineName(data.engine);
-  const version = data.version.trim();
-  const platform = data.platform.trim();
+  const engine = normalizeEngineName(data.engine)
+  const version = data.version.trim()
+  const platform = data.platform.trim()
 
   if (version.length === 0) {
-    throw new CrackerBinaryValidationError('version', 'version cannot be empty after trimming');
+    throw new CrackerBinaryValidationError('version', 'version cannot be empty after trimming')
   }
   if (platform.length === 0) {
-    throw new CrackerBinaryValidationError('platform', 'platform cannot be empty after trimming');
+    throw new CrackerBinaryValidationError('platform', 'platform cannot be empty after trimming')
   }
 
   const [row] = await db
@@ -211,22 +212,22 @@ export async function createCrackerBinary(data: {
       platform,
       isActive: true,
     })
-    .returning();
-  return row ?? null;
+    .returning()
+  return row ?? null
 }
 
 export async function updateCrackerBinary(id: number, data: { isActive?: boolean | undefined }) {
   const updates: Partial<{ isActive: boolean; updatedAt: Date }> = {
     updatedAt: new Date(),
-  };
-  if (data.isActive !== undefined) updates.isActive = data.isActive;
+  }
+  if (data.isActive !== undefined) updates.isActive = data.isActive
 
   const [row] = await db
     .update(crackerBinaries)
     .set(updates)
     .where(eq(crackerBinaries.id, id))
-    .returning();
-  return row ?? null;
+    .returning()
+  return row ?? null
 }
 
 /**
@@ -249,10 +250,10 @@ export async function updateCrackerBinary(id: number, data: { isActive?: boolean
 export async function deleteCrackerBinary(
   id: number
 ): Promise<'not_found' | 'deleted' | 'storage_failed'> {
-  const row = await getCrackerBinaryById(id);
-  if (!row) return 'not_found';
+  const row = await getCrackerBinaryById(id)
+  if (!row) return 'not_found'
 
-  const fileRef = readFileRef(row.fileRef);
+  const fileRef = readFileRef(row.fileRef)
 
   // Branch on lifecycle state. An in-progress multipart upload needs
   // `abortMultipartUpload` to free MinIO's stored parts; calling
@@ -260,28 +261,28 @@ export async function deleteCrackerBinary(
   // the assembled object doesn't exist yet.
   if (fileRef.state === 'uploading') {
     try {
-      await abortMultipartUpload(fileRef.key, fileRef.s3UploadId);
+      await abortMultipartUpload(fileRef.key, fileRef.s3UploadId)
     } catch (err) {
       logger.error(
         { err, crackerBinaryId: id, key: fileRef.key, s3UploadId: fileRef.s3UploadId },
         'Failed to abort cracker S3 multipart upload during delete; leaving DB row in place for retry'
-      );
-      return 'storage_failed';
+      )
+      return 'storage_failed'
     }
   } else if (fileRef.state === 'completed') {
     try {
-      await deleteFile(fileRef.key, fileRef.bucket);
+      await deleteFile(fileRef.key, fileRef.bucket)
     } catch (err) {
       logger.error(
         { err, crackerBinaryId: id, key: fileRef.key, bucket: fileRef.bucket },
         'Failed to delete cracker binary S3 object; leaving DB row in place for retry'
-      );
-      return 'storage_failed';
+      )
+      return 'storage_failed'
     }
   }
 
-  await db.delete(crackerBinaries).where(eq(crackerBinaries.id, id));
-  return 'deleted';
+  await db.delete(crackerBinaries).where(eq(crackerBinaries.id, id))
+  return 'deleted'
 }
 
 // ─── Latest-Version Lookup ──────────────────────────────────────────
@@ -307,90 +308,90 @@ export function compareCrackerVersions(a: string, b: string): number {
   // parsing decision is obviously linear-time and the trailing-suffix
   // semantics are easy to read at a glance.
   const parse = (v: string): { nums: number[]; rest: string } => {
-    let lastNumericEnd = 0;
-    let inNumber = false;
+    let lastNumericEnd = 0
+    let inNumber = false
     for (let i = 0; i < v.length; i++) {
-      const ch = v.charCodeAt(i);
-      const isDigit = ch >= 48 && ch <= 57;
-      const isDot = ch === 46;
+      const ch = v.charCodeAt(i)
+      const isDigit = ch >= 48 && ch <= 57
+      const isDot = ch === 46
       if (isDigit) {
-        inNumber = true;
-        lastNumericEnd = i + 1;
+        inNumber = true
+        lastNumericEnd = i + 1
       } else if (isDot && inNumber) {
         // A dot inside the numeric prefix is consumed but doesn't extend
         // lastNumericEnd — if the next char isn't a digit, the dot becomes
         // part of the suffix (so '6.2.' parses as nums=[6,2], rest='.').
-        inNumber = false;
+        inNumber = false
       } else {
-        break;
+        break
       }
     }
-    const numericPart = v.slice(0, lastNumericEnd);
-    const rest = v.slice(lastNumericEnd);
+    const numericPart = v.slice(0, lastNumericEnd)
+    const rest = v.slice(lastNumericEnd)
     const nums =
       numericPart.length === 0
         ? []
         : numericPart
             .split('.')
             .filter((s) => s.length > 0)
-            .map((s) => Number.parseInt(s, 10));
-    return { nums, rest };
-  };
+            .map((s) => Number.parseInt(s, 10))
+    return { nums, rest }
+  }
 
-  const pa = parse(a);
-  const pb = parse(b);
+  const pa = parse(a)
+  const pb = parse(b)
 
-  const len = Math.max(pa.nums.length, pb.nums.length);
+  const len = Math.max(pa.nums.length, pb.nums.length)
   for (let i = 0; i < len; i++) {
-    const an = pa.nums[i] ?? 0;
-    const bn = pb.nums[i] ?? 0;
-    if (an !== bn) return an - bn;
+    const an = pa.nums[i] ?? 0
+    const bn = pb.nums[i] ?? 0
+    if (an !== bn) return an - bn
   }
 
   // Tiebreak on the suffix; an empty suffix wins (so `6.2.6` is older
   // than `6.2.6+125`). For non-empty suffixes, compare token-by-token
   // splitting on `.`, `-`, `+` so numeric segments sort numerically
   // (`+10` after `+9`) and non-numeric tokens fall back to lex compare.
-  if (pa.rest === pb.rest) return 0;
-  if (pa.rest === '') return -1;
-  if (pb.rest === '') return 1;
-  return compareSuffixTokens(pa.rest, pb.rest);
+  if (pa.rest === pb.rest) return 0
+  if (pa.rest === '') return -1
+  if (pb.rest === '') return 1
+  return compareSuffixTokens(pa.rest, pb.rest)
 }
 
 function compareSuffixTokens(a: string, b: string): number {
   // Split on the conventional version delimiters. Empty leading tokens
   // (e.g. from a leading `+`) are preserved so `+10` and `+9` compare
   // their numeric tail correctly.
-  const tokensA = a.split(/[.+-]/);
-  const tokensB = b.split(/[.+-]/);
+  const tokensA = a.split(/[.+-]/)
+  const tokensB = b.split(/[.+-]/)
 
-  const len = Math.max(tokensA.length, tokensB.length);
+  const len = Math.max(tokensA.length, tokensB.length)
   for (let i = 0; i < len; i++) {
-    const ta = tokensA[i] ?? '';
-    const tb = tokensB[i] ?? '';
-    if (ta === tb) continue;
-    if (ta === '') return -1; // shorter wins -> older
-    if (tb === '') return 1;
+    const ta = tokensA[i] ?? ''
+    const tb = tokensB[i] ?? ''
+    if (ta === tb) continue
+    if (ta === '') return -1 // shorter wins -> older
+    if (tb === '') return 1
 
-    const na = /^\d+$/.test(ta) ? Number.parseInt(ta, 10) : NaN;
-    const nb = /^\d+$/.test(tb) ? Number.parseInt(tb, 10) : NaN;
-    const aIsNum = !Number.isNaN(na);
-    const bIsNum = !Number.isNaN(nb);
+    const na = /^\d+$/.test(ta) ? Number.parseInt(ta, 10) : NaN
+    const nb = /^\d+$/.test(tb) ? Number.parseInt(tb, 10) : NaN
+    const aIsNum = !Number.isNaN(na)
+    const bIsNum = !Number.isNaN(nb)
 
     if (aIsNum && bIsNum) {
-      if (na !== nb) return na - nb;
-      continue;
+      if (na !== nb) return na - nb
+      continue
     }
     // Numeric tokens sort before non-numeric ones (`-1` < `-jumbo`).
-    if (aIsNum) return -1;
-    if (bIsNum) return 1;
-    return ta < tb ? -1 : 1;
+    if (aIsNum) return -1
+    if (bIsNum) return 1
+    return ta < tb ? -1 : 1
   }
-  return 0;
+  return 0
 }
 
 export async function getLatestCracker(opts: { engine?: string | undefined; platform: string }) {
-  const engine = normalizeEngineName(opts.engine);
+  const engine = normalizeEngineName(opts.engine)
   const rows = await db
     .select()
     .from(crackerBinaries)
@@ -400,20 +401,20 @@ export async function getLatestCracker(opts: { engine?: string | undefined; plat
         eq(crackerBinaries.platform, opts.platform),
         eq(crackerBinaries.isActive, true)
       )
-    );
+    )
 
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return null
 
   // Sort by hashcat-aware version desc, fall back to createdAt desc as
   // final tiebreaker. The argument order is `compare(b, a)` so the
   // largest version sorts first; this is verified in unit tests.
   const sorted = [...rows].sort((a, b) => {
-    const cmp = compareCrackerVersions(b.version, a.version);
-    if (cmp !== 0) return cmp;
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
+    const cmp = compareCrackerVersions(b.version, a.version)
+    if (cmp !== 0) return cmp
+    return b.createdAt.getTime() - a.createdAt.getTime()
+  })
 
-  return sorted[0] ?? null;
+  return sorted[0] ?? null
 }
 
 // ─── Presigned Download URLs ────────────────────────────────────────
@@ -429,18 +430,18 @@ export async function getLatestCracker(opts: { engine?: string | undefined; plat
 export async function getCrackerDownloadUrl(
   id: number
 ): Promise<{ url: string; expiresIn: number } | null> {
-  const row = await getCrackerBinaryById(id);
-  if (!row) return null;
+  const row = await getCrackerBinaryById(id)
+  if (!row) return null
 
-  const fileRef = readFileRef(row.fileRef);
-  if (fileRef.state !== 'completed') return null;
+  const fileRef = readFileRef(row.fileRef)
+  if (fileRef.state !== 'completed') return null
 
   const url = await getPresignedUrl(fileRef.key, AGENT_DOWNLOAD_TTL_SECONDS, {
     bucket: fileRef.bucket,
     ...(fileRef.name ? { filename: fileRef.name } : {}),
-  });
+  })
 
-  return { url, expiresIn: AGENT_DOWNLOAD_TTL_SECONDS };
+  return { url, expiresIn: AGENT_DOWNLOAD_TTL_SECONDS }
 }
 
 // ─── Direct Upload ──────────────────────────────────────────────────
@@ -461,23 +462,23 @@ export async function uploadCrackerFile(
   if (file.size > CRACKER_DIRECT_UPLOAD_MAX_BYTES) {
     throw new Error(
       `Direct upload exceeds the ${CRACKER_DIRECT_UPLOAD_MAX_BYTES} byte cap; use the chunked upload path instead`
-    );
+    )
   }
 
-  const row = await getCrackerBinaryById(id);
-  if (!row) throw new Error(`Cracker binary ${id} not found`);
+  const row = await getCrackerBinaryById(id)
+  if (!row) throw new Error(`Cracker binary ${id} not found`)
 
-  const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${file.name}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${file.name}`
+  const buffer = Buffer.from(await file.arrayBuffer())
 
   try {
-    await uploadFile(key, buffer, file.type || 'application/octet-stream');
+    await uploadFile(key, buffer, file.type || 'application/octet-stream')
   } catch (err) {
-    logger.error({ err, crackerBinaryId: id, key }, 'Direct cracker upload failed');
-    throw err;
+    logger.error({ err, crackerBinaryId: id, key }, 'Direct cracker upload failed')
+    throw err
   }
 
-  let updatedIds: Array<{ id: number }> = [];
+  let updatedIds: Array<{ id: number }> = []
   try {
     updatedIds = await db
       .update(crackerBinaries)
@@ -493,18 +494,18 @@ export async function uploadCrackerFile(
         updatedAt: new Date(),
       })
       .where(eq(crackerBinaries.id, id))
-      .returning({ id: crackerBinaries.id });
+      .returning({ id: crackerBinaries.id })
   } catch (err) {
     // The S3 object exists but we failed to write the DB pointer to it.
     // Clean up the orphaned object so the next attempt starts fresh.
-    logger.error({ err, crackerBinaryId: id, key }, 'DB update after upload failed; cleaning up');
+    logger.error({ err, crackerBinaryId: id, key }, 'DB update after upload failed; cleaning up')
     await deleteFile(key, env.S3_BUCKET).catch((cleanupErr) => {
       logger.error(
         { err: cleanupErr, key, crackerBinaryId: id },
         'Failed to clean up orphan S3 object after DB update failure'
-      );
-    });
-    throw err;
+      )
+    })
+    throw err
   }
 
   // The lookup at line ~434 confirmed the row existed, but another admin
@@ -516,51 +517,51 @@ export async function uploadCrackerFile(
     logger.error(
       { crackerBinaryId: id, key },
       'Cracker binary row vanished during upload; cleaning up orphan S3 object'
-    );
+    )
     await deleteFile(key, env.S3_BUCKET).catch((cleanupErr) => {
       logger.error(
         { err: cleanupErr, key, crackerBinaryId: id },
         'Failed to clean up orphan S3 object after concurrent delete'
-      );
-    });
-    throw new Error(`Cracker binary ${id} disappeared during upload`);
+      )
+    })
+    throw new Error(`Cracker binary ${id} disappeared during upload`)
   }
 
-  return { key, size: file.size };
+  return { key, size: file.size }
 }
 
 // ─── Chunked (S3 Multipart) Upload ──────────────────────────────────
 
 export async function initiateCrackerChunkedUpload(data: {
-  id: number;
-  fileSize: number;
-  contentType?: string | undefined;
-  fileName?: string | undefined;
+  id: number
+  fileSize: number
+  contentType?: string | undefined
+  fileName?: string | undefined
 }): Promise<{ uploadId: string; partSize: number; key: string }> {
-  const row = await getCrackerBinaryById(data.id);
-  if (!row) throw new Error(`Cracker binary ${data.id} not found`);
+  const row = await getCrackerBinaryById(data.id)
+  if (!row) throw new Error(`Cracker binary ${data.id} not found`)
 
   // Reject re-initiation on a row that is already mid-upload — concurrent
   // initiates would overwrite the first session's `fileRef.s3UploadId`,
   // and subsequent part uploads from the first session would land on the
   // second session's object (silent data corruption on completion).
-  const existing = readFileRef(row.fileRef);
+  const existing = readFileRef(row.fileRef)
   if (existing.state === 'uploading') {
     throw new Error(
       `Cracker binary ${data.id} already has an in-progress upload (uploadId=${existing.s3UploadId}); abort it first`
-    );
+    )
   }
 
-  const fileName = data.fileName ?? `${row.engine}-${row.version}-${row.platform}`;
-  const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${fileName}`;
-  const ct = data.contentType ?? 'application/octet-stream';
+  const fileName = data.fileName ?? `${row.engine}-${row.version}-${row.platform}`
+  const key = `crackers/${row.engine}/${row.platform}/${row.version}/${randomUUID()}-${fileName}`
+  const ct = data.contentType ?? 'application/octet-stream'
 
-  let s3UploadId: string;
+  let s3UploadId: string
   try {
-    s3UploadId = await createMultipartUpload(key, ct);
+    s3UploadId = await createMultipartUpload(key, ct)
   } catch (err) {
-    logger.error({ err, crackerBinaryId: data.id }, 'S3 multipart initiation failed');
-    throw err;
+    logger.error({ err, crackerBinaryId: data.id }, 'S3 multipart initiation failed')
+    throw err
   }
 
   await db
@@ -576,9 +577,9 @@ export async function initiateCrackerChunkedUpload(data: {
       },
       updatedAt: new Date(),
     })
-    .where(eq(crackerBinaries.id, data.id));
+    .where(eq(crackerBinaries.id, data.id))
 
-  return { uploadId: s3UploadId, partSize: DEFAULT_PART_SIZE, key };
+  return { uploadId: s3UploadId, partSize: DEFAULT_PART_SIZE, key }
 }
 
 /**
@@ -595,22 +596,22 @@ export async function uploadCrackerChunkPart(
   partNumber: number,
   body: Uint8Array
 ): Promise<{ etag: string }> {
-  const row = await getCrackerBinaryById(id);
-  if (!row) throw new Error(`Cracker binary ${id} not found`);
+  const row = await getCrackerBinaryById(id)
+  if (!row) throw new Error(`Cracker binary ${id} not found`)
 
-  const fileRef = readFileRef(row.fileRef);
+  const fileRef = readFileRef(row.fileRef)
   if (fileRef.state !== 'uploading') {
-    throw new Error(`Cracker binary ${id} has no in-progress upload`);
+    throw new Error(`Cracker binary ${id} has no in-progress upload`)
   }
   if (fileRef.s3UploadId !== s3UploadId) {
-    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId)
   }
 
-  const etag = await uploadPart(fileRef.key, s3UploadId, partNumber, body);
+  const etag = await uploadPart(fileRef.key, s3UploadId, partNumber, body)
 
-  await db.update(crackerBinaries).set({ updatedAt: new Date() }).where(eq(crackerBinaries.id, id));
+  await db.update(crackerBinaries).set({ updatedAt: new Date() }).where(eq(crackerBinaries.id, id))
 
-  return { etag };
+  return { etag }
 }
 
 export async function completeCrackerChunkedUpload(
@@ -618,15 +619,15 @@ export async function completeCrackerChunkedUpload(
   s3UploadId: string,
   parts: ReadonlyArray<{ partNumber: number; etag: string }>
 ): Promise<{ id: number }> {
-  const row = await getCrackerBinaryById(id);
-  if (!row) throw new Error(`Cracker binary ${id} not found`);
+  const row = await getCrackerBinaryById(id)
+  if (!row) throw new Error(`Cracker binary ${id} not found`)
 
-  const fileRef = readFileRef(row.fileRef);
+  const fileRef = readFileRef(row.fileRef)
   if (fileRef.state !== 'uploading') {
-    throw new Error(`Cracker binary ${id} has no in-progress upload to complete`);
+    throw new Error(`Cracker binary ${id} has no in-progress upload to complete`)
   }
   if (fileRef.s3UploadId !== s3UploadId) {
-    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId)
   }
 
   // Defensive: fileSize must be present for the row to render correctly
@@ -634,10 +635,10 @@ export async function completeCrackerChunkedUpload(
   // time; the explicit check guards against a malformed JSONB written by
   // a future code path or an external mutation.
   if (!Number.isFinite(fileRef.fileSize) || fileRef.fileSize <= 0) {
-    throw new Error(`Cracker binary ${id} has invalid fileSize on its in-progress upload`);
+    throw new Error(`Cracker binary ${id} has invalid fileSize on its in-progress upload`)
   }
 
-  await completeMultipartUpload(fileRef.key, s3UploadId, parts);
+  await completeMultipartUpload(fileRef.key, s3UploadId, parts)
 
   const updatedFileRef = {
     bucket: fileRef.bucket,
@@ -646,15 +647,29 @@ export async function completeCrackerChunkedUpload(
     size: fileRef.fileSize,
     name: fileRef.name,
     uploadedAt: new Date().toISOString(),
-  };
+  }
 
-  await db
+  // Guard the UPDATE on the stored s3UploadId so a concurrent
+  // abort/re-initiate that already swapped fileRef can't be clobbered
+  // by this completion. If the WHERE no longer matches, the row's
+  // upload session moved on under us — surface a mismatch error.
+  const completed = await db
     .update(crackerBinaries)
     .set({ fileRef: updatedFileRef, updatedAt: new Date() })
-    .where(eq(crackerBinaries.id, id));
+    .where(
+      and(
+        eq(crackerBinaries.id, id),
+        sql`${crackerBinaries.fileRef}->>'s3UploadId' = ${s3UploadId}`
+      )
+    )
+    .returning({ id: crackerBinaries.id })
 
-  logger.info({ crackerBinaryId: id }, 'Cracker chunked upload completed');
-  return { id };
+  if (completed.length === 0) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, 'stale_or_replaced')
+  }
+
+  logger.info({ crackerBinaryId: id }, 'Cracker chunked upload completed')
+  return { id }
 }
 
 /**
@@ -665,32 +680,45 @@ export async function completeCrackerChunkedUpload(
  * can succeed without manual intervention.
  */
 export async function abortCrackerChunkedUpload(id: number, s3UploadId: string): Promise<void> {
-  const row = await getCrackerBinaryById(id);
-  if (!row) return;
+  const row = await getCrackerBinaryById(id)
+  if (!row) return
 
-  const fileRef = readFileRef(row.fileRef);
-  if (fileRef.state !== 'uploading') return; // nothing to abort
+  const fileRef = readFileRef(row.fileRef)
+  if (fileRef.state !== 'uploading') return // nothing to abort
 
   if (fileRef.s3UploadId !== s3UploadId) {
     // Stale uploadId from a client that didn't refresh its state —
     // don't abort the wrong session.
-    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId);
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, fileRef.s3UploadId)
   }
 
   await abortMultipartUpload(fileRef.key, s3UploadId).catch((err) => {
     logger.warn(
       { err, s3UploadId, crackerBinaryId: id },
       'Failed to abort cracker S3 multipart upload; clearing DB anyway'
-    );
-  });
+    )
+  })
 
-  // Always clear the DB pointer so the next upload starts clean.
-  await db
+  // Clear the DB pointer so the next upload starts clean, but only if
+  // the row still references this upload session. A concurrent
+  // complete/re-initiate may have already moved the row to a new
+  // fileRef — clobbering that with `{}` would lose the newer state.
+  const aborted = await db
     .update(crackerBinaries)
     .set({ fileRef: {}, updatedAt: new Date() })
-    .where(eq(crackerBinaries.id, id));
+    .where(
+      and(
+        eq(crackerBinaries.id, id),
+        sql`${crackerBinaries.fileRef}->>'s3UploadId' = ${s3UploadId}`
+      )
+    )
+    .returning({ id: crackerBinaries.id })
 
-  logger.info({ crackerBinaryId: id, s3UploadId }, 'Cracker chunked upload aborted');
+  if (aborted.length === 0) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, 'stale_or_replaced')
+  }
+
+  logger.info({ crackerBinaryId: id, s3UploadId }, 'Cracker chunked upload aborted')
 }
 
 /**
@@ -707,7 +735,7 @@ export class CrackerUploadIdMismatchError extends Error {
     super(
       `Upload session mismatch on cracker binary ${crackerBinaryId}: ` +
         `attempted=${attemptedUploadId} stored=${storedUploadId}`
-    );
-    this.name = 'CrackerUploadIdMismatchError';
+    )
+    this.name = 'CrackerUploadIdMismatchError'
   }
 }

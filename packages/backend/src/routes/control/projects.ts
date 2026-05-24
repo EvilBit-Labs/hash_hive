@@ -10,41 +10,43 @@
  * project ids the caller can't access.
  */
 
-import { Hono } from 'hono';
-import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
-import { problemResponse } from '../../lib/problem-details.js';
-import { findUserProjectById, getUserProjectsPaginated } from '../../services/projects.js';
-import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam } from './helpers.js';
+import { Hono } from 'hono'
 
-export const controlProjectRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
+
+import { paginate, paginationQuerySchema } from '../../lib/pagination.js'
+import { problemResponse } from '../../lib/problem-details.js'
+import { findUserProjectById, getUserProjectsPaginated } from '../../services/projects.js'
+import { controlErrorResponse, parseIdParam } from './helpers.js'
+
+export const controlProjectRoutes = new Hono<AppEnv>()
 
 controlProjectRoutes.get('/', async (c) => {
   try {
-    const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
-    const { userId } = c.get('currentUser');
+    const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams))
+    const { userId } = c.get('currentUser')
     const { items, total } = await getUserProjectsPaginated(userId, {
       limit: query.limit,
       offset: query.offset,
-    });
-    return c.json(paginate(items, total, query));
+    })
+    return c.json(paginate(items, total, query))
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})
 
 controlProjectRoutes.get('/:id', async (c) => {
   try {
-    const id = parseIdParam(c.req.param('id'));
-    const { userId } = c.get('currentUser');
+    const id = parseIdParam(c.req.param('id'))
+    const { userId } = c.get('currentUser')
     // Single-row visibility gate: returns the project when the caller
     // is a member, null otherwise. Same envelope (404) whether the
     // project doesn't exist or the caller can't see it — avoids
     // leaking existence via 403 vs 404 differentiation.
-    const project = await findUserProjectById(userId, id);
-    if (!project) return problemResponse(c, 404, 'not_found', 'project not found');
-    return c.json(project);
+    const project = await findUserProjectById(userId, id)
+    if (!project) return problemResponse(c, 404, 'not_found', 'project not found')
+    return c.json(project)
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})
