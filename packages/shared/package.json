@@ -14,18 +14,18 @@
   },
   "scripts": {
     "build": "tsc",
-    "lint": "biome check ./src",
+    "lint": "oxlint --type-aware ./src",
     "type-check": "tsc --noEmit",
     "test": "echo 'No tests yet' && exit 0"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "drizzle-zod": "^0.8.3",
-    "postgres": "^3.4.8",
-    "zod": "^4.3.6"
+    "postgres": "^3.4.9",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.10",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.3"
   }
 }
