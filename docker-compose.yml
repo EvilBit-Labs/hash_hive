@@ -40,8 +40,8 @@ services:
     ports:
       - '9000:8333' # S3 API (container 8333 mapped to host 9000)
       - '127.0.0.1:9333:9333' # Master HTTP UI / admin (bound to loopback;
-                              # the master `/cluster/status` page is
-                              # unauthenticated so we keep it off the LAN)
+        # the master `/cluster/status` page is
+        # unauthenticated so we keep it off the LAN)
     volumes:
       - seaweedfsdata:/data
       - ./docker/seaweedfs/s3-iam.json:/etc/seaweedfs/s3.json:ro

@@ -1,26 +1,27 @@
-import { type KeyboardEvent, useState } from 'react';
-import { Link } from 'react-router';
-import { PermissionGuard } from '../components/features/permission-guard';
-import { ResourceUploadModal } from '../components/features/resource-upload-modal';
-import { Button } from '../components/ui/button';
-import { EmptyState } from '../components/ui/empty-state';
-import { Input } from '../components/ui/input';
-import { PageHeader } from '../components/ui/page-header';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { type KeyboardEvent, useState } from 'react'
+import { Link } from 'react-router'
+
+import { PermissionGuard } from '../components/features/permission-guard'
+import { ResourceUploadModal } from '../components/features/resource-upload-modal'
+import { Button } from '../components/ui/button'
+import { EmptyState } from '../components/ui/empty-state'
+import { Input } from '../components/ui/input'
+import { PageHeader } from '../components/ui/page-header'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import {
   useGuessHashType,
   useHashLists,
   useMasklists,
   useRulelists,
   useWordlists,
-} from '../hooks/use-resources';
-import { Permission } from '../lib/permissions';
-import { cn } from '../lib/utils';
-import { useUiStore } from '../stores/ui';
+} from '../hooks/use-resources'
+import { Permission } from '../lib/permissions'
+import { cn } from '../lib/utils'
+import { useUiStore } from '../stores/ui'
 
-type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists' | 'hash-detect';
+type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists' | 'hash-detect'
 
-type UploadableTab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists';
+type UploadableTab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists'
 
 const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'hash-lists', label: 'Hash Lists' },
@@ -28,11 +29,11 @@ const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'rulelists', label: 'Rulelists' },
   { id: 'masklists', label: 'Masklists' },
   { id: 'hash-detect', label: 'Hash Detect' },
-] as const;
+] as const
 
 export function ResourcesPage() {
-  const { selectedProjectId } = useUiStore();
-  const [activeTab, setActiveTab] = useState<Tab>('hash-lists');
+  const { selectedProjectId } = useUiStore()
+  const [activeTab, setActiveTab] = useState<Tab>('hash-lists')
 
   if (!selectedProjectId) {
     return (
@@ -40,37 +41,37 @@ export function ResourcesPage() {
         <PageHeader>Resources</PageHeader>
         <EmptyState message="Select a project to view resources." />
       </div>
-    );
+    )
   }
 
   const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = TABS.findIndex((t) => t.id === activeTab);
-    let nextIndex: number | null = null;
+    const currentIndex = TABS.findIndex((t) => t.id === activeTab)
+    let nextIndex: number | null = null
 
     switch (e.key) {
       case 'ArrowRight':
-        nextIndex = (currentIndex + 1) % TABS.length;
-        break;
+        nextIndex = (currentIndex + 1) % TABS.length
+        break
       case 'ArrowLeft':
-        nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
-        break;
+        nextIndex = (currentIndex - 1 + TABS.length) % TABS.length
+        break
       case 'Home':
-        nextIndex = 0;
-        break;
+        nextIndex = 0
+        break
       case 'End':
-        nextIndex = TABS.length - 1;
-        break;
+        nextIndex = TABS.length - 1
+        break
       default:
-        return;
+        return
     }
 
-    e.preventDefault();
-    const nextTab = TABS[nextIndex];
+    e.preventDefault()
+    const nextTab = TABS[nextIndex]
     if (nextTab) {
-      setActiveTab(nextTab.id);
-      document.getElementById(`tab-${nextTab.id}`)?.focus();
+      setActiveTab(nextTab.id)
+      document.getElementById(`tab-${nextTab.id}`)?.focus()
     }
-  };
+  }
 
   return (
     <div className="space-y-6">
@@ -79,7 +80,7 @@ export function ResourcesPage() {
       <div
         role="tablist"
         aria-label="Resource types"
-        className="flex gap-1 border-b border-surface-0/50"
+        className="border-surface-0/50 flex gap-1 border-b"
       >
         {TABS.map((tab) => (
           <button
@@ -96,7 +97,7 @@ export function ResourcesPage() {
               'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
               activeTab === tab.id
                 ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                : 'text-muted-foreground hover:text-foreground border-transparent'
             )}
           >
             {tab.label}
@@ -112,18 +113,18 @@ export function ResourcesPage() {
         {activeTab === 'hash-detect' && <HashDetectTab />}
       </div>
     </div>
-  );
+  )
 }
 
 function UploadButton({ type }: { type: UploadableTab }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false)
 
   const labels: Record<UploadableTab, string> = {
     'hash-lists': 'Hash List',
     wordlists: 'Wordlist',
     rulelists: 'Rulelist',
     masklists: 'Masklist',
-  };
+  }
 
   return (
     <>
@@ -137,15 +138,15 @@ function UploadButton({ type }: { type: UploadableTab }) {
         onSuccess={() => {}}
       />
     </>
-  );
+  )
 }
 
 function HashListsTab() {
-  const { data, isLoading } = useHashLists();
+  const { data, isLoading } = useHashLists()
 
-  if (isLoading) return <EmptyState message="Loading..." />;
+  if (isLoading) return <EmptyState message="Loading..." />
 
-  const hashLists = data?.hashLists ?? [];
+  const hashLists = data?.hashLists ?? []
 
   return (
     <div className="space-y-4">
@@ -170,10 +171,10 @@ function HashListsTab() {
           </TableHead>
           <TableBody>
             {hashLists.map((hl) => {
-              const pct = hl.hashCount > 0 ? (hl.crackedCount / hl.hashCount) * 100 : 0;
+              const pct = hl.hashCount > 0 ? (hl.crackedCount / hl.hashCount) * 100 : 0
               return (
                 <TableRow key={hl.id}>
-                  <Td className="text-sm font-medium text-foreground">
+                  <Td className="text-foreground text-sm font-medium">
                     <Link
                       to={`/resources/hash-lists/${hl.id}`}
                       className="hover:text-primary hover:underline"
@@ -182,48 +183,48 @@ function HashListsTab() {
                     </Link>
                   </Td>
                   <Td className="font-mono text-xs tabular-nums">{hl.hashCount}</Td>
-                  <Td className="font-mono text-xs tabular-nums text-success">{hl.crackedCount}</Td>
+                  <Td className="text-success font-mono text-xs tabular-nums">{hl.crackedCount}</Td>
                   <Td>
                     <div className="flex items-center gap-2">
-                      <div className="h-1.5 w-20 rounded-full bg-surface-1">
+                      <div className="bg-surface-1 h-1.5 w-20 rounded-full">
                         <div
-                          className="h-full rounded-full bg-primary transition-all"
+                          className="bg-primary h-full rounded-full transition-all"
                           style={{ width: `${Math.min(pct, 100)}%` }}
                         />
                       </div>
-                      <span className="font-mono text-xs text-muted-foreground">
+                      <span className="text-muted-foreground font-mono text-xs">
                         {pct.toFixed(0)}%
                       </span>
                     </div>
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {new Date(hl.createdAt).toLocaleDateString()}
                   </Td>
                 </TableRow>
-              );
+              )
             })}
           </TableBody>
         </Table>
       )}
     </div>
-  );
+  )
 }
 
 function useResourcesByType(type: 'wordlists' | 'rulelists' | 'masklists') {
-  const wordlists = useWordlists({ enabled: type === 'wordlists' });
-  const rulelists = useRulelists({ enabled: type === 'rulelists' });
-  const masklists = useMasklists({ enabled: type === 'masklists' });
+  const wordlists = useWordlists({ enabled: type === 'wordlists' })
+  const rulelists = useRulelists({ enabled: type === 'rulelists' })
+  const masklists = useMasklists({ enabled: type === 'masklists' })
 
-  const hookMap = { wordlists, rulelists, masklists };
-  return hookMap[type];
+  const hookMap = { wordlists, rulelists, masklists }
+  return hookMap[type]
 }
 
 function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklists' }) {
-  const { data, isLoading } = useResourcesByType(type);
+  const { data, isLoading } = useResourcesByType(type)
 
-  if (isLoading) return <EmptyState message="Loading..." />;
+  if (isLoading) return <EmptyState message="Loading..." />
 
-  const resources = data?.resources ?? [];
+  const resources = data?.resources ?? []
 
   return (
     <div className="space-y-4">
@@ -246,8 +247,8 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
           <TableBody>
             {resources.map((r) => (
               <TableRow key={r.id}>
-                <Td className="text-sm font-medium text-foreground">{r.name}</Td>
-                <Td className="text-xs text-muted-foreground">
+                <Td className="text-foreground text-sm font-medium">{r.name}</Td>
+                <Td className="text-muted-foreground text-xs">
                   {new Date(r.createdAt).toLocaleDateString()}
                 </Td>
               </TableRow>
@@ -256,18 +257,18 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
         </Table>
       )}
     </div>
-  );
+  )
 }
 
 function HashDetectTab() {
-  const [hashInput, setHashInput] = useState('');
-  const guessType = useGuessHashType();
+  const [hashInput, setHashInput] = useState('')
+  const guessType = useGuessHashType()
 
   const handleDetect = () => {
     if (hashInput.trim()) {
-      guessType.mutate(hashInput.trim());
+      guessType.mutate(hashInput.trim())
     }
-  };
+  }
 
   return (
     <div className="space-y-4">
@@ -279,7 +280,7 @@ function HashDetectTab() {
           value={hashInput}
           onChange={(e) => setHashInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') handleDetect();
+            if (e.key === 'Enter') handleDetect()
           }}
         />
         <Button
@@ -314,18 +315,18 @@ function HashDetectTab() {
               <TableBody>
                 {guessType.data.candidates.map((c) => (
                   <TableRow key={c.hashcatMode}>
-                    <Td className="text-sm font-medium text-foreground">{c.name}</Td>
+                    <Td className="text-foreground text-sm font-medium">{c.name}</Td>
                     <Td className="font-mono text-xs">{c.hashcatMode}</Td>
-                    <Td className="text-xs text-muted-foreground">{c.category}</Td>
+                    <Td className="text-muted-foreground text-xs">{c.category}</Td>
                     <Td>
                       <div className="flex items-center gap-2">
-                        <div className="h-1.5 w-20 rounded-full bg-surface-1">
+                        <div className="bg-surface-1 h-1.5 w-20 rounded-full">
                           <div
-                            className="h-full rounded-full bg-primary transition-all"
+                            className="bg-primary h-full rounded-full transition-all"
                             style={{ width: `${Math.round(c.confidence * 100)}%` }}
                           />
                         </div>
-                        <span className="font-mono text-xs text-muted-foreground">
+                        <span className="text-muted-foreground font-mono text-xs">
                           {Math.round(c.confidence * 100)}%
                         </span>
                       </div>
@@ -338,5 +339,5 @@ function HashDetectTab() {
         </div>
       )}
     </div>
-  );
+  )
 }

@@ -68,9 +68,9 @@ bun --filter backend test         # Backend tests
 
 ### Formatting & Linting
 
-- **Biome** for linting and formatting (not ESLint, not Prettier)
+- **oxlint + oxfmt** for linting and formatting (not ESLint, not Prettier, not Biome); **taplo** for TOML
 - Run `just format` or `bun run format` to format all files
-- pre-commit hooks run Biome checks and type checking
+- pre-commit hooks run oxfmt + taplo format checks, oxlint, and type checking
 
 ### Error Handling
 
@@ -128,7 +128,7 @@ SeaweedFS: localhost:9000 (S3), 9333 (master)  # S3-compatible object storage (m
 - **`exactOptionalPropertyTypes`:** Use spread `...(val ? {k: val} : {})` not `k: val ?? undefined`
 - **`noUncheckedIndexedAccess`:** All `arr[i]` returns `T | undefined` — guard with null check
 - **`noPropertyAccessFromIndexSignature`:** Use `obj['key']` bracket notation for index signatures
-- **Biome `useLiteralKeys: "off"`:** Must stay off — conflicts with TS setting above
+- **Bracket notation for index signatures:** `obj['key']` not `obj.key` under `noPropertyAccessFromIndexSignature` — oxlint's `typescript/no-unnecessary-type-assertion` should not be silenced for these accesses
 - **Don't skip Zod validation** — validate all external input
 - **Don't commit secrets** — use .env files (gitignored)
 - **Agent API changes require OpenAPI spec updates** — keep contract in sync

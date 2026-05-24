@@ -15,18 +15,21 @@
  * and enumerate which user ids have provisioned API keys.
  */
 
-import { users } from '@hashhive/shared';
-import { eq } from 'drizzle-orm';
-import type { Context } from 'hono';
-import { createMiddleware } from 'hono/factory';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { BCRYPT_COST, parseApiKey, verifyApiKey } from '../lib/api-key.js';
-import { parseProjectIdHeader } from '../lib/headers.js';
-import { problemResponse } from '../lib/problem-details.js';
-import type { AppEnv } from '../types.js';
+import type { Context } from 'hono'
 
-const ACTIVE_STATUS = 'active';
+import { users } from '@hashhive/shared'
+import { eq } from 'drizzle-orm'
+import { createMiddleware } from 'hono/factory'
+
+import type { AppEnv } from '../types.js'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { BCRYPT_COST, parseApiKey, verifyApiKey } from '../lib/api-key.js'
+import { parseProjectIdHeader } from '../lib/headers.js'
+import { problemResponse } from '../lib/problem-details.js'
+
+const ACTIVE_STATUS = 'active'
 
 /**
  * Pre-computed bcrypt hash used as a timing sentinel on the user-missing
@@ -42,31 +45,31 @@ const ACTIVE_STATUS = 'active';
 const TIMING_SENTINEL_HASH = await Bun.password.hash(base64UrlRandom(32), {
   algorithm: 'bcrypt',
   cost: BCRYPT_COST,
-});
+})
 
 function base64UrlRandom(byteLength: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength))
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 function authProblem(c: Context<AppEnv>): Response {
-  return problemResponse(c, 401, 'auth', 'Invalid or missing API key');
+  return problemResponse(c, 401, 'auth', 'Invalid or missing API key')
 }
 
 export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<Response | void> => {
   // Auth scheme tokens are case-insensitive per RFC 7235 — accept both
   // `Bearer` and `bearer` so CLI clients and curl one-liners aren't
   // arbitrarily picky about capitalization.
-  const authHeader = c.req.header('authorization');
-  const [scheme, token = ''] = authHeader?.trim().split(/\s+/, 2) ?? [];
+  const authHeader = c.req.header('authorization')
+  const [scheme, token = ''] = authHeader?.trim().split(/\s+/, 2) ?? []
   if (scheme?.toLowerCase() !== 'bearer' || !token) {
-    return authProblem(c);
+    return authProblem(c)
   }
 
-  const parsed = parseApiKey(token);
-  if (!parsed) return authProblem(c);
+  const parsed = parseApiKey(token)
+  if (!parsed) return authProblem(c)
 
   const [row] = await db
     .select({
@@ -77,22 +80,22 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
     })
     .from(users)
     .where(eq(users.id, parsed.userId))
-    .limit(1);
+    .limit(1)
 
-  const userMissing = !row || row.status !== ACTIVE_STATUS || !row.apiKeyHash;
+  const userMissing = !row || row.status !== ACTIVE_STATUS || !row.apiKeyHash
   // Always run bcrypt to keep timing uniform across miss paths. We
   // verify against the real hash when the row is usable; otherwise we
   // verify against the sentinel and discard the result.
-  const hashToVerify = userMissing ? TIMING_SENTINEL_HASH : (row?.apiKeyHash as string);
-  const verified = await verifyApiKey(token, hashToVerify);
+  const hashToVerify = userMissing ? TIMING_SENTINEL_HASH : (row?.apiKeyHash as string)
+  const verified = await verifyApiKey(token, hashToVerify)
 
-  if (userMissing || !verified) return authProblem(c);
+  if (userMissing || !verified) return authProblem(c)
 
   c.set('currentUser', {
     userId: row.id,
     email: row.email,
     projectId: parseProjectIdHeader(c.req.header('x-project-id')),
-  });
+  })
 
   // Fire-and-forget last-used update. Air-gapped deployment, low
   // write volume, accuracy preferred over write amplification. The
@@ -103,7 +106,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
   db.update(users)
     .set({ apiKeyLastUsedAt: new Date() })
     .where(eq(users.id, row.id))
-    .catch((err) => logger.warn({ err, userId: row.id }, 'apiKeyLastUsedAt update failed'));
+    .catch((err) => logger.warn({ err, userId: row.id }, 'apiKeyLastUsedAt update failed'))
 
-  await next();
-});
+  await next()
+})

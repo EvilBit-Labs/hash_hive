@@ -24,7 +24,8 @@ Optimize for correctness, clarity, and developer experience -- not premature sca
 | Server state | TanStack Query v5 | Data fetching and caching |
 | Client state | Zustand | UI state (project selection, filters, wizard state) |
 | Monorepo | Turborepo + Bun workspaces | Not Nx, not Lerna |
-| Linting | Biome | Not ESLint, not Prettier |
+| Linting | oxlint (type-aware) | Not ESLint, not Biome |
+| Formatting | oxfmt (JS/TS/JSON/CSS) + taplo (TOML) | Not Prettier, not Biome |
 | Testing | bun:test, Testing Library, Playwright | Unit, component, E2E |
 
 See `.kiro/steering/tech.md` for the full details and explicit constraints on what NOT to introduce.

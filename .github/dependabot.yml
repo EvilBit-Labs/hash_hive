@@ -5,22 +5,22 @@
 
 version: 2
 updates:
-  - package-ecosystem: "docker" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: 'docker' # See documentation for possible values
+    directory: '/' # Location of package manifests
     schedule:
       interval: daily
     cooldown:
       default-days: 7
 
-  - package-ecosystem: "github-actions" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: 'github-actions' # See documentation for possible values
+    directory: '/' # Location of package manifests
     schedule:
       interval: daily
     cooldown:
       default-days: 7
 
-  - package-ecosystem: "npm" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: 'npm' # See documentation for possible values
+    directory: '/' # Location of package manifests
     schedule:
       interval: daily
     cooldown:
@@ -29,8 +29,8 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 7
 
-  - package-ecosystem: "devcontainers" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: 'devcontainers' # See documentation for possible values
+    directory: '/' # Location of package manifests
     schedule:
       interval: daily
     cooldown:

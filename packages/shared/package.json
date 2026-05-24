@@ -15,8 +15,8 @@
   "scripts": {
     "build": "tsc",
     "lint": "oxlint --type-aware ./src",
-    "type-check": "tsc --noEmit",
-    "test": "echo 'No tests yet' && exit 0"
+    "test": "echo 'No tests yet' && exit 0",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

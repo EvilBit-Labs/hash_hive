@@ -9,13 +9,13 @@
  * The middleware validates pre-shared tokens by querying the agents table.
  * We mock the DB to return a valid agent for our test token.
  */
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test'
 
 // Mock the DB so requireAgentToken middleware can resolve the pre-shared token.
 // Service modules (tasks, campaigns, events) are also mocked to prevent real
 // modules from entering bun's shared module cache, which would break mock
 // isolation for other test files (e.g., campaign-transition.test.ts).
-const TEST_AGENT_TOKEN = 'test-agent-preshared-token';
+const TEST_AGENT_TOKEN = 'test-agent-preshared-token'
 
 // Snake_case row kept as a reference for building the camelCase mock below.
 // The actual snake→camelCase mapping is validated in tasks.test.ts.
@@ -36,14 +36,14 @@ const mockSnakeCaseTaskRow = {
   retry_count: 0,
   created_at: '2026-03-24T00:00:00.000Z',
   updated_at: '2026-03-24T00:00:00.000Z',
-};
+}
 
 const mockAgent = {
   id: 1,
   projectId: 1,
   status: 'online',
   capabilities: {},
-};
+}
 
 const mockSelect = mock(() => ({
   from: mock(() => ({
@@ -51,9 +51,9 @@ const mockSelect = mock(() => ({
       limit: mock(() => Promise.resolve([mockAgent])),
     })),
   })),
-}));
+}))
 
-const mockExecute = mock(() => Promise.resolve([mockSnakeCaseTaskRow]));
+const mockExecute = mock(() => Promise.resolve([mockSnakeCaseTaskRow]))
 
 // Pull the real pure helpers in BEFORE mock.module runs so the mock
 // factory can re-export them. `mock.module` is process-global in
@@ -68,7 +68,7 @@ import {
   decideHeartbeatTransition as realDecideHeartbeatTransition,
   pickCurrentTaskByAgent as realPickCurrentTaskByAgent,
   scrubAgentErrorContext as realScrubAgentErrorContext,
-} from '../../src/services/agents.js';
+} from '../../src/services/agents.js'
 
 mock.module('../../src/services/agents.js', () => ({
   processHeartbeat: mock(() => Promise.resolve({ hasHighPriorityTasks: false })),
@@ -80,7 +80,7 @@ mock.module('../../src/services/agents.js', () => ({
   decideHeartbeatTransition: realDecideHeartbeatTransition,
   pickCurrentTaskByAgent: realPickCurrentTaskByAgent,
   scrubAgentErrorContext: realScrubAgentErrorContext,
-}));
+}))
 
 // Mock events and tasks to prevent real modules from entering the shared bun
 // module cache (which leaks across test files via mock.module merge behavior).
@@ -90,7 +90,7 @@ mock.module('../../src/services/events.js', () => ({
   emitCrackResult: mock(),
   emitTaskUpdate: mock(),
   emitCampaignStatus: mock(),
-}));
+}))
 
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase
 // mapping is validated in tasks.test.ts; here we only test the route contract.
@@ -112,7 +112,7 @@ const mockCamelCaseTask = {
   retryCount: mockSnakeCaseTaskRow.retry_count,
   createdAt: mockSnakeCaseTaskRow.created_at,
   updatedAt: mockSnakeCaseTaskRow.updated_at,
-};
+}
 
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase
 // mapping is validated in tasks.test.ts; here we only test the route contract.
@@ -125,7 +125,7 @@ mock.module('../../src/services/tasks.js', () => ({
   reassignStaleTasks: mock(() => Promise.resolve([])),
   getTaskById: mock(() => Promise.resolve(null)),
   listTasks: mock(() => Promise.resolve([])),
-}));
+}))
 
 mock.module('../../src/db/index.js', () => ({
   db: {
@@ -133,12 +133,12 @@ mock.module('../../src/db/index.js', () => ({
     execute: mockExecute,
   },
   client: {},
-}));
+}))
 
-import { app } from '../../src/index.js';
-import { agentToken } from '../fixtures.js';
+import { app } from '../../src/index.js'
+import { agentToken } from '../fixtures.js'
 
-const AGENT_BASE = '/api/v1/agent';
+const AGENT_BASE = '/api/v1/agent'
 
 /**
  * Assert the documented Agent API validation-error envelope
@@ -149,11 +149,11 @@ const AGENT_BASE = '/api/v1/agent';
  * default.
  */
 async function expectAgentValidationError(res: Response): Promise<void> {
-  const body = (await res.json()) as Record<string, unknown>;
-  expect(body).toHaveProperty('error');
-  const err = body['error'] as Record<string, unknown>;
-  expect(err['code']).toBe('VALIDATION_ERROR');
-  expect(typeof err['message']).toBe('string');
+  const body = (await res.json()) as Record<string, unknown>
+  expect(body).toHaveProperty('error')
+  const err = body['error'] as Record<string, unknown>
+  expect(err['code']).toBe('VALIDATION_ERROR')
+  expect(typeof err['message']).toBe('string')
 }
 
 // ─── POST /sessions — removed (should 404) ──────────────────────────
@@ -164,11 +164,11 @@ describe('Agent API: POST /sessions (removed)', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: 'some-token' }),
-    });
+    })
 
-    expect(res.status).toBe(404);
-  });
-});
+    expect(res.status).toBe(404)
+  })
+})
 
 // ─── POST /heartbeat — Agent Heartbeat ──────────────────────────────
 
@@ -178,16 +178,16 @@ describe('Agent API: POST /heartbeat', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'online' }),
-    });
+    })
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body['error']).toBeDefined();
-    expect(body['error']['code']).toBe('AUTH_TOKEN_INVALID');
-  });
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body['error']).toBeDefined()
+    expect(body['error']['code']).toBe('AUTH_TOKEN_INVALID')
+  })
 
   it('should return 400 for invalid heartbeat status enum', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -195,16 +195,16 @@ describe('Agent API: POST /heartbeat', () => {
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ status: 'invalid-status' }),
-    });
+    })
 
-    expect(res.status).toBe(400);
-  });
+    expect(res.status).toBe(400)
+  })
 
   it('accepts a legacy heartbeat with status only (back-compat baseline)', async () => {
     // Arrange — locks in lenient policy. Existing agents in the wild
     // still post `{status: 'online'}` and nothing else; tightening the
     // schema (e.g., adding .strict()) would silently break them.
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -214,17 +214,17 @@ describe('Agent API: POST /heartbeat', () => {
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ status: 'online' }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body['acknowledged']).toBe(true);
-  });
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+  })
 
   it('accepts a heartbeat with currentTask and warning error', async () => {
     // Arrange
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -247,17 +247,17 @@ describe('Agent API: POST /heartbeat', () => {
           context: { gpuId: 0 },
         },
       }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body['acknowledged']).toBe(true);
-  });
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+  })
 
   it('accepts a heartbeat with a fatal error and no currentTask', async () => {
     // Arrange
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -270,16 +270,16 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'error',
         error: { severity: 'fatal', message: 'hashcat crashed' },
       }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body['acknowledged']).toBe(true);
-  });
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+  })
 
   it('rejects an error.severity outside the warning|fatal enum', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -290,13 +290,13 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         error: { severity: 'info', message: 'just a note' },
       }),
-    });
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   it('rejects an empty error.message', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -307,13 +307,13 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         error: { severity: 'warning', message: '' },
       }),
-    });
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   it('rejects a non-positive currentTask.taskId', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -324,13 +324,13 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         currentTask: { taskId: 0, progress: 0, speed: 0 },
       }),
-    });
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   it('rejects a negative currentTask.progress', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -341,10 +341,10 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         currentTask: { taskId: 42, progress: -0.1, speed: 0 },
       }),
-    });
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   // ─── Size-cap boundaries on error.message and error.context ─────────
   // These guard the DoS-bound `.max(4096)` and `.refine()` 16K-char cap
@@ -353,8 +353,8 @@ describe('Agent API: POST /heartbeat', () => {
 
   it('accepts an error.message at the 4096-character cap', async () => {
     // Arrange
-    const token = agentToken(TEST_AGENT_TOKEN);
-    const messageAtCap = 'a'.repeat(4096);
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const messageAtCap = 'a'.repeat(4096)
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -367,16 +367,16 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         error: { severity: 'warning', message: messageAtCap },
       }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(200);
-  });
+    expect(res.status).toBe(200)
+  })
 
   it('rejects an error.message that exceeds the 4096-character cap', async () => {
     // Arrange
-    const token = agentToken(TEST_AGENT_TOKEN);
-    const messageOverCap = 'a'.repeat(4097);
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const messageOverCap = 'a'.repeat(4097)
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -389,18 +389,18 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         error: { severity: 'warning', message: messageOverCap },
       }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   it('rejects an error.context whose JSON serialization exceeds 16K characters', async () => {
     // Arrange — a single string value just past the 16K-char limit so
     // `JSON.stringify(context).length` exceeds HEARTBEAT_ERROR_CONTEXT_MAX_CHARS.
-    const token = agentToken(TEST_AGENT_TOKEN);
-    const oversized = { blob: 'x'.repeat(16 * 1024 + 1) };
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const oversized = { blob: 'x'.repeat(16 * 1024 + 1) }
 
     // Act
     const res = await app.request(`${AGENT_BASE}/heartbeat`, {
@@ -413,12 +413,12 @@ describe('Agent API: POST /heartbeat', () => {
         status: 'online',
         error: { severity: 'warning', message: 'big', context: oversized },
       }),
-    });
+    })
 
     // Assert
-    expect(res.status).toBe(400);
-    await expectAgentValidationError(res);
-  });
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
 
   // ─── Recovery from status='error' via heartbeat ─────────────────────
   // The heartbeat endpoint uses requireAgentTokenForHeartbeatRecovery so an
@@ -431,9 +431,9 @@ describe('Agent API: POST /heartbeat', () => {
     // status='error' by a fatal heartbeat. The strict middleware would
     // reject this token; the recovery variant on /heartbeat admits it
     // so processHeartbeat can transition it back to 'online'.
-    const token = agentToken(TEST_AGENT_TOKEN);
-    const priorStatus = mockAgent.status;
-    mockAgent.status = 'error';
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const priorStatus = mockAgent.status
+    mockAgent.status = 'error'
 
     try {
       // Act
@@ -444,42 +444,42 @@ describe('Agent API: POST /heartbeat', () => {
           authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ status: 'online' }),
-      });
+      })
 
       // Assert — the middleware admits the errored agent (200, not 401)
       // and the handler acknowledges.
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body['acknowledged']).toBe(true);
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
     } finally {
-      mockAgent.status = priorStatus;
+      mockAgent.status = priorStatus
     }
-  });
+  })
 
   it('still rejects errored agents on work endpoints (strict middleware)', async () => {
     // Arrange — same errored row, but posting to /tasks/next (which
     // uses the strict requireAgentToken middleware). Confirms the
     // recovery exemption is heartbeat-only.
-    const token = agentToken(TEST_AGENT_TOKEN);
-    const priorStatus = mockAgent.status;
-    mockAgent.status = 'error';
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const priorStatus = mockAgent.status
+    mockAgent.status = 'error'
 
     try {
       // Act
       const res = await app.request(`${AGENT_BASE}/tasks/next`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}` },
-      });
+      })
 
       // Assert
-      expect(res.status).toBe(401);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect((body['error'] as Record<string, unknown>)['code']).toBe('AUTH_TOKEN_INVALID');
+      expect(res.status).toBe(401)
+      const body = (await res.json()) as Record<string, unknown>
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('AUTH_TOKEN_INVALID')
     } finally {
-      mockAgent.status = priorStatus;
+      mockAgent.status = priorStatus
     }
-  });
-});
+  })
+})
 
 // ─── POST /tasks/next — Request Next Task ───────────────────────────
 
@@ -487,71 +487,71 @@ describe('Agent API: POST /tasks/next', () => {
   it('should return 401 without auth token', async () => {
     const res = await app.request(`${AGENT_BASE}/tasks/next`, {
       method: 'POST',
-    });
+    })
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body['error']).toBeDefined();
-  });
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body['error']).toBeDefined()
+  })
 
   it('returns camelCase task descriptor when task is available', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/next`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
       },
-    });
+    })
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    const task = body['task'] as Record<string, unknown>;
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    const task = body['task'] as Record<string, unknown>
 
     // Task should be present
-    expect(task).not.toBeNull();
+    expect(task).not.toBeNull()
 
     // camelCase keys should be defined
-    expect(task['attackId']).toBeDefined();
-    expect(task['campaignId']).toBeDefined();
-    expect(task['workRange']).toBeDefined();
+    expect(task['attackId']).toBeDefined()
+    expect(task['campaignId']).toBeDefined()
+    expect(task['workRange']).toBeDefined()
 
     // retryCount is part of the documented TaskDescriptor contract and
     // is always present (backed by a NOT NULL DEFAULT 0 column). Assert
     // the field is exposed with the expected value so generated agent
     // clients can rely on it.
-    expect(task).toHaveProperty('retryCount');
-    expect(task['retryCount']).toBe(mockSnakeCaseTaskRow.retry_count);
+    expect(task).toHaveProperty('retryCount')
+    expect(task['retryCount']).toBe(mockSnakeCaseTaskRow.retry_count)
 
     // snake_case keys should be absent
-    expect(task['attack_id']).toBeUndefined();
-    expect(task['campaign_id']).toBeUndefined();
-    expect(task['work_range']).toBeUndefined();
-    expect(task['retry_count']).toBeUndefined();
-  });
+    expect(task['attack_id']).toBeUndefined()
+    expect(task['campaign_id']).toBeUndefined()
+    expect(task['work_range']).toBeUndefined()
+    expect(task['retry_count']).toBeUndefined()
+  })
 
   it('round-trips a non-zero retryCount through the snake↔camel projection', async () => {
     // toHaveProperty passes even on an explicit undefined; assert a real
     // non-zero value so a regression that drops the column projection is
     // caught here rather than at runtime in the agent client.
-    const tasksMod = await import('../../src/services/tasks.js');
-    const assignNextTaskMock = tasksMod.assignNextTask as unknown as ReturnType<typeof mock>;
+    const tasksMod = await import('../../src/services/tasks.js')
+    const assignNextTaskMock = tasksMod.assignNextTask as unknown as ReturnType<typeof mock>
     assignNextTaskMock.mockImplementationOnce(() =>
       Promise.resolve({ ...mockCamelCaseTask, retryCount: 2 })
-    );
+    )
 
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/next`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}` },
-    });
+    })
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    const task = body['task'] as Record<string, unknown>;
-    expect(task['retryCount']).toBe(2);
-    expect(task['retryCount']).not.toBeUndefined();
-  });
-});
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    const task = body['task'] as Record<string, unknown>
+    expect(task['retryCount']).toBe(2)
+    expect(task['retryCount']).not.toBeUndefined()
+  })
+})
 
 // ─── POST /tasks/:id/report — Report Task Progress ─────────────────
 
@@ -561,13 +561,13 @@ describe('Agent API: POST /tasks/:id/report', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'running' }),
-    });
+    })
 
-    expect(res.status).toBe(401);
-  });
+    expect(res.status).toBe(401)
+  })
 
   it('should return 400 for invalid status enum', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/1/report`, {
       method: 'POST',
       headers: {
@@ -575,11 +575,11 @@ describe('Agent API: POST /tasks/:id/report', () => {
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ status: 'not-a-valid-status' }),
-    });
+    })
 
-    expect(res.status).toBe(400);
-  });
-});
+    expect(res.status).toBe(400)
+  })
+})
 
 // ─── POST /errors — Report Agent Error ──────────────────────────────
 
@@ -589,13 +589,13 @@ describe('Agent API: POST /errors', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ severity: 'error', message: 'test error' }),
-    });
+    })
 
-    expect(res.status).toBe(401);
-  });
+    expect(res.status).toBe(401)
+  })
 
   it('should return 400 for missing required fields', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/errors`, {
       method: 'POST',
       headers: {
@@ -603,13 +603,13 @@ describe('Agent API: POST /errors', () => {
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({}),
-    });
+    })
 
-    expect(res.status).toBe(400);
-  });
+    expect(res.status).toBe(400)
+  })
 
   it('should return 400 for invalid severity enum', async () => {
-    const token = agentToken(TEST_AGENT_TOKEN);
+    const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/errors`, {
       method: 'POST',
       headers: {
@@ -617,8 +617,8 @@ describe('Agent API: POST /errors', () => {
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ severity: 'invalid', message: 'test' }),
-    });
+    })
 
-    expect(res.status).toBe(400);
-  });
-});
+    expect(res.status).toBe(400)
+  })
+})

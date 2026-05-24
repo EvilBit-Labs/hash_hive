@@ -16,7 +16,7 @@ HashHive is a distributed password-cracking platform that orchestrates [hashcat]
 | Server state | TanStack Query v5 |
 | Client state | Zustand |
 | Monorepo | Turborepo + Bun workspaces |
-| Lint + format | Biome |
+| Lint + format | oxlint + oxfmt (JS/TS/JSON/CSS), taplo (TOML) |
 | Tests | bun:test (unit / integration), Playwright (e2e) |
 | Tasks | [just](https://github.com/casey/just) (recommended) |
 
@@ -93,8 +93,8 @@ just test-frontend      # Frontend (bun:test)
 just test-e2e           # E2E (Playwright)
 
 # Lint + format
-just lint               # Biome lint across the monorepo
-just format             # Biome format-write
+just lint               # oxlint (type-aware) across the monorepo
+just format             # oxfmt (JS/TS/JSON/CSS) + taplo (TOML)
 just type-check         # tsc --noEmit across packages
 
 # Database

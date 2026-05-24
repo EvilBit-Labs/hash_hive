@@ -1,5 +1,5 @@
 name: Copilot Setup
-"on":
+'on':
   workflow_dispatch:
 # Least-privilege default token scope: the setup steps only need to
 # clone the repo. Any future step that needs to write back to the

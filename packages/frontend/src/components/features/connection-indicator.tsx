@@ -1,7 +1,7 @@
-import { cn } from '../../lib/utils';
+import { cn } from '../../lib/utils'
 
 interface ConnectionIndicatorProps {
-  connected: boolean;
+  connected: boolean
 }
 
 export function ConnectionIndicator({ connected }: ConnectionIndicatorProps) {
@@ -9,7 +9,7 @@ export function ConnectionIndicator({ connected }: ConnectionIndicatorProps) {
     <div className="flex items-center gap-2 text-xs">
       <span className="relative flex h-2 w-2">
         {connected && (
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-50" />
+          <span className="bg-success absolute inline-flex h-full w-full animate-ping rounded-full opacity-50" />
         )}
         <span
           className={cn(
@@ -22,5 +22,5 @@ export function ConnectionIndicator({ connected }: ConnectionIndicatorProps) {
         {connected ? 'Live' : 'Reconnecting...'}
       </span>
     </div>
-  );
+  )
 }

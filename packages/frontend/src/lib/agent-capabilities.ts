@@ -8,7 +8,7 @@
  * both into a uniform `{ name, version }` shape so consumers can render
  * a single "Engine / Version" cell without inline branching.
  */
-import type { EngineDescriptor } from '@hashhive/shared';
+import type { EngineDescriptor } from '@hashhive/shared'
 
 /**
  * Result of `getPrimaryEngine`. Reuses the shared `EngineDescriptor`
@@ -16,34 +16,34 @@ import type { EngineDescriptor } from '@hashhive/shared';
  * `hashcatVersion` fallback synthesizes the same record an agent emits
  * via `capabilities.engines[0]`.
  */
-export type PrimaryEngine = EngineDescriptor;
+export type PrimaryEngine = EngineDescriptor
 
 interface CapabilitiesShape {
-  engines?: Array<{ name?: unknown; version?: unknown }>;
-  hashcatVersion?: unknown;
+  engines?: Array<{ name?: unknown; version?: unknown }>
+  hashcatVersion?: unknown
 }
 
 export function getPrimaryEngine(
   capabilities: Record<string, unknown> | null | undefined
 ): PrimaryEngine | null {
-  if (!capabilities) return null;
-  const caps = capabilities as CapabilitiesShape;
+  if (!capabilities) return null
+  const caps = capabilities as CapabilitiesShape
 
-  const first = caps.engines?.[0];
+  const first = caps.engines?.[0]
   if (first && typeof first.name === 'string' && typeof first.version === 'string') {
-    return { name: first.name, version: first.version };
+    return { name: first.name, version: first.version }
   }
 
   if (typeof caps.hashcatVersion === 'string' && caps.hashcatVersion.length > 0) {
-    return { name: 'hashcat', version: caps.hashcatVersion };
+    return { name: 'hashcat', version: caps.hashcatVersion }
   }
 
-  return null;
+  return null
 }
 
 export function formatPrimaryEngine(engine: PrimaryEngine | null): string {
-  if (!engine) return '-';
+  if (!engine) return '-'
   // Trim defends against an agent emitting `{ version: '' }` or whitespace.
-  const version = engine.version.trim();
-  return version ? `${engine.name} ${version}` : engine.name;
+  const version = engine.version.trim()
+  return version ? `${engine.name} ${version}` : engine.name
 }

@@ -1,15 +1,15 @@
-import { Button } from './button';
+import { Button } from './button'
 
 interface ConfirmDialogProps {
-  open: boolean;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  destructive?: boolean;
-  busy?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
+  open: boolean
+  title: string
+  message: string
+  confirmLabel?: string
+  cancelLabel?: string
+  destructive?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onCancel: () => void
 }
 
 /**
@@ -29,20 +29,21 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  if (!open) return null;
+  if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80">
+    <div className="bg-crust/80 fixed inset-0 z-50 flex items-center justify-center">
       <div
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom modal: native <dialog> doesn't support the design system's surface tokens
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
-        className="w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
+        className="border-surface-0 bg-mantle w-full max-w-md rounded-lg border p-6 shadow-2xl"
       >
         <h3 id="confirm-dialog-title" className="mb-2 text-sm font-medium">
           {title}
         </h3>
-        <p className="text-xs text-muted-foreground">{message}</p>
+        <p className="text-muted-foreground text-xs">{message}</p>
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
@@ -57,5 +58,5 @@ export function ConfirmDialog({
         </div>
       </div>
     </div>
-  );
+  )
 }

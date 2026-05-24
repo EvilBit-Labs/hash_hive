@@ -10,11 +10,12 @@
  * Imports `transitionCampaign` dynamically from `./campaigns.js` to
  * break the static cycle (campaigns.ts re-exports this module).
  */
-import { campaigns, tasks } from '@hashhive/shared';
-import { eq, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { getHashListStats } from './resources.js';
+import { campaigns, tasks } from '@hashhive/shared'
+import { eq, sql } from 'drizzle-orm'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { getHashListStats } from './resources.js'
 
 /**
  * Pure decision: should a campaign auto-transition to `completed`?
@@ -32,14 +33,14 @@ import { getHashListStats } from './resources.js';
  * Exported for unit testing the guard without mocking SQL.
  */
 export function shouldAutoCompleteCampaign(input: {
-  status: string;
-  totalTasks: number;
-  completedCount: number;
-  failedCount: number;
+  status: string
+  totalTasks: number
+  completedCount: number
+  failedCount: number
 }): boolean {
-  if (input.status !== 'running' && input.status !== 'paused') return false;
-  if (input.totalTasks <= 0) return false;
-  return input.completedCount + input.failedCount >= input.totalTasks;
+  if (input.status !== 'running' && input.status !== 'paused') return false
+  if (input.totalTasks <= 0) return false
+  return input.completedCount + input.failedCount >= input.totalTasks
 }
 
 /**
@@ -50,24 +51,24 @@ export function shouldAutoCompleteCampaign(input: {
  * testing the rate math without mocking SQL.
  */
 export function computeCampaignEta(input: {
-  startedAt: Date | null;
-  now: Date;
-  totalTasks: number;
-  completedCount: number;
-  failedCount: number;
-  runningProgress: number;
-  runningTaskCount: number;
+  startedAt: Date | null
+  now: Date
+  totalTasks: number
+  completedCount: number
+  failedCount: number
+  runningProgress: number
+  runningTaskCount: number
 }): string | null {
-  if (input.runningTaskCount <= 0) return null;
-  if (!input.startedAt) return null;
-  const completedFraction = input.completedCount + input.runningProgress;
-  if (completedFraction <= 0) return null;
-  const elapsedMs = input.now.getTime() - input.startedAt.getTime();
-  if (elapsedMs < 1000) return null;
-  const rate = completedFraction / (elapsedMs / 1000); // tasks per second
-  const remaining = Math.max(0, input.totalTasks - completedFraction - input.failedCount);
-  if (rate <= 0 || remaining <= 0) return null;
-  return new Date(input.now.getTime() + (remaining / rate) * 1000).toISOString();
+  if (input.runningTaskCount <= 0) return null
+  if (!input.startedAt) return null
+  const completedFraction = input.completedCount + input.runningProgress
+  if (completedFraction <= 0) return null
+  const elapsedMs = input.now.getTime() - input.startedAt.getTime()
+  if (elapsedMs < 1000) return null
+  const rate = completedFraction / (elapsedMs / 1000) // tasks per second
+  const remaining = Math.max(0, input.totalTasks - completedFraction - input.failedCount)
+  if (rate <= 0 || remaining <= 0) return null
+  return new Date(input.now.getTime() + (remaining / rate) * 1000).toISOString()
 }
 
 // Dynamic-import getter for transitionCampaign — breaks the static
@@ -76,10 +77,10 @@ export function computeCampaignEta(input: {
 // unresolvable cycle at evaluation time.
 export const _progressDeps = {
   getTransitionCampaign: async () => {
-    const mod = await import('./campaigns.js');
-    return mod.transitionCampaign;
+    const mod = await import('./campaigns.js')
+    return mod.transitionCampaign
   },
-};
+}
 
 export async function updateCampaignProgress(campaignId: number): Promise<void> {
   // Single aggregation query: total tasks, terminal counts, clamped running progress.
@@ -129,17 +130,17 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
       runningTaskCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'running')`,
     })
     .from(tasks)
-    .where(eq(tasks.campaignId, campaignId));
+    .where(eq(tasks.campaignId, campaignId))
 
-  const totalTasks = agg?.totalTasks ?? 0;
-  if (totalTasks === 0) return;
+  const totalTasks = agg?.totalTasks ?? 0
+  if (totalTasks === 0) return
 
-  const completedCount = agg?.completedCount ?? 0;
-  const failedCount = agg?.failedCount ?? 0;
-  const runningProgress = agg?.runningProgress ?? 0;
-  const runningTaskCount = agg?.runningTaskCount ?? 0;
+  const completedCount = agg?.completedCount ?? 0
+  const failedCount = agg?.failedCount ?? 0
+  const runningProgress = agg?.runningProgress ?? 0
+  const runningTaskCount = agg?.runningTaskCount ?? 0
 
-  const overallProgress = (completedCount + runningProgress) / totalTasks;
+  const overallProgress = (completedCount + runningProgress) / totalTasks
 
   // Hash-based progress + ETA reference: load campaign metadata once.
   const [campaign] = await db
@@ -151,23 +152,23 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
     })
     .from(campaigns)
     .where(eq(campaigns.id, campaignId))
-    .limit(1);
+    .limit(1)
 
   let hashProgress: {
-    total: number;
-    cracked: number;
-    remaining: number;
-    percentage: number;
-  } | null = null;
+    total: number
+    cracked: number
+    remaining: number
+    percentage: number
+  } | null = null
 
   if (campaign?.hashListId) {
-    const stats = await getHashListStats(campaign.hashListId);
+    const stats = await getHashListStats(campaign.hashListId)
 
     if (stats.total > 0) {
       hashProgress = {
         ...stats,
         percentage: Math.round((stats.cracked / stats.total) * 10000) / 10000,
-      };
+      }
     }
   }
 
@@ -183,7 +184,7 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
     failedCount,
     runningProgress,
     runningTaskCount,
-  });
+  })
 
   await db
     .update(campaigns)
@@ -199,7 +200,7 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
       },
       updatedAt: new Date(),
     })
-    .where(eq(campaigns.id, campaignId));
+    .where(eq(campaigns.id, campaignId))
 
   // Auto-transition running → completed when every task has reached a
   // terminal state (completed/exhausted/failed). Guarded so we don't
@@ -225,13 +226,13 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
     })
   ) {
     try {
-      const transitionCampaign = await _progressDeps.getTransitionCampaign();
-      await transitionCampaign(campaignId, 'completed');
+      const transitionCampaign = await _progressDeps.getTransitionCampaign()
+      await transitionCampaign(campaignId, 'completed')
     } catch (err) {
       logger.error(
         { err, campaignId, totalTasks, completedCount, failedCount },
         'auto-complete transitionCampaign threw; leaving for next progress write to retry'
-      );
+      )
     }
   }
 }

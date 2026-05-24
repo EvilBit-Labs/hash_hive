@@ -1,8 +1,10 @@
-import type { UseFormReturn } from 'react-hook-form';
-import { z } from 'zod';
-import { Button } from '../../ui/button';
-import { Input } from '../../ui/input';
-import { Select } from '../../ui/select';
+import type { UseFormReturn } from 'react-hook-form'
+
+import { z } from 'zod'
+
+import { Button } from '../../ui/button'
+import { Input } from '../../ui/input'
+import { Select } from '../../ui/select'
 
 /**
  * Validation schema for Step 0. The form type is derived from this via
@@ -15,22 +17,22 @@ export const basicInfoSchema = z.object({
   description: z.string().max(2000).optional(),
   priority: z.coerce.number().int().min(1).max(10),
   hashListId: z.coerce.number().int().positive('Hash list is required'),
-});
+})
 
-export type BasicInfoForm = z.infer<typeof basicInfoSchema>;
+export type BasicInfoForm = z.infer<typeof basicInfoSchema>
 
 interface HashListOption {
-  id: number;
-  name: string;
-  hashCount: number;
+  id: number
+  name: string
+  hashCount: number
 }
 
 interface BasicInfoStepProps {
-  form: UseFormReturn<BasicInfoForm>;
-  hashLists: readonly HashListOption[];
-  onSubmit: () => void;
-  onUploadHashList: () => void;
-  onCancel: () => void;
+  form: UseFormReturn<BasicInfoForm>
+  hashLists: readonly HashListOption[]
+  onSubmit: () => void
+  onUploadHashList: () => void
+  onCancel: () => void
 }
 
 /**
@@ -49,30 +51,30 @@ export function BasicInfoStep({
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label htmlFor="name" className="text-xs font-medium text-muted-foreground">
+        <label htmlFor="name" className="text-muted-foreground text-xs font-medium">
           Campaign Name
         </label>
         <Input id="name" className="mt-1.5" {...form.register('name')} />
         {form.formState.errors.name && (
-          <p className="mt-1 text-xs text-destructive">{form.formState.errors.name.message}</p>
+          <p className="text-destructive mt-1 text-xs">{form.formState.errors.name.message}</p>
         )}
       </div>
 
       <div>
-        <label htmlFor="description" className="text-xs font-medium text-muted-foreground">
+        <label htmlFor="description" className="text-muted-foreground text-xs font-medium">
           Description
         </label>
         <textarea
           id="description"
           rows={3}
-          className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
+          className="border-surface-0 bg-background text-foreground focus:border-primary focus:ring-primary/40 mt-1.5 w-full rounded border px-3 py-2 text-sm focus:ring-1"
           {...form.register('description')}
         />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
+          <label htmlFor="priority" className="text-muted-foreground text-xs font-medium">
             Priority (1-10)
           </label>
           <Input
@@ -85,7 +87,7 @@ export function BasicInfoStep({
           />
         </div>
         <div>
-          <label htmlFor="hashListId" className="text-xs font-medium text-muted-foreground">
+          <label htmlFor="hashListId" className="text-muted-foreground text-xs font-medium">
             Hash List
           </label>
           <div className="mt-1.5 flex gap-2">
@@ -108,7 +110,7 @@ export function BasicInfoStep({
             </Button>
           </div>
           {form.formState.errors.hashListId && (
-            <p className="mt-1 text-xs text-destructive">
+            <p className="text-destructive mt-1 text-xs">
               {form.formState.errors.hashListId.message}
             </p>
           )}
@@ -122,5 +124,5 @@ export function BasicInfoStep({
         </Button>
       </div>
     </form>
-  );
+  )
 }

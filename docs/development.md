@@ -49,8 +49,8 @@ bun --filter @hashhive/frontend dev  # Frontend only
 ### Code Quality
 
 ```bash
-bun lint                         # Lint all code with Biome
-bun format                       # Format all code with Biome
+bun lint                         # Lint all code with oxlint (type-aware)
+bun format                       # Format all code with oxfmt (+ taplo for TOML)
 bun type-check                   # TypeScript type checking
 ```
 

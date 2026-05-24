@@ -36,7 +36,8 @@ HashHive is a 2026 TypeScript reimplementation of CipherSwarm, running on Bun wi
 
 - **Package Manager**: Bun (exclusively, no npm, yarn, or pnpm)
 - **Monorepo**: Turborepo with Bun workspaces
-- **Linting & Formatting**: Biome (single tool for linting, formatting, import sorting)
+- **Linting**: oxlint (type-aware, Rust-based; not ESLint, not Biome)
+- **Formatting**: oxfmt for JS/TS/JSON/CSS, taplo for TOML (not Prettier, not Biome)
 - **Build**: Turborepo for task orchestration and caching
 
 ## Common Commands
@@ -63,8 +64,8 @@ bun test:e2e             # Run E2E tests (Playwright)
 
 ```bash
 bun build                # Build all packages via Turborepo
-bun lint                 # Lint all code with Biome
-bun format               # Format all code with Biome
+bun lint                 # Lint all code with oxlint (type-aware)
+bun format               # Format all code with oxfmt (+ taplo for TOML)
 bun type-check           # TypeScript type checking
 ```
 

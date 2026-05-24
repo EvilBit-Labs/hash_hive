@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, mock } from 'bun:test';
-import { QueryClientProvider } from '@tanstack/react-query';
-import { render } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { QueryClientProvider } from '@tanstack/react-query'
+import { render } from '@testing-library/react'
+import { afterEach, describe, expect, it, mock } from 'bun:test'
+import { MemoryRouter, Route, Routes } from 'react-router'
 
 // Mock BetterAuth client before importing components
-let mockSession: { user: { id: string; name: string; email: string } } | null = null;
-let mockIsPending = false;
+let mockSession: { user: { id: string; name: string; email: string } } | null = null
+let mockIsPending = false
 
 mock.module('../../src/lib/auth-client', () => ({
   authClient: {
@@ -15,20 +15,20 @@ mock.module('../../src/lib/auth-client', () => ({
       error: null,
     }),
   },
-}));
+}))
 
-import { ProtectedRoute } from '../../src/components/features/protected-route';
-import { useUiStore } from '../../src/stores/ui';
-import { cleanupAll, createTestQueryClient, screen } from '../test-utils';
+import { ProtectedRoute } from '../../src/components/features/protected-route'
+import { useUiStore } from '../../src/stores/ui'
+import { cleanupAll, createTestQueryClient, screen } from '../test-utils'
 
 afterEach(() => {
-  cleanupAll();
-  mockSession = null;
-  mockIsPending = false;
-});
+  cleanupAll()
+  mockSession = null
+  mockIsPending = false
+})
 
 function renderProtectedTree(initialRoute = '/') {
-  const qc = createTestQueryClient();
+  const qc = createTestQueryClient()
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialRoute]}>
@@ -41,33 +41,33 @@ function renderProtectedTree(initialRoute = '/') {
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
-  );
+  )
 }
 
 describe('ProtectedRoute', () => {
   it('redirects to /login when not authenticated', () => {
-    mockSession = null;
-    renderProtectedTree('/');
-    expect(screen.getByText('Login Page')).toBeDefined();
-  });
+    mockSession = null
+    renderProtectedTree('/')
+    expect(screen.getByText('Login Page')).toBeDefined()
+  })
 
   it('redirects to /select-project when authenticated but no project selected', () => {
-    mockSession = { user: { id: '1', name: 'Admin', email: 'admin@hashhive.local' } };
-    useUiStore.setState({ selectedProjectId: null });
-    renderProtectedTree('/');
-    expect(screen.getByText('Select Project')).toBeDefined();
-  });
+    mockSession = { user: { id: '1', name: 'Admin', email: 'admin@hashhive.local' } }
+    useUiStore.setState({ selectedProjectId: null })
+    renderProtectedTree('/')
+    expect(screen.getByText('Select Project')).toBeDefined()
+  })
 
   it('renders outlet when authenticated and project selected', () => {
-    mockSession = { user: { id: '1', name: 'Admin', email: 'admin@hashhive.local' } };
-    useUiStore.setState({ selectedProjectId: 1 });
-    renderProtectedTree('/');
-    expect(screen.getByText('Protected Content')).toBeDefined();
-  });
+    mockSession = { user: { id: '1', name: 'Admin', email: 'admin@hashhive.local' } }
+    useUiStore.setState({ selectedProjectId: 1 })
+    renderProtectedTree('/')
+    expect(screen.getByText('Protected Content')).toBeDefined()
+  })
 
   it('shows loading state while session is pending', () => {
-    mockIsPending = true;
-    renderProtectedTree('/');
-    expect(screen.getByText('Loading...')).toBeDefined();
-  });
-});
+    mockIsPending = true
+    renderProtectedTree('/')
+    expect(screen.getByText('Loading...')).toBeDefined()
+  })
+})

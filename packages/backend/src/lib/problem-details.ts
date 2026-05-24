@@ -7,8 +7,8 @@
  * live page; consumers use it as a string key.
  */
 
-import type { Context } from 'hono';
-import type { ZodError } from 'zod';
+import type { Context } from 'hono'
+import type { ZodError } from 'zod'
 
 export type ProblemCode =
   | 'validation'
@@ -18,11 +18,11 @@ export type ProblemCode =
   | 'conflict'
   | 'internal'
   | 'project_not_selected'
-  | 'service_unavailable';
+  | 'service_unavailable'
 
 interface ProblemMeta {
-  type: string;
-  title: string;
+  type: string
+  title: string
 }
 
 const PROBLEM_REGISTRY: Record<ProblemCode, ProblemMeta> = {
@@ -58,29 +58,29 @@ const PROBLEM_REGISTRY: Record<ProblemCode, ProblemMeta> = {
     type: 'https://hashhive.dev/errors/service-unavailable',
     title: 'Service unavailable',
   },
-};
+}
 
 const FALLBACK_META: ProblemMeta = {
   type: 'about:blank',
   title: 'Error',
-};
+}
 
 export interface ProblemFieldError {
-  path: string;
-  code: string;
-  message: string;
+  path: string
+  code: string
+  message: string
 }
 
 interface ProblemBody {
-  type: string;
-  title: string;
-  status: number;
-  detail: string;
-  instance: string;
-  errors?: ProblemFieldError[];
+  type: string
+  title: string
+  status: number
+  detail: string
+  instance: string
+  errors?: ProblemFieldError[]
 }
 
-const PROBLEM_CONTENT_TYPE = 'application/problem+json';
+const PROBLEM_CONTENT_TYPE = 'application/problem+json'
 
 /**
  * Emit an RFC 9457 problem-details response. The status code is also
@@ -94,19 +94,19 @@ export function problemResponse(
   detail: string,
   errors?: ProblemFieldError[]
 ): Response {
-  const meta = PROBLEM_REGISTRY[code] ?? FALLBACK_META;
+  const meta = PROBLEM_REGISTRY[code] ?? FALLBACK_META
   const body: ProblemBody = {
     type: meta.type,
     title: meta.title,
     status,
     detail,
     instance: c.req.path,
-  };
-  if (errors && errors.length > 0) body.errors = errors;
+  }
+  if (errors && errors.length > 0) body.errors = errors
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': PROBLEM_CONTENT_TYPE },
-  });
+  })
 }
 
 /**
@@ -119,5 +119,5 @@ export function mapZodError(err: ZodError): ProblemFieldError[] {
     path: issue.path.map(String).join('.'),
     code: issue.code,
     message: issue.message,
-  }));
+  }))
 }

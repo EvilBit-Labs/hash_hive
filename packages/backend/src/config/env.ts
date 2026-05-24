@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod'
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
@@ -39,26 +39,26 @@ const envSchema = z.object({
   HEALTH_QUEUE_WARN_FAILED: z.coerce.number().int().nonnegative().default(100),
   HEALTH_DB_CONNECTION_WARN_PCT: z.coerce.number().min(0).max(100).default(80),
   HEALTH_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
-});
+})
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema>
 
 function loadEnv(): Env {
-  const result = envSchema.safeParse(process.env);
+  const result = envSchema.safeParse(process.env)
 
   if (!result.success) {
-    const formatted = result.error.flatten().fieldErrors;
+    const formatted = result.error.flatten().fieldErrors
     const missing = Object.entries(formatted)
       .map(([key, errors]) => `  ${key}: ${errors?.join(', ')}`)
-      .join('\n');
+      .join('\n')
 
-    throw new Error(`Invalid environment variables:\n${missing}`);
+    throw new Error(`Invalid environment variables:\n${missing}`)
   }
 
-  return result.data;
+  return result.data
 }
 
-export const env = loadEnv();
+export const env = loadEnv()
 
 /**
  * Warn-once at startup when the operator did not set `S3_BUCKET` and the
@@ -71,8 +71,8 @@ export const env = loadEnv();
  * logger to avoid an import cycle at module load.
  */
 if (!process.env['S3_BUCKET']?.trim() && env.NODE_ENV !== 'test') {
-  // biome-ignore lint/suspicious/noConsole: pre-logger startup warning
+  // oxlint-disable-next-line no-console -- pre-logger startup warning
   console.warn(
     `[env] S3_BUCKET not set (or whitespace-only); defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
-  );
+  )
 }

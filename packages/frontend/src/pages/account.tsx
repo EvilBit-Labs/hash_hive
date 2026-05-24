@@ -1,15 +1,16 @@
-import { useState } from 'react';
-import { Button } from '../components/ui/button';
-import { ConfirmDialog } from '../components/ui/confirm-dialog';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { PageHeader } from '../components/ui/page-header';
-import { useApiKeyMetadata, useIssueApiKey, useRevokeApiKey } from '../hooks/use-api-key';
+import { useState } from 'react'
+
+import { Button } from '../components/ui/button'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { PageHeader } from '../components/ui/page-header'
+import { useApiKeyMetadata, useIssueApiKey, useRevokeApiKey } from '../hooks/use-api-key'
 
 const ROTATE_WARNING =
-  'Rotating issues a new API key. Any tooling using the previous key will stop working until you update it.';
+  'Rotating issues a new API key. Any tooling using the previous key will stop working until you update it.'
 
 const REVOKE_WARNING =
-  'Revoking deletes the current API key. Any tooling using it will immediately stop working until a new key is issued.';
+  'Revoking deletes the current API key. Any tooling using it will immediately stop working until a new key is issued.'
 
 export function AccountPage() {
   return (
@@ -17,62 +18,62 @@ export function AccountPage() {
       <PageHeader>Account</PageHeader>
       <ApiKeySection />
     </div>
-  );
+  )
 }
 
 function ApiKeySection() {
-  const { data: metadata, isLoading, error: queryError } = useApiKeyMetadata();
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [rawToken, setRawToken] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<'rotate' | 'revoke' | null>(null);
+  const { data: metadata, isLoading, error: queryError } = useApiKeyMetadata()
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [rawToken, setRawToken] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<'rotate' | 'revoke' | null>(null)
 
   const queryErrorMessage =
     queryError instanceof Error
       ? queryError.message
       : queryError
         ? 'Failed to load API key metadata'
-        : null;
+        : null
 
-  const issueMutation = useIssueApiKey({ onError: setActionError });
-  const revokeMutation = useRevokeApiKey({ onError: setActionError });
+  const issueMutation = useIssueApiKey({ onError: setActionError })
+  const revokeMutation = useRevokeApiKey({ onError: setActionError })
 
   const handleIssue = () => {
-    setActionError(null);
+    setActionError(null)
     issueMutation.mutate(undefined, {
       onSuccess: (data) => {
-        setRawToken(data.token);
-        setConfirm(null);
+        setRawToken(data.token)
+        setConfirm(null)
       },
-    });
-  };
+    })
+  }
 
   const handleRevoke = () => {
-    setActionError(null);
+    setActionError(null)
     revokeMutation.mutate(undefined, {
       onSettled: () => {
-        setRawToken(null);
-        setConfirm(null);
+        setRawToken(null)
+        setConfirm(null)
       },
-    });
-  };
+    })
+  }
 
   return (
-    <section className="space-y-3 rounded-md border border-border bg-card p-4">
+    <section className="border-border bg-card space-y-3 rounded-md border p-4">
       <header className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Control API Key</h2>
-        <span className="text-xs text-muted-foreground">For automation, CI, and CLI tools</span>
+        <span className="text-muted-foreground text-xs">For automation, CI, and CLI tools</span>
       </header>
 
       {queryErrorMessage && <ErrorBanner message={queryErrorMessage} />}
       {actionError && <ErrorBanner message={actionError} />}
 
       {isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading...</p>
+        <p className="text-muted-foreground text-xs">Loading...</p>
       ) : queryErrorMessage ? (
         // Don't fall through to "no key" when the metadata read failed —
         // showing the Generate button could clobber an existing key the
         // user just couldn't load.
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-xs">
           Reload the page to retry, or contact an administrator if the problem persists.
         </p>
       ) : rawToken ? (
@@ -112,21 +113,21 @@ function ApiKeySection() {
         onCancel={() => setConfirm(null)}
       />
     </section>
-  );
+  )
 }
 
 function NoKeyView({ busy, onIssue }: { busy: boolean; onIssue: () => void }) {
   return (
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground text-xs">
         You do not have an active API key. Generate one to authenticate against
-        <code className="mx-1 rounded bg-muted px-1">/api/v1/control/*</code> for scripted access.
+        <code className="bg-muted mx-1 rounded px-1">/api/v1/control/*</code> for scripted access.
       </p>
       <Button onClick={onIssue} disabled={busy}>
         {busy ? 'Generating...' : 'Generate API Key'}
       </Button>
     </div>
-  );
+  )
 }
 
 function ExistingKeyView({
@@ -137,12 +138,12 @@ function ExistingKeyView({
   onRotate,
   onRevoke,
 }: {
-  prefix: string;
-  lastUsedAt: string | null;
-  rotateBusy: boolean;
-  revokeBusy: boolean;
-  onRotate: () => void;
-  onRevoke: () => void;
+  prefix: string
+  lastUsedAt: string | null
+  rotateBusy: boolean
+  revokeBusy: boolean
+  onRotate: () => void
+  onRevoke: () => void
 }) {
   return (
     <div className="space-y-3">
@@ -152,7 +153,7 @@ function ExistingKeyView({
         <dt className="text-muted-foreground">Last used</dt>
         <dd>{formatLastUsed(lastUsedAt)}</dd>
       </dl>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground text-xs">
         The raw token is only shown once at issue time. If you've lost it, rotate to generate a new
         one.
       </p>
@@ -165,27 +166,27 @@ function ExistingKeyView({
         </Button>
       </div>
     </div>
-  );
+  )
 }
 
 function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(token);
-      setCopied(true);
-      setCopyError(null);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(token)
+      setCopied(true)
+      setCopyError(null)
+      setTimeout(() => setCopied(false), 2000)
     } catch {
       // Most often: insecure context (bare-IP HTTP), missing permission,
       // or a sandboxed iframe. Tell the user to copy manually instead of
       // failing silently — the token is shown only once.
-      setCopied(false);
-      setCopyError('Could not copy automatically. Select the token above and copy manually.');
+      setCopied(false)
+      setCopyError('Could not copy automatically. Select the token above and copy manually.')
     }
-  };
+  }
 
   return (
     <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
@@ -194,7 +195,7 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
       </p>
       <div className="flex items-center gap-2">
         {/* select-all on click so the manual-copy fallback is one gesture */}
-        <code className="flex-1 select-all overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs">
+        <code className="bg-muted flex-1 overflow-x-auto rounded px-2 py-1 font-mono text-xs select-all">
           {token}
         </code>
         <Button onClick={handleCopy} variant="secondary" className="text-xs">
@@ -202,7 +203,7 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
         </Button>
       </div>
       {copyError && <p className="text-xs text-amber-700 dark:text-amber-300">{copyError}</p>}
-      <p className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground text-xs">
         Store it in a password manager or your tool's secret store. Treat it like a password; anyone
         with this token can act as you against the Control API.
       </p>
@@ -210,12 +211,12 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
         I've saved it
       </Button>
     </div>
-  );
+  )
 }
 
 function formatLastUsed(value: string | null): string {
-  if (!value) return 'never';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  if (!value) return 'never'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
 }

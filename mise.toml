@@ -7,18 +7,18 @@ just              = "latest"
 markdownlint-cli2 = "0.22.1"
 oxfmt             = "latest"
 oxlint            = "latest"
-"pipx:pre-commit" = "4.6.0"
 "pipx:mdformat"   = { version = "1.0.0", uvx_args = "--with mdformat-gfm --with mdformat-admon --with mdformat-config --with mdformat-footnote --with mdformat-simple-breaks --with mdformat-web --with mdformat-ruff --with mdformat-gfm-alerts --with mdformat-toc --with mdformat-front-matters" }
+"pipx:pre-commit" = "4.6.0"
 syft              = "latest"
 taplo             = "latest"
 
 # Many of these settings are defaults, but we are explicit in case they change in the future and to make it clear to users what is enabled.
 [settings]
 activate_aggressive                 = true
-idiomatic_version_file_enable_tools = [ "bun" ]
 env_cache                           = true
 exec_auto_install                   = true
 github_attestations                 = true
+idiomatic_version_file_enable_tools = [ "bun" ]
 lockfile                            = true
 pin                                 = true
 slsa                                = true

@@ -1,27 +1,28 @@
-import { createAttackTemplateRequestSchema } from '@hashhive/shared';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useMemo, useState } from 'react';
-import { type Resolver, useForm } from 'react-hook-form';
-import { z } from 'zod';
-import { PermissionGuard } from '../components/features/permission-guard';
-import { Button } from '../components/ui/button';
-import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { Input } from '../components/ui/input';
-import { PageHeader } from '../components/ui/page-header';
-import { Select } from '../components/ui/select';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { createAttackTemplateRequestSchema } from '@hashhive/shared'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useMemo, useState } from 'react'
+import { type Resolver, useForm } from 'react-hook-form'
+import { z } from 'zod'
+
+import { PermissionGuard } from '../components/features/permission-guard'
+import { Button } from '../components/ui/button'
+import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { Input } from '../components/ui/input'
+import { PageHeader } from '../components/ui/page-header'
+import { Select } from '../components/ui/select'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import {
   type AttackTemplate,
   useAttackTemplates,
   useCreateAttackTemplate,
   useDeleteAttackTemplate,
   useUpdateAttackTemplate,
-} from '../hooks/use-attack-templates';
-import { useMasklists, useRulelists, useWordlists } from '../hooks/use-resources';
-import { ApiError } from '../lib/api';
-import { Permission } from '../lib/permissions';
-import { useUiStore } from '../stores/ui';
+} from '../hooks/use-attack-templates'
+import { useMasklists, useRulelists, useWordlists } from '../hooks/use-resources'
+import { ApiError } from '../lib/api'
+import { Permission } from '../lib/permissions'
+import { useUiStore } from '../stores/ui'
 
 /**
  * Create-mode schema requires mode to be a positive integer (no default 0).
@@ -29,38 +30,51 @@ import { useUiStore } from '../stores/ui';
  */
 const createFormSchema = createAttackTemplateRequestSchema.extend({
   mode: z.number({ error: 'Mode is required' }).int().nonnegative('Mode must be 0 or greater'),
-});
+})
 
-type TemplateFormData = z.infer<typeof createFormSchema>;
+type TemplateFormData = z.infer<typeof createFormSchema>
 
 export function AttackTemplatesPage() {
-  const { selectedProjectId } = useUiStore();
-  const { data, isLoading } = useAttackTemplates();
-  const createTemplate = useCreateAttackTemplate();
-  const deleteTemplate = useDeleteAttackTemplate();
-  const [showForm, setShowForm] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<AttackTemplate | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const { selectedProjectId } = useUiStore()
+  const { data, isLoading } = useAttackTemplates()
+  const createTemplate = useCreateAttackTemplate()
+  const deleteTemplate = useDeleteAttackTemplate()
+  const [showForm, setShowForm] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState<AttackTemplate | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
 
-  const updateTemplate = useUpdateAttackTemplate(editingTemplate?.id ?? 0);
+  const updateTemplate = useUpdateAttackTemplate(editingTemplate?.id ?? 0)
 
-  const wordlistsQuery = useWordlists();
-  const rulelistsQuery = useRulelists();
-  const masklistsQuery = useMasklists();
+  const wordlistsQuery = useWordlists()
+  const rulelistsQuery = useRulelists()
+  const masklistsQuery = useMasklists()
 
   const form = useForm<TemplateFormData>({
     resolver: zodResolver(createFormSchema) as unknown as Resolver<TemplateFormData>,
     defaultValues: { name: '' },
-  });
+  })
 
-  // Build name lookup maps from loaded resources
-  const wordlists = wordlistsQuery.data?.resources ?? [];
-  const rulelists = rulelistsQuery.data?.resources ?? [];
-  const masklists = masklistsQuery.data?.resources ?? [];
+  // Build name lookup maps from loaded resources. Reference the query data
+  // directly in deps so we don't depend on a fresh `?? []` array each render.
+  const wordlistResources = wordlistsQuery.data?.resources
+  const rulelistResources = rulelistsQuery.data?.resources
+  const masklistResources = masklistsQuery.data?.resources
+  const wordlists = wordlistResources ?? []
+  const rulelists = rulelistResources ?? []
+  const masklists = masklistResources ?? []
 
-  const wordlistNames = useMemo(() => new Map(wordlists.map((w) => [w.id, w.name])), [wordlists]);
-  const rulelistNames = useMemo(() => new Map(rulelists.map((r) => [r.id, r.name])), [rulelists]);
-  const masklistNames = useMemo(() => new Map(masklists.map((m) => [m.id, m.name])), [masklists]);
+  const wordlistNames = useMemo(
+    () => new Map((wordlistResources ?? []).map((w) => [w.id, w.name])),
+    [wordlistResources]
+  )
+  const rulelistNames = useMemo(
+    () => new Map((rulelistResources ?? []).map((r) => [r.id, r.name])),
+    [rulelistResources]
+  )
+  const masklistNames = useMemo(
+    () => new Map((masklistResources ?? []).map((m) => [m.id, m.name])),
+    [masklistResources]
+  )
 
   if (!selectedProjectId) {
     return (
@@ -68,19 +82,19 @@ export function AttackTemplatesPage() {
         <PageHeader>Attack Templates</PageHeader>
         <EmptyState message="Select a project to view attack templates." />
       </div>
-    );
+    )
   }
 
   const openCreateForm = () => {
-    setEditingTemplate(null);
-    setFormError(null);
-    form.reset({ name: '' });
-    setShowForm(true);
-  };
+    setEditingTemplate(null)
+    setFormError(null)
+    form.reset({ name: '' })
+    setShowForm(true)
+  }
 
   const openEditForm = (template: AttackTemplate) => {
-    setEditingTemplate(template);
-    setFormError(null);
+    setEditingTemplate(template)
+    setFormError(null)
     form.reset({
       name: template.name,
       description: template.description,
@@ -90,49 +104,49 @@ export function AttackTemplatesPage() {
       masklistId: template.masklistId,
       // Tags input displays a comma-separated string; setValueAs converts back to array
       tags: template.tags.join(', ') as unknown as string[],
-    });
-    setShowForm(true);
-  };
+    })
+    setShowForm(true)
+  }
 
   const handleSubmit = form.handleSubmit(async (formData) => {
     try {
       if (editingTemplate) {
-        await updateTemplate.mutateAsync(formData);
+        await updateTemplate.mutateAsync(formData)
       } else {
-        await createTemplate.mutateAsync(formData);
+        await createTemplate.mutateAsync(formData)
       }
-      setFormError(null);
-      form.reset();
-      setShowForm(false);
-      setEditingTemplate(null);
+      setFormError(null)
+      form.reset()
+      setShowForm(false)
+      setEditingTemplate(null)
     } catch (err) {
       if (err instanceof ApiError) {
-        setFormError(err.message);
+        setFormError(err.message)
       } else {
-        setFormError(editingTemplate ? 'Failed to update template' : 'Failed to create template');
+        setFormError(editingTemplate ? 'Failed to update template' : 'Failed to create template')
       }
     }
-  });
+  })
 
   const handleDelete = (id: number) => {
     if (window.confirm('Delete this attack template?')) {
       deleteTemplate.mutate(id, {
         onError: (err) => {
           if (err instanceof ApiError) {
-            setFormError(err.message);
+            setFormError(err.message)
           } else {
-            setFormError('Failed to delete template');
+            setFormError('Failed to delete template')
           }
         },
         onSuccess: () => {
-          setFormError(null);
+          setFormError(null)
         },
-      });
+      })
     }
-  };
+  }
 
   const resolveResourceName = (id: number | null, names: Map<number, string>) =>
-    id ? (names.get(id) ?? `#${id}`) : '-';
+    id ? (names.get(id) ?? `#${id}`) : '-'
 
   return (
     <div className="space-y-6">
@@ -152,19 +166,19 @@ export function AttackTemplatesPage() {
         <PermissionGuard permission={Permission.TEMPLATE_MANAGE}>
           <form
             onSubmit={handleSubmit}
-            className="space-y-3 rounded-md border border-surface-0 bg-surface-0/30 p-4"
+            className="border-surface-0 bg-surface-0/30 space-y-3 rounded-md border p-4"
           >
             <h3 className="text-sm font-medium">
               {editingTemplate ? 'Edit Template' : 'New Template'}
             </h3>
 
             <div>
-              <label htmlFor="tpl-name" className="text-xs font-medium text-muted-foreground">
+              <label htmlFor="tpl-name" className="text-muted-foreground text-xs font-medium">
                 Name
               </label>
               <Input id="tpl-name" className="mt-1.5" {...form.register('name')} />
               {form.formState.errors.name && (
-                <p className="mt-1 text-xs text-destructive">
+                <p className="text-destructive mt-1 text-xs">
                   {form.formState.errors.name.message}
                 </p>
               )}
@@ -173,20 +187,20 @@ export function AttackTemplatesPage() {
             <div>
               <label
                 htmlFor="tpl-description"
-                className="text-xs font-medium text-muted-foreground"
+                className="text-muted-foreground text-xs font-medium"
               >
                 Description
               </label>
               <textarea
                 id="tpl-description"
                 rows={2}
-                className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
+                className="border-surface-0 bg-background text-foreground focus:border-primary focus:ring-primary/40 mt-1.5 w-full rounded border px-3 py-2 text-sm focus:ring-1"
                 {...form.register('description')}
               />
             </div>
 
             <div>
-              <label htmlFor="tpl-mode" className="text-xs font-medium text-muted-foreground">
+              <label htmlFor="tpl-mode" className="text-muted-foreground text-xs font-medium">
                 Hashcat Mode
               </label>
               <Input
@@ -196,7 +210,7 @@ export function AttackTemplatesPage() {
                 {...form.register('mode', { valueAsNumber: true })}
               />
               {form.formState.errors.mode && (
-                <p className="mt-1 text-xs text-destructive">
+                <p className="text-destructive mt-1 text-xs">
                   {form.formState.errors.mode.message}
                 </p>
               )}
@@ -204,7 +218,7 @@ export function AttackTemplatesPage() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label htmlFor="tpl-wordlist" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="tpl-wordlist" className="text-muted-foreground text-xs font-medium">
                   Wordlist
                 </label>
                 <Select
@@ -223,7 +237,7 @@ export function AttackTemplatesPage() {
                 </Select>
               </div>
               <div>
-                <label htmlFor="tpl-rulelist" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="tpl-rulelist" className="text-muted-foreground text-xs font-medium">
                   Rulelist
                 </label>
                 <Select
@@ -242,7 +256,7 @@ export function AttackTemplatesPage() {
                 </Select>
               </div>
               <div>
-                <label htmlFor="tpl-masklist" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="tpl-masklist" className="text-muted-foreground text-xs font-medium">
                   Masklist
                 </label>
                 <Select
@@ -263,7 +277,7 @@ export function AttackTemplatesPage() {
             </div>
 
             <div>
-              <label htmlFor="tpl-tags" className="text-xs font-medium text-muted-foreground">
+              <label htmlFor="tpl-tags" className="text-muted-foreground text-xs font-medium">
                 Tags (comma-separated)
               </label>
               <Input
@@ -295,10 +309,10 @@ export function AttackTemplatesPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  setShowForm(false);
-                  setEditingTemplate(null);
-                  setFormError(null);
-                  form.reset();
+                  setShowForm(false)
+                  setEditingTemplate(null)
+                  setFormError(null)
+                  form.reset()
                 }}
               >
                 Cancel
@@ -331,21 +345,21 @@ export function AttackTemplatesPage() {
             <TableBody>
               {data.templates.map((template) => (
                 <TableRow key={template.id}>
-                  <Td className="text-sm font-medium text-foreground">{template.name}</Td>
-                  <Td className="font-mono text-xs text-muted-foreground">{template.mode}</Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-foreground text-sm font-medium">{template.name}</Td>
+                  <Td className="text-muted-foreground font-mono text-xs">{template.mode}</Td>
+                  <Td className="text-muted-foreground text-xs">
                     {resolveResourceName(template.wordlistId, wordlistNames)}
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {resolveResourceName(template.rulelistId, rulelistNames)}
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {resolveResourceName(template.masklistId, masklistNames)}
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {template.tags.length > 0 ? template.tags.join(', ') : '-'}
                   </Td>
-                  <Td className="text-xs text-muted-foreground">
+                  <Td className="text-muted-foreground text-xs">
                     {new Date(template.createdAt).toLocaleDateString()}
                   </Td>
                   <Td>
@@ -353,14 +367,14 @@ export function AttackTemplatesPage() {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="text-xs text-primary hover:text-primary/80"
+                          className="text-primary hover:text-primary/80 text-xs"
                           onClick={() => openEditForm(template)}
                         >
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="text-xs text-destructive hover:text-destructive/80"
+                          className="text-destructive hover:text-destructive/80 text-xs"
                           onClick={() => handleDelete(template.id)}
                         >
                           Delete
@@ -375,5 +389,5 @@ export function AttackTemplatesPage() {
         )}
       </div>
     </div>
-  );
+  )
 }

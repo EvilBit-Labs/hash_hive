@@ -9,20 +9,22 @@
  *   of the active project.
  */
 
-import { projectUsers, users } from '@hashhive/shared';
-import { and, asc, count, eq } from 'drizzle-orm';
-import { Hono } from 'hono';
-import { db } from '../../db/index.js';
-import { paginate, paginationQuerySchema } from '../../lib/pagination.js';
-import { problemResponse } from '../../lib/problem-details.js';
-import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, parseIdParam, requireProjectRole } from './helpers.js';
+import { projectUsers, users } from '@hashhive/shared'
+import { and, asc, count, eq } from 'drizzle-orm'
+import { Hono } from 'hono'
 
-export const controlUserRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
+
+import { db } from '../../db/index.js'
+import { paginate, paginationQuerySchema } from '../../lib/pagination.js'
+import { problemResponse } from '../../lib/problem-details.js'
+import { controlErrorResponse, parseIdParam, requireProjectRole } from './helpers.js'
+
+export const controlUserRoutes = new Hono<AppEnv>()
 
 controlUserRoutes.get('/me', async (c) => {
   try {
-    const { userId } = c.get('currentUser');
+    const { userId } = c.get('currentUser')
     const [row] = await db
       .select({
         id: users.id,
@@ -34,18 +36,18 @@ controlUserRoutes.get('/me', async (c) => {
       })
       .from(users)
       .where(eq(users.id, userId))
-      .limit(1);
-    if (!row) return problemResponse(c, 404, 'not_found', 'user not found');
-    return c.json(row);
+      .limit(1)
+    if (!row) return problemResponse(c, 404, 'not_found', 'user not found')
+    return c.json(row)
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})
 
 controlUserRoutes.get('/', async (c) => {
   try {
-    const { projectId } = await requireProjectRole(c, 'admin');
-    const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
+    const { projectId } = await requireProjectRole(c, 'admin')
+    const query = paginationQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams))
 
     const [items, totalRow] = await Promise.all([
       db
@@ -66,18 +68,18 @@ controlUserRoutes.get('/', async (c) => {
         .limit(query.limit)
         .offset(query.offset),
       db.select({ value: count() }).from(projectUsers).where(eq(projectUsers.projectId, projectId)),
-    ]);
+    ])
 
-    return c.json(paginate(items, Number(totalRow[0]?.value ?? 0), query));
+    return c.json(paginate(items, Number(totalRow[0]?.value ?? 0), query))
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})
 
 controlUserRoutes.get('/:id', async (c) => {
   try {
-    const { projectId } = await requireProjectRole(c, 'admin');
-    const id = parseIdParam(c.req.param('id'));
+    const { projectId } = await requireProjectRole(c, 'admin')
+    const id = parseIdParam(c.req.param('id'))
     const [row] = await db
       .select({
         id: users.id,
@@ -90,10 +92,10 @@ controlUserRoutes.get('/:id', async (c) => {
       .from(users)
       .innerJoin(projectUsers, eq(projectUsers.userId, users.id))
       .where(and(eq(users.id, id), eq(projectUsers.projectId, projectId)))
-      .limit(1);
-    if (!row) return problemResponse(c, 404, 'not_found', 'user not found');
-    return c.json(row);
+      .limit(1)
+    if (!row) return problemResponse(c, 404, 'not_found', 'user not found')
+    return c.json(row)
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})

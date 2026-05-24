@@ -14,14 +14,14 @@
  */
 
 interface ProgressKeyspaceShape {
-  keyspaceProgress?: number;
-  total?: number;
+  keyspaceProgress?: number
+  total?: number
 }
 
 interface CampaignProgressShape {
-  percentage?: number;
-  overallProgress?: number;
-  hashProgress?: { percentage?: number };
+  percentage?: number
+  overallProgress?: number
+  hashProgress?: { percentage?: number }
 }
 
 /**
@@ -32,12 +32,12 @@ interface CampaignProgressShape {
  * which value is the most authoritative when multiple are present.
  */
 export function readCampaignPercentage(progress: unknown): number {
-  if (!progress || typeof progress !== 'object') return 0;
-  const p = progress as CampaignProgressShape;
-  if (typeof p.percentage === 'number') return p.percentage;
-  if (typeof p.overallProgress === 'number') return p.overallProgress;
-  if (typeof p.hashProgress?.percentage === 'number') return p.hashProgress.percentage;
-  return 0;
+  if (!progress || typeof progress !== 'object') return 0
+  const p = progress as CampaignProgressShape
+  if (typeof p.percentage === 'number') return p.percentage
+  if (typeof p.overallProgress === 'number') return p.overallProgress
+  if (typeof p.hashProgress?.percentage === 'number') return p.hashProgress.percentage
+  return 0
 }
 
 /**
@@ -46,11 +46,11 @@ export function readCampaignPercentage(progress: unknown): number {
  * that the helper divides to produce a fraction in `[0, 1]`.
  */
 export function readTaskPercentage(progress: unknown): number {
-  if (!progress || typeof progress !== 'object') return 0;
-  const p = progress as CampaignProgressShape & ProgressKeyspaceShape;
-  if (typeof p.percentage === 'number') return p.percentage;
+  if (!progress || typeof progress !== 'object') return 0
+  const p = progress as CampaignProgressShape & ProgressKeyspaceShape
+  if (typeof p.percentage === 'number') return p.percentage
   if (typeof p.keyspaceProgress === 'number' && typeof p.total === 'number' && p.total > 0) {
-    return p.keyspaceProgress / p.total;
+    return p.keyspaceProgress / p.total
   }
-  return 0;
+  return 0
 }

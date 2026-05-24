@@ -1,11 +1,11 @@
-import type { QueueManager } from './manager.js';
+import type { QueueManager } from './manager.js'
 
-let instance: QueueManager | null = null;
+let instance: QueueManager | null = null
 
 export function getQueueManager(): QueueManager | null {
-  return instance;
+  return instance
 }
 
 export function setQueueManager(manager: QueueManager): void {
-  instance = manager;
+  instance = manager
 }

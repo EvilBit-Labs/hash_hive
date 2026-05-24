@@ -1,9 +1,10 @@
-import pino from 'pino';
-import { env } from './env.js';
+import pino from 'pino'
+
+import { env } from './env.js'
 
 const options: pino.LoggerOptions = {
   level: env.LOG_LEVEL,
-};
+}
 
 if (env.LOG_PRETTY) {
   options.transport = {
@@ -13,7 +14,7 @@ if (env.LOG_PRETTY) {
       translateTime: 'HH:MM:ss Z',
       ignore: 'pid,hostname',
     },
-  };
+  }
 }
 
-export const logger = pino(options);
+export const logger = pino(options)

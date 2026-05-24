@@ -1,5 +1,6 @@
-import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
-import { z } from 'zod';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod'
+import { z } from 'zod'
+
 import {
   agentBenchmarks,
   agentErrors,
@@ -19,104 +20,104 @@ import {
   tasks,
   users,
   wordLists,
-} from '../db/schema.js';
+} from '../db/schema.js'
 
 // ─── Users ──────────────────────────────────────────────────────────
 
-export const insertUserSchema = createInsertSchema(users);
-export const selectUserSchema = createSelectSchema(users);
+export const insertUserSchema = createInsertSchema(users)
+export const selectUserSchema = createSelectSchema(users)
 
 // ─── Projects ───────────────────────────────────────────────────────
 
-export const insertProjectSchema = createInsertSchema(projects);
-export const selectProjectSchema = createSelectSchema(projects);
+export const insertProjectSchema = createInsertSchema(projects)
+export const selectProjectSchema = createSelectSchema(projects)
 
 // ─── Project Users ──────────────────────────────────────────────────
 
-export const insertProjectUserSchema = createInsertSchema(projectUsers);
-export const selectProjectUserSchema = createSelectSchema(projectUsers);
+export const insertProjectUserSchema = createInsertSchema(projectUsers)
+export const selectProjectUserSchema = createSelectSchema(projectUsers)
 
 // ─── Operating Systems ──────────────────────────────────────────────
 
-export const insertOperatingSystemSchema = createInsertSchema(operatingSystems);
-export const selectOperatingSystemSchema = createSelectSchema(operatingSystems);
+export const insertOperatingSystemSchema = createInsertSchema(operatingSystems)
+export const selectOperatingSystemSchema = createSelectSchema(operatingSystems)
 
 // ─── Agents ─────────────────────────────────────────────────────────
 
-export const insertAgentSchema = createInsertSchema(agents);
-export const selectAgentSchema = createSelectSchema(agents);
+export const insertAgentSchema = createInsertSchema(agents)
+export const selectAgentSchema = createSelectSchema(agents)
 
 // ─── Agent Errors ───────────────────────────────────────────────────
 
-export const insertAgentErrorSchema = createInsertSchema(agentErrors);
-export const selectAgentErrorSchema = createSelectSchema(agentErrors);
+export const insertAgentErrorSchema = createInsertSchema(agentErrors)
+export const selectAgentErrorSchema = createSelectSchema(agentErrors)
 
 // ─── Agent Benchmarks ────────────────────────────────────────────────
 
-export const insertAgentBenchmarkSchema = createInsertSchema(agentBenchmarks);
-export const selectAgentBenchmarkSchema = createSelectSchema(agentBenchmarks);
+export const insertAgentBenchmarkSchema = createInsertSchema(agentBenchmarks)
+export const selectAgentBenchmarkSchema = createSelectSchema(agentBenchmarks)
 
 // ─── Hash Types ─────────────────────────────────────────────────────
 
-export const insertHashTypeSchema = createInsertSchema(hashTypes);
-export const selectHashTypeSchema = createSelectSchema(hashTypes);
+export const insertHashTypeSchema = createInsertSchema(hashTypes)
+export const selectHashTypeSchema = createSelectSchema(hashTypes)
 
 // ─── Hash Lists ─────────────────────────────────────────────────────
 
-export const insertHashListSchema = createInsertSchema(hashLists);
-export const selectHashListSchema = createSelectSchema(hashLists);
+export const insertHashListSchema = createInsertSchema(hashLists)
+export const selectHashListSchema = createSelectSchema(hashLists)
 
 // ─── Hash Items ─────────────────────────────────────────────────────
 
-export const insertHashItemSchema = createInsertSchema(hashItems);
-export const selectHashItemSchema = createSelectSchema(hashItems);
+export const insertHashItemSchema = createInsertSchema(hashItems)
+export const selectHashItemSchema = createSelectSchema(hashItems)
 
 // ─── Word Lists ─────────────────────────────────────────────────────
 
-export const insertWordListSchema = createInsertSchema(wordLists);
-export const selectWordListSchema = createSelectSchema(wordLists);
+export const insertWordListSchema = createInsertSchema(wordLists)
+export const selectWordListSchema = createSelectSchema(wordLists)
 
 // ─── Rule Lists ─────────────────────────────────────────────────────
 
-export const insertRuleListSchema = createInsertSchema(ruleLists);
-export const selectRuleListSchema = createSelectSchema(ruleLists);
+export const insertRuleListSchema = createInsertSchema(ruleLists)
+export const selectRuleListSchema = createSelectSchema(ruleLists)
 
 // ─── Mask Lists ─────────────────────────────────────────────────────
 
-export const insertMaskListSchema = createInsertSchema(maskLists);
-export const selectMaskListSchema = createSelectSchema(maskLists);
+export const insertMaskListSchema = createInsertSchema(maskLists)
+export const selectMaskListSchema = createSelectSchema(maskLists)
 
 // ─── Attack Templates ──────────────────────────────────────────────
 
-export const insertAttackTemplateSchema = createInsertSchema(attackTemplates);
-export const selectAttackTemplateSchema = createSelectSchema(attackTemplates);
+export const insertAttackTemplateSchema = createInsertSchema(attackTemplates)
+export const selectAttackTemplateSchema = createSelectSchema(attackTemplates)
 
 // ─── Campaigns ──────────────────────────────────────────────────────
 
-export const insertCampaignSchema = createInsertSchema(campaigns);
-export const selectCampaignSchema = createSelectSchema(campaigns);
+export const insertCampaignSchema = createInsertSchema(campaigns)
+export const selectCampaignSchema = createSelectSchema(campaigns)
 
 // ─── Attacks ────────────────────────────────────────────────────────
 
-export const insertAttackSchema = createInsertSchema(attacks);
-export const selectAttackSchema = createSelectSchema(attacks);
+export const insertAttackSchema = createInsertSchema(attacks)
+export const selectAttackSchema = createSelectSchema(attacks)
 
 // ─── Tasks ──────────────────────────────────────────────────────────
 
-export const insertTaskSchema = createInsertSchema(tasks);
-export const selectTaskSchema = createSelectSchema(tasks);
+export const insertTaskSchema = createInsertSchema(tasks)
+export const selectTaskSchema = createSelectSchema(tasks)
 
 // ─── Cracker Binaries ───────────────────────────────────────────────
 
-export const insertCrackerBinarySchema = createInsertSchema(crackerBinaries);
-export const selectCrackerBinarySchema = createSelectSchema(crackerBinaries);
+export const insertCrackerBinarySchema = createInsertSchema(crackerBinaries)
+export const selectCrackerBinarySchema = createSelectSchema(crackerBinaries)
 
 // ─── Custom API Schemas ─────────────────────────────────────────────
 
 export const loginRequestSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
-});
+})
 
 /**
  * Inline-attack payload accepted by the transactional `POST /campaigns`
@@ -135,7 +136,7 @@ export const inlineAttackRequestSchema = z.object({
   masklistId: z.number().int().positive().optional(),
   advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
   dependencyIndices: z.array(z.number().int().nonnegative()).optional(),
-});
+})
 
 export const createCampaignRequestSchema = insertCampaignSchema
   .pick({
@@ -152,7 +153,7 @@ export const createCampaignRequestSchema = insertCampaignSchema
      * single-row insert path.
      */
     attacks: z.array(inlineAttackRequestSchema).optional(),
-  });
+  })
 
 export const createAttackRequestSchema = insertAttackSchema.pick({
   mode: true,
@@ -162,7 +163,7 @@ export const createAttackRequestSchema = insertAttackSchema.pick({
   masklistId: true,
   advancedConfiguration: true,
   dependencies: true,
-});
+})
 
 /**
  * Explicit request schema for creating attack templates.
@@ -180,7 +181,7 @@ export const createAttackTemplateRequestSchema = z.object({
   masklistId: z.number().int().positive().nullable().optional(),
   advancedConfiguration: z.record(z.string(), z.unknown()).nullable().optional(),
   tags: z.array(z.string().min(1).max(100)).max(20).optional(),
-});
+})
 
 export const instantiateAttackTemplateResponseSchema = z.object({
   mode: z.number().int(),
@@ -189,20 +190,20 @@ export const instantiateAttackTemplateResponseSchema = z.object({
   rulelistId: z.number().int().nullable(),
   masklistId: z.number().int().nullable(),
   advancedConfiguration: z.unknown().nullable().optional(),
-});
+})
 
 export const hashCandidateSchema = z.object({
   name: z.string(),
   hashcatMode: z.number().int(),
   category: z.string(),
   confidence: z.number().min(0).max(1),
-});
+})
 
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
  */
-export const agentStatusSchema = z.enum(['offline', 'online', 'busy', 'error', 'benchmarked']);
+export const agentStatusSchema = z.enum(['offline', 'online', 'busy', 'error', 'benchmarked'])
 
 /**
  * Heartbeat status is intentionally a subset of `agentStatusSchema` — agents
@@ -222,13 +223,13 @@ export const benchmarkSubmissionSchema = z.object({
     .min(1)
     .refine(
       (entries) => {
-        const modes = entries.map((e) => e.hashcatMode);
-        return new Set(modes).size === modes.length;
+        const modes = entries.map((e) => e.hashcatMode)
+        return new Set(modes).size === modes.length
       },
       { message: 'entries must not contain duplicate hashcatMode values' }
     ),
   crackerVersion: z.string().min(1).optional(),
-});
+})
 
 /**
  * Cracker engines the registry knows about. Hashcat is the default
@@ -237,8 +238,8 @@ export const benchmarkSubmissionSchema = z.object({
  *
  * Stored values are always lowercase — see `normalizeEngineName` callers.
  */
-export const KNOWN_ENGINES = ['hashcat', 'john'] as const;
-export type KnownEngineName = (typeof KNOWN_ENGINES)[number];
+export const KNOWN_ENGINES = ['hashcat', 'john'] as const
+export type KnownEngineName = (typeof KNOWN_ENGINES)[number]
 
 /**
  * Platform identifiers used in cracker binary keys. Closed set so the
@@ -250,11 +251,11 @@ export const KNOWN_PLATFORMS = [
   'windows-x64',
   'darwin-x64',
   'darwin-arm64',
-] as const;
-export type KnownPlatformName = (typeof KNOWN_PLATFORMS)[number];
+] as const
+export type KnownPlatformName = (typeof KNOWN_PLATFORMS)[number]
 
-export const engineNameSchema = z.enum(KNOWN_ENGINES);
-export const platformNameSchema = z.enum(KNOWN_PLATFORMS);
+export const engineNameSchema = z.enum(KNOWN_ENGINES)
+export const platformNameSchema = z.enum(KNOWN_PLATFORMS)
 
 /**
  * Engine descriptor advertised by an agent in heartbeat capabilities.
@@ -267,7 +268,7 @@ export const platformNameSchema = z.enum(KNOWN_PLATFORMS);
 export const engineDescriptorSchema = z.object({
   name: z.string().min(1),
   version: z.string().min(1),
-});
+})
 
 /**
  * Structured hardware profile reported by agents. Every field is optional
@@ -318,7 +319,7 @@ export const agentHardwareProfileSchema = z.object({
   cpuUsage: z.number().optional(),
   memoryUsage: z.number().optional(),
   temperature: z.number().optional(),
-});
+})
 
 /**
  * Worst error-severity bucket observed for an agent in the last 24 hours.
@@ -328,7 +329,7 @@ export const agentWorstSeveritySchema = z.union([
   z.literal('warning'),
   z.literal('fatal'),
   z.null(),
-]);
+])
 
 /**
  * Single active task associated with an agent, displayed inline on the
@@ -343,7 +344,7 @@ export const agentCurrentTaskSchema = z.object({
   attackId: z.number().int(),
   attackMode: z.number().int(),
   status: z.string(),
-});
+})
 
 /**
  * Wire-shape contract for `GET /dashboard/agents/:id/tasks`. `startedAt`
@@ -360,7 +361,7 @@ export const agentTaskSummarySchema = z.object({
   progress: z.record(z.string(), z.unknown()),
   startedAt: z.string().nullable(),
   assignedAt: z.string().nullable(),
-});
+})
 
 /**
  * Heartbeat-only error severity. Narrower than the standalone
@@ -379,8 +380,8 @@ export const agentTaskSummarySchema = z.object({
  * even a fully-multibyte 16K-char payload stays under 64 KB, which is
  * still safely under jsonb-friendly row limits.
  */
-export const HEARTBEAT_ERROR_MESSAGE_MAX = 4096;
-export const HEARTBEAT_ERROR_CONTEXT_MAX_CHARS = 16 * 1024;
+export const HEARTBEAT_ERROR_MESSAGE_MAX = 4096
+export const HEARTBEAT_ERROR_CONTEXT_MAX_CHARS = 16 * 1024
 
 export const agentHeartbeatErrorSchema = z.object({
   severity: z.enum(['warning', 'fatal']),
@@ -395,7 +396,7 @@ export const agentHeartbeatErrorSchema = z.object({
         message: `context exceeds ${HEARTBEAT_ERROR_CONTEXT_MAX_CHARS} characters when serialized`,
       }
     ),
-});
+})
 
 /**
  * Telemetry view of the task the agent is currently executing. Accepted by
@@ -409,7 +410,7 @@ export const agentHeartbeatCurrentTaskSchema = z.object({
   progress: z.number().min(0),
   speed: z.number(),
   temperature: z.number().optional(),
-});
+})
 
 export const agentHeartbeatSchema = z.object({
   // Status enum is a deliberate superset: `busy` and `benchmarked` are
@@ -433,7 +434,7 @@ export const agentHeartbeatSchema = z.object({
   deviceInfo: agentHardwareProfileSchema.optional(),
   currentTask: agentHeartbeatCurrentTaskSchema.optional(),
   error: agentHeartbeatErrorSchema.optional(),
-});
+})
 
 // ─── Cracker Check-Update API ───────────────────────────────────────
 
@@ -451,7 +452,7 @@ export const crackerCheckUpdateRequestSchema = z.object({
   engine: z.string().min(1).max(50).optional(),
   version: z.string().min(1).max(100),
   platform: z.string().min(1).max(64),
-});
+})
 
 /**
  * Response shape for `/agent/cracker/check-update`. Modeled as a
@@ -472,7 +473,7 @@ export const crackerCheckUpdateResponseSchema = z.discriminatedUnion('updateAvai
     downloadUrl: z.string().url(),
     expiresIn: z.number().int().positive(),
   }),
-]);
+])
 
 /**
  * Dashboard request schema for creating a cracker binary record (no file
@@ -484,11 +485,11 @@ export const createCrackerBinaryRequestSchema = z.object({
   engine: engineNameSchema,
   version: z.string().min(1).max(100),
   platform: platformNameSchema,
-});
+})
 
 export const updateCrackerBinaryRequestSchema = z.object({
   isActive: z.boolean().optional(),
-});
+})
 
 // ─── Work Range / Progress ──────────────────────────────────────────
 
@@ -508,7 +509,7 @@ export const keyspaceCoordSchema = z.union([
     .string()
     .regex(/^[0-9]+$/, 'keyspace coord must be a non-negative decimal string')
     .max(64),
-]);
+])
 
 /**
  * Per-task work range surfaced on `AssignedTask`. Start/end/total share
@@ -521,7 +522,7 @@ export const workRangeSchema = z.object({
   end: keyspaceCoordSchema,
   total: keyspaceCoordSchema,
   agentSpeedHs: z.number().int().nonnegative(),
-});
+})
 
 /**
  * Capability requirements that a task may impose on the agent that
@@ -534,7 +535,7 @@ export const requiredCapabilitiesSchema = z
     gpu: z.boolean().optional(),
     hashcatMode: z.number().int().nonnegative().optional(),
   })
-  .passthrough();
+  .passthrough()
 
 /**
  * Canonical shape of a task descriptor returned from `assignNextTask`
@@ -563,7 +564,7 @@ export const assignedTaskSchema = z.object({
   retryCount: z.number().int().nonnegative(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
-});
+})
 
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 
@@ -579,7 +580,7 @@ export const campaignTaskStatsSchema = z.object({
   running: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
-});
+})
 
 /**
  * An agent currently assigned to an active task on a campaign. `progress`
@@ -598,7 +599,7 @@ export const campaignActiveAgentSchema = z.object({
   // through. Zero / negative / NaN / Infinity become null so the ETA
   // computation cannot be poisoned by malformed agent payloads.
   speedHs: z.number().finite().positive().nullable(),
-});
+})
 
 /**
  * Sort fields and order accepted by `GET /dashboard/campaigns`. The
@@ -606,28 +607,28 @@ export const campaignActiveAgentSchema = z.object({
  * route validator, service, and dashboard hook all share one source
  * of truth.
  */
-export const campaignSortFieldSchema = z.enum(['name', 'createdAt', 'priority']);
-export const campaignSortOrderSchema = z.enum(['asc', 'desc']);
+export const campaignSortFieldSchema = z.enum(['name', 'createdAt', 'priority'])
+export const campaignSortOrderSchema = z.enum(['asc', 'desc'])
 
 /**
  * Lifecycle actions the dashboard can fire against
  * `POST /dashboard/campaigns/:id/lifecycle`.
  */
-export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'resume', 'stop', 'cancel']);
+export const campaignLifecycleActionSchema = z.enum(['start', 'pause', 'resume', 'stop', 'cancel'])
 
 /**
  * Canonical priority buckets. Backend pegs three integer values
  * (1 = HIGH, 5 = NORMAL, 10 = LOW) via `priorityMap` in
  * `services/campaigns.ts`; any other integer falls back to NORMAL.
  */
-export const CAMPAIGN_PRIORITY = { HIGH: 1, NORMAL: 5, LOW: 10 } as const;
-export const campaignPriorityBucketSchema = z.enum(['high', 'normal', 'low']);
+export const CAMPAIGN_PRIORITY = { HIGH: 1, NORMAL: 5, LOW: 10 } as const
+export const campaignPriorityBucketSchema = z.enum(['high', 'normal', 'low'])
 
 /** Bucket an arbitrary integer priority into the canonical three buckets. */
 export function priorityBucket(priority: number): 'high' | 'normal' | 'low' {
-  if (priority === CAMPAIGN_PRIORITY.HIGH) return 'high';
-  if (priority === CAMPAIGN_PRIORITY.LOW) return 'low';
-  return 'normal';
+  if (priority === CAMPAIGN_PRIORITY.HIGH) return 'high'
+  if (priority === CAMPAIGN_PRIORITY.LOW) return 'low'
+  return 'normal'
 }
 
 /**
@@ -650,7 +651,7 @@ export const useCampaignsOptionsSchema = z.object({
   order: campaignSortOrderSchema.optional(),
   limit: z.number().int().positive().optional(),
   offset: z.number().int().nonnegative().optional(),
-});
+})
 
 /**
  * Per-attack row returned by the campaign detail payload. Scoped to
@@ -665,7 +666,7 @@ export const campaignAttackRowSchema = z.object({
   rulelistId: z.number().int().positive().nullable(),
   masklistId: z.number().int().positive().nullable(),
   dependencies: z.array(z.number().int().positive()).nullable(),
-});
+})
 
 /**
  * Full response shape of `GET /dashboard/campaigns/:id`. Single
@@ -677,4 +678,4 @@ export const campaignDetailPayloadSchema = z.object({
   attacks: z.array(campaignAttackRowSchema),
   taskStats: campaignTaskStatsSchema,
   activeAgents: z.array(campaignActiveAgentSchema),
-});
+})

@@ -1,6 +1,7 @@
-import { hashTypes } from '@hashhive/shared';
-import { eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import { hashTypes } from '@hashhive/shared'
+import { eq } from 'drizzle-orm'
+
+import { db } from '../db/index.js'
 
 // ─── Hash Type Detection Patterns ───────────────────────────────────
 //
@@ -10,10 +11,10 @@ import { db } from '../db/index.js';
 // appear first (mirrors name-that-hash's popularity ranking).
 
 interface HashPattern {
-  name: string;
-  hashcatMode: number;
-  regex: RegExp;
-  category: string;
+  name: string
+  hashcatMode: number
+  regex: RegExp
+  category: string
 }
 
 const HASH_PATTERNS: HashPattern[] = [
@@ -122,13 +123,13 @@ const HASH_PATTERNS: HashPattern[] = [
 
   // ─── CRC / checksums ──────────────────────────────────────────
   { name: 'CRC32', hashcatMode: 11500, regex: /^[a-fA-F0-9]{8}$/, category: 'Checksum' },
-];
+]
 
 export interface HashCandidate {
-  name: string;
-  hashcatMode: number;
-  category: string;
-  confidence: number;
+  name: string
+  hashcatMode: number
+  category: string
+  confidence: number
 }
 
 /**
@@ -138,61 +139,61 @@ export interface HashCandidate {
  *   - Raw hex hashes share lengths, so confidence decreases with each match (popularity-ranked)
  */
 export function guessHashType(hashValue: string): HashCandidate[] {
-  const trimmed = hashValue.trim();
+  const trimmed = hashValue.trim()
   if (!trimmed) {
-    return [];
+    return []
   }
 
-  const candidates: HashCandidate[] = [];
-  const seenModes = new Set<number>();
+  const candidates: HashCandidate[] = []
+  const seenModes = new Set<number>()
 
   for (const pattern of HASH_PATTERNS) {
     if (pattern.regex.test(trimmed)) {
       // Avoid duplicate mode entries
       if (seenModes.has(pattern.hashcatMode)) {
-        continue;
+        continue
       }
-      seenModes.add(pattern.hashcatMode);
+      seenModes.add(pattern.hashcatMode)
 
       // Structured formats are near-certain; raw hex shares lengths
       const isStructured =
         trimmed.includes('$') ||
         trimmed.startsWith('*') ||
         trimmed.startsWith('md5') ||
-        trimmed.includes('::');
-      const baseConfidence = isStructured ? 0.95 : 0.7;
+        trimmed.includes('::')
+      const baseConfidence = isStructured ? 0.95 : 0.7
 
       // Decay confidence for later matches of same-length raw hex
-      const positionPenalty = isStructured ? 0 : candidates.length * 0.1;
-      const confidence = Math.max(0.1, baseConfidence - positionPenalty);
+      const positionPenalty = isStructured ? 0 : candidates.length * 0.1
+      const confidence = Math.max(0.1, baseConfidence - positionPenalty)
 
       candidates.push({
         name: pattern.name,
         hashcatMode: pattern.hashcatMode,
         category: pattern.category,
         confidence: Math.round(confidence * 100) / 100,
-      });
+      })
     }
   }
 
   // Sort by confidence descending
-  candidates.sort((a, b) => b.confidence - a.confidence);
+  candidates.sort((a, b) => b.confidence - a.confidence)
 
-  return candidates;
+  return candidates
 }
 
 /**
  * Looks up a hash type by its hashcat mode number in the database.
  */
 export async function getHashTypeByMode(mode: number) {
-  const [ht] = await db.select().from(hashTypes).where(eq(hashTypes.hashcatMode, mode)).limit(1);
-  return ht ?? null;
+  const [ht] = await db.select().from(hashTypes).where(eq(hashTypes.hashcatMode, mode)).limit(1)
+  return ht ?? null
 }
 
 /**
  * Validates whether a hash string matches a known format.
  */
 export function validateHashFormat(hashValue: string): boolean {
-  const candidates = guessHashType(hashValue);
-  return candidates.length > 0;
+  const candidates = guessHashType(hashValue)
+  return candidates.length > 0
 }

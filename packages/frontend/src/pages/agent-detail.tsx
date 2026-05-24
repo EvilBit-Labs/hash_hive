@@ -1,51 +1,47 @@
-import { useEffect } from 'react';
-import { useLocation, useParams } from 'react-router';
-import { AgentErrorLog } from '../components/features/agent-error-log';
-import { AgentTasksSection } from '../components/features/agent-tasks-section';
-import { HardwareProfileCard } from '../components/features/hardware-profile-card';
-import { StatusBadge } from '../components/features/status-badge';
-import { EmptyState } from '../components/ui/empty-state';
-import { PageHeader } from '../components/ui/page-header';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
-import { TextLink } from '../components/ui/text-link';
-import {
-  useAgent,
-  useAgentBenchmarks,
-  useAgentErrors,
-  useAgentTasks,
-} from '../hooks/use-dashboard';
-import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities';
+import { useEffect } from 'react'
+import { useLocation, useParams } from 'react-router'
+
+import { AgentErrorLog } from '../components/features/agent-error-log'
+import { AgentTasksSection } from '../components/features/agent-tasks-section'
+import { HardwareProfileCard } from '../components/features/hardware-profile-card'
+import { StatusBadge } from '../components/features/status-badge'
+import { EmptyState } from '../components/ui/empty-state'
+import { PageHeader } from '../components/ui/page-header'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
+import { TextLink } from '../components/ui/text-link'
+import { useAgent, useAgentBenchmarks, useAgentErrors, useAgentTasks } from '../hooks/use-dashboard'
+import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities'
 
 function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
-  if (!capabilities) return '-';
-  const modes = capabilities['hashModes'] ?? capabilities['supportedModes'];
-  if (modes === undefined || modes === null) return '-';
+  if (!capabilities) return '-'
+  const modes = capabilities['hashModes'] ?? capabilities['supportedModes']
+  if (modes === undefined || modes === null) return '-'
   if (!Array.isArray(modes)) {
-    // biome-ignore lint/suspicious/noConsole: surface protocol drift to operators
-    console.warn('[AgentDetailPage] capabilities.hashModes has unexpected shape', modes);
-    return 'invalid';
+    // oxlint-disable-next-line no-console -- surface protocol drift to operators
+    console.warn('[AgentDetailPage] capabilities.hashModes has unexpected shape', modes)
+    return 'invalid'
   }
-  if (modes.length === 0) return '-';
-  return modes.join(', ');
+  if (modes.length === 0) return '-'
+  return modes.join(', ')
 }
 
 export function AgentDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const agentId = Number(id);
-  const { hash } = useLocation();
+  const { id } = useParams<{ id: string }>()
+  const agentId = Number(id)
+  const { hash } = useLocation()
 
-  const { data: agentData, isLoading } = useAgent(agentId);
-  const { data: errorsData, isError: isErrorsError } = useAgentErrors(agentId);
+  const { data: agentData, isLoading } = useAgent(agentId)
+  const { data: errorsData, isError: isErrorsError } = useAgentErrors(agentId)
   const {
     data: tasksData,
     isLoading: isTasksLoading,
     isError: isTasksError,
-  } = useAgentTasks(agentId);
+  } = useAgentTasks(agentId)
   const {
     data: benchmarksData,
     isLoading: isBenchmarksLoading,
     isError: isBenchmarksError,
-  } = useAgentBenchmarks(agentId);
+  } = useAgentBenchmarks(agentId)
 
   // React Router does not auto-scroll to URL fragments. The agent error
   // badge on the list page deep-links to /agents/:id#errors; without this,
@@ -53,24 +49,24 @@ export function AgentDetailPage() {
   // and errorsData as deps intentionally — they are TRIGGERS that re-fire the
   // scroll after the loading state clears and the target element actually
   // exists in the DOM. The closure doesn't reference them.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: trigger-only deps for post-load scrollIntoView
+  // oxlint-disable-next-line react/exhaustive-deps -- trigger-only deps for post-load scrollIntoView
   useEffect(() => {
-    if (!hash || isLoading) return;
-    const target = document.getElementById(hash.slice(1));
+    if (!hash || isLoading) return
+    const target = document.getElementById(hash.slice(1))
     if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
-  }, [hash, isLoading, agentData, errorsData]);
+  }, [hash, isLoading, agentData, errorsData])
 
   // Real-time updates are subscribed globally by <EventsProvider> in the
   // app layout — that listener invalidates this page's keys via the
   // [prefix, agentId] invalidation map in use-events.ts.
 
   if (isLoading) {
-    return <EmptyState message="Loading agent..." />;
+    return <EmptyState message="Loading agent..." />
   }
 
-  const agent = agentData?.agent;
+  const agent = agentData?.agent
   if (!agent) {
     return (
       <div className="space-y-4">
@@ -79,7 +75,7 @@ export function AgentDetailPage() {
         </TextLink>
         <EmptyState message="Agent not found." />
       </div>
-    );
+    )
   }
 
   return (
@@ -92,14 +88,14 @@ export function AgentDetailPage() {
           <PageHeader>{agent.name}</PageHeader>
           <StatusBadge status={agent.status} />
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-xs">
           Last seen: {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
-          <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
+          <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
             Details
           </h3>
           <dl className="space-y-2 text-sm">
@@ -173,5 +169,5 @@ export function AgentDetailPage() {
         )}
       </section>
     </div>
-  );
+  )
 }

@@ -8,18 +8,18 @@
  * agent-api-contract.test.ts caches tasks.js before this file runs, making
  * mock.module here ineffective for dynamic imports within campaigns.ts.
  */
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test'
 
 // Matches resolveGenerationStrategy's worst-case estimator basis
 // (MIN_CHUNK_SIZE). The estimator switched from a 10M legacy constant to
 // MIN_CHUNK_SIZE = 1000 so the chunk-count estimate is an upper bound on
 // what generateTasksForAttack actually emits at runtime.
-const CHUNK_SIZE = 1000;
+const CHUNK_SIZE = 1000
 
 // ─── Spies ──────────────────────────────────────────────────────────
 
-const generateTasksForAttackSpy = mock(() => Promise.resolve({ tasks: [], count: 0 }));
-const enqueueSpy = mock(() => Promise.resolve(true));
+const generateTasksForAttackSpy = mock(() => Promise.resolve({ tasks: [], count: 0 }))
+const enqueueSpy = mock(() => Promise.resolve(true))
 
 // ─── Mock modules (must be registered before importing the module under test) ──
 
@@ -39,34 +39,32 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
   createdAt: new Date(),
   updatedAt: new Date(),
   ...overrides,
-});
+})
 
-let mockAttacks: Array<Record<string, unknown>> = [];
+let mockAttacks: Array<Record<string, unknown>> = []
 
 // Shared mock helper: makes where() awaitable AND chainable to
 // limit/orderBy. validateCampaignResources awaits where() directly;
 // the legacy campaign/attack chains use where().limit / .orderBy.
-import { makeAwaitableChain } from '../helpers/db-mock.js';
+import { makeAwaitableChain } from '../helpers/db-mock.js'
 
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mock(() => ({
-      from: mock(() =>
-        // For validateCampaignResources lookups (no further chain), where()
-        // is awaited directly and should resolve to [{ id: 1 }] so the
-        // hashListId=1 reference is treated as existing. For the legacy
-        // campaign/attack chains, the `.limit` / `.orderBy` methods are
-        // attached to the same returned object.
-        ({
-          where: mock(() =>
-            makeAwaitableChain([{ id: 1 }], {
-              limit: mock(() => Promise.resolve([makeCampaignRow()])),
-              orderBy: mock(() => Promise.resolve(mockAttacks)),
-            })
-          ),
-          orderBy: mock(() => Promise.resolve(mockAttacks)),
-        })
-      ),
+      from: mock(() => // For validateCampaignResources lookups (no further chain), where()
+      // is awaited directly and should resolve to [{ id: 1 }] so the
+      // hashListId=1 reference is treated as existing. For the legacy
+      // campaign/attack chains, the `.limit` / `.orderBy` methods are
+      // attached to the same returned object.
+      ({
+        where: mock(() =>
+          makeAwaitableChain([{ id: 1 }], {
+            limit: mock(() => Promise.resolve([makeCampaignRow()])),
+            orderBy: mock(() => Promise.resolve(mockAttacks)),
+          })
+        ),
+        orderBy: mock(() => Promise.resolve(mockAttacks)),
+      })),
     })),
     update: mock(() => ({
       set: mock(() => ({
@@ -83,76 +81,76 @@ mock.module('../../src/db/index.js', () => ({
     })),
   },
   client: {},
-}));
+}))
 
 mock.module('../../src/services/events.js', () => ({
   emitCampaignStatus: mock(() => {}),
-}));
+}))
 
 // Import module under test after DB/events mocks are registered
-const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js');
+const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js')
 
 // Override _deps to inject spies directly — bypasses bun's shared module cache
 _deps.getTasksModule = () =>
-  Promise.resolve({ generateTasksForAttack: generateTasksForAttackSpy } as any);
+  Promise.resolve({ generateTasksForAttack: generateTasksForAttackSpy } as any)
 _deps.getQueueContext = () =>
   Promise.resolve({
     getQueueManager: mock(() => ({
       getHealth: mock(() => Promise.resolve({ status: 'connected' })),
       enqueue: enqueueSpy,
     })),
-  } as any);
+  } as any)
 _deps.getQueueConfig = () =>
   Promise.resolve({
     QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
-  } as any);
+  } as any)
 _deps.getQueueTypes = () =>
-  Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any);
+  Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any)
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
 describe('transitionCampaign task generation branching', () => {
   afterEach(() => {
-    generateTasksForAttackSpy.mockClear();
-    enqueueSpy.mockClear();
-    mockAttacks = [];
-  });
+    generateTasksForAttackSpy.mockClear()
+    enqueueSpy.mockClear()
+    mockAttacks = []
+  })
 
   test('calls generateTasksForAttack inline when estimated tasks < 100', async () => {
     // Single attack with no keyspace → 1 estimated task → inline strategy
-    mockAttacks = [{ id: 10, keyspace: null, campaignId: 1 }];
+    mockAttacks = [{ id: 10, keyspace: null, campaignId: 1 }]
 
-    const result = await transitionCampaign(1, 'running');
+    const result = await transitionCampaign(1, 'running')
 
-    expect(result).toHaveProperty('campaign');
-    expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1);
-    expect(generateTasksForAttackSpy).toHaveBeenCalledWith(10);
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
+    expect(result).toHaveProperty('campaign')
+    expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
+    expect(generateTasksForAttackSpy).toHaveBeenCalledWith(10)
+    expect(enqueueSpy).not.toHaveBeenCalled()
+  })
 
   test('calls generateTasksForAttack inline when estimated tasks = 99 (boundary)', async () => {
     // Single attack with keyspace producing exactly 99 chunks → inline strategy
-    const keyspace = String(99 * CHUNK_SIZE);
-    mockAttacks = [{ id: 15, keyspace, campaignId: 1 }];
+    const keyspace = String(99 * CHUNK_SIZE)
+    mockAttacks = [{ id: 15, keyspace, campaignId: 1 }]
 
-    const result = await transitionCampaign(1, 'running');
+    const result = await transitionCampaign(1, 'running')
 
-    expect(result).toHaveProperty('campaign');
-    expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1);
-    expect(generateTasksForAttackSpy).toHaveBeenCalledWith(15);
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
+    expect(result).toHaveProperty('campaign')
+    expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
+    expect(generateTasksForAttackSpy).toHaveBeenCalledWith(15)
+    expect(enqueueSpy).not.toHaveBeenCalled()
+  })
 
   test('enqueues to BullMQ when estimated tasks >= 100', async () => {
     // Single attack with keyspace producing exactly 100 chunks → async strategy
-    const keyspace = String(100 * CHUNK_SIZE);
-    mockAttacks = [{ id: 20, keyspace, campaignId: 1 }];
+    const keyspace = String(100 * CHUNK_SIZE)
+    mockAttacks = [{ id: 20, keyspace, campaignId: 1 }]
 
-    const result = await transitionCampaign(1, 'running');
+    const result = await transitionCampaign(1, 'running')
 
-    expect(result).toHaveProperty('campaign');
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs-task-generation');
-    expect(generateTasksForAttackSpy).not.toHaveBeenCalled();
-  });
-});
+    expect(result).toHaveProperty('campaign')
+    expect(enqueueSpy).toHaveBeenCalledTimes(1)
+    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs-task-generation')
+    expect(generateTasksForAttackSpy).not.toHaveBeenCalled()
+  })
+})

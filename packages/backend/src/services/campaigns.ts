@@ -4,16 +4,17 @@ import {
   type CampaignSortOrder,
   campaigns,
   tasks,
-} from '@hashhive/shared';
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { validateProposedDAG } from './campaign-dag.js';
-import { validateCampaignResources } from './campaign-resources.js';
-import { MIN_CHUNK_SIZE } from './chunk-sizing.js';
-import { emitCampaignStatus } from './events.js';
+} from '@hashhive/shared'
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
 
-export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js';
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { validateProposedDAG } from './campaign-dag.js'
+import { validateCampaignResources } from './campaign-resources.js'
+import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
+import { emitCampaignStatus } from './events.js'
+
+export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js'
 // Re-export from sibling modules so existing callers (route handlers,
 // tests) keep working through the `services/campaigns` import path.
 // The split brought this file near the 800-line project guideline
@@ -25,24 +26,24 @@ export {
   deleteCampaign,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
-} from './campaign-dashboard.js';
+} from './campaign-dashboard.js'
 export {
   _progressDeps,
   computeCampaignEta,
   shouldAutoCompleteCampaign,
   updateCampaignProgress,
-} from './campaign-progress.js';
-export { validateCampaignResources } from './campaign-resources.js';
+} from './campaign-progress.js'
+export { validateCampaignResources } from './campaign-resources.js'
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
-export const INLINE_GENERATION_THRESHOLD = 100;
+export const INLINE_GENERATION_THRESHOLD = 100
 // Use the smallest possible runtime chunk size as the estimator's basis so
 // the chunk-count estimate is an upper bound on what generateTasksForAttack
 // will actually emit. pickChunkSize can clamp as low as MIN_CHUNK_SIZE for
 // slow fleets, so using the legacy 10M constant would let attacks slip
 // through the inline gate and then materialize 4 orders of magnitude more
 // rows in the request path.
-const CHUNK_SIZE = Number(MIN_CHUNK_SIZE);
+const CHUNK_SIZE = Number(MIN_CHUNK_SIZE)
 
 // Dynamic import getters — break circular dependency (campaigns ↔ tasks) while
 // remaining testable. bun:test's mock.module cannot override already-cached
@@ -52,7 +53,7 @@ export const _deps = {
   getQueueContext: () => import('../queue/context.js'),
   getQueueConfig: () => import('../config/queue.js'),
   getQueueTypes: () => import('../queue/types.js'),
-};
+}
 
 /**
  * Decide whether an attack with a null `keyspace` is *computable* by
@@ -71,28 +72,28 @@ export const _deps = {
  * inline INSERTs.
  */
 function isAttackKeyspaceComputable(atk: {
-  mode?: number | null | undefined;
-  wordlistId?: number | null | undefined;
-  masklistId?: number | null | undefined;
-  advancedConfiguration?: unknown;
+  mode?: number | null | undefined
+  wordlistId?: number | null | undefined
+  masklistId?: number | null | undefined
+  advancedConfiguration?: unknown
 }): boolean {
-  if (atk.mode === undefined || atk.mode === null) return false;
+  if (atk.mode === undefined || atk.mode === null) return false
   const mask =
     atk.advancedConfiguration &&
     typeof atk.advancedConfiguration === 'object' &&
     typeof (atk.advancedConfiguration as Record<string, unknown>)['mask'] === 'string'
       ? ((atk.advancedConfiguration as Record<string, unknown>)['mask'] as string)
-      : null;
+      : null
   switch (atk.mode) {
     case 0:
-      return atk.wordlistId != null;
+      return atk.wordlistId != null
     case 3:
-      return mask !== null && mask.length > 0;
+      return mask !== null && mask.length > 0
     case 6:
     case 7:
-      return atk.wordlistId != null && mask !== null && mask.length > 0;
+      return atk.wordlistId != null && mask !== null && mask.length > 0
     default:
-      return false;
+      return false
   }
 }
 
@@ -112,48 +113,48 @@ function isAttackKeyspaceComputable(atk: {
  */
 export function resolveGenerationStrategy(
   attackList: ReadonlyArray<{
-    keyspace: string | null;
-    mode?: number | null | undefined;
-    wordlistId?: number | null | undefined;
-    masklistId?: number | null | undefined;
-    advancedConfiguration?: unknown;
+    keyspace: string | null
+    mode?: number | null | undefined
+    wordlistId?: number | null | undefined
+    masklistId?: number | null | undefined
+    advancedConfiguration?: unknown
   }>
 ): 'inline' | 'async' {
-  let estimatedTasks = 0;
-  const chunkSize = BigInt(CHUNK_SIZE);
+  let estimatedTasks = 0
+  const chunkSize = BigInt(CHUNK_SIZE)
   for (const atk of attackList) {
-    const raw = atk.keyspace?.trim();
+    const raw = atk.keyspace?.trim()
     if (!raw || raw === '0') {
       // Null / zero / blank keyspace.
       if (isAttackKeyspaceComputable(atk)) {
         // generateTasksForAttack will compute the real keyspace and
         // may generate up to MAX_CHUNKS_PER_ATTACK chunks inline.
         // Force async so the request path doesn't block on the burst.
-        return 'async';
+        return 'async'
       }
       // Calculator will fall through to a single placeholder task.
-      estimatedTasks += 1;
-      continue;
+      estimatedTasks += 1
+      continue
     }
-    let bigKs: bigint;
+    let bigKs: bigint
     try {
-      bigKs = BigInt(raw);
+      bigKs = BigInt(raw)
     } catch {
-      estimatedTasks += 1;
-      continue;
+      estimatedTasks += 1
+      continue
     }
     if (bigKs <= 0n) {
-      estimatedTasks += 1;
-      continue;
+      estimatedTasks += 1
+      continue
     }
-    const chunks = bigKs / chunkSize + (bigKs % chunkSize === 0n ? 0n : 1n);
+    const chunks = bigKs / chunkSize + (bigKs % chunkSize === 0n ? 0n : 1n)
     // Saturate at INLINE_GENERATION_THRESHOLD so the comparison stays
     // within safe-Number range even for astronomical keyspaces.
     estimatedTasks +=
-      chunks > BigInt(INLINE_GENERATION_THRESHOLD) ? INLINE_GENERATION_THRESHOLD : Number(chunks);
-    if (estimatedTasks >= INLINE_GENERATION_THRESHOLD) return 'async';
+      chunks > BigInt(INLINE_GENERATION_THRESHOLD) ? INLINE_GENERATION_THRESHOLD : Number(chunks)
+    if (estimatedTasks >= INLINE_GENERATION_THRESHOLD) return 'async'
   }
-  return estimatedTasks < INLINE_GENERATION_THRESHOLD ? 'inline' : 'async';
+  return estimatedTasks < INLINE_GENERATION_THRESHOLD ? 'inline' : 'async'
 }
 
 // ─── Campaign CRUD ──────────────────────────────────────────────────
@@ -162,40 +163,40 @@ const SORT_COLUMNS = {
   name: campaigns.name,
   createdAt: campaigns.createdAt,
   priority: campaigns.priority,
-} as const;
+} as const
 
 export async function listCampaigns(filters: {
-  projectId?: number | undefined;
-  status?: string | undefined;
-  priority?: number | undefined;
-  sort?: CampaignSortField | undefined;
-  order?: CampaignSortOrder | undefined;
-  limit?: number | undefined;
-  offset?: number | undefined;
+  projectId?: number | undefined
+  status?: string | undefined
+  priority?: number | undefined
+  sort?: CampaignSortField | undefined
+  order?: CampaignSortOrder | undefined
+  limit?: number | undefined
+  offset?: number | undefined
 }) {
-  let query = db.select().from(campaigns).$dynamic();
+  let query = db.select().from(campaigns).$dynamic()
 
-  const conditions = [];
+  const conditions = []
   if (filters.projectId) {
-    conditions.push(eq(campaigns.projectId, filters.projectId));
+    conditions.push(eq(campaigns.projectId, filters.projectId))
   }
   if (filters.status) {
-    conditions.push(eq(campaigns.status, filters.status));
+    conditions.push(eq(campaigns.status, filters.status))
   }
   if (filters.priority !== undefined) {
-    conditions.push(eq(campaigns.priority, filters.priority));
+    conditions.push(eq(campaigns.priority, filters.priority))
   }
   if (conditions.length > 0) {
-    query = query.where(and(...conditions));
+    query = query.where(and(...conditions))
   }
 
-  const limit = filters.limit ?? 50;
-  const offset = filters.offset ?? 0;
+  const limit = filters.limit ?? 50
+  const offset = filters.offset ?? 0
 
-  const sortField = filters.sort ?? 'createdAt';
-  const sortOrder = filters.order ?? 'desc';
-  const sortColumn = SORT_COLUMNS[sortField];
-  const orderClause = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn);
+  const sortField = filters.sort ?? 'createdAt'
+  const sortOrder = filters.order ?? 'desc'
+  const sortColumn = SORT_COLUMNS[sortField]
+  const orderClause = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn)
 
   const [results, countResult] = await Promise.all([
     query.limit(limit).offset(offset).orderBy(orderClause),
@@ -203,28 +204,28 @@ export async function listCampaigns(filters: {
       .select({ count: sql<number>`count(*)` })
       .from(campaigns)
       .where(conditions.length > 0 ? and(...conditions) : undefined),
-  ]);
+  ])
 
   return {
     campaigns: results,
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
-  };
+  }
 }
 
 export async function getCampaignById(id: number) {
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
-  return campaign ?? null;
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1)
+  return campaign ?? null
 }
 
 export async function createCampaign(data: {
-  projectId: number;
-  name: string;
-  description?: string | undefined;
-  hashListId: number;
-  priority?: number | undefined;
-  createdBy?: number | undefined;
+  projectId: number
+  name: string
+  description?: string | undefined
+  hashListId: number
+  priority?: number | undefined
+  createdBy?: number | undefined
 }) {
   const [campaign] = await db
     .insert(campaigns)
@@ -237,9 +238,9 @@ export async function createCampaign(data: {
       createdBy: data.createdBy ?? null,
       status: 'draft',
     })
-    .returning();
+    .returning()
 
-  return campaign ?? null;
+  return campaign ?? null
 }
 
 /**
@@ -253,23 +254,23 @@ export async function createCampaign(data: {
  * cannot be confused at the call site or on the wire.
  */
 export interface InlineAttackInput {
-  mode: number;
-  hashTypeId?: number | null | undefined;
-  wordlistId?: number | null | undefined;
-  rulelistId?: number | null | undefined;
-  masklistId?: number | null | undefined;
-  advancedConfiguration?: Record<string, unknown> | undefined;
-  dependencyIndices?: number[] | undefined;
+  mode: number
+  hashTypeId?: number | null | undefined
+  wordlistId?: number | null | undefined
+  rulelistId?: number | null | undefined
+  masklistId?: number | null | undefined
+  advancedConfiguration?: Record<string, unknown> | undefined
+  dependencyIndices?: number[] | undefined
 }
 
 export type CreateCampaignWithAttacksResult =
   | {
-      kind: 'created';
-      campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>>;
-      attacks: Array<{ id: number; dependencies: number[] | null }>;
+      kind: 'created'
+      campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>>
+      attacks: Array<{ id: number; dependencies: number[] | null }>
     }
   | { kind: 'dag_invalid'; error: string }
-  | { kind: 'resource_missing'; missing: string[] };
+  | { kind: 'resource_missing'; missing: string[] }
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -284,13 +285,13 @@ export type CreateCampaignWithAttacksResult =
  * where the user composes the graph before any IDs exist.
  */
 export async function createCampaignWithAttacks(input: {
-  projectId: number;
-  name: string;
-  description?: string | undefined;
-  hashListId: number;
-  priority?: number | undefined;
-  createdBy?: number | undefined;
-  attacks: ReadonlyArray<InlineAttackInput>;
+  projectId: number
+  name: string
+  description?: string | undefined
+  hashListId: number
+  priority?: number | undefined
+  createdBy?: number | undefined
+  attacks: ReadonlyArray<InlineAttackInput>
 }): Promise<CreateCampaignWithAttacksResult> {
   // First validate the proposed DAG using index-based IDs. We use the
   // input position as a stable proxy id; this catches cycles and
@@ -299,10 +300,10 @@ export async function createCampaignWithAttacks(input: {
   const indexValidationInput = input.attacks.map((a, idx) => ({
     id: idx,
     dependencies: a.dependencyIndices ?? null,
-  }));
-  const preCheck = validateProposedDAG(indexValidationInput);
+  }))
+  const preCheck = validateProposedDAG(indexValidationInput)
   if (!preCheck.valid) {
-    return { kind: 'dag_invalid', error: preCheck.error ?? 'Invalid DAG' };
+    return { kind: 'dag_invalid', error: preCheck.error ?? 'Invalid DAG' }
   }
 
   // Cross-project resource pre-check: refuse to persist a campaign or
@@ -319,14 +320,14 @@ export async function createCampaignWithAttacks(input: {
       rulelistId: a.rulelistId,
       masklistId: a.masklistId,
     }))
-  );
+  )
   if (!resourceCheck.valid) {
-    return { kind: 'resource_missing', missing: resourceCheck.missing };
+    return { kind: 'resource_missing', missing: resourceCheck.missing }
   }
 
   class DAGInvalidInsideTx extends Error {
     constructor(public readonly reason: string) {
-      super(reason);
+      super(reason)
     }
   }
 
@@ -343,13 +344,13 @@ export async function createCampaignWithAttacks(input: {
           createdBy: input.createdBy ?? null,
           status: 'draft',
         })
-        .returning();
+        .returning()
       if (!campaign) {
-        throw new Error('Campaign insert returned no row');
+        throw new Error('Campaign insert returned no row')
       }
 
       if (input.attacks.length === 0) {
-        return { kind: 'created' as const, campaign, attacks: [] };
+        return { kind: 'created' as const, campaign, attacks: [] }
       }
 
       // Insert attacks one at a time so the returned id reliably
@@ -363,7 +364,7 @@ export async function createCampaignWithAttacks(input: {
       // transaction so latency is dominated by the txn itself.
       // Dependencies start empty; they're translated and persisted in
       // the loop below.
-      const realIdByIndex: number[] = [];
+      const realIdByIndex: number[] = []
       for (const a of input.attacks) {
         const [row] = await tx
           .insert(attacks)
@@ -379,11 +380,11 @@ export async function createCampaignWithAttacks(input: {
             dependencies: [],
             status: 'pending' as const,
           })
-          .returning({ id: attacks.id });
+          .returning({ id: attacks.id })
         if (!row) {
-          throw new Error('Attack insert returned no row — txn invariant violated');
+          throw new Error('Attack insert returned no row — txn invariant violated')
         }
-        realIdByIndex.push(row.id);
+        realIdByIndex.push(row.id)
       }
 
       // Translate index-based deps → real-id deps and persist. The
@@ -394,46 +395,46 @@ export async function createCampaignWithAttacks(input: {
       // corresponding edge in the index graph that was already proven
       // acyclic. The only remaining failure mode is an out-of-range
       // index, which is caught point-of-use below.
-      const finalGraph: Array<{ id: number; dependencies: number[] | null }> = [];
+      const finalGraph: Array<{ id: number; dependencies: number[] | null }> = []
       for (let idx = 0; idx < input.attacks.length; idx++) {
-        const realId = realIdByIndex[idx];
+        const realId = realIdByIndex[idx]
         if (realId === undefined) {
-          throw new Error('Inserted attack id missing — txn invariant violated');
+          throw new Error('Inserted attack id missing — txn invariant violated')
         }
-        const indexDeps = input.attacks[idx]?.dependencyIndices ?? [];
+        const indexDeps = input.attacks[idx]?.dependencyIndices ?? []
         const realDeps = indexDeps.map((depIdx) => {
-          const target = realIdByIndex[depIdx];
+          const target = realIdByIndex[depIdx]
           if (target === undefined) {
             throw new DAGInvalidInsideTx(
               `Attack at index ${idx} depends on out-of-range index ${depIdx}`
-            );
+            )
           }
-          return target;
-        });
-        finalGraph.push({ id: realId, dependencies: realDeps.length > 0 ? realDeps : null });
+          return target
+        })
+        finalGraph.push({ id: realId, dependencies: realDeps.length > 0 ? realDeps : null })
 
         if (realDeps.length > 0) {
           await tx
             .update(attacks)
             .set({ dependencies: realDeps, updatedAt: new Date() })
-            .where(eq(attacks.id, realId));
+            .where(eq(attacks.id, realId))
         }
       }
 
-      return { kind: 'created' as const, campaign, attacks: finalGraph };
-    });
+      return { kind: 'created' as const, campaign, attacks: finalGraph }
+    })
   } catch (err) {
     if (err instanceof DAGInvalidInsideTx) {
-      return { kind: 'dag_invalid', error: err.reason };
+      return { kind: 'dag_invalid', error: err.reason }
     }
-    throw err;
+    throw err
   }
 }
 
 export type UpdateCampaignResult =
   | { kind: 'updated'; campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>> }
   | { kind: 'not_found' }
-  | { kind: 'not_draft'; status: string };
+  | { kind: 'not_draft'; status: string }
 
 /**
  * Update a campaign if and only if its status is `draft`. The draft
@@ -445,31 +446,31 @@ export type UpdateCampaignResult =
 export async function updateCampaign(
   id: number,
   data: {
-    name?: string | undefined;
+    name?: string | undefined
     // PUT requests can pass `null` to explicitly clear the description;
     // PATCH requests omit the field entirely (undefined) to leave it
     // untouched. The Drizzle `.set()` call below only writes keys
     // present in `data`, so `undefined` is skipped while `null` is
     // persisted.
-    description?: string | null | undefined;
-    priority?: number | undefined;
+    description?: string | null | undefined
+    priority?: number | undefined
   }
 ): Promise<UpdateCampaignResult> {
   const [updated] = await db
     .update(campaigns)
     .set({ ...data, updatedAt: new Date() })
     .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
-    .returning();
+    .returning()
 
   if (updated) {
-    return { kind: 'updated', campaign: updated };
+    return { kind: 'updated', campaign: updated }
   }
 
-  const existing = await getCampaignById(id);
+  const existing = await getCampaignById(id)
   if (!existing) {
-    return { kind: 'not_found' };
+    return { kind: 'not_found' }
   }
-  return { kind: 'not_draft', status: existing.status };
+  return { kind: 'not_draft', status: existing.status }
 }
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
@@ -480,7 +481,7 @@ export async function updateCampaign(
 // `campaign-progress.ts`. Splitting kept this file under the project's
 // 800-line guideline without changing the public import surface.
 
-type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'cancelled';
+type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'cancelled'
 
 const VALID_TRANSITIONS: Record<string, CampaignStatus[]> = {
   draft: ['running', 'cancelled'],
@@ -493,19 +494,19 @@ const VALID_TRANSITIONS: Record<string, CampaignStatus[]> = {
   paused: ['running', 'completed', 'cancelled', 'draft'],
   completed: [],
   cancelled: [],
-};
+}
 
 export async function transitionCampaign(id: number, targetStatus: CampaignStatus) {
-  const campaign = await getCampaignById(id);
+  const campaign = await getCampaignById(id)
   if (!campaign) {
-    return { error: 'Campaign not found' };
+    return { error: 'Campaign not found' }
   }
 
-  const allowed = VALID_TRANSITIONS[campaign.status] ?? [];
+  const allowed = VALID_TRANSITIONS[campaign.status] ?? []
   if (!allowed.includes(targetStatus)) {
     return {
       error: `Cannot transition from '${campaign.status}' to '${targetStatus}'`,
-    };
+    }
   }
 
   // Validate campaign has attacks and that every referenced resource
@@ -513,9 +514,9 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   // attack-count check so the more specific "missing resources" error
   // is preferred over the generic "no attacks" error.
   if (targetStatus === 'running') {
-    const campaignAttacks = await listAttacks(id);
+    const campaignAttacks = await listAttacks(id)
     if (campaignAttacks.length === 0) {
-      return { error: 'Campaign must have at least one attack before starting' };
+      return { error: 'Campaign must have at least one attack before starting' }
     }
 
     // validateCampaignResources fires 4-5 parallel SELECTs. Promise.all
@@ -523,7 +524,7 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     // as an unstructured 500. Wrap and map to a typed error so the route
     // layer returns a consistent envelope rather than letting the throw
     // bubble through the lifecycle handler.
-    let resourceCheck: Awaited<ReturnType<typeof validateCampaignResources>>;
+    let resourceCheck: Awaited<ReturnType<typeof validateCampaignResources>>
     try {
       resourceCheck = await validateCampaignResources(
         { projectId: campaign.projectId, hashListId: campaign.hashListId },
@@ -533,41 +534,41 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
           rulelistId: a.rulelistId,
           masklistId: a.masklistId,
         }))
-      );
+      )
     } catch (err) {
       logger.error(
         { err, campaignId: id, projectId: campaign.projectId },
         'validateCampaignResources threw — treating as service unavailable'
-      );
+      )
       return {
         error: 'Unable to validate campaign resources right now',
         code: 'RESOURCE_VALIDATION_FAILED' as const,
-      };
+      }
     }
     if (!resourceCheck.valid) {
       return {
         error: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
         code: 'RESOURCE_MISSING' as const,
-      };
+      }
     }
   }
 
   // When starting/resuming a campaign, verify queue availability before transitioning
   if (targetStatus === 'running') {
-    const { getQueueManager } = await _deps.getQueueContext();
-    const qm = getQueueManager();
+    const { getQueueManager } = await _deps.getQueueContext()
+    const qm = getQueueManager()
     if (!qm) {
       return {
         error: 'Queue unavailable — cannot start campaign',
         code: 'QUEUE_UNAVAILABLE' as const,
-      };
+      }
     }
-    const health = await qm.getHealth();
+    const health = await qm.getHealth()
     if (health.status === 'disconnected') {
       return {
         error: 'Queue unavailable — cannot start campaign',
         code: 'QUEUE_UNAVAILABLE' as const,
-      };
+      }
     }
   }
 
@@ -578,25 +579,25 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(
         and(eq(tasks.campaignId, id), sql`${tasks.status} IN ('pending', 'assigned', 'running')`)
-      );
+      )
   }
 
   const updates: Record<string, unknown> = {
     status: targetStatus,
     updatedAt: new Date(),
-  };
+  }
 
   if (targetStatus === 'running' && !campaign.startedAt) {
-    updates['startedAt'] = new Date();
+    updates['startedAt'] = new Date()
   }
   if (targetStatus === 'completed' || targetStatus === 'cancelled') {
-    updates['completedAt'] = new Date();
+    updates['completedAt'] = new Date()
   }
   // Stop resets timestamps
   if (targetStatus === 'draft') {
-    updates['startedAt'] = null;
-    updates['completedAt'] = null;
-    updates['progress'] = {};
+    updates['startedAt'] = null
+    updates['completedAt'] = null
+    updates['progress'] = {}
   }
 
   // Source-status guard: fold the read-time status into the UPDATE
@@ -610,33 +611,33 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     .update(campaigns)
     .set(updates)
     .where(and(eq(campaigns.id, id), eq(campaigns.status, campaign.status)))
-    .returning();
+    .returning()
 
   if (!updated) {
     return {
       error: `Campaign status changed during transition (was '${campaign.status}'); retry against the current state`,
       code: 'STALE_STATE' as const,
-    };
+    }
   }
 
   // Emit status for non-running transitions immediately; for 'running',
   // defer until after task generation enqueue succeeds to avoid premature events.
   if (targetStatus !== 'running') {
-    emitCampaignStatus(campaign.projectId, id, targetStatus);
+    emitCampaignStatus(campaign.projectId, id, targetStatus)
   }
 
   // When starting a campaign, generate tasks — inline if few, queued if many
   if (targetStatus === 'running') {
-    const campaignAttacks = await listAttacks(id);
+    const campaignAttacks = await listAttacks(id)
     if (campaignAttacks.length > 0) {
-      const strategy = resolveGenerationStrategy(campaignAttacks);
+      const strategy = resolveGenerationStrategy(campaignAttacks)
 
       if (strategy === 'inline') {
         // Generate inline in parallel — small enough to not block the request meaningfully
         try {
-          const { generateTasksForAttack } = await _deps.getTasksModule();
-          await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)));
-        } catch (_err) {
+          const { generateTasksForAttack } = await _deps.getTasksModule()
+          await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)))
+        } catch {
           // Roll back — inline task generation failed
           await db
             .update(campaigns)
@@ -647,15 +648,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               progress: campaign.progress ?? {},
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id));
-          return { error: 'Task generation failed', code: 'TASK_GENERATION_FAILED' as const };
+            .where(eq(campaigns.id, id))
+          return { error: 'Task generation failed', code: 'TASK_GENERATION_FAILED' as const }
         }
       } else {
         // Enqueue to the dedicated task-generation job queue
-        const { getQueueManager } = await _deps.getQueueContext();
-        const { QUEUE_NAMES } = await _deps.getQueueConfig();
-        const { JOB_PRIORITY } = await _deps.getQueueTypes();
-        const qm = getQueueManager();
+        const { getQueueManager } = await _deps.getQueueContext()
+        const { QUEUE_NAMES } = await _deps.getQueueConfig()
+        const { JOB_PRIORITY } = await _deps.getQueueTypes()
+        const qm = getQueueManager()
         if (!qm) {
           // Roll back — queue disappeared between health check and enqueue
           await db
@@ -667,26 +668,26 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               progress: campaign.progress ?? {},
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id));
+            .where(eq(campaigns.id, id))
           return {
             error: 'Queue unavailable — cannot start campaign',
             code: 'QUEUE_UNAVAILABLE' as const,
-          };
+          }
         }
 
         const priorityMap: Record<number, number> = {
           1: JOB_PRIORITY.HIGH,
           5: JOB_PRIORITY.NORMAL,
           10: JOB_PRIORITY.LOW,
-        };
-        const jobPriority = priorityMap[campaign.priority] ?? JOB_PRIORITY.NORMAL;
+        }
+        const jobPriority = priorityMap[campaign.priority] ?? JOB_PRIORITY.NORMAL
 
         const enqueued = await qm.enqueue(QUEUE_NAMES.TASK_GENERATION, {
           campaignId: id,
           projectId: campaign.projectId,
           attackIds: campaignAttacks.map((a) => a.id),
           priority: jobPriority as 1 | 5 | 10,
-        });
+        })
 
         if (!enqueued) {
           // Roll back the entire status transition including timestamps/progress
@@ -699,28 +700,28 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               progress: campaign.progress ?? {},
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id));
+            .where(eq(campaigns.id, id))
           return {
             error: 'Failed to enqueue task generation',
             code: 'QUEUE_UNAVAILABLE' as const,
-          };
+          }
         }
       }
     }
 
     // Emit after successful generation/enqueue
     if (updated) {
-      emitCampaignStatus(campaign.projectId, id, targetStatus);
+      emitCampaignStatus(campaign.projectId, id, targetStatus)
     }
   }
 
-  return { campaign: updated ?? null };
+  return { campaign: updated ?? null }
 }
 
 // ─── Attack Management ──────────────────────────────────────────────
 
 export async function listAttacks(campaignId: number) {
-  return db.select().from(attacks).where(eq(attacks.campaignId, campaignId)).orderBy(attacks.id);
+  return db.select().from(attacks).where(eq(attacks.campaignId, campaignId)).orderBy(attacks.id)
 }
 
 /**
@@ -732,7 +733,7 @@ export async function listAttacksPaginated(
   campaignId: number,
   opts: { limit: number; offset: number }
 ) {
-  const whereClause = eq(attacks.campaignId, campaignId);
+  const whereClause = eq(attacks.campaignId, campaignId)
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -742,25 +743,25 @@ export async function listAttacksPaginated(
       .limit(opts.limit)
       .offset(opts.offset),
     db.select({ value: count() }).from(attacks).where(whereClause),
-  ]);
-  return { items, total: Number(countResult[0]?.value ?? 0) };
+  ])
+  return { items, total: Number(countResult[0]?.value ?? 0) }
 }
 
 export async function getAttackById(id: number) {
-  const [attack] = await db.select().from(attacks).where(eq(attacks.id, id)).limit(1);
-  return attack ?? null;
+  const [attack] = await db.select().from(attacks).where(eq(attacks.id, id)).limit(1)
+  return attack ?? null
 }
 
 export async function createAttack(data: {
-  campaignId: number;
-  projectId: number;
-  mode: number;
-  hashTypeId?: number | undefined;
-  wordlistId?: number | undefined;
-  rulelistId?: number | undefined;
-  masklistId?: number | undefined;
-  advancedConfiguration?: Record<string, unknown> | undefined;
-  dependencies?: number[] | undefined;
+  campaignId: number
+  projectId: number
+  mode: number
+  hashTypeId?: number | undefined
+  wordlistId?: number | undefined
+  rulelistId?: number | undefined
+  masklistId?: number | undefined
+  advancedConfiguration?: Record<string, unknown> | undefined
+  dependencies?: number[] | undefined
 }) {
   const [attack] = await db
     .insert(attacks)
@@ -776,33 +777,33 @@ export async function createAttack(data: {
       dependencies: data.dependencies ?? [],
       status: 'pending',
     })
-    .returning();
+    .returning()
 
-  return attack ?? null;
+  return attack ?? null
 }
 
 export async function updateAttack(
   id: number,
   data: {
-    mode?: number | undefined;
-    hashTypeId?: number | undefined;
-    wordlistId?: number | undefined;
-    rulelistId?: number | undefined;
-    masklistId?: number | undefined;
-    advancedConfiguration?: Record<string, unknown> | undefined;
-    dependencies?: number[] | undefined;
+    mode?: number | undefined
+    hashTypeId?: number | undefined
+    wordlistId?: number | undefined
+    rulelistId?: number | undefined
+    masklistId?: number | undefined
+    advancedConfiguration?: Record<string, unknown> | undefined
+    dependencies?: number[] | undefined
   }
 ) {
   const [updated] = await db
     .update(attacks)
     .set({ ...data, updatedAt: new Date() })
     .where(eq(attacks.id, id))
-    .returning();
+    .returning()
 
-  return updated ?? null;
+  return updated ?? null
 }
 
 export async function deleteAttack(id: number) {
-  const [deleted] = await db.delete(attacks).where(eq(attacks.id, id)).returning();
-  return deleted ?? null;
+  const [deleted] = await db.delete(attacks).where(eq(attacks.id, id)).returning()
+  return deleted ?? null
 }

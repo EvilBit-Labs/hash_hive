@@ -4,13 +4,13 @@
  * Loaded via bun's --preload flag. Sets up a happy-dom window as the
  * global DOM environment for Testing Library to render into.
  */
-import { Window } from 'happy-dom';
+import { Window } from 'happy-dom'
 
-const window = new Window({ url: 'http://localhost:3000' });
+const window = new Window({ url: 'http://localhost:3000' })
 
 // happy-dom v20 sets window.SyntaxError = undefined, but its internal
 // SelectorParser calls `new this.window.SyntaxError(...)`. Patch it.
-(window as unknown as Record<string, unknown>)['SyntaxError'] = globalThis.SyntaxError;
+;(window as unknown as Record<string, unknown>)['SyntaxError'] = globalThis.SyntaxError
 
 // Inject DOM globals that Testing Library expects
 Object.assign(globalThis, {
@@ -40,4 +40,4 @@ Object.assign(globalThis, {
   cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
   setTimeout: window.setTimeout.bind(window),
   clearTimeout: window.clearTimeout.bind(window),
-});
+})

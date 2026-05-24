@@ -1,13 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "typescript",
-    "unicorn",
-    "oxc",
-    "react",
-    "jsx-a11y",
-    "import"
-  ],
+  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import"],
   "categories": {
     "correctness": "error",
     "perf": "warn",
@@ -35,13 +28,7 @@
   ],
   "overrides": [
     {
-      "files": [
-        "tests/**",
-        "**/tests/**",
-        "e2e/**",
-        "**/*.test.ts",
-        "**/*.test.tsx"
-      ],
+      "files": ["tests/**", "**/tests/**", "e2e/**", "**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "typescript/no-unsafe-type-assertion": "off",
         "no-await-in-loop": "off",
@@ -52,18 +39,13 @@
       }
     },
     {
-      "files": [
-        "scripts/**",
-        "packages/*/scripts/**"
-      ],
+      "files": ["scripts/**", "packages/*/scripts/**"],
       "rules": {
         "no-await-in-loop": "off"
       }
     },
     {
-      "files": [
-        "packages/frontend/e2e/**"
-      ],
+      "files": ["packages/frontend/e2e/**"],
       "rules": {
         "unicorn/consistent-function-scoping": "off"
       }

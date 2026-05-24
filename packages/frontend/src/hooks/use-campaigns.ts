@@ -2,55 +2,57 @@ import type {
   CampaignLifecycleAction,
   CreateAttackRequest,
   CreateCampaignRequest,
-} from '@hashhive/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
+} from '@hashhive/shared'
+
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+
+import { api } from '../lib/api'
 
 // Re-export for callers that want the lifecycle action type alongside
 // the mutation hooks.
-export type { CampaignLifecycleAction } from '@hashhive/shared';
+export type { CampaignLifecycleAction } from '@hashhive/shared'
 
 // API response types — represent JSON-serialized shapes (dates as strings)
 interface Campaign {
-  id: number;
-  name: string;
-  status: string;
-  projectId: number;
+  id: number
+  name: string
+  status: string
+  projectId: number
 }
 
 interface Attack {
-  id: number;
-  campaignId: number;
-  mode: number;
+  id: number
+  campaignId: number
+  mode: number
 }
 
 export function useCreateCampaign() {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (data: CreateCampaignRequest) =>
       api.post<{ campaign: Campaign }>('/dashboard/campaigns', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      void queryClient.invalidateQueries({ queryKey: ['campaigns'] })
     },
-  });
+  })
 }
 
 export function useCreateAttack(campaignId: number) {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (data: CreateAttackRequest) =>
       api.post<{ attack: Attack }>(`/dashboard/campaigns/${campaignId}/attacks`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] })
     },
-  });
+  })
 }
 
 interface LifecycleVariables {
-  campaignId: number;
-  action: CampaignLifecycleAction;
+  campaignId: number
+  action: CampaignLifecycleAction
 }
 
 /**
@@ -61,7 +63,7 @@ interface LifecycleVariables {
  * rebind a render-time id.
  */
 export function useCampaignLifecycle() {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: ({ campaignId, action }: LifecycleVariables) =>
@@ -69,10 +71,10 @@ export function useCampaignLifecycle() {
         action,
       }),
     onSuccess: (_data, { campaignId }) => {
-      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
-      queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      void queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] })
     },
-  });
+  })
 }
 
 /**
@@ -84,22 +86,22 @@ export function useCampaignLifecycle() {
  * so a contract regression cannot quietly leave the row in the list.
  */
 export function useCampaignDelete() {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ campaignId }: { campaignId: number }) => {
       const response = await api.delete<{ deleted: boolean; id: number }>(
         `/dashboard/campaigns/${campaignId}`
-      );
+      )
       if (response.deleted !== true) {
-        throw new Error('Delete request returned without deleted: true');
+        throw new Error('Delete request returned without deleted: true')
       }
-      return response;
+      return response
     },
     onSuccess: (_data, { campaignId }) => {
-      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
-      queryClient.removeQueries({ queryKey: ['campaign', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.removeQueries({ queryKey: ['campaign', campaignId] })
     },
-  });
+  })
 }

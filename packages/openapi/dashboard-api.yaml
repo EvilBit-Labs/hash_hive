@@ -45,7 +45,7 @@ tags:
 paths:
   /campaigns:
     parameters:
-      - $ref: "#/components/parameters/XProjectIdHeader"
+      - $ref: '#/components/parameters/XProjectIdHeader'
     post:
       operationId: createCampaign
       summary: Create a new campaign (optionally with inline attacks)
@@ -63,9 +63,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateCampaignRequest"
+              $ref: '#/components/schemas/CreateCampaignRequest'
       responses:
-        "201":
+        '201':
           description: Campaign created
           content:
             application/json:
@@ -74,33 +74,33 @@ paths:
                 required: [campaign, attacks]
                 properties:
                   campaign:
-                    $ref: "#/components/schemas/Campaign"
+                    $ref: '#/components/schemas/Campaign'
                   attacks:
                     type: array
                     items:
-                      $ref: "#/components/schemas/AttackSummary"
+                      $ref: '#/components/schemas/AttackSummary'
                     description: |
                       Always present. Empty when the request omitted
                       `attacks[]`; otherwise contains the inserted
                       attacks with real IDs and translated dependencies.
-        "400":
+        '400':
           description: Body failed validation, or proposed inline-attack DAG contains a cycle / dangling dependency.
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: "#/components/schemas/ValidationError"
-                  - $ref: "#/components/schemas/DagInvalidError"
-        "409":
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/DagInvalidError'
+        '409':
           description: Cross-project resource reference rejected by the draft-write resource validator.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ResourceMissingError"
+                $ref: '#/components/schemas/ResourceMissingError'
 
   /campaigns/{id}:
     parameters:
-      - $ref: "#/components/parameters/XProjectIdHeader"
+      - $ref: '#/components/parameters/XProjectIdHeader'
       - name: id
         in: path
         required: true
@@ -118,16 +118,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PatchCampaignRequest"
+              $ref: '#/components/schemas/PatchCampaignRequest'
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
-          $ref: "#/components/responses/NotDraft"
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/NotDraft'
     put:
       operationId: updateCampaignReplace
       summary: Full-replace a draft campaign
@@ -142,27 +142,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PutCampaignRequest"
+              $ref: '#/components/schemas/PutCampaignRequest'
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
-          $ref: "#/components/responses/NotDraft"
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/NotDraft'
     delete:
       operationId: deleteCampaign
       summary: Delete a draft campaign
       tags: [Campaigns]
       responses:
-        "200":
+        '200':
           description: Campaign deleted
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
-          $ref: "#/components/responses/NotDraft"
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/NotDraft'
 
   /campaigns/{id}/start:
     post:
@@ -176,27 +176,27 @@ paths:
         `campaign_status` event.
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Resource missing or stale state.
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: "#/components/schemas/ResourceMissingError"
-                  - $ref: "#/components/schemas/StaleStateError"
-        "500":
-          $ref: "#/components/responses/TaskGenerationFailed"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
+                  - $ref: '#/components/schemas/ResourceMissingError'
+                  - $ref: '#/components/schemas/StaleStateError'
+        '500':
+          $ref: '#/components/responses/TaskGenerationFailed'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /campaigns/{id}/pause:
     post:
@@ -204,21 +204,21 @@ paths:
       summary: Transition a running campaign to `paused`
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Stale state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StaleStateError"
+                $ref: '#/components/schemas/StaleStateError'
 
   /campaigns/{id}/resume:
     post:
@@ -226,23 +226,23 @@ paths:
       summary: Transition a paused campaign back to `running`
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Resource missing or stale state.
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: "#/components/schemas/ResourceMissingError"
-                  - $ref: "#/components/schemas/StaleStateError"
+                  - $ref: '#/components/schemas/ResourceMissingError'
+                  - $ref: '#/components/schemas/StaleStateError'
 
   /campaigns/{id}/stop:
     post:
@@ -254,21 +254,21 @@ paths:
         campaign remains restartable.
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Stale state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StaleStateError"
+                $ref: '#/components/schemas/StaleStateError'
 
   /campaigns/{id}/cancel:
     post:
@@ -276,15 +276,15 @@ paths:
       summary: Transition a campaign to `cancelled` (terminal)
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
 
   /campaigns/{id}/lifecycle:
     post:
@@ -296,7 +296,7 @@ paths:
         Preserved for clients that prefer the enum-style request.
       tags: [Campaigns]
       parameters:
-        - $ref: "#/components/parameters/XProjectIdHeader"
+        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       requestBody:
         required: true
@@ -310,24 +310,24 @@ paths:
                   type: string
                   enum: [start, pause, resume, stop, cancel]
       responses:
-        "200":
-          $ref: "#/components/responses/CampaignWrapper"
-        "400":
-          $ref: "#/components/responses/InvalidTransition"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+        '200':
+          $ref: '#/components/responses/CampaignWrapper'
+        '400':
+          $ref: '#/components/responses/InvalidTransition'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Resource missing or stale state.
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: "#/components/schemas/ResourceMissingError"
-                  - $ref: "#/components/schemas/StaleStateError"
+                  - $ref: '#/components/schemas/ResourceMissingError'
+                  - $ref: '#/components/schemas/StaleStateError'
 
   /campaigns/{id}/attacks:
     parameters:
-      - $ref: "#/components/parameters/XProjectIdHeader"
+      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer } }
     post:
       operationId: addAttack
@@ -343,9 +343,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateAttackRequest"
+              $ref: '#/components/schemas/CreateAttackRequest'
       responses:
-        "201":
+        '201':
           description: Attack created
           content:
             application/json:
@@ -353,23 +353,23 @@ paths:
                 type: object
                 required: [attack]
                 properties:
-                  attack: { $ref: "#/components/schemas/AttackSummary" }
-        "400":
+                  attack: { $ref: '#/components/schemas/AttackSummary' }
+        '400':
           description: Validation error or DAG cycle.
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: "#/components/schemas/ValidationError"
-                  - $ref: "#/components/schemas/DagInvalidError"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "409":
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/DagInvalidError'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
           description: Cross-project resource reference.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ResourceMissingError"
+                $ref: '#/components/schemas/ResourceMissingError'
 
 components:
   securitySchemes:
@@ -406,7 +406,7 @@ components:
           type: string
           enum: [draft, running, paused, completed, cancelled]
         priority: { type: integer, minimum: 1, maximum: 10 }
-        progress: { $ref: "#/components/schemas/CampaignProgress" }
+        progress: { $ref: '#/components/schemas/CampaignProgress' }
         startedAt: { type: string, format: date-time, nullable: true }
         completedAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
@@ -486,7 +486,7 @@ components:
         priority: { type: integer, minimum: 1, maximum: 10 }
         attacks:
           type: array
-          items: { $ref: "#/components/schemas/InlineAttack" }
+          items: { $ref: '#/components/schemas/InlineAttack' }
 
     PatchCampaignRequest:
       type: object
@@ -537,7 +537,7 @@ components:
 
     ValidationError:
       allOf:
-        - $ref: "#/components/schemas/ErrorEnvelope"
+        - $ref: '#/components/schemas/ErrorEnvelope'
         - type: object
           properties:
             error:
@@ -546,7 +546,7 @@ components:
 
     DagInvalidError:
       allOf:
-        - $ref: "#/components/schemas/ErrorEnvelope"
+        - $ref: '#/components/schemas/ErrorEnvelope'
         - type: object
           properties:
             error:
@@ -555,7 +555,7 @@ components:
 
     ResourceMissingError:
       allOf:
-        - $ref: "#/components/schemas/ErrorEnvelope"
+        - $ref: '#/components/schemas/ErrorEnvelope'
         - type: object
           properties:
             error:
@@ -564,7 +564,7 @@ components:
 
     StaleStateError:
       allOf:
-        - $ref: "#/components/schemas/ErrorEnvelope"
+        - $ref: '#/components/schemas/ErrorEnvelope'
         - type: object
           properties:
             error:
@@ -580,21 +580,21 @@ components:
             type: object
             required: [campaign]
             properties:
-              campaign: { $ref: "#/components/schemas/Campaign" }
+              campaign: { $ref: '#/components/schemas/Campaign' }
 
     ValidationError:
       description: Request body or path parameter failed validation.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ValidationError"
+            $ref: '#/components/schemas/ValidationError'
 
     ResourceNotFound:
       description: Campaign / attack not found or not visible in this project.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ErrorEnvelope"
+            $ref: '#/components/schemas/ErrorEnvelope'
 
     NotDraft:
       description: Operation only permitted on `draft` campaigns.
@@ -602,7 +602,7 @@ components:
         application/json:
           schema:
             allOf:
-              - $ref: "#/components/schemas/ErrorEnvelope"
+              - $ref: '#/components/schemas/ErrorEnvelope'
               - type: object
                 properties:
                   error:
@@ -618,7 +618,7 @@ components:
         application/json:
           schema:
             allOf:
-              - $ref: "#/components/schemas/ErrorEnvelope"
+              - $ref: '#/components/schemas/ErrorEnvelope'
               - type: object
                 properties:
                   error:
@@ -634,7 +634,7 @@ components:
         application/json:
           schema:
             allOf:
-              - $ref: "#/components/schemas/ErrorEnvelope"
+              - $ref: '#/components/schemas/ErrorEnvelope'
               - type: object
                 properties:
                   error:
@@ -647,7 +647,7 @@ components:
         application/json:
           schema:
             allOf:
-              - $ref: "#/components/schemas/ErrorEnvelope"
+              - $ref: '#/components/schemas/ErrorEnvelope'
               - type: object
                 properties:
                   error:

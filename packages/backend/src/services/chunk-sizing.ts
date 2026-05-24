@@ -18,29 +18,29 @@
 
 /** Wall-time target per chunk. Roughly amortizes claim overhead while keeping
  *  the offline-loss window short. Fixed for now; tuning is a future issue. */
-export const TARGET_CHUNK_SECONDS = 60;
+export const TARGET_CHUNK_SECONDS = 60
 
 /** Minimum chunk size - below this, claim overhead dominates work. */
-export const MIN_CHUNK_SIZE = '1000';
+export const MIN_CHUNK_SIZE = '1000'
 
 /** Maximum chunk size - above this, an offline agent loses too much progress. */
-export const MAX_CHUNK_SIZE = '1000000000';
+export const MAX_CHUNK_SIZE = '1000000000'
 
 /** Fallback chunk size when no fleet data is available - matches the legacy
  *  `DEFAULT_CHUNK_SIZE = 10_000_000` so a fresh fleet doesn't regress. */
-export const FALLBACK_CHUNK_SIZE = '10000000';
+export const FALLBACK_CHUNK_SIZE = '10000000'
 
 interface Benchmark {
-  readonly speedHs: number;
+  readonly speedHs: number
 }
 
 export interface PickChunkSizeInput {
   /** Total attack keyspace, bigint-decimal string. */
-  totalKeyspace: string;
+  totalKeyspace: string
   /** Fleet benchmarks for the attack's hashcat mode. */
-  benchmarks: ReadonlyArray<Benchmark>;
+  benchmarks: ReadonlyArray<Benchmark>
   /** Override wall-time target (testing knob). */
-  targetSeconds?: number;
+  targetSeconds?: number
 }
 
 /**
@@ -49,16 +49,16 @@ export interface PickChunkSizeInput {
  * averages the two middle values.
  */
 function medianSpeed(benchmarks: ReadonlyArray<Benchmark>): number {
-  const sorted = [...benchmarks].map((b) => b.speedHs).sort((a, b) => a - b);
-  const n = sorted.length;
-  if (n === 0) throw new Error('medianSpeed called with empty benchmarks');
-  const mid = Math.floor(n / 2);
+  const sorted = [...benchmarks].map((b) => b.speedHs).sort((a, b) => a - b)
+  const n = sorted.length
+  if (n === 0) throw new Error('medianSpeed called with empty benchmarks')
+  const mid = Math.floor(n / 2)
   if (n % 2 === 1) {
-    return sorted[mid] as number;
+    return sorted[mid] as number
   }
-  const left = sorted[mid - 1] as number;
-  const right = sorted[mid] as number;
-  return (left + right) / 2;
+  const left = sorted[mid - 1] as number
+  const right = sorted[mid] as number
+  return (left + right) / 2
 }
 
 /**
@@ -69,27 +69,27 @@ function medianSpeed(benchmarks: ReadonlyArray<Benchmark>): number {
  *     in which case the total wins (the whole keyspace fits in one chunk).
  */
 function clampChunkSize(candidate: bigint, totalOrRemaining: bigint): bigint {
-  const max = BigInt(MAX_CHUNK_SIZE);
-  const min = BigInt(MIN_CHUNK_SIZE);
+  const max = BigInt(MAX_CHUNK_SIZE)
+  const min = BigInt(MIN_CHUNK_SIZE)
 
-  let result = candidate;
-  if (result > max) result = max;
-  if (result < min) result = min;
+  let result = candidate
+  if (result > max) result = max
+  if (result < min) result = min
   // If the total is below MIN, the whole keyspace fits in one chunk.
-  if (totalOrRemaining < min) return totalOrRemaining;
+  if (totalOrRemaining < min) return totalOrRemaining
   // Never exceed what's actually available.
-  if (result > totalOrRemaining) return totalOrRemaining;
-  return result;
+  if (result > totalOrRemaining) return totalOrRemaining
+  return result
 }
 
 export function pickChunkSize(input: PickChunkSizeInput): string {
   if (input.benchmarks.length === 0) {
-    return FALLBACK_CHUNK_SIZE;
+    return FALLBACK_CHUNK_SIZE
   }
-  const target = input.targetSeconds ?? TARGET_CHUNK_SECONDS;
-  const median = medianSpeed(input.benchmarks);
+  const target = input.targetSeconds ?? TARGET_CHUNK_SECONDS
+  const median = medianSpeed(input.benchmarks)
   // BigInt arithmetic; median may be fractional (even-length list) - round
   // to an integer before converting, since speed * time is integer keyspace.
-  const candidate = BigInt(Math.floor(median * target));
-  return clampChunkSize(candidate, BigInt(input.totalKeyspace)).toString();
+  const candidate = BigInt(Math.floor(median * target))
+  return clampChunkSize(candidate, BigInt(input.totalKeyspace)).toString()
 }

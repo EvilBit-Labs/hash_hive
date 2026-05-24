@@ -1,15 +1,15 @@
 export type AppEnv = {
   Variables: {
-    requestId: string;
+    requestId: string
     currentUser: {
-      userId: number;
-      email: string;
-      projectId: number | null;
-    };
+      userId: number
+      email: string
+      projectId: number | null
+    }
     agent: {
-      agentId: number;
-      projectId: number;
-      capabilities: Record<string, unknown>;
-    };
-  };
-};
+      agentId: number
+      projectId: number
+      capabilities: Record<string, unknown>
+    }
+  }
+}

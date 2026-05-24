@@ -13,7 +13,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - **`exactOptionalPropertyTypes`**: Use `...(val ? { key: val } : {})` spread, never `key: val ?? undefined`
 - **`noUncheckedIndexedAccess`**: All `arr[i]` returns `T | undefined` — guard with null check before use
 - **`noPropertyAccessFromIndexSignature`**: Use `obj['key']` bracket notation for index signatures
-- **Biome `useLiteralKeys: "off"`**: MUST stay off — conflicts with `noPropertyAccessFromIndexSignature`
+- **Bracket access for index signatures**: `obj['key']` is required under `noPropertyAccessFromIndexSignature` — do not auto-rewrite to `obj.key`; oxlint does not flag the bracket form
 - **`z.preprocess` + React Hook Form**: `z.preprocess` widens input type to `unknown`, breaking `zodResolver` under strict mode. Define the form type as an explicit interface (not `z.infer`) and cast: `zodResolver(schema) as unknown as Resolver<FormType>`
 
 ## Hono
@@ -93,7 +93,7 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 
 - Backend contract tests validate auth (401), validation (400), and camelCase response shapes (200) without a running DB
 - Test fixtures: `packages/backend/tests/fixtures.ts` — factory functions + token helpers
-- Biome overrides: `**/scripts/**` disables `noConsole` and `noExplicitAny` for CLI tools
+- oxlint overrides (`.oxlintrc.json`): `tests/**` and `**/tests/**` relax `no-shadow`, `no-await-in-loop`, and several typescript-* rules; `scripts/**` and `packages/*/scripts/**` relax `no-await-in-loop`; `packages/frontend/e2e/**` relaxes `unicorn/consistent-function-scoping`
 
 ## Frontend Testing
 

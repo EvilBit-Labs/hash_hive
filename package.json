@@ -7,24 +7,24 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev",
     "build": "turbo run build",
-    "lint": "turbo run lint",
+    "dev": "turbo run dev",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "type-check": "turbo run type-check",
+    "lint": "turbo run lint",
     "test": "turbo run test",
-    "test:e2e": "turbo run test:e2e"
+    "test:e2e": "turbo run test:e2e",
+    "type-check": "turbo run type-check"
   },
   "devDependencies": {
     "turbo": "^2.9.14",
     "typescript": "^6.0.3"
   },
+  "overrides": {
+    "ioredis": "5.10.1"
+  },
   "engines": {
     "bun": ">=1.2.0"
   },
-  "packageManager": "bun@1.2.4",
-  "overrides": {
-    "ioredis": "5.10.1"
-  }
+  "packageManager": "bun@1.2.4"
 }

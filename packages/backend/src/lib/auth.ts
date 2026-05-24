@@ -1,8 +1,9 @@
-import * as schema from '@hashhive/shared';
-import { betterAuth } from 'better-auth';
-import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { env } from '../config/env.js';
-import { db } from '../db/index.js';
+import * as schema from '@hashhive/shared'
+import { betterAuth } from 'better-auth'
+import { drizzleAdapter } from 'better-auth/adapters/drizzle'
+
+import { env } from '../config/env.js'
+import { db } from '../db/index.js'
 
 export const auth = betterAuth({
   basePath: '/api/auth',
@@ -52,8 +53,8 @@ export const auth = betterAuth({
   advanced: {
     database: {
       generateId: ({ model }) => {
-        if (model === 'user') return false; // Let PostgreSQL serial auto-generate
-        return crypto.randomUUID();
+        if (model === 'user') return false // Let PostgreSQL serial auto-generate
+        return crypto.randomUUID()
       },
     },
     cookiePrefix: 'hh',
@@ -62,4 +63,4 @@ export const auth = betterAuth({
   // In production (air-gapped Docker Compose), frontend and backend are same-origin
   // behind a reverse proxy, so no cross-origin allowance is needed. In dev, allow localhost.
   trustedOrigins: env.NODE_ENV === 'production' ? [] : ['http://localhost:3000'],
-});
+})

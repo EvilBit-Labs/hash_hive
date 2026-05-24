@@ -1,24 +1,26 @@
-import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
-import { z } from 'zod';
-import { requireSession } from '../../middleware/auth.js';
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js';
+import { zValidator } from '@hono/zod-validator'
+import { Hono } from 'hono'
+import { z } from 'zod'
+
+import type { AppEnv } from '../../types.js'
+
+import { requireSession } from '../../middleware/auth.js'
+import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
 import {
   getAgentById,
   getAgentErrors,
   getBenchmarksForAgent,
   listAgents,
   updateAgent,
-} from '../../services/agents.js';
-import { listTasksByAgent } from '../../services/tasks.js';
-import type { AppEnv } from '../../types.js';
+} from '../../services/agents.js'
+import { listTasksByAgent } from '../../services/tasks.js'
 
-const dashboardAgentRoutes = new Hono<AppEnv>();
+const dashboardAgentRoutes = new Hono<AppEnv>()
 
-dashboardAgentRoutes.use('*', requireSession);
+dashboardAgentRoutes.use('*', requireSession)
 
-const AGENT_LIST_MAX_LIMIT = 200;
-const AGENT_LIST_DEFAULT_LIMIT = 50;
+const AGENT_LIST_MAX_LIMIT = 200
+const AGENT_LIST_DEFAULT_LIMIT = 50
 
 // Coerce + clamp pagination at the schema boundary so handlers stay thin.
 // Permissive: invalid values fall back to defaults rather than 400 — matches
@@ -34,21 +36,21 @@ const listAgentsQuerySchema = z.object({
     .catch(AGENT_LIST_DEFAULT_LIMIT)
     .default(AGENT_LIST_DEFAULT_LIMIT),
   offset: z.coerce.number().int().min(0).catch(0).default(0),
-});
+})
 
 const agentIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
-});
+})
 
 const errorsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
-});
+})
 
 const validationErrorEnvelope = {
   error: { code: 'VALIDATION_ERROR', message: 'Invalid agent ID' },
-};
-const notFoundEnvelope = { error: { code: 'RESOURCE_NOT_FOUND', message: 'Agent not found' } };
+}
+const notFoundEnvelope = { error: { code: 'RESOURCE_NOT_FOUND', message: 'Agent not found' } }
 
 // GET /agents — list agents with optional filtering
 dashboardAgentRoutes.get(
@@ -56,12 +58,12 @@ dashboardAgentRoutes.get(
   requireProjectAccess(),
   zValidator('query', listAgentsQuerySchema),
   async (c) => {
-    const { projectId } = c.get('currentUser');
-    const { status, limit, offset } = c.req.valid('query');
-    const result = await listAgents({ projectId: projectId ?? undefined, status, limit, offset });
-    return c.json(result);
+    const { projectId } = c.get('currentUser')
+    const { status, limit, offset } = c.req.valid('query')
+    const result = await listAgents({ projectId: projectId ?? undefined, status, limit, offset })
+    return c.json(result)
   }
-);
+)
 
 // GET /agents/:id -- get agent details
 dashboardAgentRoutes.get(
@@ -71,21 +73,21 @@ dashboardAgentRoutes.get(
     result.success ? undefined : c.json(validationErrorEnvelope, 400)
   ),
   async (c) => {
-    const { id: agentId } = c.req.valid('param');
-    const { projectId } = c.get('currentUser');
-    const agent = await getAgentById(agentId);
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('currentUser')
+    const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404);
+      return c.json(notFoundEnvelope, 404)
     }
-    return c.json({ agent });
+    return c.json({ agent })
   }
-);
+)
 
 // PATCH /agents/:id — update agent
 const updateAgentSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   status: z.enum(['online', 'offline', 'busy', 'error']).optional(),
-});
+})
 
 dashboardAgentRoutes.patch(
   '/:id',
@@ -95,15 +97,15 @@ dashboardAgentRoutes.patch(
   ),
   zValidator('json', updateAgentSchema),
   async (c) => {
-    const { id: agentId } = c.req.valid('param');
-    const data = c.req.valid('json');
-    const agent = await updateAgent(agentId, data);
+    const { id: agentId } = c.req.valid('param')
+    const data = c.req.valid('json')
+    const agent = await updateAgent(agentId, data)
     if (!agent) {
-      return c.json(notFoundEnvelope, 404);
+      return c.json(notFoundEnvelope, 404)
     }
-    return c.json({ agent });
+    return c.json({ agent })
   }
-);
+)
 
 // GET /agents/:id/errors -- get agent errors
 dashboardAgentRoutes.get(
@@ -114,17 +116,17 @@ dashboardAgentRoutes.get(
   ),
   zValidator('query', errorsQuerySchema),
   async (c) => {
-    const { id: agentId } = c.req.valid('param');
-    const { projectId } = c.get('currentUser');
-    const agent = await getAgentById(agentId);
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('currentUser')
+    const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404);
+      return c.json(notFoundEnvelope, 404)
     }
-    const { limit, offset } = c.req.valid('query');
-    const errors = await getAgentErrors(agentId, { limit, offset });
-    return c.json({ errors });
+    const { limit, offset } = c.req.valid('query')
+    const errors = await getAgentErrors(agentId, { limit, offset })
+    return c.json({ errors })
   }
-);
+)
 
 // GET /agents/:id/tasks -- list active tasks assigned to the agent
 dashboardAgentRoutes.get(
@@ -134,16 +136,16 @@ dashboardAgentRoutes.get(
     result.success ? undefined : c.json(validationErrorEnvelope, 400)
   ),
   async (c) => {
-    const { id: agentId } = c.req.valid('param');
-    const { projectId } = c.get('currentUser');
-    const agent = await getAgentById(agentId);
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('currentUser')
+    const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404);
+      return c.json(notFoundEnvelope, 404)
     }
-    const tasks = await listTasksByAgent(agentId);
-    return c.json({ tasks });
+    const tasks = await listTasksByAgent(agentId)
+    return c.json({ tasks })
   }
-);
+)
 
 // GET /agents/:id/benchmarks -- get agent benchmarks
 dashboardAgentRoutes.get(
@@ -153,15 +155,15 @@ dashboardAgentRoutes.get(
     result.success ? undefined : c.json(validationErrorEnvelope, 400)
   ),
   async (c) => {
-    const { id: agentId } = c.req.valid('param');
-    const { projectId } = c.get('currentUser');
-    const agent = await getAgentById(agentId);
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('currentUser')
+    const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404);
+      return c.json(notFoundEnvelope, 404)
     }
-    const benchmarks = await getBenchmarksForAgent(agentId);
-    return c.json({ benchmarks });
+    const benchmarks = await getBenchmarksForAgent(agentId)
+    return c.json({ benchmarks })
   }
-);
+)
 
-export { dashboardAgentRoutes };
+export { dashboardAgentRoutes }

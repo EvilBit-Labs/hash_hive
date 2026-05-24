@@ -1,12 +1,13 @@
-import { createContext, type ReactNode, useContext } from 'react';
-import { useEvents } from '../../hooks/use-events';
+import { createContext, type ReactNode, useContext } from 'react'
+
+import { useEvents } from '../../hooks/use-events'
 
 interface EventsContextValue {
-  connected: boolean;
-  polling: boolean;
+  connected: boolean
+  polling: boolean
 }
 
-const EventsContext = createContext<EventsContextValue | null>(null);
+const EventsContext = createContext<EventsContextValue | null>(null)
 
 /**
  * App-level WebSocket-events provider. Mounting this once at the layout
@@ -22,16 +23,16 @@ const EventsContext = createContext<EventsContextValue | null>(null);
  * provider (rare; today only used inside the provider itself).
  */
 export function EventsProvider({ children }: { children: ReactNode }) {
-  const value = useEvents();
-  return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>;
+  const value = useEvents()
+  return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>
 }
 
 export function useEventsConnection(): EventsContextValue {
-  const ctx = useContext(EventsContext);
+  const ctx = useContext(EventsContext)
   if (!ctx) {
     // Outside the provider — return a stable disconnected snapshot so
     // tests and one-off renders don't have to mount the provider.
-    return { connected: false, polling: false };
+    return { connected: false, polling: false }
   }
-  return ctx;
+  return ctx
 }

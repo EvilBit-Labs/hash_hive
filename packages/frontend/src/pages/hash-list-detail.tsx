@@ -1,49 +1,50 @@
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router';
-import { StatusBadge } from '../components/features/status-badge';
-import { Button } from '../components/ui/button';
-import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { Input } from '../components/ui/input';
-import { PageHeader } from '../components/ui/page-header';
-import { Select } from '../components/ui/select';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
-import { TextLink } from '../components/ui/text-link';
-import { useHashListDetail, useHashListItems } from '../hooks/use-resources';
+import { useEffect, useState } from 'react'
+import { useParams } from 'react-router'
 
-type StatusFilter = 'all' | 'cracked' | 'uncracked';
+import { StatusBadge } from '../components/features/status-badge'
+import { Button } from '../components/ui/button'
+import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { Input } from '../components/ui/input'
+import { PageHeader } from '../components/ui/page-header'
+import { Select } from '../components/ui/select'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
+import { TextLink } from '../components/ui/text-link'
+import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 
-const PAGE_SIZE = 50;
+type StatusFilter = 'all' | 'cracked' | 'uncracked'
+
+const PAGE_SIZE = 50
 
 function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  const [debouncedValue, setDebouncedValue] = useState<T>(value)
 
   useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
+    const handler = setTimeout(() => setDebouncedValue(value), delay)
+    return () => clearTimeout(handler)
+  }, [value, delay])
 
-  return debouncedValue;
+  return debouncedValue
 }
 
 export function HashListDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const hashListId = Number(id);
+  const { id } = useParams<{ id: string }>()
+  const hashListId = Number(id)
 
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [search, setSearch] = useState('');
-  const debouncedSearch = useDebounce(search, 300);
-  const [offset, setOffset] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search, 300)
+  const [offset, setOffset] = useState(0)
 
-  const { data, isLoading, isError, error } = useHashListDetail(hashListId);
+  const { data, isLoading, isError, error } = useHashListDetail(hashListId)
   const { data: itemsData, isLoading: itemsLoading } = useHashListItems(hashListId, {
     status: statusFilter,
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
     limit: PAGE_SIZE,
     offset,
-  });
+  })
 
-  if (isLoading) return <EmptyState message="Loading hash list..." />;
+  if (isLoading) return <EmptyState message="Loading hash list..." />
 
   if (isError) {
     return (
@@ -55,7 +56,7 @@ export function HashListDetailPage() {
           message={error instanceof Error ? error.message : 'Failed to load hash list'}
         />
       </div>
-    );
+    )
   }
 
   if (!data?.hashList) {
@@ -66,16 +67,16 @@ export function HashListDetailPage() {
         </TextLink>
         <EmptyState message="Hash list not found." />
       </div>
-    );
+    )
   }
 
-  const { hashList } = data;
-  const stats = hashList.statistics;
-  const percentage = stats.total > 0 ? (stats.cracked / stats.total) * 100 : 0;
-  const items = itemsData?.items ?? [];
-  const total = itemsData?.total ?? 0;
-  const hasNext = offset + PAGE_SIZE < total;
-  const hasPrev = offset > 0;
+  const { hashList } = data
+  const stats = hashList.statistics
+  const percentage = stats.total > 0 ? (stats.cracked / stats.total) * 100 : 0
+  const items = itemsData?.items ?? []
+  const total = itemsData?.total ?? 0
+  const hasNext = offset + PAGE_SIZE < total
+  const hasPrev = offset > 0
 
   return (
     <div className="space-y-6">
@@ -94,14 +95,14 @@ export function HashListDetailPage() {
         <StatCard label="Total" value={stats.total.toLocaleString()} />
         <StatCard label="Cracked" value={stats.cracked.toLocaleString()} className="text-success" />
         <StatCard label="Remaining" value={stats.remaining.toLocaleString()} />
-        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
+          <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
             Progress
           </p>
           <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{percentage.toFixed(1)}%</p>
-          <div className="mt-2 h-1.5 w-full rounded-full bg-surface-1">
+          <div className="bg-surface-1 mt-2 h-1.5 w-full rounded-full">
             <div
-              className="h-full rounded-full bg-primary transition-all"
+              className="bg-primary h-full rounded-full transition-all"
               style={{ width: `${Math.min(percentage, 100)}%` }}
             />
           </div>
@@ -115,8 +116,8 @@ export function HashListDetailPage() {
             aria-label="Filter by crack status"
             value={statusFilter}
             onChange={(e) => {
-              setStatusFilter(e.target.value as StatusFilter);
-              setOffset(0);
+              setStatusFilter(e.target.value as StatusFilter)
+              setOffset(0)
             }}
           >
             <option value="all">All</option>
@@ -129,8 +130,8 @@ export function HashListDetailPage() {
             className="max-w-xs font-mono text-xs"
             value={search}
             onChange={(e) => {
-              setSearch(e.target.value);
-              setOffset(0);
+              setSearch(e.target.value)
+              setOffset(0)
             }}
           />
         </div>
@@ -158,11 +159,11 @@ export function HashListDetailPage() {
                     <Td>
                       <StatusBadge status={item.crackedAt ? 'cracked' : 'uncracked'} />
                     </Td>
-                    <Td className="font-mono text-xs text-success">{item.plaintext ?? '-'}</Td>
-                    <Td className="text-xs text-muted-foreground">
+                    <Td className="text-success font-mono text-xs">{item.plaintext ?? '-'}</Td>
+                    <Td className="text-muted-foreground text-xs">
                       {item.crackedAt ? new Date(item.crackedAt).toLocaleString() : '-'}
                     </Td>
-                    <Td className="font-mono text-xs text-muted-foreground">
+                    <Td className="text-muted-foreground font-mono text-xs">
                       {item.agentId ? `#${item.agentId}` : '-'}
                     </Td>
                   </TableRow>
@@ -171,7 +172,7 @@ export function HashListDetailPage() {
             </Table>
 
             {/* Pagination */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="text-muted-foreground flex items-center justify-between text-xs">
               <span>
                 Showing {offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of{' '}
                 {total.toLocaleString()}
@@ -199,7 +200,7 @@ export function HashListDetailPage() {
         )}
       </div>
     </div>
-  );
+  )
 }
 
 function StatCard({
@@ -207,14 +208,14 @@ function StatCard({
   value,
   className,
 }: {
-  label: string;
-  value: string;
-  className?: string;
+  label: string
+  value: string
+  className?: string
 }) {
   return (
-    <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
-      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+    <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
+      <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">{label}</p>
       <p className={`mt-2 font-mono text-2xl font-bold tabular-nums ${className ?? ''}`}>{value}</p>
     </div>
-  );
+  )
 }

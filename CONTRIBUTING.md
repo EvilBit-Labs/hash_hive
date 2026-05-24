@@ -112,9 +112,9 @@ docker compose up -d         # Infrastructure
 ### Code Quality
 
 ```bash
-just lint                # Lint all code (Biome)
-just format              # Format code (Biome)
-just format-check        # Check formatting
+just lint                # Lint all code (oxlint, type-aware)
+just format              # Format code (oxfmt + taplo)
+just format-check        # Check formatting (oxfmt --check + taplo --check)
 just type-check          # TypeScript type check
 ```
 
@@ -153,7 +153,7 @@ just ci-check            # lint + format-check + type-check + build + test
 
 ### Code Style
 
-- **Biome** for linting and formatting (not ESLint, not Prettier)
+- **oxlint + oxfmt** for linting and formatting (not ESLint, not Prettier, not Biome); **taplo** for TOML
 - 2 spaces for indentation
 - Single quotes for strings
 - Trailing commas
@@ -178,7 +178,7 @@ just ci-check            # lint + format-check + type-check + build + test
 
 The project uses [pre-commit](https://pre-commit.com) for automated quality checks:
 
-- Biome format and lint checks
+- oxfmt + taplo format checks and oxlint lint checks
 - TypeScript type checking
 - Trailing whitespace and file hygiene
 

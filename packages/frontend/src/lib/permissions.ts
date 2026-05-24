@@ -10,9 +10,9 @@ export const Permission = {
   TEMPLATE_VIEW: 'template:view',
   TEMPLATE_MANAGE: 'template:manage',
   CRACKER_MANAGE: 'cracker:manage',
-} as const;
+} as const
 
-export type PermissionKey = (typeof Permission)[keyof typeof Permission];
+export type PermissionKey = (typeof Permission)[keyof typeof Permission]
 
 const ROLE_PERMISSIONS: Record<string, ReadonlySet<PermissionKey>> = {
   admin: new Set(Object.values(Permission)),
@@ -34,17 +34,17 @@ const ROLE_PERMISSIONS: Record<string, ReadonlySet<PermissionKey>> = {
     Permission.AGENT_VIEW,
     Permission.TEMPLATE_VIEW,
   ]),
-};
+}
 
 export function resolvePermissions(roles: readonly string[]): ReadonlySet<PermissionKey> {
-  const merged = new Set<PermissionKey>();
+  const merged = new Set<PermissionKey>()
   for (const role of roles) {
-    const perms = ROLE_PERMISSIONS[role];
+    const perms = ROLE_PERMISSIONS[role]
     if (perms) {
       for (const p of perms) {
-        merged.add(p);
+        merged.add(p)
       }
     }
   }
-  return merged;
+  return merged
 }

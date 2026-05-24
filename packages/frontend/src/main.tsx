@@ -1,52 +1,53 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { lazy, StrictMode, Suspense, useEffect } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Route, Routes } from 'react-router';
-import { ErrorBoundary } from './components/features/error-boundary';
-import { AppLayout } from './components/features/layout';
-import { ProtectedRoute } from './components/features/protected-route';
-import './index.css';
-import { authClient } from './lib/auth-client';
-import { useAuthStore } from './stores/auth';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { lazy, StrictMode, Suspense, useEffect } from 'react'
+import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Route, Routes } from 'react-router'
+
+import { ErrorBoundary } from './components/features/error-boundary'
+import { AppLayout } from './components/features/layout'
+import { ProtectedRoute } from './components/features/protected-route'
+import './index.css'
+import { authClient } from './lib/auth-client'
+import { useAuthStore } from './stores/auth'
 
 // Route-level code splitting - each page is loaded on demand
 const DashboardPage = lazy(() =>
   import('./pages/dashboard').then((m) => ({ default: m.DashboardPage }))
-);
-const LoginPage = lazy(() => import('./pages/login').then((m) => ({ default: m.LoginPage })));
+)
+const LoginPage = lazy(() => import('./pages/login').then((m) => ({ default: m.LoginPage })))
 const SelectProjectPage = lazy(() =>
   import('./pages/select-project').then((m) => ({ default: m.SelectProjectPage }))
-);
-const AgentsPage = lazy(() => import('./pages/agents').then((m) => ({ default: m.AgentsPage })));
+)
+const AgentsPage = lazy(() => import('./pages/agents').then((m) => ({ default: m.AgentsPage })))
 const AgentDetailPage = lazy(() =>
   import('./pages/agent-detail').then((m) => ({ default: m.AgentDetailPage }))
-);
+)
 const CampaignsPage = lazy(() =>
   import('./pages/campaigns').then((m) => ({ default: m.CampaignsPage }))
-);
+)
 const CampaignCreatePage = lazy(() =>
   import('./pages/campaign-create').then((m) => ({ default: m.CampaignCreatePage }))
-);
+)
 const CampaignDetailPage = lazy(() =>
   import('./pages/campaign-detail').then((m) => ({ default: m.CampaignDetailPage }))
-);
+)
 const AttackTemplatesPage = lazy(() =>
   import('./pages/attack-templates').then((m) => ({ default: m.AttackTemplatesPage }))
-);
+)
 const ResourcesPage = lazy(() =>
   import('./pages/resources').then((m) => ({ default: m.ResourcesPage }))
-);
+)
 const HashListDetailPage = lazy(() =>
   import('./pages/hash-list-detail').then((m) => ({ default: m.HashListDetailPage }))
-);
-const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default: m.ResultsPage })));
+)
+const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default: m.ResultsPage })))
 const CrackersPage = lazy(() =>
   import('./pages/crackers').then((m) => ({ default: m.CrackersPage }))
-);
-const AccountPage = lazy(() => import('./pages/account').then((m) => ({ default: m.AccountPage })));
+)
+const AccountPage = lazy(() => import('./pages/account').then((m) => ({ default: m.AccountPage })))
 const NotFoundPage = lazy(() =>
   import('./pages/not-found').then((m) => ({ default: m.NotFoundPage }))
-);
+)
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,18 +58,18 @@ const queryClient = new QueryClient({
       refetchOnReconnect: false,
     },
   },
-});
+})
 
 function App() {
-  const { data: session } = authClient.useSession();
-  const { fetchProjects, hasFetchedProjects } = useAuthStore();
+  const { data: session } = authClient.useSession()
+  const { fetchProjects, hasFetchedProjects } = useAuthStore()
 
   // Fetch project memberships when session is available
   useEffect(() => {
     if (session && !hasFetchedProjects) {
-      fetchProjects();
+      void fetchProjects()
     }
-  }, [session, hasFetchedProjects, fetchProjects]);
+  }, [session, hasFetchedProjects, fetchProjects])
 
   return (
     <ErrorBoundary>
@@ -102,14 +103,14 @@ function App() {
         </BrowserRouter>
       </QueryClientProvider>
     </ErrorBoundary>
-  );
+  )
 }
 
-const rootElement = document.getElementById('root');
-if (!rootElement) throw new Error('Root element not found');
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('Root element not found')
 
 createRoot(rootElement).render(
   <StrictMode>
     <App />
   </StrictMode>
-);
+)

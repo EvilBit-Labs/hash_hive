@@ -1,26 +1,25 @@
-import { useState } from 'react';
-import { Button, buttonVariants } from '../components/ui/button';
-import { EmptyState } from '../components/ui/empty-state';
-import { Input } from '../components/ui/input';
-import { PageHeader } from '../components/ui/page-header';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
-import { useResults, useResultsExportUrl } from '../hooks/use-results';
-import { useUiStore } from '../stores/ui';
+import { useState } from 'react'
+
+import { Button, buttonVariants } from '../components/ui/button'
+import { EmptyState } from '../components/ui/empty-state'
+import { Input } from '../components/ui/input'
+import { PageHeader } from '../components/ui/page-header'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
+import { useResults, useResultsExportUrl } from '../hooks/use-results'
+import { useUiStore } from '../stores/ui'
 
 export function ResultsPage() {
-  const { selectedProjectId } = useUiStore();
-  const [search, setSearch] = useState('');
-  const [offset, setOffset] = useState(0);
-  const limit = 50;
+  const { selectedProjectId } = useUiStore()
+  const [search, setSearch] = useState('')
+  const [offset, setOffset] = useState(0)
+  const limit = 50
 
   const { data, isLoading } = useResults({
     ...(search ? { search } : {}),
     limit,
     offset,
-  });
-  const exportUrl = useResultsExportUrl({
-    ...(search ? { search } : {}),
-  });
+  })
+  const exportUrl = useResultsExportUrl(search ? { search } : {})
 
   if (!selectedProjectId) {
     return (
@@ -28,12 +27,12 @@ export function ResultsPage() {
         <PageHeader>Cracked Results</PageHeader>
         <EmptyState message="Select a project to view results." />
       </div>
-    );
+    )
   }
 
-  const total = data?.total ?? 0;
-  const hasNext = offset + limit < total;
-  const hasPrev = offset > 0;
+  const total = data?.total ?? 0
+  const hasNext = offset + limit < total
+  const hasPrev = offset > 0
 
   return (
     <div className="space-y-6">
@@ -46,8 +45,8 @@ export function ResultsPage() {
             className="w-auto px-3 py-1.5 text-xs"
             value={search}
             onChange={(e) => {
-              setSearch(e.target.value);
-              setOffset(0);
+              setSearch(e.target.value)
+              setOffset(0)
             }}
           />
           {exportUrl && (
@@ -78,15 +77,15 @@ export function ResultsPage() {
               <TableBody>
                 {data.results.map((r) => (
                   <TableRow key={r.id}>
-                    <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
+                    <Td className="text-muted-foreground max-w-[200px] truncate font-mono text-xs">
                       {r.hashValue}
                     </Td>
-                    <Td className="font-mono text-xs font-medium text-success">
+                    <Td className="text-success font-mono text-xs font-medium">
                       {r.plaintext ?? '-'}
                     </Td>
-                    <Td className="text-xs text-muted-foreground">{r.campaignName}</Td>
-                    <Td className="text-xs text-muted-foreground">{r.hashListName}</Td>
-                    <Td className="text-xs text-muted-foreground">
+                    <Td className="text-muted-foreground text-xs">{r.campaignName}</Td>
+                    <Td className="text-muted-foreground text-xs">{r.hashListName}</Td>
+                    <Td className="text-muted-foreground text-xs">
                       {r.crackedAt ? new Date(r.crackedAt).toLocaleString() : '-'}
                     </Td>
                   </TableRow>
@@ -121,5 +120,5 @@ export function ResultsPage() {
         )}
       </div>
     </div>
-  );
+  )
 }

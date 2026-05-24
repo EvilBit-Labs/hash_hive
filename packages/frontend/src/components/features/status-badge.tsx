@@ -1,4 +1,4 @@
-import { cn } from '../../lib/utils';
+import { cn } from '../../lib/utils'
 
 const STATUS_STYLES: Record<string, string> = {
   online: 'bg-success/15 text-success border-success/20',
@@ -13,14 +13,14 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-destructive/15 text-destructive border-destructive/20',
   draft: 'bg-ctp-mauve/15 text-ctp-mauve border-ctp-mauve/20',
   benchmarked: 'bg-ctp-teal/15 text-ctp-teal border-ctp-teal/20',
-};
+}
 
 interface StatusBadgeProps {
-  status: string;
+  status: string
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {
-  const styles = STATUS_STYLES[status] ?? STATUS_STYLES['pending'];
+  const styles = STATUS_STYLES[status] ?? STATUS_STYLES['pending']
   return (
     <span
       className={cn(
@@ -38,5 +38,5 @@ export function StatusBadge({ status }: StatusBadgeProps) {
       />
       {status}
     </span>
-  );
+  )
 }

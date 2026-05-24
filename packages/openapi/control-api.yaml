@@ -55,14 +55,14 @@ paths:
       security:
         - BearerApiKey: []
       responses:
-        "200":
+        '200':
           description: System health snapshot
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemHealth"
-        "401":
-          $ref: "#/components/responses/AuthError"
+                $ref: '#/components/schemas/SystemHealth'
+        '401':
+          $ref: '#/components/responses/AuthError'
 
   /projects:
     get:
@@ -72,17 +72,17 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "200":
+        '200':
           description: Paginated projects
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PaginatedProjects"
-        "401":
-          $ref: "#/components/responses/AuthError"
+                $ref: '#/components/schemas/PaginatedProjects'
+        '401':
+          $ref: '#/components/responses/AuthError'
 
   /projects/{id}:
     get:
@@ -96,14 +96,14 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
+        - $ref: '#/components/parameters/IdPath'
       responses:
-        "200":
+        '200':
           description: Project record
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /users/me:
     get:
@@ -113,10 +113,10 @@ paths:
       security:
         - BearerApiKey: []
       responses:
-        "200":
+        '200':
           description: User record
-        "401":
-          $ref: "#/components/responses/AuthError"
+        '401':
+          $ref: '#/components/responses/AuthError'
 
   /users:
     get:
@@ -126,16 +126,16 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/ProjectIdHeader'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated users
-        "403":
-          $ref: "#/components/responses/Forbidden"
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /users/{id}:
     get:
@@ -145,17 +145,17 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: User record
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /hashlists:
     get:
@@ -165,16 +165,16 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/ProjectIdHeader'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated hash lists
-        "400":
-          $ref: "#/components/responses/ValidationError"
+        '400':
+          $ref: '#/components/responses/ValidationError'
 
   /hashlists/{id}:
     get:
@@ -184,15 +184,15 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Hash list record
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /hashlists/{id}/stats:
     get:
@@ -202,15 +202,15 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Stats payload
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /stats:
     get:
@@ -220,14 +220,14 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Stats payload
-        "400":
-          $ref: "#/components/responses/ValidationError"
+        '400':
+          $ref: '#/components/responses/ValidationError'
 
   /resources/{kind}:
     get:
@@ -243,13 +243,13 @@ paths:
           schema:
             type: string
             enum: [wordlists, rulelists, masklists]
-        - $ref: "#/components/parameters/ProjectIdHeader"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/ProjectIdHeader'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated resources
 
   /resources/{kind}/{id}:
@@ -266,15 +266,15 @@ paths:
           schema:
             type: string
             enum: [wordlists, rulelists, masklists]
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Resource record
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /campaigns:
     get:
@@ -284,18 +284,18 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/ProjectIdHeader'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
         - in: query
           name: status
           schema:
             type: string
             enum: [draft, running, paused, completed, cancelled]
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated campaigns
     post:
       operationId: createCampaign
@@ -304,7 +304,7 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/ProjectIdHeader'
       requestBody:
         required: true
         content:
@@ -322,12 +322,12 @@ paths:
                 priority:
                   type: integer
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "201":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '201':
           description: Created campaign
-        "400":
-          $ref: "#/components/responses/ValidationError"
+        '400':
+          $ref: '#/components/responses/ValidationError'
 
   /campaigns/{id}:
     get:
@@ -337,15 +337,15 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Campaign record
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
       operationId: updateCampaign
       summary: Update a campaign
@@ -353,8 +353,8 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       requestBody:
         required: true
         content:
@@ -369,12 +369,12 @@ paths:
                 priority:
                   type: integer
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Updated campaign
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /campaigns/{id}/transition:
     post:
@@ -384,8 +384,8 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       requestBody:
         required: true
         content:
@@ -398,16 +398,16 @@ paths:
                   type: string
                   enum: [draft, running, paused, completed, cancelled]
       responses:
-        "200":
+        '200':
           description: Updated campaign
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "500":
-          $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /attacks:
     get:
@@ -417,18 +417,18 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/ProjectIdHeader'
         - in: query
           name: campaignId
           required: true
           schema:
             type: integer
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated attacks for the named campaign
           content:
             application/json:
@@ -446,8 +446,8 @@ paths:
                     type: integer
                   limit:
                     type: integer
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       operationId: createAttack
       summary: Create an attack on a campaign
@@ -455,7 +455,7 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/ProjectIdHeader'
       requestBody:
         required: true
         content:
@@ -477,9 +477,9 @@ paths:
                 masklistId:
                   type: integer
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "201":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '201':
           description: Created attack
 
   /attacks/{id}:
@@ -490,12 +490,12 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Attack record
     patch:
       operationId: updateAttack
@@ -504,12 +504,12 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Updated attack
     delete:
       operationId: deleteAttack
@@ -518,12 +518,12 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "204":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '204':
           description: Deleted
 
   /agents:
@@ -534,23 +534,23 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/ProjectIdHeader'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
         - in: query
           name: status
           schema:
             type: string
             enum: [online, offline, busy, error, benchmarked]
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated agents
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PaginatedAgents"
+                $ref: '#/components/schemas/PaginatedAgents'
 
   /agents/{id}:
     get:
@@ -560,15 +560,15 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Agent record
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
       operationId: updateAgent
       summary: Update an agent (admin only)
@@ -576,15 +576,15 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Updated agent
-        "403":
-          $ref: "#/components/responses/Forbidden"
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /tasks:
     get:
@@ -594,18 +594,18 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/ProjectIdHeader'
         - in: query
           name: campaignId
           required: true
           schema:
             type: integer
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "401":
-          $ref: "#/components/responses/AuthError"
-        "200":
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '200':
           description: Paginated tasks
 
   /tasks/{id}:
@@ -616,13 +616,13 @@ paths:
       security:
         - BearerApiKey: []
       parameters:
-        - $ref: "#/components/parameters/IdPath"
-        - $ref: "#/components/parameters/ProjectIdHeader"
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/ProjectIdHeader'
       responses:
-        "200":
+        '200':
           description: Task record
-        "404":
-          $ref: "#/components/responses/NotFound"
+        '404':
+          $ref: '#/components/responses/NotFound'
 
 components:
   securitySchemes:
@@ -676,7 +676,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/AgentListItem"
+            $ref: '#/components/schemas/AgentListItem'
         total:
           type: integer
         offset:
@@ -694,16 +694,7 @@ components:
         identical across surfaces.
       type: object
       required:
-        [
-          id,
-          name,
-          status,
-          projectId,
-          createdAt,
-          errorCount24h,
-          worstSeverity24h,
-          currentTask,
-        ]
+        [id, name, status, projectId, createdAt, errorCount24h, worstSeverity24h, currentTask]
       properties:
         id:
           type: integer
@@ -715,15 +706,15 @@ components:
           # OpenAPI 3.1 — `nullable: true` is dropped from the vocabulary;
           # use JSON Schema type-array unions instead so generated clients
           # see the null possibility.
-          type: [string, "null"]
+          type: [string, 'null']
           format: date-time
         projectId:
           type: integer
         capabilities:
-          type: [object, "null"]
+          type: [object, 'null']
           additionalProperties: true
         hardwareProfile:
-          type: [object, "null"]
+          type: [object, 'null']
           additionalProperties: true
         createdAt:
           type: string
@@ -732,7 +723,7 @@ components:
           type: integer
           description: Count of warning+fatal severities in the last 24 hours.
         worstSeverity24h:
-          type: [string, "null"]
+          type: [string, 'null']
           enum: [warning, fatal, null]
           description: |
             Highest severity tier observed in the last 24 hours, mapped to the
@@ -744,7 +735,7 @@ components:
             agent has no `assigned` or `running` task — pending tasks are
             intentionally not surfaced here (they appear on the detail-page
             tasks endpoint).
-          type: [object, "null"]
+          type: [object, 'null']
           required: [id, campaignId, campaignName, attackId, attackMode, status]
           properties:
             id:
@@ -782,13 +773,13 @@ components:
           required: [database, redis, minio, queues]
           properties:
             database:
-              $ref: "#/components/schemas/ComponentHealth"
+              $ref: '#/components/schemas/ComponentHealth'
             redis:
-              $ref: "#/components/schemas/ComponentHealth"
+              $ref: '#/components/schemas/ComponentHealth'
             minio:
-              $ref: "#/components/schemas/ComponentHealth"
+              $ref: '#/components/schemas/ComponentHealth'
             queues:
-              $ref: "#/components/schemas/ComponentHealth"
+              $ref: '#/components/schemas/ComponentHealth'
 
     ComponentHealth:
       description: |
@@ -796,14 +787,14 @@ components:
         degraded and unhealthy components must include one. Mirrors the
         `ProbeResult` discriminated union in `services/health.ts`.
       oneOf:
-        - $ref: "#/components/schemas/HealthyComponent"
-        - $ref: "#/components/schemas/NonHealthyComponent"
+        - $ref: '#/components/schemas/HealthyComponent'
+        - $ref: '#/components/schemas/NonHealthyComponent'
       discriminator:
         propertyName: status
         mapping:
-          healthy: "#/components/schemas/HealthyComponent"
-          degraded: "#/components/schemas/NonHealthyComponent"
-          unhealthy: "#/components/schemas/NonHealthyComponent"
+          healthy: '#/components/schemas/HealthyComponent'
+          degraded: '#/components/schemas/NonHealthyComponent'
+          unhealthy: '#/components/schemas/NonHealthyComponent'
 
     HealthyComponent:
       type: object
@@ -895,40 +886,40 @@ components:
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     Forbidden:
       description: Caller lacks permission
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     NotFound:
       description: Target resource was not found or is not visible to the caller
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     ValidationError:
       description: Request body or query parameters failed validation
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     Conflict:
       description: Operation conflicts with current resource state
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     InternalError:
       description: Server-side failure that is not the caller's fault (e.g., downstream task generation failed)
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'
     ServiceUnavailable:
       description: Transient infrastructure issue (e.g., queue down); the operation is safe to retry
       content:
         application/problem+json:
           schema:
-            $ref: "#/components/schemas/Problem"
+            $ref: '#/components/schemas/Problem'

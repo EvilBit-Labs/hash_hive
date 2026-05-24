@@ -17,9 +17,6 @@
     "pantheon-ai/agents-md": {
       "version": "0.1.3"
     },
-    "tessl/npm-biomejs--biome": {
-      "version": "2.3.0"
-    },
     "tessl/npm-turbo": {
       "version": "2.5.0"
     },

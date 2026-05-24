@@ -1,43 +1,44 @@
-import { useState } from 'react';
-import { CrackerUploadModal } from '../components/features/cracker-upload-modal';
-import { PermissionGuard } from '../components/features/permission-guard';
-import { Button } from '../components/ui/button';
-import { ConfirmDialog } from '../components/ui/confirm-dialog';
-import { EmptyState } from '../components/ui/empty-state';
-import { ErrorBanner } from '../components/ui/error-banner';
-import { PageHeader } from '../components/ui/page-header';
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table';
+import { useState } from 'react'
+
+import { CrackerUploadModal } from '../components/features/cracker-upload-modal'
+import { PermissionGuard } from '../components/features/permission-guard'
+import { Button } from '../components/ui/button'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
+import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
+import { PageHeader } from '../components/ui/page-header'
+import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import {
   type CrackerBinary,
   useCrackerBinaries,
   useDeleteCrackerBinary,
   useUpdateCrackerBinary,
-} from '../hooks/use-crackers';
-import { Permission } from '../lib/permissions';
+} from '../hooks/use-crackers'
+import { Permission } from '../lib/permissions'
 
-const ENGINES = ['', 'hashcat', 'john'] as const;
-type EngineFilter = (typeof ENGINES)[number];
+const ENGINES = ['', 'hashcat', 'john'] as const
+type EngineFilter = (typeof ENGINES)[number]
 
 function formatFileSize(bytes: number | undefined): string {
-  if (!bytes || bytes <= 0) return '-';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let unit = 0;
+  if (!bytes || bytes <= 0) return '-'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
   while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
+    value /= 1024
+    unit++
   }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`
 }
 
 function formatDate(iso: string): string {
   // `new Date(...)` does not throw on invalid input — it returns a Date
   // whose internal time is NaN. The previous try/catch never triggered
   // and the UI showed "Invalid Date". Validate via getTime() instead.
-  if (!iso) return '-';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString();
+  if (!iso) return '-'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleDateString()
 }
 
 export function CrackersPage() {
@@ -53,44 +54,44 @@ export function CrackersPage() {
     >
       <CrackersAdminView />
     </PermissionGuard>
-  );
+  )
 }
 
 function CrackersAdminView() {
-  const [engineFilter, setEngineFilter] = useState<EngineFilter>('');
-  const [includeInactive, setIncludeInactive] = useState(false);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<CrackerBinary | null>(null);
+  const [engineFilter, setEngineFilter] = useState<EngineFilter>('')
+  const [includeInactive, setIncludeInactive] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<CrackerBinary | null>(null)
 
-  const queryArgs: Parameters<typeof useCrackerBinaries>[0] = { includeInactive };
+  const queryArgs: Parameters<typeof useCrackerBinaries>[0] = { includeInactive }
   if (engineFilter) {
-    queryArgs.engine = engineFilter;
+    queryArgs.engine = engineFilter
   }
-  const { data: binaries, isLoading, error: queryError, refetch } = useCrackerBinaries(queryArgs);
+  const { data: binaries, isLoading, error: queryError, refetch } = useCrackerBinaries(queryArgs)
 
-  const updateBinary = useUpdateCrackerBinary({ onError: setActionError });
-  const deleteBinary = useDeleteCrackerBinary({ onError: setActionError });
+  const updateBinary = useUpdateCrackerBinary({ onError: setActionError })
+  const deleteBinary = useDeleteCrackerBinary({ onError: setActionError })
 
   const handleToggleActive = (binary: CrackerBinary) => {
-    setActionError(null);
-    updateBinary.mutate({ id: binary.id, isActive: !binary.isActive });
-  };
+    setActionError(null)
+    updateBinary.mutate({ id: binary.id, isActive: !binary.isActive })
+  }
 
   const handleConfirmDelete = () => {
-    if (!pendingDelete) return;
-    setActionError(null);
+    if (!pendingDelete) return
+    setActionError(null)
     deleteBinary.mutate(pendingDelete.id, {
       onSettled: () => setPendingDelete(null),
-    });
-  };
+    })
+  }
 
   const queryErrorMessage =
     queryError instanceof Error
       ? queryError.message
       : queryError
         ? 'Failed to load cracker binaries'
-        : null;
+        : null
 
   return (
     <div className="space-y-4">
@@ -115,9 +116,10 @@ function CrackersAdminView() {
             </Button>
           ))}
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
           <input
             type="checkbox"
+            aria-label="Include inactive cracker binaries"
             checked={includeInactive}
             onChange={(e) => setIncludeInactive(e.target.checked)}
           />
@@ -126,7 +128,7 @@ function CrackersAdminView() {
       </div>
 
       {isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading...</p>
+        <p className="text-muted-foreground text-xs">Loading...</p>
       ) : !binaries || binaries.length === 0 ? (
         <EmptyState
           message="No cracker binaries registered yet."
@@ -147,7 +149,7 @@ function CrackersAdminView() {
           </TableHead>
           <TableBody>
             {binaries.map((binary) => {
-              const fileRef = binary.fileRef as { size?: number } | null;
+              const fileRef = binary.fileRef as { size?: number } | null
               return (
                 <TableRow key={binary.id}>
                   <Td>{binary.engine}</Td>
@@ -169,8 +171,8 @@ function CrackersAdminView() {
                       <Button
                         variant="destructive"
                         onClick={() => {
-                          setActionError(null);
-                          setPendingDelete(binary);
+                          setActionError(null)
+                          setPendingDelete(binary)
                         }}
                         disabled={deleteBinary.isPending}
                         className="text-xs"
@@ -180,7 +182,7 @@ function CrackersAdminView() {
                     </div>
                   </Td>
                 </TableRow>
-              );
+              )
             })}
           </TableBody>
         </Table>
@@ -190,8 +192,8 @@ function CrackersAdminView() {
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
         onSuccess={() => {
-          setUploadOpen(false);
-          refetch();
+          setUploadOpen(false)
+          void refetch()
         }}
       />
 
@@ -210,5 +212,5 @@ function CrackersAdminView() {
         onCancel={() => setPendingDelete(null)}
       />
     </div>
-  );
+  )
 }

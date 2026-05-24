@@ -4,18 +4,20 @@
  * problems on failure paths.
  */
 
-import { agents, campaigns, hashItems, tasks } from '@hashhive/shared';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
-import { Hono } from 'hono';
-import { db } from '../../db/index.js';
-import type { AppEnv } from '../../types.js';
-import { controlErrorResponse, requireProjectMembership } from './helpers.js';
+import { agents, campaigns, hashItems, tasks } from '@hashhive/shared'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
+import { Hono } from 'hono'
 
-export const controlStatsRoutes = new Hono<AppEnv>();
+import type { AppEnv } from '../../types.js'
+
+import { db } from '../../db/index.js'
+import { controlErrorResponse, requireProjectMembership } from './helpers.js'
+
+export const controlStatsRoutes = new Hono<AppEnv>()
 
 controlStatsRoutes.get('/', async (c) => {
   try {
-    const { projectId } = await requireProjectMembership(c);
+    const { projectId } = await requireProjectMembership(c)
 
     const [agentStats, campaignStats, taskStats, crackedStats] = await Promise.all([
       db
@@ -42,27 +44,27 @@ controlStatsRoutes.get('/', async (c) => {
           and(eq(hashItems.campaignId, campaigns.id), eq(campaigns.projectId, projectId))
         )
         .where(isNotNull(hashItems.crackedAt)),
-    ]);
+    ])
 
-    const agentCounts: Record<string, number> = {};
-    let agentTotal = 0;
+    const agentCounts: Record<string, number> = {}
+    let agentTotal = 0
     for (const row of agentStats) {
-      agentCounts[row.status] = Number(row.count);
-      agentTotal += Number(row.count);
+      agentCounts[row.status] = Number(row.count)
+      agentTotal += Number(row.count)
     }
 
-    const campaignCounts: Record<string, number> = {};
-    let campaignTotal = 0;
+    const campaignCounts: Record<string, number> = {}
+    let campaignTotal = 0
     for (const row of campaignStats) {
-      campaignCounts[row.status] = Number(row.count);
-      campaignTotal += Number(row.count);
+      campaignCounts[row.status] = Number(row.count)
+      campaignTotal += Number(row.count)
     }
 
-    const taskCounts: Record<string, number> = {};
-    let taskTotal = 0;
+    const taskCounts: Record<string, number> = {}
+    let taskTotal = 0
     for (const row of taskStats) {
-      taskCounts[row.status] = Number(row.count);
-      taskTotal += Number(row.count);
+      taskCounts[row.status] = Number(row.count)
+      taskTotal += Number(row.count)
     }
 
     return c.json({
@@ -89,8 +91,8 @@ controlStatsRoutes.get('/', async (c) => {
       cracked: {
         total: Number(crackedStats[0]?.count ?? 0),
       },
-    });
+    })
   } catch (err) {
-    return controlErrorResponse(c, err);
+    return controlErrorResponse(c, err)
   }
-});
+})

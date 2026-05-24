@@ -1,13 +1,15 @@
-import { agents } from '@hashhive/shared';
-import { eq } from 'drizzle-orm';
-import { deleteCookie, getCookie } from 'hono/cookie';
-import { createMiddleware } from 'hono/factory';
-import { HTTPException } from 'hono/http-exception';
-import { logger } from '../config/logger.js';
-import { db } from '../db/index.js';
-import { auth } from '../lib/auth.js';
-import { parseProjectIdHeader } from '../lib/headers.js';
-import type { AppEnv } from '../types.js';
+import { agents } from '@hashhive/shared'
+import { eq } from 'drizzle-orm'
+import { deleteCookie, getCookie } from 'hono/cookie'
+import { createMiddleware } from 'hono/factory'
+import { HTTPException } from 'hono/http-exception'
+
+import type { AppEnv } from '../types.js'
+
+import { logger } from '../config/logger.js'
+import { db } from '../db/index.js'
+import { auth } from '../lib/auth.js'
+import { parseProjectIdHeader } from '../lib/headers.js'
 
 function authError(message: string): HTTPException {
   return new HTTPException(401, {
@@ -15,7 +17,7 @@ function authError(message: string): HTTPException {
       status: 401,
       headers: { 'content-type': 'application/json' },
     }),
-  });
+  })
 }
 
 /**
@@ -27,27 +29,27 @@ function authError(message: string): HTTPException {
 export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   // TODO: remove legacy cookie cleanup after first production deploy cycle (2026-Q2)
   if (getCookie(c, 'session')) {
-    deleteCookie(c, 'session', { path: '/' });
+    deleteCookie(c, 'session', { path: '/' })
   }
 
-  let session: Awaited<ReturnType<typeof auth.api.getSession>>;
+  let session: Awaited<ReturnType<typeof auth.api.getSession>>
   try {
-    session = await auth.api.getSession({ headers: c.req.raw.headers });
+    session = await auth.api.getSession({ headers: c.req.raw.headers })
   } catch (err) {
-    logger.warn({ err }, 'BetterAuth getSession failed');
-    throw authError('Authentication required');
+    logger.warn({ err }, 'BetterAuth getSession failed')
+    throw authError('Authentication required')
   }
   if (!session) {
-    throw authError('Authentication required');
+    throw authError('Authentication required')
   }
 
   c.set('currentUser', {
     userId: Number(session.user.id),
     email: session.user.email,
     projectId: parseProjectIdHeader(c.req.header('x-project-id')),
-  });
-  await next();
-});
+  })
+  await next()
+})
 
 /**
  * Build an agent-token middleware. Validates the `Authorization: Bearer`
@@ -63,12 +65,12 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
  */
 function createAgentTokenMiddleware(opts: { allowErroredAgent: boolean }) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const authHeader = c.req.header('authorization');
+    const authHeader = c.req.header('authorization')
     if (!authHeader?.startsWith('Bearer ')) {
-      throw authError('Bearer token required');
+      throw authError('Bearer token required')
     }
 
-    const token = authHeader.slice(7);
+    const token = authHeader.slice(7)
 
     const [agent] = await db
       .select({
@@ -79,22 +81,22 @@ function createAgentTokenMiddleware(opts: { allowErroredAgent: boolean }) {
       })
       .from(agents)
       .where(eq(agents.authToken, token))
-      .limit(1);
+      .limit(1)
 
     if (!agent) {
-      throw authError('Invalid or expired agent token');
+      throw authError('Invalid or expired agent token')
     }
     if (agent.status === 'error' && !opts.allowErroredAgent) {
-      throw authError('Invalid or expired agent token');
+      throw authError('Invalid or expired agent token')
     }
 
     c.set('agent', {
       agentId: agent.id,
       projectId: agent.projectId,
       capabilities: (agent.capabilities ?? {}) as Record<string, unknown>,
-    });
-    await next();
-  });
+    })
+    await next()
+  })
 }
 
 /**
@@ -102,7 +104,7 @@ function createAgentTokenMiddleware(opts: { allowErroredAgent: boolean }) {
  * Use this on work endpoints; a broken agent should not be picking up
  * new tasks or posting benchmarks until it sends a recovery heartbeat.
  */
-export const requireAgentToken = createAgentTokenMiddleware({ allowErroredAgent: false });
+export const requireAgentToken = createAgentTokenMiddleware({ allowErroredAgent: false })
 
 /**
  * Recovery-friendly agent auth — accepts agents whose row is in
@@ -113,4 +115,4 @@ export const requireAgentToken = createAgentTokenMiddleware({ allowErroredAgent:
  */
 export const requireAgentTokenForHeartbeatRecovery = createAgentTokenMiddleware({
   allowErroredAgent: true,
-});
+})
