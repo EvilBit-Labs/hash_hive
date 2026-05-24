@@ -215,5 +215,7 @@ db-studio:
 # Order matters: lint → format → types → build (catches Tailwind CSS generation) → test
 ci-check: check test
 
-# Quick quality gate — run after every task (no tests, faster than ci-check)
-check: pre-commit lint format-check type-check build
+# Quick quality gate — run after every task (no tests, faster than ci-check).
+# `pre-commit` already runs format-check + oxlint + type-check via its hooks,
+# so we only add `build` (which catches Tailwind generation failures).
+check: pre-commit build
