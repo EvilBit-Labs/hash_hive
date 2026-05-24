@@ -1,4 +1,10 @@
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import {
+  createHashListRequestSchema,
+  detectHashTypeRequestSchema,
+  maskLists,
+  ruleLists,
+  wordLists,
+} from '@hashhive/shared'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -58,11 +64,7 @@ resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
   return c.json({ hashLists })
 })
 
-const createHashListSchema = z.object({
-  name: z.string().min(1).max(255),
-  hashTypeId: z.number().int().positive().optional(),
-  source: z.string().max(50).optional(),
-})
+// createHashListRequestSchema is imported from @hashhive/shared.
 
 // Content-type-aware route. Multipart -> one-shot create+upload+enqueue
 // flow (returns 202 with status='processing'). JSON -> legacy create-empty
@@ -173,7 +175,7 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
   }
 
   // ─── Legacy JSON create-empty path ─────────────────────────────────
-  const parsed = createHashListSchema.safeParse(await c.req.json().catch(() => null))
+  const parsed = createHashListRequestSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400)
   }
@@ -359,14 +361,12 @@ resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c)
 
 // ─── Hash Type Detection ─────────────────────────────────────────────
 
-const detectHashTypeSchema = z.object({
-  hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
-})
+// detectHashTypeRequestSchema is imported from @hashhive/shared.
 
 resourceRoutes.post(
   '/detect-hash-type',
   requireSession,
-  zValidator('json', detectHashTypeSchema),
+  zValidator('json', detectHashTypeRequestSchema),
   async (c) => {
     const { hashes } = c.req.valid('json')
 
