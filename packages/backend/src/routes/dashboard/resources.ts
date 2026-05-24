@@ -64,23 +64,122 @@ const createHashListSchema = z.object({
   source: z.string().max(50).optional(),
 })
 
-resourceRoutes.post(
-  '/hash-lists',
-  requireRole('admin', 'contributor'),
-  zValidator('json', createHashListSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
+// Content-type-aware route. Multipart -> one-shot create+upload+enqueue
+// flow (returns 202 with status='processing'). JSON -> legacy create-empty
+// flow that the caller follows with separate /upload + /import requests
+// (still in use by the CLI and older frontend code paths).
+// We cannot apply zValidator at registration because the validator binds
+// per content-type; instead we dispatch inside the handler.
+resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser')
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
+  }
+
+  const contentType = c.req.header('content-type') ?? ''
+
+  // ─── Multipart one-shot upload (ticket AC #1) ──────────────────────
+  if (contentType.startsWith('multipart/form-data')) {
+    const body = await c.req.parseBody()
+    const file = body['file']
+    const nameRaw = body['name']
+    const hashTypeIdRaw = body['hashTypeId']
+
+    if (!(file instanceof File)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+    }
+    if (typeof nameRaw !== 'string' || nameRaw.length === 0 || nameRaw.length > 200) {
       return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        {
+          error: { code: 'VALIDATION_ERROR', message: 'name is required (1-200 chars)' },
+        },
         400
       )
     }
-    const hashList = await createHashList({ ...data, projectId })
-    return c.json({ hashList }, 201)
+    let hashTypeId: number | undefined
+    if (typeof hashTypeIdRaw === 'string' && hashTypeIdRaw.length > 0) {
+      const parsed = Number(hashTypeIdRaw)
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'hashTypeId must be a positive integer',
+            },
+          },
+          400
+        )
+      }
+      hashTypeId = parsed
+    }
+
+    // Create the DB row first so we can target the upload at a stable key.
+    const created = await createHashList({
+      projectId,
+      name: nameRaw,
+      ...(hashTypeId !== undefined ? { hashTypeId } : {}),
+    })
+    if (!created) {
+      return c.json(
+        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to create hash list' } },
+        503
+      )
+    }
+
+    // Upload — rollback DB row on failure so the caller sees a clean error
+    // state rather than an orphaned uploading-status row.
+    try {
+      await uploadHashListFile(created.id, projectId, file)
+    } catch (err) {
+      try {
+        await deleteHashList(created.id, projectId)
+      } catch (rollbackErr) {
+        logger.error(
+          { hashListId: created.id, err: rollbackErr },
+          'Failed to rollback hash list after upload error'
+        )
+      }
+      if (err instanceof UploadTooLargeError) {
+        return c.json(
+          {
+            error: {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+            },
+          },
+          413
+        )
+      }
+      logger.error({ hashListId: created.id, err }, 'Hash list upload failed')
+      return c.json(
+        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to upload file' } },
+        503
+      )
+    }
+
+    // Enqueue parsing. If the queue is down we leave the row in `uploaded`
+    // status (the user can retry via POST /:id/import) and surface a 503.
+    const importResult = await importHashList(created.id, projectId)
+    if (!importResult) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+    if ('error' in importResult) {
+      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: importResult.error } }, 503)
+    }
+
+    // Re-read so the response carries `status=processing` and the fresh fileRef.
+    const finalRow = await getHashListById(created.id, projectId)
+    return c.json({ hashList: finalRow }, 202)
   }
-)
+
+  // ─── Legacy JSON create-empty path ─────────────────────────────────
+  const parsed = createHashListSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400)
+  }
+  const hashList = await createHashList({ ...parsed.data, projectId })
+  return c.json({ hashList }, 201)
+})
 
 resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   const { projectId } = c.get('currentUser')
