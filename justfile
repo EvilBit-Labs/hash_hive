@@ -111,7 +111,13 @@ test-backend:
 test-frontend:
     {{ mise_exec }} bun --filter @hashhive/frontend test
 
-# Run E2E tests
+# Install Playwright browsers (run once; idempotent if already cached).
+# Uses the workspace's pinned `@playwright/test` to avoid version skew —
+# never use `bunx playwright install`.
+test-e2e-install:
+    {{ mise_exec }} bun --filter @hashhive/frontend test:e2e:install
+
+# Run E2E tests (assumes browsers already installed via `test-e2e-install`)
 test-e2e:
     {{ mise_exec }} bun run test:e2e
 
@@ -210,10 +216,13 @@ db-studio:
 # CI Workflow
 # -----------------------------
 
-# Run the full CI check locally.
-# Backend tests use bun:test with mocked services — no docker-compose required.
-# Order matters: lint → format → types → build (catches Tailwind CSS generation) → test
-ci-check: check test
+# Run the full pre-push gate locally. Stricter than the GitHub `ci-check`
+# job — this is what you run before pushing to catch everything CI catches
+# plus the e2e job. Backend tests use bun:test with mocked services
+# (no docker-compose required); e2e needs Playwright browsers
+# (`just test-e2e-install` once after `just install`).
+# Order: lint → format → types → build (catches Tailwind generation) → unit → e2e
+ci-check: check test test-e2e
 
 # Quick quality gate — run after every task (no tests, faster than ci-check).
 # `pre-commit` already runs format-check + oxlint + type-check via its hooks,
