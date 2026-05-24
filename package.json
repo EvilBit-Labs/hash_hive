@@ -17,6 +17,7 @@
     "type-check": "turbo run type-check"
   },
   "devDependencies": {
+    "oxlint-tsgolint": "0.22.1",
     "turbo": "^2.9.14",
     "typescript": "^6.0.3"
   },
