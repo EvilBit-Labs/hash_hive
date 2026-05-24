@@ -49,15 +49,11 @@ mock.module('../../src/db/index.js', () => ({
   client: {},
 }));
 
-// Both export names point at the same stub: `checkObjectStoreHealth` is
-// what `health.ts` actually imports after the SeaweedFS rename;
-// `checkMinioHealth` is the legacy alias kept for back-compat.
 const probeStub = mock(() =>
   Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
 );
 mock.module('../../src/config/storage.js', () => ({
   checkObjectStoreHealth: probeStub,
-  checkMinioHealth: probeStub,
   s3: {},
   uploadFile: mock(),
   downloadFile: mock(),

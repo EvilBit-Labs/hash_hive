@@ -7,7 +7,7 @@ import {
   getSystemHealth,
   legacyPublicEnvelope,
   probeDatabase,
-  probeMinio,
+  probeObjectStore,
   probeQueues,
   probeRedis,
   runProbe,
@@ -222,9 +222,9 @@ describe('probeRedis', () => {
   });
 });
 
-describe('probeMinio', () => {
+describe('probeObjectStore', () => {
   test('returns healthy when bucket is connected', async () => {
-    const result = await probeMinio({
+    const result = await probeObjectStore({
       check: async () => ({ status: 'connected', bucket: 'hashhive' }),
     });
     expect(result.status).toBe('healthy');
@@ -232,7 +232,7 @@ describe('probeMinio', () => {
   });
 
   test('returns unhealthy when bucket is unreachable', async () => {
-    const result = await probeMinio({
+    const result = await probeObjectStore({
       check: async () => ({ status: 'disconnected', bucket: 'hashhive' }),
     });
     expect(result.status).toBe('unhealthy');

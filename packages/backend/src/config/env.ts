@@ -15,7 +15,7 @@ const envSchema = z.object({
   // Redis
   REDIS_URL: z.string().url(),
 
-  // MinIO (S3-compatible storage)
+  // Object storage (SeaweedFS in dev / air-gapped prod, AWS S3 in hosted envs)
   S3_ENDPOINT: z.string().url(),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
@@ -52,3 +52,20 @@ function loadEnv(): Env {
 }
 
 export const env = loadEnv();
+
+/**
+ * Warn-once at startup when the operator did not set `S3_BUCKET` and the
+ * Zod default kicked in. Fine for dev (`hashhive` matches the
+ * docker-compose bucket-init default) but almost certainly wrong in any
+ * other deployment — without this, a misconfigured prod silently probes a
+ * bucket that does not exist and the dashboard shows
+ * `bucket: hashhive, status: disconnected` with no hint that the bucket
+ * name itself is suspect. Uses console.warn rather than the structured
+ * logger to avoid an import cycle at module load.
+ */
+if (!process.env['S3_BUCKET'] && env.NODE_ENV !== 'test') {
+  // biome-ignore lint/suspicious/noConsole: pre-logger startup warning
+  console.warn(
+    `[env] S3_BUCKET not set; defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
+  );
+}

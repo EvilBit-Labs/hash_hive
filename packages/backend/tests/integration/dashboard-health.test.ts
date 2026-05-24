@@ -51,16 +51,11 @@ mock.module('../../src/services/auth.js', () => ({
 }));
 
 // Object-store probe stubbed to avoid bucket dependency.
-// Both export names point at the same stub: `checkObjectStoreHealth` is
-// what `health.ts` actually imports after the SeaweedFS rename, while
-// `checkMinioHealth` is the legacy alias kept for back-compat with
-// callers that have not migrated yet.
 const probeStub = mock(() =>
   Promise.resolve({ status: 'connected' as const, bucket: 'hashhive-test' })
 );
 mock.module('../../src/config/storage.js', () => ({
   checkObjectStoreHealth: probeStub,
-  checkMinioHealth: probeStub,
   s3: {},
   uploadFile: mock(),
   downloadFile: mock(),

@@ -201,7 +201,7 @@ export async function probeRedis(deps: RedisProbeDeps): Promise<ProbeResult> {
   return { status: 'healthy' };
 }
 
-export interface MinioProbeDeps {
+export interface ObjectStoreProbeDeps {
   /**
    * Probe the bucket. The optional `signal` is wired through to the S3
    * client so a timeout in `runProbe` actually aborts the underlying
@@ -214,7 +214,10 @@ export interface MinioProbeDeps {
   }>;
 }
 
-export async function probeMinio(deps: MinioProbeDeps, signal?: AbortSignal): Promise<ProbeResult> {
+export async function probeObjectStore(
+  deps: ObjectStoreProbeDeps,
+  signal?: AbortSignal
+): Promise<ProbeResult> {
   const result = await deps.check(signal);
   if (result.status !== 'connected') {
     return {
@@ -316,7 +319,7 @@ export function __resetMaxConnectionsCache(): void {
 function buildDefaultProbes(): {
   database: DatabaseProbeDeps;
   redis: RedisProbeDeps;
-  minio: MinioProbeDeps;
+  minio: ObjectStoreProbeDeps;
   queues: QueuesProbeDeps;
 } {
   const qm = getQueueManager();
@@ -351,7 +354,7 @@ export interface SystemHealthOptions {
   probes?: {
     database?: DatabaseProbeDeps;
     redis?: RedisProbeDeps;
-    minio?: MinioProbeDeps;
+    minio?: ObjectStoreProbeDeps;
     queues?: QueuesProbeDeps;
   };
   /** Override thresholds for testing. */
@@ -389,7 +392,11 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
       thresholds.probeTimeoutMs
     ),
     runProbe('redis', () => probeRedis(probes.redis), thresholds.probeTimeoutMs),
-    runProbe('minio', (signal) => probeMinio(probes.minio, signal), thresholds.probeTimeoutMs),
+    runProbe(
+      'minio',
+      (signal) => probeObjectStore(probes.minio, signal),
+      thresholds.probeTimeoutMs
+    ),
     runProbe(
       'queues',
       () => probeQueues(probes.queues, thresholds.queueWarnDepth, thresholds.queueWarnFailed),
@@ -512,7 +519,7 @@ export interface LegacyHealthEnvelope {
     redis: LegacyServiceGuards & { status: 'connected' | 'disconnected' };
     minio: LegacyServiceGuards & {
       status: 'connected' | 'disconnected';
-      bucket?: string;
+      bucket: string;
     };
     queues: LegacyServiceGuards & {
       status: 'connected' | 'disconnected';
@@ -534,7 +541,11 @@ function extractQueueStats(
 }
 
 export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope {
-  const minioBucket = health.components.minio.detail?.['bucket'] as string | undefined;
+  // Preserve the pre-#109 `services.minio.bucket` contract even when the
+  // probe timed out before setting `detail` — fall back to env.S3_BUCKET so
+  // monitors that read `body.services.minio.bucket.length` keep working.
+  const minioBucket =
+    (health.components.minio.detail?.['bucket'] as string | undefined) ?? env.S3_BUCKET;
   return {
     status: health.status === 'healthy' ? 'ok' : 'degraded',
     aggregateStatus: health.status,
@@ -545,7 +556,7 @@ export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope
       redis: { status: legacyServiceStatus(health.components.redis.status) },
       minio: {
         status: legacyServiceStatus(health.components.minio.status),
-        ...(minioBucket ? { bucket: minioBucket } : {}),
+        bucket: minioBucket,
       },
       queues: {
         status: legacyServiceStatus(health.components.queues.status),

@@ -10,6 +10,10 @@ import { api } from '../lib/api';
 
 export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
 
+// `'minio'` is preserved as the wire identifier across the SeaweedFS swap
+// so the backend can swap its object-store implementation without a
+// coupled frontend release. See `packages/backend/src/services/health.ts`
+// (ComponentName) for the corresponding backend type.
 export type ComponentName = 'database' | 'redis' | 'minio' | 'queues';
 
 export interface ComponentHealth {

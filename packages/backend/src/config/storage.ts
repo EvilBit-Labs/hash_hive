@@ -111,13 +111,6 @@ export async function checkObjectStoreHealth(signal?: AbortSignal): Promise<{
   }
 }
 
-/**
- * @deprecated Renamed to `checkObjectStoreHealth` after the SeaweedFS swap;
- * kept for one PR cycle so any external consumer (none expected in this
- * monorepo) keeps compiling. Remove when no callers remain.
- */
-export const checkMinioHealth = checkObjectStoreHealth;
-
 export async function createMultipartUpload(
   key: string,
   contentType: string,

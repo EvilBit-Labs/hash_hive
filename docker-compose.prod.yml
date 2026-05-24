@@ -42,18 +42,32 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
     # `weed` ships with no JSON-templating tool, so we shell out to `awk` to
     # produce a syntactically valid IAM config from operator-supplied env
-    # vars. AWK is used (not naive heredoc/sed) because credentials may
+    # vars. AWK is used (not literal heredoc/sed) because credentials may
     # legitimately contain `"`, `\`, or other JSON-significant characters,
-    # and naive string interpolation would either malform the file (DoS) or
-    # let a crafted value inject an extra identity. AWK gives us proper
-    # escaping without requiring `jq` (which is not in the SeaweedFS image).
+    # and literal string interpolation would either malform the file (DoS)
+    # or let a crafted value inject an extra identity. We read the env vars
+    # via AWK's `ENVIRON[]` array because `-v var=value` performs C-style
+    # escape interpretation on the value, silently mangling any backslash
+    # or `\n` / `\t` / `\r` before the program ever runs. `ENVIRON[]`
+    # returns the raw bytes the shell received.
     entrypoint:
       - /bin/sh
       - -ec
       - |
-        : "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
-        : "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
-        awk -v ak="$$S3_ACCESS_KEY" -v sk="$$S3_SECRET_KEY" '
+        : "$${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
+        : "$${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
+        # Reject whitespace-only credentials; otherwise SeaweedFS would
+        # boot with an unreproducible identity that the operator can't
+        # tell from a typo in `.env`.
+        case "$$S3_ACCESS_KEY" in
+          *[!\ \	]*) ;;
+          *) echo "FATAL: S3_ACCESS_KEY is whitespace-only" >&2; exit 1 ;;
+        esac
+        case "$$S3_SECRET_KEY" in
+          *[!\ \	]*) ;;
+          *) echo "FATAL: S3_SECRET_KEY is whitespace-only" >&2; exit 1 ;;
+        esac
+        awk '
           function esc(s,  r) {
             r = s
             gsub(/\\/, "\\\\", r)
@@ -64,6 +78,8 @@ services:
             return r
           }
           BEGIN {
+            ak = ENVIRON["S3_ACCESS_KEY"]
+            sk = ENVIRON["S3_SECRET_KEY"]
             printf("{\n")
             printf("  \"identities\": [\n")
             printf("    {\n")
@@ -83,15 +99,15 @@ services:
       retries: 5
       start_period: 10s
 
-  # One-shot sidecar that creates the configured bucket on first boot. See
-  # docker-compose.yml for behavior. Production reads credentials from
-  # operator-supplied env vars rather than the dev default.
   # One-shot sidecar that creates the configured bucket on first boot.
-  # `set -e` propagates any failure to the exit code so the backend's
+  # Production reads credentials from operator-supplied env vars rather
+  # than the dev default. `set -e` propagates any failure to the exit
+  # code so the backend's
   # `depends_on: bucket-init: service_completed_successfully` correctly
-  # blocks until the bucket actually exists. Retry exhaustion is treated
-  # as fatal (exit 1) so the backend never starts against an unreachable
-  # S3 endpoint.
+  # blocks until the bucket actually exists. Retry exhaustion AND any
+  # auth error during the readiness probe are treated as fatal so the
+  # backend never starts against an unreachable or mis-configured S3
+  # endpoint.
   bucket-init:
     image: amazon/aws-cli:2.27.8
     restart: 'no'
@@ -101,29 +117,51 @@ services:
     environment:
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
-      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+      # SeaweedFS does not use region; pin a literal so AWS CLI does not
+      # try to resolve one from ~/.aws/config (absent in the container).
+      AWS_DEFAULT_REGION: us-east-1
       BUCKET: ${S3_BUCKET:-hashhive}
     entrypoint:
       - /bin/sh
       - -ec
       - |
+        # Probe loop captures stderr so we can fast-fail on auth errors
+        # (config drift between bucket-init and the SeaweedFS IAM file)
+        # within a few seconds instead of timing out after 60s.
         ready=0
+        last_err=""
         for i in $$(seq 1 30); do
-          if aws --cli-connect-timeout 3 --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; then
+          if err=$$(aws --cli-connect-timeout 3 --endpoint-url http://seaweedfs:8333 s3 ls 2>&1 >/dev/null); then
             ready=1
             break
           fi
+          last_err="$$err"
+          case "$$err" in
+            *InvalidAccessKeyId*|*SignatureDoesNotMatch*|*AccessDenied*)
+              echo "bucket-init: auth error from seaweedfs — IAM config likely drifted from AWS_ACCESS_KEY_ID. Aborting." >&2
+              echo "bucket-init: stderr was: $$err" >&2
+              exit 1
+              ;;
+          esac
           echo "bucket-init: waiting for seaweedfs s3 endpoint... ($$i/30)"
           sleep 2
         done
         if [ "$$ready" -ne 1 ]; then
-          echo "bucket-init: seaweedfs s3 endpoint did not become ready within 60s; failing" >&2
+          echo "bucket-init: seaweedfs s3 endpoint did not become ready within 60s; last_err: $$last_err" >&2
           exit 1
         fi
+        # Idempotent-success markers across AWS S3 and SeaweedFS variants.
         mb_out=$$(aws --endpoint-url http://seaweedfs:8333 s3 mb "s3://$$BUCKET" 2>&1) || mb_status=$$? && mb_status=$${mb_status:-0}
-        if [ "$$mb_status" -ne 0 ] && ! echo "$$mb_out" | grep -q "BucketAlready"; then
-          echo "bucket-init: failed to create bucket $$BUCKET: $$mb_out" >&2
-          exit 1
+        if [ "$$mb_status" -ne 0 ]; then
+          case "$$mb_out" in
+            *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*|*"bucket already exists"*|*"already exists"*)
+              echo "bucket-init: bucket $$BUCKET already exists (idempotent re-run)"
+              ;;
+            *)
+              echo "bucket-init: failed to create bucket $$BUCKET (exit=$$mb_status): $$mb_out" >&2
+              exit 1
+              ;;
+          esac
         fi
         echo "bucket-init: bucket $$BUCKET ready"
 
