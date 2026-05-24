@@ -1,0 +1,62 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "useTabs": false,
+  "tabWidth": 2,
+  "printWidth": 100,
+  "singleQuote": true,
+  "jsxSingleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "es5",
+  "semi": false,
+  "arrowParens": "always",
+  "bracketSameLine": false,
+  "bracketSpacing": true,
+  "sortImports": {
+    "groups": [
+      "type-import",
+      [
+        "value-builtin",
+        "value-external"
+      ],
+      "type-internal",
+      "value-internal",
+      [
+        "type-parent",
+        "type-sibling",
+        "type-index"
+      ],
+      [
+        "value-parent",
+        "value-sibling",
+        "value-index"
+      ],
+      "unknown"
+    ]
+  },
+  "sortTailwindcss": {
+    "stylesheet": "./packages/frontend/src/index.css",
+    "functions": [
+      "clsx",
+      "cn"
+    ],
+    "preserveWhitespace": true
+  },
+  "sortPackageJson": {
+    "sortScripts": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "**/dist/**",
+    "**/.turbo/**",
+    "packages/*/dist/**",
+    "node_modules/**",
+    "test-results/**",
+    "playwright-report/**",
+    ".playwright-mcp/**",
+    "bun.lock",
+    "packages/shared/src/db/migrations/**",
+    "**/*.tsbuildinfo",
+    "**/*.md",
+    "**/*.toml"
+  ]
+}
