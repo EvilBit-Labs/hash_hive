@@ -10,14 +10,13 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "type-check": "turbo run type-check",
     "test": "turbo run test",
     "test:e2e": "turbo run test:e2e"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.15",
     "turbo": "^2.9.14",
     "typescript": "^6.0.3"
   },
