@@ -3,8 +3,8 @@
 set shell := ["bash", "-cu"]
 set dotenv-load := true
 
-# Use mise to manage all dev tools (bun, biome, etc.)
-# See mise.toml for tool versions
+# Use mise to manage all dev tools (bun, oxlint, oxfmt, taplo, etc.).
+# See mise.toml for tool versions.
 mise_exec := "mise exec --"
 
 # Show available recipes
@@ -61,17 +61,32 @@ info:
 # Linting, Typing, Formatting
 # -----------------------------
 
-# Lint all code
+# Lint all code with oxlint (type-aware mode reads tsconfig context).
 lint:
-    {{ mise_exec }} bun run lint
+    {{ mise_exec }} oxlint --type-aware
 
-# Format all code
-format:
-    {{ mise_exec }} bun run format
+# Run oxlint with auto-fixes across the whole tree.
+lint-fix:
+    {{ mise_exec }} oxlint --type-aware --fix
 
-# Check code formatting
-format-check:
-    {{ mise_exec }} bun run format:check
+# Format all code: oxfmt for JS/TS/CSS/JSON; taplo for TOML.
+# oxfmt has no TOML alignment knobs, so taplo handles `mise.toml` and
+# friends with `align_entries = true` configured in `.taplo.toml`.
+# `oxfmt` ignores TOMLs via `.oxfmtrc.json` so the two don't fight.
+format: format-toml
+    {{ mise_exec }} oxfmt
+
+# Check formatting without writing changes (oxfmt + taplo).
+format-check: format-toml-check
+    {{ mise_exec }} oxfmt --check
+
+# Format all TOML files with taplo. Configured in `.taplo.toml`.
+format-toml:
+    {{ mise_exec }} taplo fmt
+
+# Check TOML formatting without writing changes.
+format-toml-check:
+    {{ mise_exec }} taplo fmt --check
 
 # Run TypeScript type checking
 type-check:
