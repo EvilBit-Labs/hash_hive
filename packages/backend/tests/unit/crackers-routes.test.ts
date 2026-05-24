@@ -191,7 +191,9 @@ mock.module('../../src/queue/manager.js', () => ({
 }));
 
 mock.module('../../src/config/storage.js', () => ({
-  checkObjectStoreHealth: async () => ({ status: 'connected' }),
+  // Match the real `checkObjectStoreHealth` return shape `{status, bucket}`
+  // so `probeObjectStore`'s downstream `detail.bucket` stays defined.
+  checkObjectStoreHealth: async () => ({ status: 'connected', bucket: 'hashhive-test' }),
 }));
 
 mock.module('ioredis', () => ({

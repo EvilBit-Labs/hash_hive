@@ -85,7 +85,7 @@ Run this before pushing. It matches what CI runs.
 | PostgreSQL | 5432 | hashhive/hashhive | Drizzle Studio (`just db-studio`) or psql |
 | Redis | 6379 | -- | RedisInsight or `redis-cli` |
 | SeaweedFS (S3 API) | 9000 | minioadmin/minioadmin | -- |
-| SeaweedFS (master) | 9333 | -- | <http://localhost:9333> |
+| SeaweedFS (master) | 9333 | -- | <http://localhost:9333> (loopback-only — bound to `127.0.0.1` in `docker-compose.yml` because the SeaweedFS master `/cluster/status` page is unauthenticated; not reachable from other hosts on the LAN) |
 
 A one-shot `bucket-init` sidecar runs after SeaweedFS reports healthy on first
 `docker compose up`; it creates the `hashhive` bucket via the S3 API and exits.

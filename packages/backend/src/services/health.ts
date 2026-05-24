@@ -25,7 +25,7 @@ export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy';
 
 /**
  * Component names exposed on the wire (`components.<name>` on
- * `/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
+ * `/api/v1/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
  * `'minio'` is preserved as the wire identifier across the SeaweedFS swap
  * so frontend consumers (see `packages/frontend/src/hooks/use-system-health.ts`)
  * keep working without a coupled release. Internal symbols are migrated

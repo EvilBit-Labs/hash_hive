@@ -19,7 +19,14 @@ const envSchema = z.object({
   S3_ENDPOINT: z.string().url(),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
-  S3_BUCKET: z.string().min(1).default('hashhive'),
+  // Trim before applying min/default so a whitespace-only env var doesn't
+  // pass `.min(1)` and silently become the bucket name (which would also
+  // make the "defaulted" startup warning lie about the source).
+  S3_BUCKET: z
+    .string()
+    .transform((v) => v.trim())
+    .pipe(z.string().min(1))
+    .default('hashhive'),
   S3_REGION: z.string().default('us-east-1'),
 
   // BetterAuth (generate with: openssl rand -base64 32)
@@ -63,9 +70,9 @@ export const env = loadEnv();
  * name itself is suspect. Uses console.warn rather than the structured
  * logger to avoid an import cycle at module load.
  */
-if (!process.env['S3_BUCKET'] && env.NODE_ENV !== 'test') {
+if (!process.env['S3_BUCKET']?.trim() && env.NODE_ENV !== 'test') {
   // biome-ignore lint/suspicious/noConsole: pre-logger startup warning
   console.warn(
-    `[env] S3_BUCKET not set; defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
+    `[env] S3_BUCKET not set (or whitespace-only); defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
   );
 }
