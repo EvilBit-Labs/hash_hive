@@ -1,5 +1,5 @@
 import { crackerBinaries, KNOWN_ENGINES, type KnownEngineName } from '@hashhive/shared'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 /**
  * Cracker binary registry — engine-aware, MinIO-backed, admin-managed.
  *
@@ -649,10 +649,24 @@ export async function completeCrackerChunkedUpload(
     uploadedAt: new Date().toISOString(),
   }
 
-  await db
+  // Guard the UPDATE on the stored s3UploadId so a concurrent
+  // abort/re-initiate that already swapped fileRef can't be clobbered
+  // by this completion. If the WHERE no longer matches, the row's
+  // upload session moved on under us — surface a mismatch error.
+  const completed = await db
     .update(crackerBinaries)
     .set({ fileRef: updatedFileRef, updatedAt: new Date() })
-    .where(eq(crackerBinaries.id, id))
+    .where(
+      and(
+        eq(crackerBinaries.id, id),
+        sql`${crackerBinaries.fileRef}->>'s3UploadId' = ${s3UploadId}`
+      )
+    )
+    .returning({ id: crackerBinaries.id })
+
+  if (completed.length === 0) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, 'stale_or_replaced')
+  }
 
   logger.info({ crackerBinaryId: id }, 'Cracker chunked upload completed')
   return { id }
@@ -685,11 +699,24 @@ export async function abortCrackerChunkedUpload(id: number, s3UploadId: string):
     )
   })
 
-  // Always clear the DB pointer so the next upload starts clean.
-  await db
+  // Clear the DB pointer so the next upload starts clean, but only if
+  // the row still references this upload session. A concurrent
+  // complete/re-initiate may have already moved the row to a new
+  // fileRef — clobbering that with `{}` would lose the newer state.
+  const aborted = await db
     .update(crackerBinaries)
     .set({ fileRef: {}, updatedAt: new Date() })
-    .where(eq(crackerBinaries.id, id))
+    .where(
+      and(
+        eq(crackerBinaries.id, id),
+        sql`${crackerBinaries.fileRef}->>'s3UploadId' = ${s3UploadId}`
+      )
+    )
+    .returning({ id: crackerBinaries.id })
+
+  if (aborted.length === 0) {
+    throw new CrackerUploadIdMismatchError(id, s3UploadId, 'stale_or_replaced')
+  }
 
   logger.info({ crackerBinaryId: id, s3UploadId }, 'Cracker chunked upload aborted')
 }

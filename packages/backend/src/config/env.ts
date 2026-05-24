@@ -19,9 +19,11 @@ const envSchema = z.object({
   S3_ENDPOINT: z.string().url(),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
-  // Trim before applying min/default so a whitespace-only env var doesn't
-  // pass `.min(1)` and silently become the bucket name (which would also
-  // make the "defaulted" startup warning lie about the source).
+  // Trim before applying min so a whitespace-only env var fails env
+  // parsing (fail-fast) rather than silently becoming the bucket name.
+  // Note: `.default()` only fires when `S3_BUCKET` is undefined; a
+  // whitespace-only value reaches the transform, trims to `""`, and is
+  // rejected by `.min(1)` — `loadEnv()` throws before startup.
   S3_BUCKET: z
     .string()
     .transform((v) => v.trim())
@@ -69,10 +71,13 @@ export const env = loadEnv()
  * `bucket: hashhive, status: disconnected` with no hint that the bucket
  * name itself is suspect. Uses console.warn rather than the structured
  * logger to avoid an import cycle at module load.
+ *
+ * Only triggers when `S3_BUCKET` is genuinely unset; a whitespace-only
+ * value fails env parsing in `loadEnv()` above and never reaches here.
  */
-if (!process.env['S3_BUCKET']?.trim() && env.NODE_ENV !== 'test') {
+if (process.env['S3_BUCKET'] === undefined && env.NODE_ENV !== 'test') {
   // oxlint-disable-next-line no-console -- pre-logger startup warning
   console.warn(
-    `[env] S3_BUCKET not set (or whitespace-only); defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
+    `[env] S3_BUCKET not set; defaulted to "${env.S3_BUCKET}". Fine for dev; set it explicitly in any other deployment.`
   )
 }

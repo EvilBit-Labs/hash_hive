@@ -174,6 +174,22 @@ export async function generateTasksForAttack(
   attackId: number,
   opts: { chunkSize?: number | undefined } = {}
 ) {
+  // Validate caller override up front: the chunk size feeds bigint division
+  // at the projected-chunks check and the loop step. Zero, negative, NaN,
+  // Infinity, or non-integer values would either throw inside `BigInt()`
+  // or trigger division-by-zero / produce a non-terminating chunk walk.
+  if (opts.chunkSize !== undefined) {
+    if (
+      !Number.isFinite(opts.chunkSize) ||
+      !Number.isInteger(opts.chunkSize) ||
+      opts.chunkSize <= 0
+    ) {
+      throw new Error(
+        `generateTasksForAttack: opts.chunkSize must be a positive integer, got ${String(opts.chunkSize)}`
+      )
+    }
+  }
+
   const [attack] = await db.select().from(attacks).where(eq(attacks.id, attackId)).limit(1)
   if (!attack) {
     return { error: 'Attack not found' }

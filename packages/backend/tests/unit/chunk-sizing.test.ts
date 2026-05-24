@@ -116,4 +116,48 @@ describe('pickChunkSize', () => {
     })
     expect(out).toBe(MAX_CHUNK_SIZE)
   })
+
+  test('rejects non-finite targetSeconds with a descriptive error', () => {
+    // Without the guard, BigInt(NaN) would throw a confusing RangeError.
+    expect(() =>
+      pickChunkSize({
+        totalKeyspace: '1000000000',
+        benchmarks: [{ speedHs: 1000 }],
+        targetSeconds: Number.NaN,
+      })
+    ).toThrow(/targetSeconds/)
+    expect(() =>
+      pickChunkSize({
+        totalKeyspace: '1000000000',
+        benchmarks: [{ speedHs: 1000 }],
+        targetSeconds: Number.POSITIVE_INFINITY,
+      })
+    ).toThrow(/targetSeconds/)
+  })
+
+  test('rejects non-positive targetSeconds', () => {
+    expect(() =>
+      pickChunkSize({
+        totalKeyspace: '1000000000',
+        benchmarks: [{ speedHs: 1000 }],
+        targetSeconds: 0,
+      })
+    ).toThrow(/targetSeconds/)
+    expect(() =>
+      pickChunkSize({
+        totalKeyspace: '1000000000',
+        benchmarks: [{ speedHs: 1000 }],
+        targetSeconds: -5,
+      })
+    ).toThrow(/targetSeconds/)
+  })
+
+  test('rejects non-finite benchmark speedHs', () => {
+    expect(() =>
+      pickChunkSize({
+        totalKeyspace: '1000000000',
+        benchmarks: [{ speedHs: Number.POSITIVE_INFINITY }],
+      })
+    ).toThrow(/speedHs/)
+  })
 })

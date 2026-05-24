@@ -16,6 +16,39 @@ import {
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 
+// ─── Upload size limits ─────────────────────────────────────────────
+
+/**
+ * Maximum file size accepted by the single-shot upload helpers
+ * (`uploadHashListFile` / `uploadResourceFile`). These helpers buffer the
+ * entire payload into memory before forwarding to S3, so we cap them at
+ * a small ceiling and steer larger uploads through the chunked multipart
+ * flow (`initiateChunkedUpload` + `uploadChunkPart` + `completeChunkedUpload`),
+ * which streams parts straight to S3 without buffering the whole file.
+ *
+ * Anything above this threshold should use `POST /api/v1/dashboard/resources/upload`
+ * (the chunked endpoint) instead of the legacy `/upload` form-data endpoint.
+ */
+export const MAX_DIRECT_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB
+
+/**
+ * Thrown by the direct upload helpers when the incoming file exceeds
+ * `MAX_DIRECT_UPLOAD_BYTES`. Routes catch this to surface a 413 with a
+ * pointer at the chunked upload endpoint.
+ */
+export class UploadTooLargeError extends Error {
+  readonly size: number
+  readonly limit: number
+  constructor(size: number, limit: number) {
+    super(
+      `File size ${size} bytes exceeds direct-upload limit of ${limit} bytes; use chunked upload.`
+    )
+    this.name = 'UploadTooLargeError'
+    this.size = size
+    this.limit = limit
+  }
+}
+
 // ─── Hash Types ──────────────────────────────────────────────────────
 
 export async function listHashTypes() {
@@ -99,6 +132,10 @@ export async function uploadHashListFile(
   const hl = await getHashListById(hashListId, projectId)
   if (!hl) {
     throw new Error(`Hash list ${hashListId} not found`)
+  }
+
+  if (file.size > MAX_DIRECT_UPLOAD_BYTES) {
+    throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
   const ext = extname(file.name)
@@ -311,6 +348,10 @@ export async function uploadResourceFile(
   const resource = await getResourceById(table, resourceId, projectId)
   if (!resource) {
     throw new Error(`Resource ${resourceId} not found in ${prefix}`)
+  }
+
+  if (file.size > MAX_DIRECT_UPLOAD_BYTES) {
+    throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
   const ext = extname(file.name)

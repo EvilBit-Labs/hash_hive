@@ -87,7 +87,18 @@ export function pickChunkSize(input: PickChunkSizeInput): string {
     return FALLBACK_CHUNK_SIZE
   }
   const target = input.targetSeconds ?? TARGET_CHUNK_SECONDS
+  // Guard against non-finite or non-positive `targetSeconds`. The boundary
+  // Zod schema for `speedHs` already enforces finite non-negative integers,
+  // but `targetSeconds` is a function-level knob with no schema in front of
+  // it, so a bad value (NaN/Infinity/<=0) would otherwise blow up in
+  // `BigInt(...)` with an opaque RangeError or yield nonsense sizing.
+  if (!Number.isFinite(target) || target <= 0) {
+    throw new Error('pickChunkSize: targetSeconds must be a finite positive number')
+  }
   const median = medianSpeed(input.benchmarks)
+  if (!Number.isFinite(median) || median < 0) {
+    throw new Error('pickChunkSize: benchmark speedHs must be finite and non-negative')
+  }
   // BigInt arithmetic; median may be fractional (even-length list) - round
   // to an integer before converting, since speed * time is integer keyspace.
   const candidate = BigInt(Math.floor(median * target))

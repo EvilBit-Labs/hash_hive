@@ -1025,6 +1025,18 @@ if (isIsolated) {
       expect(lastChunk['end']).toBe(1_000_000)
     })
 
+    test('rejects non-positive or non-integer chunkSize before any DB work', async () => {
+      // Validation runs at the function boundary, ahead of the attack lookup,
+      // so we don't need to seed any mocks. Each invalid value must throw a
+      // descriptive Error and never reach the BigInt math or division below.
+      const invalid: Array<number> = [0, -1, -1_000_000, Number.NaN, Number.POSITIVE_INFINITY, 1.5]
+      for (const value of invalid) {
+        await expect(generateTasksForAttack(7, { chunkSize: value })).rejects.toThrow(
+          /opts\.chunkSize must be a positive integer/
+        )
+      }
+    })
+
     test('returns single placeholder task when keyspace cannot be computed', async () => {
       // Mode 1 (combination) needs secondaryWordlistRows which the schema
       // doesn't expose, so calculateAttackKeyspace returns null and the

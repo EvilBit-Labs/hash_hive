@@ -715,7 +715,7 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     }
   }
 
-  return { campaign: updated ?? null }
+  return { campaign: updated }
 }
 
 // ─── Attack Management ──────────────────────────────────────────────

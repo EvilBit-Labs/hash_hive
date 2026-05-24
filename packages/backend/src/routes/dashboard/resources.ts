@@ -28,6 +28,7 @@ import {
   type ResourceTable,
   uploadChunkPart,
   uploadHashListFile,
+  UploadTooLargeError,
   uploadResourceFile,
 } from '../../services/resources.js'
 
@@ -124,8 +125,23 @@ resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
   }
 
-  const result = await uploadHashListFile(id, projectId, file)
-  return c.json(result)
+  try {
+    const result = await uploadHashListFile(id, projectId, file)
+    return c.json(result)
+  } catch (err) {
+    if (err instanceof UploadTooLargeError) {
+      return c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+          },
+        },
+        413
+      )
+    }
+    throw err
+  }
 })
 
 resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'), async (c) => {
@@ -320,8 +336,23 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
     }
 
-    const result = await uploadResourceFile(table, id, projectId, prefix, file)
-    return c.json(result)
+    try {
+      const result = await uploadResourceFile(table, id, projectId, prefix, file)
+      return c.json(result)
+    } catch (err) {
+      if (err instanceof UploadTooLargeError) {
+        return c.json(
+          {
+            error: {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+            },
+          },
+          413
+        )
+      }
+      throw err
+    }
   })
 
   resourceRoutes.get(`/${prefix}/:id/download`, requireProjectAccess(), async (c) => {

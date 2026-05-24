@@ -225,6 +225,8 @@ db-studio:
 ci-check: check test test-e2e
 
 # Quick quality gate — run after every task (no tests, faster than ci-check).
-# `pre-commit` already runs format-check + oxlint + type-check via its hooks,
-# so we only add `build` (which catches Tailwind generation failures).
-check: pre-commit build
+# `pre-commit` runs format-check + oxlint + type-check via its hooks.
+# `build` must run FIRST: oxlint's --type-aware mode loads `@hashhive/shared`
+# types from its built `dist/`, and a fresh CI checkout has no dist until
+# build runs (turbo orders shared → backend → frontend).
+check: build pre-commit

@@ -94,6 +94,25 @@ function mapId(idMap: IdMap, oldId: string | number | null | undefined): number 
   return mapped
 }
 
+// Required foreign-key resolution: throws if the source ID is missing or
+// unmapped. Use for non-nullable FKs where silently substituting 0 would
+// either trigger an FK violation or, worse, encode an invalid relationship
+// if constraints are relaxed.
+function requireMapped(
+  idMap: IdMap,
+  oldId: string | number | null | undefined,
+  label: string
+): number {
+  if (oldId == null) {
+    throw new Error(`Missing required ${label} source ID`)
+  }
+  const mapped = idMap.get(String(oldId))
+  if (mapped == null) {
+    throw new Error(`Unmapped ${label} source ID: ${String(oldId)}`)
+  }
+  return mapped
+}
+
 // ─── Import Functions ───────────────────────────────────────────────
 
 const BATCH_SIZE = 500
@@ -194,8 +213,8 @@ async function main() {
 
   // Project Users
   const puRecords = rawProjectUsers.map((pu) => ({
-    userId: mapId(userIdMap, pu['user_id'] as string) ?? 0,
-    projectId: mapId(projectIdMap, pu['project_id'] as string) ?? 0,
+    userId: requireMapped(userIdMap, pu['user_id'] as string, 'project_users.user_id'),
+    projectId: requireMapped(projectIdMap, pu['project_id'] as string, 'project_users.project_id'),
     roles: (pu['roles'] as string[]) ?? ['member'],
   }))
   await importInBatches(schema.projectUsers, puRecords, 'project users')
@@ -203,7 +222,7 @@ async function main() {
   // Agents
   const agentRecords = rawAgents.map((a) => ({
     name: toStr(a['name']),
-    projectId: mapId(projectIdMap, a['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, a['project_id'] as string, 'agents.project_id'),
     authToken: toStr(a['auth_token'] ?? crypto.randomUUID()),
     status: toStr(a['status'] ?? 'offline'),
     capabilities: (a['capabilities'] as Record<string, unknown>) ?? {},
@@ -224,7 +243,7 @@ async function main() {
 
   // Hash Lists
   const hlRecords = rawHashLists.map((hl) => ({
-    projectId: mapId(projectIdMap, hl['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, hl['project_id'] as string, 'hash_lists.project_id'),
     name: toStr(hl['name']),
     hashTypeId: mapId(hashTypeIdMap, hl['hash_type_id'] as string),
     source: toStr(hl['source'] ?? 'upload'),
@@ -235,7 +254,11 @@ async function main() {
 
   // Hash Items (can be large — batched)
   const hiRecords = rawHashItems.map((hi) => ({
-    hashListId: mapId(hashListIdMap, hi['hash_list_id'] as string) ?? 0,
+    hashListId: requireMapped(
+      hashListIdMap,
+      hi['hash_list_id'] as string,
+      'hash_items.hash_list_id'
+    ),
     hashValue: toStr(hi['hash_value']),
     plaintext: hi['plaintext'] ? toStr(hi['plaintext']) : null,
     crackedAt: hi['cracked_at'] ? new Date(hi['cracked_at'] as string) : null,
@@ -244,7 +267,7 @@ async function main() {
 
   // Wordlists, Rulelists, Masklists
   const wlRecords = rawWordLists.map((wl) => ({
-    projectId: mapId(projectIdMap, wl['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, wl['project_id'] as string, 'word_lists.project_id'),
     name: String(wl['name']),
     lineCount: wl['line_count'] ? Number(wl['line_count']) : null,
     fileSize: wl['file_size'] ? Number(wl['file_size']) : null,
@@ -253,7 +276,7 @@ async function main() {
   const wordListIdMap = buildIdMap(rawWordLists, wlIds)
 
   const rlRecords = rawRuleLists.map((rl) => ({
-    projectId: mapId(projectIdMap, rl['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, rl['project_id'] as string, 'rule_lists.project_id'),
     name: String(rl['name']),
     lineCount: rl['line_count'] ? Number(rl['line_count']) : null,
     fileSize: rl['file_size'] ? Number(rl['file_size']) : null,
@@ -262,7 +285,7 @@ async function main() {
   const ruleListIdMap = buildIdMap(rawRuleLists, rlIds)
 
   const mlRecords = rawMaskLists.map((ml) => ({
-    projectId: mapId(projectIdMap, ml['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, ml['project_id'] as string, 'mask_lists.project_id'),
     name: String(ml['name']),
     lineCount: ml['line_count'] ? Number(ml['line_count']) : null,
     fileSize: ml['file_size'] ? Number(ml['file_size']) : null,
@@ -272,10 +295,10 @@ async function main() {
 
   // Campaigns
   const campaignRecords = rawCampaigns.map((c) => ({
-    projectId: mapId(projectIdMap, c['project_id'] as string) ?? 0,
+    projectId: requireMapped(projectIdMap, c['project_id'] as string, 'campaigns.project_id'),
     name: toStr(c['name']),
     description: c['description'] ? toStr(c['description']) : null,
-    hashListId: mapId(hashListIdMap, c['hash_list_id'] as string) ?? 0,
+    hashListId: requireMapped(hashListIdMap, c['hash_list_id'] as string, 'campaigns.hash_list_id'),
     status: toStr(c['status'] ?? 'draft'),
     priority: Number(c['priority'] ?? 5),
     createdBy: mapId(userIdMap, c['created_by'] as string),
@@ -287,8 +310,8 @@ async function main() {
 
   // Attacks
   const attackRecords = rawAttacks.map((a) => ({
-    campaignId: mapId(campaignIdMap, a['campaign_id'] as string) ?? 0,
-    projectId: mapId(projectIdMap, a['project_id'] as string) ?? 0,
+    campaignId: requireMapped(campaignIdMap, a['campaign_id'] as string, 'attacks.campaign_id'),
+    projectId: requireMapped(projectIdMap, a['project_id'] as string, 'attacks.project_id'),
     mode: Number(a['mode']),
     hashTypeId: mapId(hashTypeIdMap, a['hash_type_id'] as string),
     wordlistId: mapId(wordListIdMap, a['wordlist_id'] as string),
@@ -304,8 +327,8 @@ async function main() {
 
   // Tasks
   const taskRecords = rawTasks.map((t) => ({
-    attackId: mapId(attackIdMap, t['attack_id'] as string) ?? 0,
-    campaignId: mapId(campaignIdMap, t['campaign_id'] as string) ?? 0,
+    attackId: requireMapped(attackIdMap, t['attack_id'] as string, 'tasks.attack_id'),
+    campaignId: requireMapped(campaignIdMap, t['campaign_id'] as string, 'tasks.campaign_id'),
     agentId: mapId(agentIdMap, t['agent_id'] as string),
     status: toStr(t['status'] ?? 'pending'),
     workRange: (t['work_range'] as Record<string, unknown>) ?? {},
@@ -324,7 +347,7 @@ async function main() {
   const validateTable = async (table: any, label: string, expected: number) => {
     const result = await db.select({ id: table.id }).from(table)
     const actual = result.length
-    const status = actual >= expected ? 'OK' : 'MISMATCH'
+    const status = actual === expected ? 'OK' : 'MISMATCH'
     console.log(`  ${label}: ${actual} (expected ${expected}) [${status}]`)
   }
 
