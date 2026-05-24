@@ -9,12 +9,32 @@ import {
   abortMultipartUpload,
   completeMultipartUpload,
   createMultipartUpload,
+  deleteFile,
   getPresignedUrl,
   listParts,
   uploadFile,
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
+
+// ─── Errors ────────────────────────────────────────────────────────────
+
+/**
+ * Thrown when a resource cannot be deleted because another row references
+ * it (campaign, attack, etc.). Routes catch this and surface a 409.
+ */
+export class ResourceInUseError extends Error {
+  readonly resourceType: string
+  readonly resourceId: number
+  readonly references: string
+  constructor(resourceType: string, resourceId: number, references: string) {
+    super(`${resourceType} ${resourceId} cannot be deleted while it is referenced by ${references}`)
+    this.name = 'ResourceInUseError'
+    this.resourceType = resourceType
+    this.resourceId = resourceId
+    this.references = references
+  }
+}
 
 // ─── Upload size limits ─────────────────────────────────────────────
 
@@ -93,6 +113,89 @@ export async function listHashListsPaginated(
     db.select({ value: count() }).from(hashLists).where(whereClause),
   ])
   return { items, total: Number(countResult[0]?.value ?? 0) }
+}
+
+/**
+ * Delete a hash list and its associated rows. Order of operations:
+ *   1. Ownership check (404 if not in project)
+ *   2. Best-effort S3 object delete (logged on failure but doesn't block)
+ *   3. Cascade-delete `hash_items` rows (explicit because schema has no
+ *      ON DELETE CASCADE — adding it would require a migration)
+ *   4. Delete the `hash_lists` row
+ *
+ * Throws `ResourceInUseError` if another table (campaigns/attacks) still
+ * references the row. Idempotent: returns `false` when the row was
+ * already gone, `true` when this call performed the delete.
+ */
+export async function deleteHashList(id: number, projectId: number): Promise<boolean> {
+  const hl = await getHashListById(id, projectId)
+  if (!hl) return false
+
+  const fileRef = hl.fileRef as { bucket?: string; key?: string } | null
+  if (fileRef?.key) {
+    try {
+      await deleteFile(fileRef.key, fileRef.bucket)
+    } catch (err) {
+      // Object may already be gone, or the bucket may be transient-unavailable —
+      // log and proceed. The DB row delete is the durable signal.
+      logger.warn({ hashListId: id, err }, 'Failed to delete hash list S3 object; continuing')
+    }
+  }
+
+  // Explicit cascade — no ON DELETE CASCADE on the FK.
+  await db.delete(hashItems).where(eq(hashItems.hashListId, id))
+
+  try {
+    await db.delete(hashLists).where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+  } catch (err) {
+    // FK violation from a referencing table (campaigns, attacks) — surface
+    // as a domain error the route maps to 409.
+    if (err instanceof Error && /foreign key|violates|reference/i.test(err.message)) {
+      throw new ResourceInUseError('hash_list', id, 'one or more campaigns or attacks')
+    }
+    throw err
+  }
+  return true
+}
+
+/**
+ * Generic delete for `wordlists`, `rulelists`, `masklists`. Same flow as
+ * `deleteHashList` but without the `hash_items` cascade. Throws
+ * `ResourceInUseError` when attacks still reference the resource.
+ */
+export async function deleteResource(
+  table: ResourceTable,
+  id: number,
+  projectId: number,
+  resourceType: string
+): Promise<boolean> {
+  const row = await getResourceById(table, id, projectId)
+  if (!row) return false
+
+  const fileRef = (row as Record<string, unknown>)['fileRef'] as {
+    bucket?: string
+    key?: string
+  } | null
+  if (fileRef?.key) {
+    try {
+      await deleteFile(fileRef.key, fileRef.bucket)
+    } catch (err) {
+      logger.warn(
+        { resourceType, resourceId: id, err },
+        'Failed to delete resource S3 object; continuing'
+      )
+    }
+  }
+
+  try {
+    await db.delete(table).where(and(eq(table.id, id), eq(table.projectId, projectId)))
+  } catch (err) {
+    if (err instanceof Error && /foreign key|violates|reference/i.test(err.message)) {
+      throw new ResourceInUseError(resourceType, id, 'one or more attacks')
+    }
+    throw err
+  }
+  return true
 }
 
 export async function getHashListById(id: number, projectId: number) {

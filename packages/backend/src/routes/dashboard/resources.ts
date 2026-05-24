@@ -14,6 +14,8 @@ import {
   completeChunkedUpload,
   createHashList,
   createResource,
+  deleteHashList,
+  deleteResource,
   getChunkedUploadStatus,
   getHashItems,
   getHashListById,
@@ -26,6 +28,7 @@ import {
   listHashTypes,
   listResources,
   type ResourceTable,
+  ResourceInUseError,
   uploadChunkPart,
   uploadHashListFile,
   UploadTooLargeError,
@@ -103,6 +106,31 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
       },
     },
   })
+})
+
+resourceRoutes.delete('/hash-lists/:id', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser')
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
+  }
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid hash list id' } }, 400)
+  }
+
+  try {
+    const deleted = await deleteHashList(id, projectId)
+    if (!deleted) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+    return c.body(null, 204)
+  } catch (err) {
+    if (err instanceof ResourceInUseError) {
+      return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+    }
+    throw err
+  }
 })
 
 resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
@@ -350,6 +378,35 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
           },
           413
         )
+      }
+      throw err
+    }
+  })
+
+  resourceRoutes.delete(`/${prefix}/:id`, requireRole('admin', 'contributor'), async (c) => {
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
+    const id = Number(c.req.param('id'))
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
+    }
+    try {
+      const deleted = await deleteResource(table, id, projectId, prefix)
+      if (!deleted) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
+          404
+        )
+      }
+      return c.body(null, 204)
+    } catch (err) {
+      if (err instanceof ResourceInUseError) {
+        return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
       }
       throw err
     }
