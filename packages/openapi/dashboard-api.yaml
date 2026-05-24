@@ -41,6 +41,13 @@ servers:
 tags:
   - name: Campaigns
     description: Campaign orchestration — create, edit, list, lifecycle, attacks.
+  - name: Resources
+    description: |
+      Hash lists, wordlists, rulelists, masklists. Hash lists carry the
+      target hashes a campaign tries to crack; wordlists/rulelists/masklists
+      are the inputs an attack consumes. Upload paths: small files
+      (≤ 10 MB) use direct multipart; larger files go through the chunked
+      S3 multipart endpoints under `/resources/upload/*`.
 
 paths:
   /campaigns:
@@ -371,6 +378,632 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResourceMissingError'
 
+  # ─── Resources ─────────────────────────────────────────────────────
+  /resources/hash-types:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+    get:
+      operationId: listHashTypes
+      summary: List supported hash types
+      tags: [Resources]
+      responses:
+        '200':
+          description: All hash types known to the platform (ordered by hashcat mode).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hashTypes]
+                properties:
+                  hashTypes:
+                    type: array
+                    items: { $ref: '#/components/schemas/HashType' }
+
+  /resources/hash-lists:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+    get:
+      operationId: listHashLists
+      summary: List hash lists for the active project
+      tags: [Resources]
+      responses:
+        '200':
+          description: Project-scoped hash lists, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hashLists]
+                properties:
+                  hashLists:
+                    type: array
+                    items: { $ref: '#/components/schemas/HashList' }
+    post:
+      operationId: createOrUploadHashList
+      summary: Create a hash list, optionally with a one-shot multipart upload
+      description: |
+        Content-type-aware. `multipart/form-data` runs the full
+        create + upload + enqueue flow and returns **202** with
+        `status=processing` (large files >10 MB must use the chunked
+        upload endpoints instead). `application/json` runs the legacy
+        create-empty flow (caller follows up with `/upload` + `/import`)
+        and returns **201**.
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHashListRequest' }
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string, minLength: 1, maxLength: 200 }
+                hashTypeId: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: Hash list created (JSON path, no upload).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hashList]
+                properties:
+                  hashList: { $ref: '#/components/schemas/HashList' }
+        '202':
+          description: Hash list created and parsing enqueued (multipart path).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hashList]
+                properties:
+                  hashList: { $ref: '#/components/schemas/HashList' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /resources/hash-lists/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getHashList
+      summary: Get a hash list with live statistics
+      tags: [Resources]
+      responses:
+        '200':
+          description: Hash list with merged persisted + live statistics.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hashList]
+                properties:
+                  hashList:
+                    allOf:
+                      - $ref: '#/components/schemas/HashList'
+                      - type: object
+                        properties:
+                          statistics: { $ref: '#/components/schemas/HashListStatistics' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    delete:
+      operationId: deleteHashList
+      summary: Delete a hash list and its hash items
+      description: |
+        Idempotent. Cascade-deletes `hash_items` for this hash list and
+        attempts to remove the underlying S3 object (logged on failure
+        but doesn't block). Returns **409** when a campaign or attack
+        still references the row — operator must remove those first.
+      tags: [Resources]
+      responses:
+        '204': { description: Hash list deleted. }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '409':
+          description: Hash list is still referenced by a campaign or attack.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceInUseError' }
+
+  /resources/hash-lists/{id}/upload:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      operationId: uploadHashListFile
+      summary: Upload the hash list file (direct, ≤ 10 MB)
+      description: |
+        Used after a JSON create-empty `POST /hash-lists`. Larger files
+        must use the chunked endpoints at `/resources/upload/*`.
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Upload accepted; hash list now has `status=uploaded`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, size]
+                properties:
+                  key: { type: string }
+                  size: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /resources/hash-lists/{id}/import:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      operationId: importHashList
+      summary: Enqueue async parsing for an already-uploaded hash list
+      tags: [Resources]
+      responses:
+        '200':
+          description: Job enqueued; hash list now has `status=processing`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enqueued: { type: boolean }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /resources/hash-lists/{id}/items:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      - { name: status, in: query, schema: { type: string, enum: [all, cracked, uncracked] } }
+      - { name: q, in: query, schema: { type: string, maxLength: 256 } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    get:
+      operationId: listHashItems
+      summary: Paginated, filterable hash items for a hash list
+      tags: [Resources]
+      responses:
+        '200':
+          description: Paginated hash items.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/HashItem' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  /resources/hash-lists/{id}/download:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getHashListDownloadUrl
+      summary: Presigned download URL for the hash list file
+      tags: [Resources]
+      responses:
+        '200':
+          description: Time-limited presigned URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url: { type: string, format: uri }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  /resources/detect-hash-type:
+    post:
+      operationId: detectHashType
+      summary: Identify likely hash types for sample hashes
+      description: |
+        Hand-rolled regex matcher (~25 patterns, popularity-ranked).
+        Capped at 100 hashes per call to bound CPU on the synchronous
+        path.
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DetectHashTypeRequest' }
+      responses:
+        '200':
+          description: One result entry per input hash.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DetectHashTypeResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  # The wordlists/rulelists/masklists endpoints share an identical shape
+  # — list, create, get, upload (≤10 MB), download (presigned), delete.
+  # Documented as parameterized paths under each prefix so generated
+  # clients get one method per (resource, operation).
+  /resources/wordlists:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+    get:
+      operationId: listWordlists
+      summary: List wordlists for the active project
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceList' }
+    post:
+      operationId: createWordlist
+      summary: Create an empty wordlist record
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateResourceRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/ResourceCreated' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /resources/wordlists/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getWordlist
+      summary: Get a wordlist
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceItem' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    delete:
+      operationId: deleteWordlist
+      summary: Delete a wordlist
+      tags: [Resources]
+      responses:
+        '204': { description: Wordlist deleted. }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '409':
+          description: Wordlist is still referenced by an attack.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceInUseError' }
+
+  /resources/wordlists/{id}/upload:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      operationId: uploadWordlistFile
+      summary: Upload the wordlist file (direct, ≤ 10 MB)
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200': { $ref: '#/components/responses/ResourceUploadResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /resources/wordlists/{id}/download:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getWordlistDownloadUrl
+      summary: Presigned download URL for the wordlist file
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceDownloadUrl' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  # /resources/rulelists/* and /resources/masklists/* mirror /resources/wordlists/*
+  # exactly. The factory `createResourceRoutes` in
+  # `packages/backend/src/routes/dashboard/resources.ts` wires them with
+  # identical shapes; clients should treat the three as a uniform family.
+  # See operationIds: list/create/get/upload/download/delete<Rulelist|Masklist>.
+  /resources/rulelists:
+    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
+    get:
+      operationId: listRulelists
+      tags: [Resources]
+      responses: { '200': { $ref: '#/components/responses/ResourceList' } }
+    post:
+      operationId: createRulelist
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateResourceRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/ResourceCreated' }
+
+  /resources/rulelists/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getRulelist
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceItem' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    delete:
+      operationId: deleteRulelist
+      tags: [Resources]
+      responses:
+        '204': { description: Rulelist deleted. }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '409':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceInUseError' }
+          description: Rulelist is still referenced by an attack.
+
+  /resources/rulelists/{id}/upload:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      operationId: uploadRulelistFile
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200': { $ref: '#/components/responses/ResourceUploadResult' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /resources/rulelists/{id}/download:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getRulelistDownloadUrl
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceDownloadUrl' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  /resources/masklists:
+    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
+    get:
+      operationId: listMasklists
+      tags: [Resources]
+      responses: { '200': { $ref: '#/components/responses/ResourceList' } }
+    post:
+      operationId: createMasklist
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateResourceRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/ResourceCreated' }
+
+  /resources/masklists/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getMasklist
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceItem' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    delete:
+      operationId: deleteMasklist
+      tags: [Resources]
+      responses:
+        '204': { description: Masklist deleted. }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '409':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceInUseError' }
+          description: Masklist is still referenced by an attack.
+
+  /resources/masklists/{id}/upload:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      operationId: uploadMasklistFile
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200': { $ref: '#/components/responses/ResourceUploadResult' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /resources/masklists/{id}/download:
+    parameters:
+      - $ref: '#/components/parameters/XProjectIdHeader'
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: getMasklistDownloadUrl
+      tags: [Resources]
+      responses:
+        '200': { $ref: '#/components/responses/ResourceDownloadUrl' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  # Chunked S3 multipart upload — used by the dashboard UI when a file
+  # exceeds the 10 MB direct-upload cap. PUT carries raw binary part
+  # bodies (no zValidator). Documented for client generation; sub-IDs
+  # are server-issued.
+  /resources/upload/initiate:
+    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
+    post:
+      operationId: initiateChunkedUpload
+      summary: Begin a chunked S3 multipart upload
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, contentType, size, resourceType]
+              properties:
+                filename: { type: string }
+                contentType: { type: string }
+                size: { type: integer, minimum: 1 }
+                resourceType:
+                  type: string
+                  enum: [hash-list, wordlist, rulelist, masklist]
+                resourceId: { type: integer, minimum: 1, nullable: true }
+      responses:
+        '200':
+          description: Upload session created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploadId, key, partSize]
+                properties:
+                  uploadId: { type: string }
+                  key: { type: string }
+                  partSize: { type: integer }
+
+  /resources/upload/{uploadId}/part/{partNumber}:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+      - {
+          name: partNumber,
+          in: path,
+          required: true,
+          schema: { type: integer, minimum: 1, maximum: 10000 },
+        }
+    put:
+      operationId: uploadChunkPart
+      summary: Upload one part of a chunked upload
+      description: Body is raw binary; no JSON. Returns the part's `ETag`.
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Part accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [etag]
+                properties:
+                  etag: { type: string }
+
+  /resources/upload/{uploadId}/complete:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: completeChunkedUpload
+      summary: Finalize a chunked upload (assembles all parts on the bucket)
+      tags: [Resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parts]
+              properties:
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    required: [partNumber, etag]
+                    properties:
+                      partNumber: { type: integer, minimum: 1 }
+                      etag: { type: string }
+      responses:
+        '200':
+          description: Upload assembled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string }
+
+  /resources/upload/{uploadId}:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: abortChunkedUpload
+      summary: Abort a chunked upload and release its parts
+      tags: [Resources]
+      responses:
+        '204': { description: Upload aborted. }
+
+  /resources/upload/{uploadId}/status:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getChunkedUploadStatus
+      summary: List uploaded parts for an in-flight chunked upload
+      tags: [Resources]
+      responses:
+        '200':
+          description: List of parts received so far.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [parts]
+                properties:
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      required: [partNumber, etag, size]
+                      properties:
+                        partNumber: { type: integer }
+                        etag: { type: string }
+                        size: { type: integer }
+
 components:
   securitySchemes:
     SessionCookie:
@@ -571,7 +1204,220 @@ components:
               properties:
                 code: { type: string, enum: [STALE_STATE] }
 
+    # ─── Resources ────────────────────────────────────────────────────
+    HashType:
+      type: object
+      required: [id, name, hashcatMode, category]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        hashcatMode: { type: integer }
+        category: { type: string }
+        example: { type: string, nullable: true }
+
+    HashList:
+      type: object
+      required: [id, projectId, name, status, createdAt]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        name: { type: string }
+        hashTypeId: { type: integer, nullable: true }
+        source: { type: string }
+        status:
+          type: string
+          enum: [uploading, uploaded, processing, ready, error]
+        fileRef:
+          type: object
+          nullable: true
+          properties:
+            bucket: { type: string }
+            key: { type: string }
+            name: { type: string }
+            size: { type: integer }
+            contentType: { type: string }
+            uploadedAt: { type: string, format: date-time }
+        statistics: { $ref: '#/components/schemas/HashListStatistics' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HashListStatistics:
+      type: object
+      description: |
+        Persisted by the hash-list parser worker; the dashboard GET
+        merges live counts on top before returning. Wire shape matches
+        the shared Zod schema `hashListStatisticsSchema`.
+      required: [totalCount, crackedCount, crackRate]
+      properties:
+        totalCount: { type: integer, minimum: 0 }
+        crackedCount: { type: integer, minimum: 0 }
+        crackRate: { type: number, minimum: 0, maximum: 1 }
+        lastUpdated: { type: string, format: date-time }
+
+    HashItem:
+      type: object
+      required: [id, hashListId, hashValue]
+      properties:
+        id: { type: integer }
+        hashListId: { type: integer }
+        hashValue: { type: string }
+        plaintext: { type: string, nullable: true }
+        crackedAt: { type: string, format: date-time, nullable: true }
+        campaignId: { type: integer, nullable: true }
+        attackId: { type: integer, nullable: true }
+        taskId: { type: integer, nullable: true }
+        agentId: { type: integer, nullable: true }
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+
+    ResourceListItem:
+      type: object
+      description: Generic shape for wordlists/rulelists/masklists rows.
+      required: [id, projectId, name, status, createdAt]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        name: { type: string }
+        fileRef:
+          type: object
+          nullable: true
+          properties:
+            bucket: { type: string }
+            key: { type: string }
+            name: { type: string }
+            size: { type: integer }
+        lineCount: { type: integer, nullable: true }
+        fileSize: { type: integer, nullable: true }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateHashListRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        hashTypeId: { type: integer, minimum: 1 }
+        source: { type: string, maxLength: 50 }
+
+    CreateResourceRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+
+    DetectHashTypeRequest:
+      type: object
+      required: [hashes]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 1024 }
+
+    HashCandidate:
+      type: object
+      required: [name, hashcatMode, category, confidence]
+      properties:
+        name: { type: string }
+        hashcatMode: { type: integer }
+        category: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+
+    DetectHashTypeResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [hashValue, candidates]
+            properties:
+              hashValue: { type: string }
+              candidates:
+                type: array
+                items: { $ref: '#/components/schemas/HashCandidate' }
+
+    ResourceInUseError:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          properties:
+            error:
+              properties:
+                code: { type: string, enum: [RESOURCE_IN_USE] }
+
   responses:
+    # ─── Resources ────────────────────────────────────────────────────
+    ResourceList:
+      description: Generic resource list response.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties:
+              type: array
+              items: { $ref: '#/components/schemas/ResourceListItem' }
+    ResourceCreated:
+      description: Generic resource created.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [item]
+            properties:
+              item: { $ref: '#/components/schemas/ResourceListItem' }
+    ResourceItem:
+      description: Generic resource item.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [item]
+            properties:
+              item: { $ref: '#/components/schemas/ResourceListItem' }
+    ResourceUploadResult:
+      description: Generic resource upload result.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [key, size]
+            properties:
+              key: { type: string }
+              size: { type: integer }
+    ResourceDownloadUrl:
+      description: Presigned download URL.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [url]
+            properties:
+              url: { type: string, format: uri }
+    PayloadTooLarge:
+      description: Direct upload exceeds the 10 MB cap; use the chunked endpoint instead.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorEnvelope'
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [PAYLOAD_TOO_LARGE] }
+    ValidationFailed:
+      description: Request body or query parameter failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
     CampaignWrapper:
       description: Returns the campaign envelope.
       content:
