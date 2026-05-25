@@ -1,4 +1,10 @@
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import {
+  createHashListRequestSchema,
+  detectHashTypeRequestSchema,
+  maskLists,
+  ruleLists,
+  wordLists,
+} from '@hashhive/shared'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -14,6 +20,8 @@ import {
   completeChunkedUpload,
   createHashList,
   createResource,
+  deleteHashList,
+  deleteResource,
   getChunkedUploadStatus,
   getHashItems,
   getHashListById,
@@ -25,12 +33,22 @@ import {
   listHashLists,
   listHashTypes,
   listResources,
+  MAX_DIRECT_UPLOAD_BYTES,
   type ResourceTable,
+  ResourceInUseError,
   uploadChunkPart,
   uploadHashListFile,
   UploadTooLargeError,
   uploadResourceFile,
 } from '../../services/resources.js'
+
+// Cap the multipart wire body slightly above the direct-upload limit. The
+// extra 1 MB covers multipart overhead (boundaries, field headers) so a
+// genuine 10 MB file isn't rejected by the wire-size check before it
+// reaches the byte-size check in `uploadHashListFile`. Anything larger
+// is rejected before parseBody so the server doesn't buffer GBs into
+// memory. See the multipart branch in POST /hash-lists.
+const MULTIPART_BODY_LIMIT_BYTES = MAX_DIRECT_UPLOAD_BYTES + 1_048_576
 
 const resourceRoutes = new Hono<AppEnv>()
 
@@ -55,29 +73,183 @@ resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
   return c.json({ hashLists })
 })
 
-const createHashListSchema = z.object({
-  name: z.string().min(1).max(255),
-  hashTypeId: z.number().int().positive().optional(),
-  source: z.string().max(50).optional(),
-})
+// createHashListRequestSchema is imported from @hashhive/shared.
 
-resourceRoutes.post(
-  '/hash-lists',
-  requireRole('admin', 'contributor'),
-  zValidator('json', createHashListSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
+// Content-type-aware route. Multipart -> one-shot create+upload+enqueue
+// flow (returns 202 with status='processing'). JSON -> legacy create-empty
+// flow that the caller follows with separate /upload + /import requests
+// (still in use by the CLI and older frontend code paths).
+// We cannot apply zValidator at registration because the validator binds
+// per content-type; instead we dispatch inside the handler.
+resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser')
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
+  }
+
+  const contentType = c.req.header('content-type') ?? ''
+
+  // ─── Multipart one-shot upload (ticket AC #1) ──────────────────────
+  if (contentType.startsWith('multipart/form-data')) {
+    // Reject oversize multipart payloads BEFORE parseBody buffers them.
+    // Without this guard, an authenticated admin/contributor could OOM
+    // the backend with a multi-GB body.
+    //
+    // Defense:
+    //   1. Reject `Transfer-Encoding: chunked` outright (411). chunked
+    //      omits Content-Length, so the size guard below couldn't
+    //      enforce a cap and the body would buffer unbounded into
+    //      parseBody. Callers with files of unknown size must use the
+    //      streaming chunked-upload endpoint at `/upload/initiate`.
+    //   2. Reject when declared Content-Length exceeds the cap.
+    //   3. Backstop: `uploadHashListFile` still enforces the byte cap
+    //      via `UploadTooLargeError` after parseBody.
+    const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
+    if (transferEncoding.includes('chunked')) {
       return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        {
+          error: {
+            code: 'LENGTH_REQUIRED',
+            message:
+              'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
+          },
+        },
+        411
+      )
+    }
+    const contentLengthRaw = c.req.header('content-length')
+    const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
+    if (
+      typeof contentLength === 'number' &&
+      Number.isFinite(contentLength) &&
+      contentLength > MULTIPART_BODY_LIMIT_BYTES
+    ) {
+      return c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+          },
+        },
+        413
+      )
+    }
+    let body: Awaited<ReturnType<typeof c.req.parseBody>>
+    try {
+      body = await c.req.parseBody()
+    } catch (err) {
+      logger.warn({ err }, 'Failed to parse multipart body for POST /hash-lists')
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Malformed multipart body',
+          },
+        },
         400
       )
     }
-    const hashList = await createHashList({ ...data, projectId })
-    return c.json({ hashList }, 201)
+    const file = body['file']
+    const nameRaw = body['name']
+    const hashTypeIdRaw = body['hashTypeId']
+
+    if (!(file instanceof File)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+    }
+    // Align with createHashListRequestSchema (1-255 chars) so the multipart
+    // and JSON paths accept the same name lengths.
+    if (typeof nameRaw !== 'string' || nameRaw.length === 0 || nameRaw.length > 255) {
+      return c.json(
+        {
+          error: { code: 'VALIDATION_ERROR', message: 'name is required (1-255 chars)' },
+        },
+        400
+      )
+    }
+    let hashTypeId: number | undefined
+    if (typeof hashTypeIdRaw === 'string' && hashTypeIdRaw.length > 0) {
+      const parsed = Number(hashTypeIdRaw)
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'hashTypeId must be a positive integer',
+            },
+          },
+          400
+        )
+      }
+      hashTypeId = parsed
+    }
+
+    // Create the DB row first so we can target the upload at a stable key.
+    const created = await createHashList({
+      projectId,
+      name: nameRaw,
+      ...(hashTypeId !== undefined ? { hashTypeId } : {}),
+    })
+    if (!created) {
+      return c.json(
+        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to create hash list' } },
+        503
+      )
+    }
+
+    // Upload — rollback DB row on failure so the caller sees a clean error
+    // state rather than an orphaned uploading-status row.
+    try {
+      await uploadHashListFile(created.id, projectId, file)
+    } catch (err) {
+      try {
+        await deleteHashList(created.id, projectId)
+      } catch (rollbackErr) {
+        logger.error(
+          { hashListId: created.id, err: rollbackErr },
+          'Failed to rollback hash list after upload error'
+        )
+      }
+      if (err instanceof UploadTooLargeError) {
+        return c.json(
+          {
+            error: {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+            },
+          },
+          413
+        )
+      }
+      logger.error({ hashListId: created.id, err }, 'Hash list upload failed')
+      return c.json(
+        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to upload file' } },
+        503
+      )
+    }
+
+    // Enqueue parsing. If the queue is down we leave the row in `uploaded`
+    // status (the user can retry via POST /:id/import) and surface a 503.
+    const importResult = await importHashList(created.id, projectId)
+    if (!importResult) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+    if ('error' in importResult) {
+      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: importResult.error } }, 503)
+    }
+
+    // Re-read so the response carries `status=processing` and the fresh fileRef.
+    const finalRow = await getHashListById(created.id, projectId)
+    return c.json({ hashList: finalRow }, 202)
   }
-)
+
+  // ─── Legacy JSON create-empty path ─────────────────────────────────
+  const parsed = createHashListRequestSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400)
+  }
+  const hashList = await createHashList({ ...parsed.data, projectId })
+  return c.json({ hashList }, 201)
+})
 
 resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   const { projectId } = c.get('currentUser')
@@ -94,15 +266,50 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
 
   const liveStats = await getHashListStats(hashListId)
 
+  // Strip legacy keys so a pre-rename row (parsed before U1 shipped) doesn't
+  // leak `{total, cracked, remaining, skippedLines}` into the response next
+  // to the new `{totalCount, crackedCount, crackRate, lastUpdated}` shape.
+  // `lastUpdated` is the only persisted-only field; everything else is
+  // recomputed from `liveStats` on every request so the response is always
+  // wire-shape-clean regardless of what's in the JSONB.
+  const persistedStats = (hl.statistics as Record<string, unknown> | null) ?? {}
+  const lastUpdated =
+    typeof persistedStats['lastUpdated'] === 'string' ? persistedStats['lastUpdated'] : undefined
+
   return c.json({
     hashList: {
       ...hl,
       statistics: {
-        ...(hl.statistics as Record<string, unknown> | null),
         ...liveStats,
+        ...(lastUpdated ? { lastUpdated } : {}),
       },
     },
   })
+})
+
+resourceRoutes.delete('/hash-lists/:id', requireRole('admin', 'contributor'), async (c) => {
+  const { projectId } = c.get('currentUser')
+  if (!projectId) {
+    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
+  }
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid hash list id' } }, 400)
+  }
+
+  try {
+    const deleted = await deleteHashList(id, projectId)
+    if (!deleted) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+    return c.body(null, 204)
+  } catch (err) {
+    if (err instanceof ResourceInUseError) {
+      return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+    }
+    throw err
+  }
 })
 
 resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
@@ -134,7 +341,7 @@ resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'
         {
           error: {
             code: 'PAYLOAD_TOO_LARGE',
-            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
           },
         },
         413
@@ -232,14 +439,12 @@ resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c)
 
 // ─── Hash Type Detection ─────────────────────────────────────────────
 
-const detectHashTypeSchema = z.object({
-  hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
-})
+// detectHashTypeRequestSchema is imported from @hashhive/shared.
 
 resourceRoutes.post(
   '/detect-hash-type',
   requireSession,
-  zValidator('json', detectHashTypeSchema),
+  zValidator('json', detectHashTypeRequestSchema),
   async (c) => {
     const { hashes } = c.req.valid('json')
 
@@ -345,11 +550,40 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
           {
             error: {
               code: 'PAYLOAD_TOO_LARGE',
-              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
             },
           },
           413
         )
+      }
+      throw err
+    }
+  })
+
+  resourceRoutes.delete(`/${prefix}/:id`, requireRole('admin', 'contributor'), async (c) => {
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
+    const id = Number(c.req.param('id'))
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
+    }
+    try {
+      const deleted = await deleteResource(table, id, projectId, prefix)
+      if (!deleted) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
+          404
+        )
+      }
+      return c.body(null, 204)
+    } catch (err) {
+      if (err instanceof ResourceInUseError) {
+        return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
       }
       throw err
     }

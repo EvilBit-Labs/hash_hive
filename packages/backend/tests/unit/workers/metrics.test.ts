@@ -34,7 +34,24 @@ if (IS_ISOLATED) {
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
-      update: () => ({ set: () => ({ where: () => dbUpdateImpl() }) }),
+      update: () => ({
+        set: () => ({
+          // Post-R refactor: hash-list-parser's failed listener now chains
+          // `.where(...).returning(...)` for the status-guarded flip.
+          // Make `where` return a thenable that also carries `.returning`
+          // so both call shapes work (await for legacy callers in this
+          // file, `.returning()` for the parser's atomic guard).
+          where: () => {
+            const p = dbUpdateImpl()
+            return {
+              returning: () => p.then(() => [{ id: 1 }]),
+              // oxlint-disable-next-line unicorn/no-thenable -- mock dual-shape
+              then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+                p.then(resolve, reject),
+            }
+          },
+        }),
+      }),
       select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
     },
   }))
@@ -44,9 +61,22 @@ if (IS_ISOLATED) {
     reassignStaleTasks: mock(() => Promise.resolve({ reassigned: 0 })),
   }))
 
+  // Inline events mock — the file-level `createEventsMockFactory` helper
+  // can't be used here because this file is gated behind `IS_ISOLATED`
+  // and the helper is imported at module top, before the gate runs.
   mock.module('../../../src/services/events.js', () => ({
+    emit: mock(),
     emitAgentStatus: mock(),
+    emitAgentError: mock(),
+    emitCampaignStatus: mock(),
+    emitTaskUpdate: mock(),
+    emitCrackResult: mock(),
+    emitResourceUpdate: mock(),
     broadcastSystemHealth: mock(),
+    registerClient: mock(),
+    unregisterClient: mock(),
+    getClientCount: mock(() => 0),
+    __resetEventsForTesting: mock(),
   }))
 
   mock.module('../../../src/services/health.js', () => ({

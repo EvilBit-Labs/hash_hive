@@ -25,8 +25,12 @@ import type {
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
   createCrackerBinaryRequestSchema,
+  createHashListRequestSchema,
+  detectHashTypeRequestSchema,
+  detectHashTypeResponseSchema,
   engineDescriptorSchema,
   hashCandidateSchema,
+  hashListStatisticsSchema,
   inlineAttackRequestSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
@@ -49,6 +53,7 @@ import type {
   instantiateAttackTemplateResponseSchema,
   loginRequestSchema,
   requiredCapabilitiesSchema,
+  resourceUpdateEventDataSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
@@ -214,6 +219,13 @@ export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>
 export type HashCandidate = z.infer<typeof hashCandidateSchema>
+
+// ─── Resource Management API wire types ─────────────────────────────
+export type HashListStatistics = z.infer<typeof hashListStatisticsSchema>
+export type CreateHashListRequest = z.infer<typeof createHashListRequestSchema>
+export type DetectHashTypeRequest = z.infer<typeof detectHashTypeRequestSchema>
+export type DetectHashTypeResponse = z.infer<typeof detectHashTypeResponseSchema>
+export type ResourceUpdateEventData = z.infer<typeof resourceUpdateEventDataSchema>
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>

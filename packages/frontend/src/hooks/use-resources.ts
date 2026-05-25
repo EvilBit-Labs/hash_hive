@@ -1,4 +1,4 @@
-import type { HashCandidate } from '@hashhive/shared'
+import type { HashCandidate, HashListStatistics } from '@hashhive/shared'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -130,7 +130,7 @@ interface HashListDetail {
   projectId: number
   hashTypeId: number | null
   status: string
-  statistics: { total: number; cracked: number; remaining: number }
+  statistics: HashListStatistics
   createdAt: string
 }
 

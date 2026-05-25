@@ -1,3 +1,5 @@
+import type { ResourceUpdateEventData } from '@hashhive/shared'
+
 import type { ComponentName, ComponentStatus } from './health.js'
 
 import { logger } from '../config/logger.js'
@@ -102,17 +104,19 @@ interface WebSocketClient {
 
 // MUST stay in sync with the EventType union above. There's no way to
 // derive a runtime array from a TypeScript union, so adding a new member
-// requires touching both. Any new entry here means new clients connecting
-// without `?types=` will receive the new event by default — verify that
-// is the intended behavior before adding.
-const ALL_EVENT_TYPES: EventType[] = [
+// requires touching both. The `satisfies` clause forces a compile error
+// if the array drifts from the union; new entries default to "delivered
+// to subscribers without `?types=`" so verify that's the intended
+// behavior before adding.
+const ALL_EVENT_TYPES = [
   'agent_status',
+  'agent_error',
   'campaign_status',
   'task_update',
   'crack_result',
   'resource_update',
   'system_health',
-]
+] as const satisfies readonly EventType[]
 
 let clientIdCounter = 0
 const clients = new Map<number, WebSocketClient>()
@@ -302,6 +306,39 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
     type: 'crack_result',
     projectId,
     data: { hashListId, crackedCount: count },
+    timestamp: new Date().toISOString(),
+  })
+}
+
+/**
+ * Resource lifecycle event emitted when an async resource job transitions
+ * to a terminal state. `action` discriminates the payload:
+ *   - 'hash_list_ready'  -> data carries the final `statistics` JSONB
+ *   - 'hash_list_failed' -> data carries `error` (operator-facing string)
+ *
+ * Subscribers already wired for `resource_update` invalidations switch on
+ * `data.action` to decide whether to refetch detail (ready) or surface a
+ * banner (failed).
+ */
+// Re-export the shared wire type as a local alias so existing callers
+// don't need to update imports; the shape lives in @hashhive/shared
+// (resourceUpdateEventDataSchema → z.infer) so producer + subscriber
+// can't drift.
+export type ResourceUpdatePayload = ResourceUpdateEventData
+
+export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePayload) {
+  // The cast widens the typed payload to AppEvent.data's
+  // `Record<string, unknown>`. AppEvent.data stays unstructured because
+  // the WebSocket wire is untyped JSON anyway — subscribers re-narrow
+  // via the `data.action` discriminator. Caller side stays typed via
+  // the `ResourceUpdatePayload` parameter; this cast is the producer-
+  // side erasure that matches the wire's reality. A future refactor
+  // could lift the discriminator into a per-type EventDataMap, but
+  // touches every emit/subscriber call site.
+  emit({
+    type: 'resource_update',
+    projectId,
+    data: payload as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
   })
 }

@@ -9,12 +9,32 @@ import {
   abortMultipartUpload,
   completeMultipartUpload,
   createMultipartUpload,
+  deleteFile,
   getPresignedUrl,
   listParts,
   uploadFile,
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
+
+// ─── Errors ────────────────────────────────────────────────────────────
+
+/**
+ * Thrown when a resource cannot be deleted because another row references
+ * it (campaign, attack, etc.). Routes catch this and surface a 409.
+ */
+export class ResourceInUseError extends Error {
+  readonly resourceType: string
+  readonly resourceId: number
+  readonly references: string
+  constructor(resourceType: string, resourceId: number, references: string) {
+    super(`${resourceType} ${resourceId} cannot be deleted while it is referenced by ${references}`)
+    this.name = 'ResourceInUseError'
+    this.resourceType = resourceType
+    this.resourceId = resourceId
+    this.references = references
+  }
+}
 
 // ─── Upload size limits ─────────────────────────────────────────────
 
@@ -26,7 +46,7 @@ import { db } from '../db/index.js'
  * flow (`initiateChunkedUpload` + `uploadChunkPart` + `completeChunkedUpload`),
  * which streams parts straight to S3 without buffering the whole file.
  *
- * Anything above this threshold should use `POST /api/v1/dashboard/resources/upload`
+ * Anything above this threshold should use `POST /api/v1/dashboard/resources/upload/initiate`
  * (the chunked endpoint) instead of the legacy `/upload` form-data endpoint.
  */
 export const MAX_DIRECT_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB
@@ -93,6 +113,161 @@ export async function listHashListsPaginated(
     db.select({ value: count() }).from(hashLists).where(whereClause),
   ])
   return { items, total: Number(countResult[0]?.value ?? 0) }
+}
+
+/**
+ * Detect a Postgres foreign-key-violation either by SQLSTATE 23503 (the
+ * canonical, locale-stable signal) or by a regex against `err.message`
+ * (fallback for older PG / test mocks that don't surface the code).
+ */
+function isForeignKeyViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = 'code' in err ? (err as { code?: string }).code : undefined
+  if (code === '23503') return true
+  return /foreign key|violates|reference/i.test(err.message)
+}
+
+/**
+ * Shared cascade-delete flow for resource tables. Steps:
+ *   1. Ownership check (404 if not in project) — handled by the caller via
+ *      `lookup`.
+ *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
+ *      FK violation rolls back the children).
+ *   3. Best-effort S3 object delete on the row's fileRef.
+ *
+ * Throws `ResourceInUseError` if a FK from another table still references
+ * the row. Idempotent: returns `false` when the row was already gone.
+ */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+type DbRunner = DbTx | typeof db
+
+async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
+  id: number
+  projectId: number
+  resourceLabel: string
+  referencedBy: string
+  lookup: () => Promise<TRow | null>
+  cascade?: (tx: DbTx) => Promise<void>
+  deleteOwner: (runner: DbRunner) => Promise<void>
+}): Promise<boolean> {
+  const row = await args.lookup()
+  if (!row) return false
+
+  try {
+    if (args.cascade) {
+      await db.transaction(async (tx) => {
+        await args.cascade!(tx)
+        await args.deleteOwner(tx)
+      })
+    } else {
+      await args.deleteOwner(db)
+    }
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      throw new ResourceInUseError(args.resourceLabel, args.id, args.referencedBy)
+    }
+    throw err
+  }
+
+  const fileRef = (row as Record<string, unknown>)['fileRef'] as {
+    bucket?: string
+    key?: string
+  } | null
+  if (fileRef?.key) {
+    try {
+      await deleteFile(fileRef.key, fileRef.bucket)
+    } catch (err) {
+      logger.warn(
+        { resourceLabel: args.resourceLabel, resourceId: args.id, err },
+        'Failed to delete resource S3 object; continuing'
+      )
+    }
+  }
+  return true
+}
+
+// Maximum hash_items rows to remove per DELETE chunk during cascade. Bounds
+// the worst-case lock duration so a hash list with millions of items can
+// be deleted without holding row-level locks for minutes.
+const HASH_ITEMS_DELETE_CHUNK = 10_000
+// Hard cap on cascade iterations (10k rows × this = 1B rows). A driver
+// that returns rowCount=0 while rows remain (or any future bug that hides
+// the chunk count) would otherwise loop forever inside the transaction.
+const HASH_ITEMS_DELETE_MAX_ITERATIONS = 100_000
+
+/**
+ * Cascade-delete `hash_items` for `hashListId` in bounded batches. Each
+ * iteration deletes up to `HASH_ITEMS_DELETE_CHUNK` rows using a
+ * `ctid IN (SELECT ctid ... LIMIT N)` pattern (PG-specific; bounds the
+ * statement-level lock duration). Hard-capped at
+ * `HASH_ITEMS_DELETE_MAX_ITERATIONS` so a misreported row count can't
+ * cause an unbounded transaction.
+ */
+async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<void> {
+  for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
+    // postgres-js v3.4.x exposes the DELETE affected-row count on
+    // `result.count` (it returns its own `Result` array with a `.count`
+    // property — NOT `rowCount`, which is the pg/node-pg convention).
+    // `rowCount` retained as a fallback for any future driver that
+    // diverges; the MAX_ITERATIONS cap below bails on either reporting
+    // bug. https://github.com/porsager/postgres
+    const result = (await tx.execute(
+      sql`DELETE FROM ${hashItems}
+          WHERE ctid IN (
+            SELECT ctid FROM ${hashItems}
+            WHERE ${eq(hashItems.hashListId, hashListId)}
+            LIMIT ${HASH_ITEMS_DELETE_CHUNK}
+          )`
+    )) as { count?: number; rowCount?: number }
+    const deleted = result.count ?? result.rowCount ?? 0
+    if (deleted < HASH_ITEMS_DELETE_CHUNK) return
+  }
+  logger.error(
+    { hashListId, max: HASH_ITEMS_DELETE_MAX_ITERATIONS, chunkSize: HASH_ITEMS_DELETE_CHUNK },
+    'deleteHashItemsBatched hit max iterations — bailing to avoid unbounded transaction'
+  )
+  throw new Error(
+    `deleteHashItemsBatched(${hashListId}) exceeded ${HASH_ITEMS_DELETE_MAX_ITERATIONS} iterations`
+  )
+}
+
+export async function deleteHashList(id: number, projectId: number): Promise<boolean> {
+  return cascadeDeleteResource({
+    id,
+    projectId,
+    resourceLabel: 'hash list',
+    referencedBy: 'one or more campaigns or attacks',
+    lookup: () => getHashListById(id, projectId),
+    // Bounded-batch cascade: large hash lists (millions of items) get
+    // chunked DELETEs instead of one unbounded statement, capping the
+    // worst-case lock duration.
+    cascade: (tx) => deleteHashItemsBatched(tx, id),
+    deleteOwner: (runner) =>
+      runner
+        .delete(hashLists)
+        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+        .then(() => undefined),
+  })
+}
+
+export async function deleteResource(
+  table: ResourceTable,
+  id: number,
+  projectId: number,
+  resourceType: string
+): Promise<boolean> {
+  return cascadeDeleteResource({
+    id,
+    projectId,
+    resourceLabel: resourceType,
+    referencedBy: 'one or more attacks',
+    lookup: () => getResourceById(table, id, projectId),
+    deleteOwner: (runner) =>
+      runner
+        .delete(table)
+        .where(and(eq(table.id, id), eq(table.projectId, projectId)))
+        .then(() => undefined),
+  })
 }
 
 export async function getHashListById(id: number, projectId: number) {
@@ -180,26 +355,32 @@ export async function importHashList(hashListId: number, projectId: number) {
     return { error: 'Queue unavailable — cannot process hash list' }
   }
 
-  // Mark as processing
+  // Enqueue FIRST so the queue's success/failure is what gates the status
+  // flip. If enqueue throws or returns false, status stays at 'uploaded'
+  // and the caller can retry without a separate revert UPDATE that could
+  // itself fail and leave the row stuck mid-flight.
+  let enqueued = false
+  try {
+    enqueued = await qm.enqueue(QUEUE_NAMES.HASH_LIST_PARSING, {
+      hashListId,
+      projectId: hl.projectId,
+    })
+  } catch (err) {
+    logger.warn({ err, hashListId }, 'Failed to enqueue hash list parsing job')
+    return { error: 'Failed to enqueue hash list parsing job' }
+  }
+
+  if (!enqueued) {
+    return { error: 'Failed to enqueue hash list parsing job' }
+  }
+
+  // Status-guarded UPDATE: only flip rows currently in 'uploaded'. Any
+  // other state (already processing, ready, error) is left alone so a
+  // duplicate import call can't corrupt the row.
   await db
     .update(hashLists)
     .set({ status: 'processing', updatedAt: new Date() })
-    .where(eq(hashLists.id, hashListId))
-
-  // Enqueue async parsing job into the hash-list-parsing job queue
-  const enqueued = await qm.enqueue(QUEUE_NAMES.HASH_LIST_PARSING, {
-    hashListId,
-    projectId: hl.projectId,
-  })
-
-  if (!enqueued) {
-    // Revert status since the job was not enqueued
-    await db
-      .update(hashLists)
-      .set({ status: 'uploaded', updatedAt: new Date() })
-      .where(eq(hashLists.id, hashListId))
-    return { error: 'Failed to enqueue hash list parsing job' }
-  }
+    .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'uploaded')))
 
   return { status: 'processing' as const, queued: true }
 }
@@ -267,9 +448,9 @@ export function escapeLike(value: string): string {
  * Uses a single COUNT + FILTER query (fast with composite index).
  */
 export async function getHashListStats(hashListId: number): Promise<{
-  total: number
-  cracked: number
-  remaining: number
+  totalCount: number
+  crackedCount: number
+  crackRate: number
 }> {
   const [stats] = await db
     .select({
@@ -279,9 +460,10 @@ export async function getHashListStats(hashListId: number): Promise<{
     .from(hashItems)
     .where(eq(hashItems.hashListId, hashListId))
 
-  const total = Number(stats?.total ?? 0)
-  const cracked = Number(stats?.cracked ?? 0)
-  return { total, cracked, remaining: total - cracked }
+  const totalCount = Number(stats?.total ?? 0)
+  const crackedCount = Number(stats?.cracked ?? 0)
+  const crackRate = totalCount > 0 ? crackedCount / totalCount : 0
+  return { totalCount, crackedCount, crackRate }
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────

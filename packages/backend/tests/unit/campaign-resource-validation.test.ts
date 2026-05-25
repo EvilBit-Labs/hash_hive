@@ -124,10 +124,32 @@ if (!IS_ISOLATED) {
   }))
 
   // Stub getHashListStats so updateCampaignProgress doesn't issue
-  // additional reads we'd otherwise have to queue. The hashProgress
-  // computation is exercised separately in resources tests.
+  // additional reads we'd otherwise have to queue. Tests that want to
+  // exercise the hashProgress mapping branch enqueue a non-zero result
+  // via `stageNextHashListStats(...)`; otherwise the default zero-shape
+  // makes `updateCampaignProgress` skip the hashProgress block entirely.
+  //
+  // Shape must match `getHashListStats`'s real return type
+  // (`{ totalCount, crackedCount, crackRate }`) — the U1 rename in this
+  // PR changed it from `{ total, cracked, remaining }`, and the
+  // `if (stats.totalCount > 0)` guard in campaign-progress.ts silently
+  // skips the new branch when the legacy shape is returned.
+  type HashListStatsResult = {
+    totalCount: number
+    crackedCount: number
+    crackRate: number
+  }
+  const hashListStatsQueue: HashListStatsResult[] = []
+  const defaultHashListStats: HashListStatsResult = {
+    totalCount: 0,
+    crackedCount: 0,
+    crackRate: 0,
+  }
+  function stageNextHashListStats(stats: HashListStatsResult): void {
+    hashListStatsQueue.push(stats)
+  }
   mock.module('../../src/services/resources.js', () => ({
-    getHashListStats: mock(async () => ({ total: 0, cracked: 0, remaining: 0 })),
+    getHashListStats: mock(async () => hashListStatsQueue.shift() ?? defaultHashListStats),
   }))
 
   // Import service AFTER mocks are in place.
@@ -148,6 +170,7 @@ if (!IS_ISOLATED) {
   afterEach(() => {
     selectFromQueue.length = 0
     updateCalls.length = 0
+    hashListStatsQueue.length = 0
   })
 
   // ─── validateCampaignResources ──────────────────────────────────────
@@ -355,6 +378,80 @@ if (!IS_ISOLATED) {
       expect(progress['tasksFailed']).toBe(1)
       // 4 remaining tasks (10 - 5 done - 1 failed), 0.5 tasks/sec → 8 more seconds
       expect(typeof progress['eta']).toBe('string')
+    })
+
+    test('maps renamed getHashListStats shape into hashProgress wire shape', async () => {
+      // Regression guard for the U1 hash-list stats rename
+      // (`{total,cracked,remaining}` → `{totalCount,crackedCount,crackRate}`).
+      // The mapping in campaign-progress.ts is gated on `stats.totalCount > 0`,
+      // so a mock returning the legacy shape silently skips the branch.
+      // This test stages the new shape and asserts the embedded
+      // `hashProgress` payload uses the wire-stable
+      // `{total,cracked,remaining,percentage}` fields.
+      expectFromCall('tasks', [
+        {
+          totalTasks: 4,
+          completedCount: 2,
+          failedCount: 0,
+          runningProgress: 0,
+          runningTaskCount: 0,
+        },
+      ])
+      expectFromCall('campaigns', [
+        { hashListId: 7, status: 'running', projectId: 1, startedAt: new Date() },
+      ])
+      stageNextHashListStats({ totalCount: 100, crackedCount: 25, crackRate: 0.25 })
+
+      await updateCampaignProgress(100)
+
+      const progressWrite = updateCalls.find(
+        (c) =>
+          c.tableName === 'campaigns' &&
+          typeof c.values['progress'] === 'object' &&
+          c.values['progress'] !== null
+      )
+      expect(progressWrite).toBeDefined()
+      const progress = progressWrite?.values['progress'] as Record<string, unknown>
+      expect(progress['hashProgress']).toEqual({
+        total: 100,
+        cracked: 25,
+        remaining: 75,
+        percentage: 0.25,
+      })
+    })
+
+    test('skips hashProgress block when getHashListStats returns zero totalCount', async () => {
+      // Companion to the mapping test above: when the renamed `totalCount`
+      // field is zero, the branch must not produce a hashProgress payload.
+      // Guards against an accidental flip of the guard's polarity.
+      expectFromCall('tasks', [
+        {
+          totalTasks: 4,
+          completedCount: 2,
+          failedCount: 0,
+          runningProgress: 0,
+          runningTaskCount: 0,
+        },
+      ])
+      expectFromCall('campaigns', [
+        { hashListId: 7, status: 'running', projectId: 1, startedAt: new Date() },
+      ])
+      stageNextHashListStats({ totalCount: 0, crackedCount: 0, crackRate: 0 })
+
+      await updateCampaignProgress(100)
+
+      const progressWrite = updateCalls.find(
+        (c) =>
+          c.tableName === 'campaigns' &&
+          typeof c.values['progress'] === 'object' &&
+          c.values['progress'] !== null
+      )
+      expect(progressWrite).toBeDefined()
+      const progress = progressWrite?.values['progress'] as Record<string, unknown>
+      // hashProgress is only spread when the > 0 guard passes — absent
+      // when stats are empty, not null. Asserting absence here pins the
+      // guard's polarity (and confirms the renamed field is being read).
+      expect(progress['hashProgress']).toBeUndefined()
     })
 
     test('shouldAutoCompleteCampaign fires for paused status', () => {

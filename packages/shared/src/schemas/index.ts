@@ -199,6 +199,75 @@ export const hashCandidateSchema = z.object({
   confidence: z.number().min(0).max(1),
 })
 
+// ─── Resource Management API wire shapes ────────────────────────────
+// Promoted from inline route definitions per AGENTS.md (wire shapes
+// live in @hashhive/shared as z.infer from Zod schemas). Used by both
+// backend route handlers (zValidator + handler bodies) and frontend
+// hooks (TanStack Query type narrowing).
+
+/**
+ * Shape of the JSONB written to `hash_lists.statistics` by the
+ * hash-list parser worker (and merged with live counts by the dashboard
+ * GET /hash-lists/:id route).
+ */
+export const hashListStatisticsSchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  crackedCount: z.number().int().nonnegative(),
+  crackRate: z.number().min(0).max(1),
+  lastUpdated: z.string().datetime().optional(),
+})
+
+/**
+ * Legacy JSON body for `POST /api/v1/dashboard/resources/hash-lists`
+ * (create-empty path). Multipart one-shot uploads are validated inline
+ * in the route because Hono's zValidator binds per content-type.
+ */
+export const createHashListRequestSchema = z.object({
+  name: z.string().min(1).max(255),
+  hashTypeId: z.number().int().positive().optional(),
+  source: z.string().max(50).optional(),
+})
+
+/**
+ * Request body for `POST /api/v1/dashboard/resources/detect-hash-type`.
+ * Capped at 100 hashes per call to bound CPU on the synchronous regex
+ * matcher in `hash-analysis.ts`.
+ */
+export const detectHashTypeRequestSchema = z.object({
+  hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
+})
+
+/**
+ * Response from `POST /api/v1/dashboard/resources/detect-hash-type`.
+ * One entry per input hash; candidates ordered by confidence DESC.
+ */
+export const detectHashTypeResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      hashValue: z.string(),
+      candidates: z.array(hashCandidateSchema),
+    })
+  ),
+})
+
+/**
+ * Payload shape of `resource_update` events emitted by the hash-list
+ * parser worker. Discriminated on `action` so subscribers can switch on
+ * the terminal-state branch.
+ */
+export const resourceUpdateEventDataSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('hash_list_ready'),
+    hashListId: z.number().int().positive(),
+    statistics: hashListStatisticsSchema,
+  }),
+  z.object({
+    action: z.literal('hash_list_failed'),
+    hashListId: z.number().int().positive(),
+    error: z.string(),
+  }),
+])
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
