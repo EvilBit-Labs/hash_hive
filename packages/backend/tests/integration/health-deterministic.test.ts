@@ -54,7 +54,7 @@ function buildSystemHealth(): SystemHealth {
     components: {
       database: buildComponent(mockedAggregateStatus === 'unhealthy' ? 'unhealthy' : 'healthy'),
       redis: buildComponent('healthy'),
-      minio: buildComponent('healthy'),
+      object_store: buildComponent('healthy'),
       queues: buildComponent(mockedAggregateStatus === 'degraded' ? 'degraded' : 'healthy'),
     },
   }

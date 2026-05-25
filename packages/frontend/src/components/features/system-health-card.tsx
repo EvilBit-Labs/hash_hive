@@ -1,7 +1,7 @@
 /**
  * System health card (issue #109).
  *
- * Renders the four-component health snapshot (database, redis, minio,
+ * Renders the four-component health snapshot (database, redis, object_store,
  * queues) with status dots and per-component messages on degraded /
  * unhealthy. Click a row to expand its raw `detail` payload.
  *
@@ -24,11 +24,11 @@ import { cn } from '../../lib/utils'
 const COMPONENT_LABELS: Record<ComponentName, string> = {
   database: 'Database',
   redis: 'Redis',
-  minio: 'Object Storage',
+  object_store: 'Object Storage',
   queues: 'Job Queues',
 }
 
-const COMPONENT_ORDER: ComponentName[] = ['database', 'redis', 'minio', 'queues']
+const COMPONENT_ORDER: ComponentName[] = ['database', 'redis', 'object_store', 'queues']
 
 const STATUS_DOT: Record<ComponentStatus, string> = {
   healthy: 'bg-success',

@@ -11,11 +11,11 @@ import { api } from '../lib/api'
 
 export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy'
 
-// `'minio'` is preserved as the wire identifier across the SeaweedFS swap
-// so the backend can swap its object-store implementation without a
-// coupled frontend release. See `packages/backend/src/services/health.ts`
-// (ComponentName) for the corresponding backend type.
-export type ComponentName = 'database' | 'redis' | 'minio' | 'queues'
+// `'object_store'` is the neutral wire identifier — vendor-agnostic across
+// SeaweedFS today and any future hosted AWS S3 deploy. See
+// `packages/backend/src/services/health.ts` (ComponentName) for the
+// corresponding backend type.
+export type ComponentName = 'database' | 'redis' | 'object_store' | 'queues'
 
 export interface ComponentHealth {
   status: ComponentStatus

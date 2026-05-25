@@ -42,7 +42,7 @@ import {
 } from '../../services/health.js'
 import { attachWorkerMetrics } from './metrics.js'
 
-const COMPONENTS: ComponentName[] = ['database', 'redis', 'minio', 'queues']
+const COMPONENTS: ComponentName[] = ['database', 'redis', 'object_store', 'queues']
 const REDIS_KEY_PREFIX = 'health:last-status:'
 const REDIS_KEY_TTL_SEC = 24 * 60 * 60
 

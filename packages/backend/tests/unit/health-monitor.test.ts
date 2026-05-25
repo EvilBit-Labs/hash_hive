@@ -44,20 +44,20 @@ function buildContext(
   const memory: Record<ComponentName, ComponentStatus | null> = {
     database: initial.memory?.database ?? null,
     redis: initial.memory?.redis ?? null,
-    minio: initial.memory?.minio ?? null,
+    object_store: initial.memory?.object_store ?? null,
     queues: initial.memory?.queues ?? null,
   }
   const redis: Record<ComponentName, ComponentStatus | null> = {
     database: initial.redis?.database ?? null,
     redis: initial.redis?.redis ?? null,
-    minio: initial.redis?.minio ?? null,
+    object_store: initial.redis?.object_store ?? null,
     queues: initial.redis?.queues ?? null,
   }
   const broadcasts: TestContext['broadcasts'] = []
   const components: Record<ComponentName, ComponentHealth> = {
     database: parseStatus(componentStatuses.database),
     redis: parseStatus(componentStatuses.redis),
-    minio: parseStatus(componentStatuses.minio),
+    object_store: parseStatus(componentStatuses.object_store),
     queues: parseStatus(componentStatuses.queues),
   }
 
@@ -90,13 +90,13 @@ describe('runHealthMonitorTick', () => {
   test('first run with no prior state seeds memory and emits zero broadcasts', async () => {
     const ctx = buildContext(
       {}, // no prior state in memory or Redis
-      { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' }
+      { database: 'healthy', redis: 'healthy', object_store: 'healthy', queues: 'healthy' }
     )
 
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.initialized.sort()).toEqual(['database', 'minio', 'queues', 'redis'])
+    expect(result.initialized.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
 
     // Both memory and Redis are seeded
@@ -112,42 +112,57 @@ describe('runHealthMonitorTick', () => {
     const ctx = buildContext(
       {
         memory: {}, // empty post-boot
-        redis: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        redis: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
-      { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' }
+      { database: 'healthy', redis: 'healthy', object_store: 'healthy', queues: 'healthy' }
     )
 
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.unchanged.sort()).toEqual(['database', 'minio', 'queues', 'redis'])
+    expect(result.unchanged.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
   })
 
   test('second run with identical status emits zero broadcasts', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
-      { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' }
+      { database: 'healthy', redis: 'healthy', object_store: 'healthy', queues: 'healthy' }
     )
 
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.unchanged.sort()).toEqual(['database', 'minio', 'queues', 'redis'])
+    expect(result.unchanged.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
   })
 
   test('one component flips from healthy to degraded — exactly one broadcast', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
       {
         database: { status: 'degraded', message: 'pool 90% full' },
         redis: 'healthy',
-        minio: 'healthy',
+        object_store: 'healthy',
         queues: 'healthy',
       }
     )
@@ -169,12 +184,17 @@ describe('runHealthMonitorTick', () => {
   test('two components flip simultaneously — exactly two broadcasts', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
       {
         database: 'degraded',
         redis: 'unhealthy',
-        minio: 'healthy',
+        object_store: 'healthy',
         queues: 'healthy',
       }
     )
@@ -190,28 +210,38 @@ describe('runHealthMonitorTick', () => {
   test('all four components flip simultaneously — four broadcasts (testing T-008 / U5)', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
       {
         database: 'unhealthy',
         redis: 'unhealthy',
-        minio: 'unhealthy',
+        object_store: 'unhealthy',
         queues: 'unhealthy',
       }
     )
 
     const result = await runHealthMonitorTick(ctx.deps)
 
-    expect(result.transitioned.sort()).toEqual(['database', 'minio', 'queues', 'redis'])
+    expect(result.transitioned.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(4)
   })
 
   test('component flips back from unhealthy to healthy — broadcast on recovery', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'unhealthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'unhealthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
-      { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' }
+      { database: 'healthy', redis: 'healthy', object_store: 'healthy', queues: 'healthy' }
     )
 
     const result = await runHealthMonitorTick(ctx.deps)
@@ -227,7 +257,7 @@ describe('runHealthMonitorTick', () => {
     const memory = new Map<ComponentName, ComponentStatus>([
       ['database', 'healthy'],
       ['redis', 'healthy'],
-      ['minio', 'healthy'],
+      ['object_store', 'healthy'],
       ['queues', 'healthy'],
     ])
     const broadcasts: TestContext['broadcasts'] = []
@@ -260,7 +290,7 @@ describe('runHealthMonitorTick', () => {
         {
           database: makeComponent('healthy'),
           redis: makeComponent('unhealthy', 'redis disconnected'),
-          minio: makeComponent('healthy'),
+          object_store: makeComponent('healthy'),
           queues: makeComponent('unhealthy', 'queue manager not connected to redis'),
         },
         true
@@ -272,7 +302,7 @@ describe('runHealthMonitorTick', () => {
         {
           database: makeComponent('healthy'),
           redis: makeComponent('unhealthy', 'redis disconnected'),
-          minio: makeComponent('healthy'),
+          object_store: makeComponent('healthy'),
           queues: makeComponent('unhealthy', 'queue manager not connected to redis'),
         },
         true
@@ -284,7 +314,7 @@ describe('runHealthMonitorTick', () => {
         {
           database: makeComponent('healthy'),
           redis: makeComponent('healthy'),
-          minio: makeComponent('healthy'),
+          object_store: makeComponent('healthy'),
           queues: makeComponent('healthy'),
         },
         false
@@ -317,7 +347,7 @@ describe('runHealthMonitorTick', () => {
         components: {
           database: makeComponent('healthy'),
           redis: makeComponent('unhealthy', 'connection refused'),
-          minio: makeComponent('healthy'),
+          object_store: makeComponent('healthy'),
           queues: makeComponent('healthy'),
         },
       }),
@@ -332,7 +362,7 @@ describe('runHealthMonitorTick', () => {
   test('Redis write failure is logged but does not crash the worker', async () => {
     const ctx = buildContext(
       { memory: { database: 'healthy' } },
-      { database: 'degraded', redis: 'healthy', minio: 'healthy', queues: 'healthy' }
+      { database: 'degraded', redis: 'healthy', object_store: 'healthy', queues: 'healthy' }
     )
     // Override writeRedisStatus to throw — memory write still succeeds
     const deps: HealthMonitorDeps = {
@@ -353,12 +383,17 @@ describe('runHealthMonitorTick', () => {
   test('broadcast throw on one component does not stop the loop (T-009)', async () => {
     const ctx = buildContext(
       {
-        memory: { database: 'healthy', redis: 'healthy', minio: 'healthy', queues: 'healthy' },
+        memory: {
+          database: 'healthy',
+          redis: 'healthy',
+          object_store: 'healthy',
+          queues: 'healthy',
+        },
       },
       {
         database: 'degraded',
         redis: 'degraded',
-        minio: 'healthy',
+        object_store: 'healthy',
         queues: 'healthy',
       }
     )
@@ -414,7 +449,7 @@ describe('runHealthMonitorTick', () => {
         queues: { status: 'degraded', message: 'tasks-high waiting=50000 > 10000' },
         database: 'healthy',
         redis: 'healthy',
-        minio: 'healthy',
+        object_store: 'healthy',
       }
     )
 

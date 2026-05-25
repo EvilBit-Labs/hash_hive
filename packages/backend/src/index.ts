@@ -53,7 +53,7 @@ app.use(
 // Public, unauthenticated endpoint used by load balancers. Delegates to
 // the centralized health service (issue #109) but keeps the legacy
 // envelope shape so older probes that read services.{database,redis,
-// minio}.status keep working. HTTP 503 fires only when the system is
+// object_store}.status keep working. HTTP 503 fires only when the system is
 // unhealthy; degraded queues stay 200 so we don't flap LB rotation on
 // transient warnings.
 

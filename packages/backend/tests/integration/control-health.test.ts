@@ -133,7 +133,7 @@ describe('GET /api/v1/control/health', () => {
       // it).
       expect(body.components['database']).toBeDefined()
       expect(body.components['redis']).toBeDefined()
-      expect(body.components['minio']).toBeDefined()
+      expect(body.components['object_store']).toBeDefined()
       expect(body.components['queues']).toBeDefined()
       // Per-component status uses the three-tier enum
       for (const c of Object.values(body.components)) {
