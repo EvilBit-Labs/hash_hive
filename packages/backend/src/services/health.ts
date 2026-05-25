@@ -546,9 +546,12 @@ function extractQueueStats(
 }
 
 export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope {
-  // Always populate `services.object_store.bucket` from `env.S3_BUCKET` when
-  // the probe timed out before setting `detail`, so anonymous monitors that
-  // read the bucket name get a stable value regardless of probe outcome.
+  // On a healthy probe, `detail.bucket` carries the authoritative bucket
+  // name (which may differ from `env.S3_BUCKET` in unusual deploys). When
+  // the probe finished without populating `detail.bucket` (timeout,
+  // programming error, future probe variant), fall back to
+  // `env.S3_BUCKET` so anonymous monitors that read this field
+  // unconditionally do not break on a degraded probe outcome.
   const objectStoreBucket =
     (health.components.object_store.detail?.['bucket'] as string | undefined) ?? env.S3_BUCKET
   return {

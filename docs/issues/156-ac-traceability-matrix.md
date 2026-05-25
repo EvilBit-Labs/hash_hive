@@ -31,7 +31,7 @@ Legend: ✅ Covered · 🟡 Partial · ❌ Orphan · ⚠️ Documented deviation
 
 | # | AC | Production symbol | Test reference | Status |
 |---|----|-------------------|----------------|--------|
-| 3.1 | Presigned URLs with 1-hour expiration | `services/resources.ts:573-577` (`getDownloadUrl` → `getPresignedUrl(key, 3600, ...)`); **`services/resources.ts:587-613` (`getAgentDownloadUrl` uses `6 * 3600`)** | Storage/resource integration tests | ⚠️ — `getAgentDownloadUrl` deliberately exceeds 1h to support large-file agent downloads. Documented deviation. |
+| 3.1 | Presigned URLs with 1-hour expiration | `services/resources.ts → getResourcePresignedUrl` (calls `getPresignedUrl(key, 3600, ...)`); **`services/resources.ts → getAgentDownloadUrl` uses `6 * 3600`** | Storage/resource integration tests | ⚠️ — `getAgentDownloadUrl` deliberately exceeds 1h to support large-file agent downloads. Documented deviation. |
 | 3.2 | URLs work against SeaweedFS and AWS S3 unchanged | `config/storage.ts:121-134` uses `@aws-sdk/s3-request-presigner` (`getSignedUrl`) — provider-neutral | n/a (provider-neutrality is a code-shape assertion) | ✅ |
 | 3.3 | Content-disposition headers for downloads | `config/storage.ts:92-115` (`buildContentDisposition`) emits both `filename=` ASCII fallback + `filename*=UTF-8''<percent-encoded>` modern form; sanitizes hostile filenames | Inline unit coverage on the builder; integration test exercises real URL | ✅ |
 
@@ -41,7 +41,7 @@ Legend: ✅ Covered · 🟡 Partial · ❌ Orphan · ⚠️ Documented deviation
 
 | # | AC | Production symbol | Test reference | Status |
 |---|----|-------------------|----------------|--------|
-| 4.1 | Object-store connectivity check added to `/health` | `services/health.ts:339, 397-398` (probe wired in `runProbes`); route at `routes/control/health.ts` (and dashboard equivalent) | `tests/unit/health-service.test.ts`, `tests/unit/health.test.ts` | ✅ |
+| 4.1 | Object-store connectivity check added to `/health` | `services/health.ts → executeProbes` wires the `object_store` probe via `buildDefaultProbes`; route at `routes/control/health.ts` (and dashboard equivalent) | `tests/unit/health-service.test.ts`, `tests/unit/health.test.ts` | ✅ |
 | 4.2 | Health check verifies bucket exists and is accessible | `services/health.ts` — probe uses `HeadBucketCommand` against `env.S3_BUCKET` via `checkObjectStoreHealth` | `tests/unit/health-service.test.ts` (asserts connected + bucket field) | ✅ |
 | 4.3 | Status (connected/disconnected); log/field names use neutral terms (`object_store`, not `minio`) | **Currently uses `minio` wire identifier** per defensive preservation in PR #153 | n/a (current code violates the AC) | 🔧 **Closed in this PR** — U2/U3 rename. |
 

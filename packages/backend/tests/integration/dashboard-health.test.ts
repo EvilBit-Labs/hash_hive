@@ -7,7 +7,7 @@
  *     when authenticated
  *
  * Mocks BetterAuth and storage so the test does not depend on real
- * Postgres / Redis / MinIO availability.
+ * Postgres / Redis / object-store availability.
  */
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
@@ -114,6 +114,10 @@ describe('GET /api/v1/dashboard/health', () => {
     expect(body.components['redis']).toBeDefined()
     expect(body.components['object_store']).toBeDefined()
     expect(body.components['queues']).toBeDefined()
+    // Regression guard for issue #156 AC 4.3: the legacy `minio` key
+    // must not reappear on the rich envelope. Symmetric with the
+    // legacy /health absence assertion in tests/unit/health.test.ts.
+    expect(body.components['minio']).toBeUndefined()
 
     // Per-component status uses the new three-tier enum
     for (const c of Object.values(body.components)) {
@@ -130,7 +134,7 @@ describe('GET /api/v1/dashboard/health', () => {
     const body = (await res.json()) as {
       components: Record<string, { detail?: Record<string, unknown> }>
     }
-    // MinIO probe is mocked to connected, so detail should include the bucket name
+    // Object-store probe is mocked to connected, so detail should include the bucket name
     expect(body.components['object_store']?.detail?.['bucket']).toBe('hashhive-test')
   })
 

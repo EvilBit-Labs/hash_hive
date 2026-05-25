@@ -135,6 +135,10 @@ describe('GET /api/v1/control/health', () => {
       expect(body.components['redis']).toBeDefined()
       expect(body.components['object_store']).toBeDefined()
       expect(body.components['queues']).toBeDefined()
+      // Regression guard for issue #156 AC 4.3: the legacy `minio` key
+      // must not reappear on the rich envelope. Symmetric with the
+      // legacy /health absence assertion in tests/unit/health.test.ts.
+      expect(body.components['minio']).toBeUndefined()
       // Per-component status uses the three-tier enum
       for (const c of Object.values(body.components)) {
         expect(['healthy', 'degraded', 'unhealthy']).toContain(c.status)
