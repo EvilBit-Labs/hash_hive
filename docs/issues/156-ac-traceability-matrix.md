@@ -1,6 +1,6 @@
 # Issue #156 — AC ↔ Code ↔ Test Traceability Matrix
 
-> Built from issue #156 (20 acceptance checkboxes across 6 blocks). Drives the verification sweep and minio→object_store rename in plan `docs/plans/2026-05-25-001-feat-object-storage-verification-and-health-rename-plan.md`.
+> Built from issue #156 (20 acceptance checkboxes across 6 blocks). Drives the verification sweep and `minio` → `object_store` rename. The companion implementation plan is local-only (`docs/plans/` is gitignored); see `docs/issues/156-object-storage-file-management-spec.md` for the durable spec.
 
 Legend: ✅ Covered · 🟡 Partial · ❌ Orphan · ⚠️ Documented deviation · 🔧 Closed in this PR.
 

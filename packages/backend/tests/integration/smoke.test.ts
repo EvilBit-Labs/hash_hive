@@ -31,7 +31,7 @@ describe('Integration: Health check', () => {
 
     const body = await res.json()
     expect(['ok', 'degraded']).toContain(body['status'])
-    expect(body['version']).toBe('1.1.0')
+    expect(body['version']).toBe('2.0.0')
     expect(typeof body['timestamp']).toBe('string')
 
     // Validate ISO 8601 timestamp

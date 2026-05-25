@@ -96,7 +96,7 @@ describe('runHealthMonitorTick', () => {
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.initialized.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
+    expect([...result.initialized].sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
 
     // Both memory and Redis are seeded
@@ -125,7 +125,7 @@ describe('runHealthMonitorTick', () => {
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.unchanged.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
+    expect([...result.unchanged].sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
   })
 
@@ -145,7 +145,7 @@ describe('runHealthMonitorTick', () => {
     const result = await runHealthMonitorTick(ctx.deps)
 
     expect(result.transitioned).toEqual([])
-    expect(result.unchanged.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
+    expect([...result.unchanged].sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(0)
   })
 
@@ -201,7 +201,7 @@ describe('runHealthMonitorTick', () => {
 
     const result = await runHealthMonitorTick(ctx.deps)
 
-    expect(result.transitioned.sort()).toEqual(['database', 'redis'])
+    expect([...result.transitioned].sort()).toEqual(['database', 'redis'])
     expect(ctx.broadcasts).toHaveLength(2)
     const components = ctx.broadcasts.map((b) => b.component).sort()
     expect(components).toEqual(['database', 'redis'])
@@ -227,7 +227,7 @@ describe('runHealthMonitorTick', () => {
 
     const result = await runHealthMonitorTick(ctx.deps)
 
-    expect(result.transitioned.sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
+    expect([...result.transitioned].sort()).toEqual(['database', 'object_store', 'queues', 'redis'])
     expect(ctx.broadcasts).toHaveLength(4)
   })
 
@@ -412,7 +412,7 @@ describe('runHealthMonitorTick', () => {
     const result = await runHealthMonitorTick(deps)
 
     // Both components still appear in transitioned (loop continued)
-    expect(result.transitioned.sort()).toEqual(['database', 'redis'])
+    expect([...result.transitioned].sort()).toEqual(['database', 'redis'])
     // Memory was updated for both despite first broadcast throwing
     expect(ctx.memory.database).toBe('degraded')
     expect(ctx.memory.redis).toBe('degraded')

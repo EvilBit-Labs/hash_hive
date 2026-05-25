@@ -364,7 +364,7 @@ describe('getSystemHealth', () => {
   test('returns SystemHealth shape with all four components and version', async () => {
     const result = await getSystemHealth({ probes: allHealthyProbes })
     expect(result.status).toBe('healthy')
-    expect(result.version).toBe('1.1.0')
+    expect(result.version).toBe('2.0.0')
     expect(result.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(result.components.database.status).toBe('healthy')
     expect(result.components.redis.status).toBe('healthy')
@@ -529,7 +529,7 @@ describe('legacyPublicEnvelope', () => {
     expect(env.services.object_store.status).toBe('connected')
     expect(env.services.object_store.bucket).toBe('hashhive-test')
     expect(env.services.queues.status).toBe('connected')
-    expect(env.version).toBe('1.1.0')
+    expect(env.version).toBe('2.0.0')
   })
 
   test('degraded maps to status="degraded" body, aggregateStatus="degraded", services stay "connected"', async () => {

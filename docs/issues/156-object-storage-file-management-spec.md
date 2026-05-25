@@ -33,7 +33,7 @@ The ticket's "Technical Notes → Current Implementation Issue" section says `pa
 
 **AC 4 says:** "log messages and field names use neutral terms (e.g., `object_store`, not `minio`)".
 
-**Current code (`services/health.ts:30-36`):**
+**Pre-rename code from PR #153** (kept here as the historical state this spec was written against):
 ```typescript
 // 'minio' is preserved as the wire identifier across the SeaweedFS swap
 export type ComponentName = 'database' | 'redis' | 'minio' | 'queues'
@@ -41,7 +41,7 @@ export type ComponentName = 'database' | 'redis' | 'minio' | 'queues'
 
 PR #153 preserved `minio` as the wire identifier defensively, but **HashHive is pre-prod** — there are no external monitors reading `services.minio.*` whose contract needs honoring. The defensive preservation has outlived its usefulness; the new wire identifier should be neutral so future readers don't have to mentally translate `minio` → "actually SeaweedFS, or AWS S3 if hosted."
 
-**Recommendation: rename `minio` → `object_store` outright.**
+**Decision: rename `minio` → `object_store` outright.** Landed in this PR — the live code now reads `'database' | 'redis' | 'object_store' | 'queues'` and `HEALTH_VERSION` bumped to `2.0.0`.
 
 Concrete renames in scope:
 
@@ -133,8 +133,9 @@ TDD per `~/.claude/rules/testing.md`. Each AC checkbox that becomes an orphan ge
 
 ### Contract / health envelope
 
-- `GET /health` response — `services.object_store.status` field present (new); `services.minio.bucket` field preserved verbatim (legacy contract from #109).
-- `services.object_store` and `services.minio` reference the same underlying probe so the two fields cannot disagree.
+- `GET /health` response — `services.object_store.status` and `services.object_store.bucket` are present.
+- `services.minio` is **absent** from the response shape after the rename — no dual-write, no alias. Pre-2.0.0 probes keyed on the old name see `undefined`.
+- `HEALTH_VERSION` (in `services/health.ts`) bumps to `2.0.0` in lock-step with the OpenAPI `info.version` in `packages/openapi/control-api.yaml` so consumers can gate on the breaking change.
 
 ## 7. Files to Modify / Create
 
@@ -147,7 +148,7 @@ TDD per `~/.claude/rules/testing.md`. Each AC checkbox that becomes an orphan ge
 | `packages/frontend/src/**` and `packages/backend/src/routes/**` | Audit and update — anything reading `services.minio.*` flips to `services.object_store.*` |
 | `docs/development.md` | Modify — verify SeaweedFS S3-API instructions; drop any MinIO console refs |
 | `.env.example` | Verify — `S3_ENDPOINT` default points at the SeaweedFS compose service |
-| `packages/backend/tests/unit/health-service.test.ts` | Extend — assert dual `minio` + `object_store` fields |
+| `packages/backend/tests/unit/health-service.test.ts` | Extend — assert `object_store` fields and absence of `minio` |
 | `packages/backend/tests/integration/storage.test.ts` | Extend if matrix surfaces gaps in multipart or presigned-URL coverage |
 
 ## 8. Success Criteria

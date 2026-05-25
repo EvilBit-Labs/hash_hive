@@ -9,6 +9,23 @@ info:
 
     ## Changelog
 
+    ### 2.0.0 (issue #156)
+
+    Breaking rename in the `SystemHealth.components` map (and the legacy
+    public `/health` `services` map):
+    - `minio` → `object_store`. The previous key was a SeaweedFS-era
+      placeholder; the neutral name is vendor-agnostic across SeaweedFS
+      and any future hosted AWS S3 deploy.
+    - `services.minio` is **removed** from the legacy `/health` envelope —
+      no dual-write, no alias. Probes built against `services.minio.status`
+      will see `undefined` after this change.
+    - `HEALTH_VERSION` constant in `services/health.ts` bumps to `2.0.0`
+      in lock-step.
+
+    Pre-prod posture: HashHive has no external automation consumers of
+    this surface at this time. Internal frontend and CLI consumers are
+    updated in the same PR.
+
     ### 1.1.0 (issue #109)
 
     Breaking change to `GET /health`:
@@ -22,7 +39,7 @@ info:
     Consumers that pinned the old envelope must update before upgrading.
     No deprecation window: this surface was introduced in 1.0.0 and has
     no known external automation consumers yet.
-  version: 1.1.0
+  version: 2.0.0
 
 servers:
   - url: /api/v1/control
@@ -42,12 +59,16 @@ paths:
           `/api/v1/dashboard/health` return the rich `SystemHealth`
           shape — three-tier `status`, `components` map, per-component
           `message`, `detail`, and `durationMs`.
-        - The public `/health` returns a backward-compatible legacy
-          envelope: two-tier `status: ok | degraded`, a `services` map,
-          and an additive `aggregateStatus` field carrying the full
-          three-tier signal. This shape exists so older load-balancer
-          probes that read `services.{database,redis,object_store}.status`
-          keep working.
+        - The public `/health` returns a legacy envelope: two-tier
+          `status: ok | degraded`, a `services` map, and an additive
+          `aggregateStatus` field carrying the full three-tier signal.
+          The envelope shape pre-dates issue #109; LB probes that read
+          `services.{database,redis,object_store,queues}.status` use it.
+          **Note:** this is not back-compat in the strict sense — the
+          rich-vs-legacy split is preserved, but issue #156 renamed the
+          object-store component from `minio` to `object_store` and
+          bumped the schema version to 2.0.0; pre-2.0.0 probes keyed on
+          `services.minio` will see `undefined`.
 
         Authenticated control consumers receive the full shape including
         connection counts, queue depths, and probe durations.

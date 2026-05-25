@@ -106,7 +106,7 @@ describe('GET /api/v1/dashboard/health', () => {
     // Top-level envelope
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status)
     expect(typeof body.timestamp).toBe('string')
-    expect(body.version).toBe('1.1.0')
+    expect(body.version).toBe('2.0.0')
 
     // All four components present. Bracket notation per
     // `noPropertyAccessFromIndexSignature` (Record<string, …>).

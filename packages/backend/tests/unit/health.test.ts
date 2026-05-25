@@ -30,7 +30,7 @@ describe('GET /health', () => {
     const body = await res.json()
     expect(['ok', 'degraded']).toContain(body['status'])
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body['aggregateStatus'])
-    expect(body['version']).toBe('1.1.0')
+    expect(body['version']).toBe('2.0.0')
     expect(body['timestamp']).toBeDefined()
     expect(body['services']['database']).toBeDefined()
     expect(['connected', 'disconnected']).toContain(body['services']['database']['status'])

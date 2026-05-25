@@ -14,6 +14,8 @@
  * from getSystemHealth().
  */
 
+import type { ComponentName, ComponentStatus } from '@hashhive/shared'
+
 import { sql } from 'drizzle-orm'
 
 import { env } from '../config/env.js'
@@ -22,17 +24,12 @@ import { checkObjectStoreHealth } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { getQueueManager } from '../queue/context.js'
 
-export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy'
-
-/**
- * Component names exposed on the wire (`components.<name>` on
- * `/api/v1/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
- * `'object_store'` is the neutral wire identifier — vendor-agnostic across
- * the SeaweedFS swap (and any future hosted AWS S3 deploy). The previous
- * `'minio'` placeholder was dropped on the pre-prod boundary; see issue
- * #156 AC 4.3.
- */
-export type ComponentName = 'database' | 'redis' | 'object_store' | 'queues'
+// Re-export so existing callers (`import { ComponentName } from
+// '../services/health.js'`) continue to work without churn. The
+// canonical declaration lives in `@hashhive/shared` per AGENTS.md's
+// wire-shape rule. See `componentNameSchema` /
+// `componentStatusSchema` there.
+export type { ComponentName, ComponentStatus }
 
 /**
  * Probe result shape without a `durationMs` field — that field is
@@ -65,8 +62,15 @@ export interface SystemHealth {
  * since the health surface evolves on its own cadence; see the
  * Control API spec at packages/openapi/control-api.yaml for the
  * matching `info.version` it documents.
+ *
+ * 2.0.0 (issue #156) — `components.minio` renamed to `components.object_store`
+ *   across both the rich envelope and the legacy public envelope. No
+ *   back-compat alias; pre-2.0.0 probes keyed on the old name will see
+ *   the field absent.
+ * 1.1.0 (issue #109) — three-tier status, `components` map, per-component
+ *   `message`/`detail`/`durationMs`.
  */
-export const HEALTH_VERSION = '1.1.0'
+export const HEALTH_VERSION = '2.0.0'
 
 // Threshold semantics for the entire module: warn comparisons use `>=`
 // (inclusive boundary). "Warn at 10000" means 10000 is already the warn

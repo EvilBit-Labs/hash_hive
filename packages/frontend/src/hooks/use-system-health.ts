@@ -1,3 +1,5 @@
+import type { ComponentName, ComponentStatus } from '@hashhive/shared'
+
 /**
  * System health query hook (issue #109).
  *
@@ -9,13 +11,11 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 
-export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy'
-
-// `'object_store'` is the neutral wire identifier — vendor-agnostic across
-// SeaweedFS today and any future hosted AWS S3 deploy. See
-// `packages/backend/src/services/health.ts` (ComponentName) for the
-// corresponding backend type.
-export type ComponentName = 'database' | 'redis' | 'object_store' | 'queues'
+// Re-export so component files keep `import { ComponentName } from
+// '../hooks/use-system-health'` working. Canonical schemas
+// (`componentNameSchema`, `componentStatusSchema`) live in
+// `@hashhive/shared` per AGENTS.md's wire-shape rule.
+export type { ComponentName, ComponentStatus }
 
 export interface ComponentHealth {
   status: ComponentStatus

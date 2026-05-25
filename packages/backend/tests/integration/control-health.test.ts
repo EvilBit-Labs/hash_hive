@@ -125,7 +125,7 @@ describe('GET /api/v1/control/health', () => {
         components: Record<string, { status: string; durationMs: number }>
       }
       expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status)
-      expect(body.version).toBe('1.1.0')
+      expect(body.version).toBe('2.0.0')
       expect(typeof body.timestamp).toBe('string')
       // All four components present — same shape as the dashboard surface,
       // unlike the public /health envelope. Bracket notation per

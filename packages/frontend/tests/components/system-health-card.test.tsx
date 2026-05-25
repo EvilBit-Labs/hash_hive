@@ -24,7 +24,7 @@ function buildHealth(overrides: Partial<SystemHealth> = {}): SystemHealth {
   return {
     status: 'healthy',
     timestamp: '2026-05-06T12:00:00.000Z',
-    version: '1.1.0',
+    version: '2.0.0',
     components: {
       database: { status: 'healthy', durationMs: 4 },
       redis: { status: 'healthy', durationMs: 2 },
