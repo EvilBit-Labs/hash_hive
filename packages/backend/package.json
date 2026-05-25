@@ -23,6 +23,7 @@
     "@aws-sdk/s3-request-presigner": "3.1052.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-validator": "^0.8.0",
+    "@smithy/node-http-handler": "^4.5.0",
     "better-auth": "^1.6.11",
     "bullmq": "^5.77.0",
     "drizzle-orm": "0.45.2",
