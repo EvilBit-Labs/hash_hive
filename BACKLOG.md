@@ -4,26 +4,27 @@ Companion to [STRATEGY.md](./STRATEGY.md). Orders work by leverage on the strate
 
 Work is in two phases:
 
-- **Phase 1 — Foundation:** the 11 remaining tickets under `spec/tickets/`. These complete the original ticket pack and are prerequisite for most of Phase 2.
+- **Phase 1 — Foundation:** the 10 remaining tickets under `spec/tickets/`. These complete the original ticket pack and are prerequisite for most of Phase 2.
 - **Phase 2 — Backlog:** open GitHub issues (#97–#124) labeled P0/P1/P2 and grouped under epics #117–#121. Strategic-value ordering within tracks.
 
 ---
 
-## Phase 1 — Remaining spec/tickets (11)
+## Phase 1 — Remaining spec/tickets (10)
 
-### Completed (7, retrospective)
+### Completed (8)
 
-| Ticket                                          | Track                 |
-| ----------------------------------------------- | --------------------- |
-| `Agent_Authentication_&_Authorization`          | 2 — Agent Protocol    |
-| `Agent_Heartbeat_&_Error_Handling`              | 2 — Agent Protocol    |
-| `Agent_List_&_Detail_UI`                        | 4 — Operator Console  |
-| `BullMQ_Queue_Architecture_&_Redis_Integration` | 1 — Scheduler (infra) |
-| `Campaign_Creation_Wizard_UI`                   | 4 — Operator Console  |
-| `Campaign_List_&_Detail_UI`                     | 4 — Operator Console  |
-| `Campaign_Orchestration_API`                    | 1 — Scheduler         |
+| Ticket                                          | Track                 | Landed                                                                       |
+| ----------------------------------------------- | --------------------- | ---------------------------------------------------------------------------- |
+| `Agent_Authentication_&_Authorization`          | 2 — Agent Protocol    | retrospective                                                                |
+| `Agent_Heartbeat_&_Error_Handling`              | 2 — Agent Protocol    | retrospective                                                                |
+| `Agent_List_&_Detail_UI`                        | 4 — Operator Console  | retrospective                                                                |
+| `BullMQ_Queue_Architecture_&_Redis_Integration` | 1 — Scheduler (infra) | retrospective                                                                |
+| `Campaign_Creation_Wizard_UI`                   | 4 — Operator Console  | retrospective                                                                |
+| `Campaign_List_&_Detail_UI`                     | 4 — Operator Console  | retrospective                                                                |
+| `Campaign_Orchestration_API`                    | 1 — Scheduler         | retrospective                                                                |
+| `Resource_Management_API`                       | 3 — Resource Pipeline | PRs #122 / #151 / #152 / #153 / #167 — AC walk complete (issue #157)         |
 
-### Recommended sequence for the remaining 11
+### Recommended sequence for the remaining 10
 
 Sequencing is strategy-driven, not alphabetical. The scheduler core comes first because it is the guiding choice of the product; resources come second because campaigns can't crack anything without wordlists; visibility and auth follow; results last.
 
@@ -31,21 +32,20 @@ Sequencing is strategy-driven, not alphabetical. The scheduler core comes first 
 | ---: | --------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 |    1 | `Task_Distribution_&_Assignment`              | 1 — Scheduler         | **The scheduler is half-done without this.** Strict capability matching, hybrid sync/async generation, reassignment job, retry logic, priority queuing — these *are* the rebalancing approach. Until this lands, campaigns don't actually distribute end-to-end. |
 |    2 | `Object_Storage_&_File_Management`            | 3 — Resource Pipeline | Resource API depends on it. Env-driven buckets, presigned URLs, object-store health checks. Now targets SeaweedFS instead of MinIO (Apache-2.0 + MinIO upstream archived). Some chunked-upload code exists from #122 but AC isn't met.                           |
-|    3 | `Resource_Management_API`                     | 3 — Resource Pipeline | Async hash-list parsing, bulk insert with dedup, resource CRUD with project scoping, hash-type detection endpoint. Required before resource UI is meaningful.                                                                                                    |
-|    4 | `Real-Time_Events_&_WebSocket_Infrastructure` | 4 — Operator Console  | WebSocket auth, polling fallback, project-scoped filtering, connection indicator. #150 shipped partial real-time updates; the full infra ticket has more AC items. Blocks live-update behavior in every Track 4 surface below.                                   |
-|    5 | `Project_Selection_&_User_Authentication_API` | 4 — Operator Console  | Project selector endpoint, RBAC enforcement, remember-last-project logic. BetterAuth migration (#127) covers login/logout but the project-scoping AC may still be open.                                                                                          |
-|    6 | `Login_&_Project_Selection_UI`                | 4 — Operator Console  | Depends on #5. Auto-select on single-project, remember-last-project, sidebar project switcher, protected route that requires a selected project.                                                                                                                 |
-|    7 | `Dashboard_Stats_API_Endpoint`                | 4 — Operator Console  | Backend feed for dashboard cards. `routes/dashboard/stats.ts` exists; verify AC: agent breakdown, campaign breakdown, task breakdown, cracked-hash totals, server-side project scoping.                                                                          |
-|    8 | `Dashboard_&_Real-Time_Monitoring_UI`         | 4 — Operator Console  | Depends on #4 + #7. Four stat cards with clickable nav, WebSocket-driven updates, polling fallback, connection indicator.                                                                                                                                        |
-|    9 | `Resource_Management_UI`                      | 3 — Resource Pipeline | Depends on #3. Tabbed resource page, drag-and-drop upload with progress, hash-type detection UI with confidence scores.                                                                                                                                          |
-|   10 | `Results_API_&_CSV_Export`                    | 4 — Operator Console  | Paginated/filterable results, CSV export, campaign→attack→hash-list attribution. `routes/dashboard/results.ts` exists; verify AC against ticket.                                                                                                                 |
-|   11 | `Results_Analysis_&_Export_UI`                | 4 — Operator Console  | Depends on #10. Global Results page with filters and search, CSV export trigger, campaign-specific results tab on campaign detail.                                                                                                                               |
+|    3 | `Real-Time_Events_&_WebSocket_Infrastructure` | 4 — Operator Console  | WebSocket auth, polling fallback, project-scoped filtering, connection indicator. #150 shipped partial real-time updates; the full infra ticket has more AC items. Blocks live-update behavior in every Track 4 surface below.                                   |
+|    4 | `Project_Selection_&_User_Authentication_API` | 4 — Operator Console  | Project selector endpoint, RBAC enforcement, remember-last-project logic. BetterAuth migration (#127) covers login/logout but the project-scoping AC may still be open.                                                                                          |
+|    5 | `Login_&_Project_Selection_UI`                | 4 — Operator Console  | Depends on #4. Auto-select on single-project, remember-last-project, sidebar project switcher, protected route that requires a selected project.                                                                                                                 |
+|    6 | `Dashboard_Stats_API_Endpoint`                | 4 — Operator Console  | Backend feed for dashboard cards. `routes/dashboard/stats.ts` exists; verify AC: agent breakdown, campaign breakdown, task breakdown, cracked-hash totals, server-side project scoping.                                                                          |
+|    7 | `Dashboard_&_Real-Time_Monitoring_UI`         | 4 — Operator Console  | Depends on #3 + #6. Four stat cards with clickable nav, WebSocket-driven updates, polling fallback, connection indicator.                                                                                                                                        |
+|    8 | `Resource_Management_UI`                      | 3 — Resource Pipeline | Backend API (`Resource_Management_API`) shipped — see Completed table. Tabbed resource page, drag-and-drop upload with progress, hash-type detection UI with confidence scores.                                                                                  |
+|    9 | `Results_API_&_CSV_Export`                    | 4 — Operator Console  | Paginated/filterable results, CSV export, campaign→attack→hash-list attribution. `routes/dashboard/results.ts` exists; verify AC against ticket.                                                                                                                 |
+|   10 | `Results_Analysis_&_Export_UI`                | 4 — Operator Console  | Depends on #9. Global Results page with filters and search, CSV export trigger, campaign-specific results tab on campaign detail.                                                                                                                                |
 
 ### Dependency notes
 
-- **#1 (Task Distribution) is on its own track and can be parallelized** against #2–#11 if you have the bandwidth. It blocks nothing in this list but is the highest-leverage item against STRATEGY.md.
-- **#4 (WebSocket infra) blocks live-update behavior** in #8, #9, and #11. Finishing it before those UI surfaces avoids re-wiring later.
-- **#5 → #6**, **#7 → #8**, **#3 → #9**, **#10 → #11** are hard dependencies. The rest is preference.
+- **#1 (Task Distribution) is on its own track and can be parallelized** against #2–#10 if you have the bandwidth. It blocks nothing in this list but is the highest-leverage item against STRATEGY.md.
+- **#3 (WebSocket infra) blocks live-update behavior** in #7, #8, and #10. Finishing it before those UI surfaces avoids re-wiring later.
+- **#4 → #5**, **#6 → #7**, **#9 → #10** are hard dependencies. The rest is preference. The `Resource_Management_API → Resource_Management_UI (#8)` dependency is now satisfied by the completed-table entry.
 
 ---
 
