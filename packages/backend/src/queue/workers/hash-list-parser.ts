@@ -31,7 +31,10 @@ function sanitizeParseError(err: unknown): string {
   if (msg.includes('empty file body') || msg.includes('empty body')) {
     return 'Uploaded file is empty'
   }
-  if (msg.includes('not found')) {
+  // Anchored "hash list" prefix avoids collapsing Postgres "relation ...
+  // not found" / Redis "key not found" / generic "not found" errors into
+  // a misleading "Hash list not found" wire message.
+  if (/\bhash list .* not found\b/i.test(err.message)) {
     return 'Hash list not found'
   }
   if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('etimedout')) {
@@ -75,12 +78,24 @@ function parseHashLine(line: string, hashListId: number) {
   if (tokens.length === 3) {
     const [username, hashValue, plaintext] = tokens
     if (!hashValue) return null // 'user::plain' - no hash to insert
+    // Empty username (`:hash:plain`) falls back to 2-token semantics
+    // instead of persisting `metadata: { username: '' }`, which would
+    // pollute the JSONB with empty-string usernames that the docstring's
+    // 3-token contract doesn't promise.
+    if (!username) {
+      return {
+        hashListId,
+        hashValue,
+        plaintext: plaintext ?? '',
+        crackedAt: new Date(),
+      }
+    }
     return {
       hashListId,
       hashValue,
       plaintext: plaintext ?? '',
       crackedAt: new Date(),
-      metadata: { username: username ?? '' },
+      metadata: { username },
     }
   }
   // 4+ tokens: legacy first-colon-as-separator. Preserves prior behavior for

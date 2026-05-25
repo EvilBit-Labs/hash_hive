@@ -391,6 +391,75 @@ if (!IS_ISOLATED) {
       expect(mockImportHashList).not.toHaveBeenCalled()
     })
 
+    it('rejects with 413 BEFORE parseBody when content-length exceeds the wire cap', async () => {
+      mockCreateHashList.mockClear()
+      mockUploadHashListFile.mockClear()
+      mockDeleteHashList.mockClear()
+      mockImportHashList.mockClear()
+
+      const { boundary } = buildMultipart([
+        { name: 'name', value: 'huge' },
+        { name: 'file', value: { filename: 'huge.bin', content: 'x' } },
+      ])
+
+      const res = await app.request(HASH_LISTS_URL, {
+        method: 'POST',
+        headers: { ...multipartHeaders(boundary), 'content-length': '999999999' },
+        body: 'ignored — server rejects on header before reading',
+      })
+
+      expect(res.status).toBe(413)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('PAYLOAD_TOO_LARGE')
+      // Critical: must NOT have invoked the upload pipeline. The whole
+      // point of the headers-only guard is that hostile clients can't
+      // make us buffer a multi-GB body before being rejected.
+      expect(mockCreateHashList).not.toHaveBeenCalled()
+      expect(mockUploadHashListFile).not.toHaveBeenCalled()
+      expect(mockImportHashList).not.toHaveBeenCalled()
+    })
+
+    it('rejects with 400 VALIDATION_ERROR when hashTypeId is not a positive integer', async () => {
+      mockCreateHashList.mockClear()
+      const { body, boundary } = buildMultipart([
+        { name: 'name', value: 'bad-type' },
+        { name: 'hashTypeId', value: 'not-a-number' },
+        { name: 'file', value: { filename: 'h.txt', content: 'abc\n' } },
+      ])
+
+      const res = await app.request(HASH_LISTS_URL, {
+        method: 'POST',
+        headers: multipartHeaders(boundary),
+        body,
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(json.error?.message).toContain('hashTypeId')
+      expect(mockCreateHashList).not.toHaveBeenCalled()
+    })
+
+    it('rejects with 400 VALIDATION_ERROR when hashTypeId is negative or zero', async () => {
+      mockCreateHashList.mockClear()
+      const { body, boundary } = buildMultipart([
+        { name: 'name', value: 'bad-type' },
+        { name: 'hashTypeId', value: '-3' },
+        { name: 'file', value: { filename: 'h.txt', content: 'abc\n' } },
+      ])
+
+      const res = await app.request(HASH_LISTS_URL, {
+        method: 'POST',
+        headers: multipartHeaders(boundary),
+        body,
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(mockCreateHashList).not.toHaveBeenCalled()
+    })
+
     it('generic upload failure returns 503 STORAGE_UNAVAILABLE and rolls back', async () => {
       mockCreateHashList.mockReset()
       mockCreateHashList.mockImplementation(async (data) => makeHashList({ name: data.name }))

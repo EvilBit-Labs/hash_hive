@@ -20,7 +20,7 @@
  * mocks would leak into the broader test suite. Mirrors the
  * isolated-phase pattern documented in GOTCHAS.md.
  */
-import { beforeEach, describe, expect, it, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 const IS_ISOLATED = process.env['HASH_LIST_PIPELINE_TEST_ISOLATED'] === '1'
 
@@ -487,13 +487,10 @@ if (IS_ISOLATED) {
     })
   })
 
-  describe('hash-list pipeline failure path', () => {
-    it('placeholder for failure-emit coverage', () => {
-      // The failed-listener emit path is already locked by the unit test
-      // in tests/unit/workers/hash-list-parser.test.ts (U2). A full
-      // failure-path integration test would require simulating BullMQ's
-      // retry semantics; deferred until the suite gains real BullMQ.
-      expect(true).toBe(true)
-    })
-  })
+  // Failure-path coverage lives in tests/unit/workers/hash-list-parser.test.ts
+  // ("worker.on('failed') listener — DB cleanup + hash_list_failed emit"
+  // describe block). A real-BullMQ integration test for retry semantics
+  // would require the suite to gain testcontainers + actual queue
+  // infrastructure; that's a separate effort tracked in the project
+  // backlog, not a placeholder in this file.
 }

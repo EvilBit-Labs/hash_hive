@@ -169,6 +169,23 @@ if (IS_ISOLATED) {
       expect(mockDeleteFile).not.toHaveBeenCalled()
     })
 
+    test('FK detection: regex fallback fires when SQLSTATE 23503 is missing (mocked driver)', async () => {
+      selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'k' } }])
+      // Driver/mock that doesn't surface `code` on the error — must still
+      // map to ResourceInUseError via the message-regex fallback.
+      deleteImpl = (table: string) => {
+        if (table === 'hash_lists') {
+          return Promise.reject(
+            new Error('update or delete on table "hash_lists" violates foreign key constraint')
+          )
+        }
+        return Promise.resolve()
+      }
+      const { deleteHashList, ResourceInUseError } = await import('../../src/services/resources.js')
+      await expect(deleteHashList(5, 1)).rejects.toBeInstanceOf(ResourceInUseError)
+      expect(mockDeleteFile).not.toHaveBeenCalled()
+    })
+
     test('skips S3 delete when fileRef is null (upload never finished)', async () => {
       selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: null }])
       const { deleteHashList } = await import('../../src/services/resources.js')

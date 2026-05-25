@@ -138,16 +138,17 @@ function isForeignKeyViolation(err: unknown): boolean {
  * Throws `ResourceInUseError` if a FK from another table still references
  * the row. Idempotent: returns `false` when the row was already gone.
  */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+type DbRunner = DbTx | typeof db
+
 async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
   id: number
   projectId: number
   resourceLabel: string
   referencedBy: string
   lookup: () => Promise<TRow | null>
-  cascade?: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<void>
-  deleteOwner: (
-    runner: Parameters<Parameters<typeof db.transaction>[0]>[0] | typeof db
-  ) => Promise<void>
+  cascade?: (tx: DbTx) => Promise<void>
+  deleteOwner: (runner: DbRunner) => Promise<void>
 }): Promise<boolean> {
   const row = await args.lookup()
   if (!row) return false
@@ -189,18 +190,21 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
 // the worst-case lock duration so a hash list with millions of items can
 // be deleted without holding row-level locks for minutes.
 const HASH_ITEMS_DELETE_CHUNK = 10_000
+// Hard cap on cascade iterations (10k rows × this = 1B rows). A driver
+// that returns rowCount=0 while rows remain (or any future bug that hides
+// the chunk count) would otherwise loop forever inside the transaction.
+const HASH_ITEMS_DELETE_MAX_ITERATIONS = 100_000
 
 /**
  * Cascade-delete `hash_items` for `hashListId` in bounded batches. Each
  * iteration deletes up to `HASH_ITEMS_DELETE_CHUNK` rows using a
  * `ctid IN (SELECT ctid ... LIMIT N)` pattern (PG-specific; bounds the
- * statement-level lock duration).
+ * statement-level lock duration). Hard-capped at
+ * `HASH_ITEMS_DELETE_MAX_ITERATIONS` so a misreported row count can't
+ * cause an unbounded transaction.
  */
-async function deleteHashItemsBatched(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  hashListId: number
-): Promise<void> {
-  for (;;) {
+async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<void> {
+  for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
     const result = (await tx.execute(
       sql`DELETE FROM ${hashItems}
           WHERE ctid IN (
@@ -217,8 +221,15 @@ async function deleteHashItemsBatched(
           : Array.isArray(result)
             ? result.length
             : 0
-    if (deleted < HASH_ITEMS_DELETE_CHUNK) break
+    if (deleted < HASH_ITEMS_DELETE_CHUNK) return
   }
+  logger.error(
+    { hashListId, max: HASH_ITEMS_DELETE_MAX_ITERATIONS, chunkSize: HASH_ITEMS_DELETE_CHUNK },
+    'deleteHashItemsBatched hit max iterations — bailing to avoid unbounded transaction'
+  )
+  throw new Error(
+    `deleteHashItemsBatched(${hashListId}) exceeded ${HASH_ITEMS_DELETE_MAX_ITERATIONS} iterations`
+  )
 }
 
 export async function deleteHashList(id: number, projectId: number): Promise<boolean> {

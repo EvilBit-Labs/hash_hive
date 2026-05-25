@@ -114,7 +114,21 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
         413
       )
     }
-    const body = await c.req.parseBody()
+    let body: Awaited<ReturnType<typeof c.req.parseBody>>
+    try {
+      body = await c.req.parseBody()
+    } catch (err) {
+      logger.warn({ err }, 'Failed to parse multipart body for POST /hash-lists')
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Malformed multipart body',
+          },
+        },
+        400
+      )
+    }
     const file = body['file']
     const nameRaw = body['name']
     const hashTypeIdRaw = body['hashTypeId']

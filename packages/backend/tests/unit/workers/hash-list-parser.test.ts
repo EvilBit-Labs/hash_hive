@@ -251,6 +251,102 @@ describe('Hash list parser worker', () => {
     expect(stats['crackRate']).toBe(0)
   })
 
+  test('parseHashLine: skips empty-hashValue inputs (`:plain`, `::`, `user::plain`, `:a:b:c`)', async () => {
+    mockUpdateSetCalls.length = 0
+    countQueueOverrides.length = 0
+    mockInsertValues.mockReset()
+    mockInsertValues.mockImplementation(() => ({ onConflictDoNothing: mockInsertOnConflict }))
+    const emptyHashContent = [
+      ':plain', // 2 tokens, empty hashValue
+      '::', // 3 tokens, empty hashValue
+      'user::plain', // 3 tokens, empty hashValue
+      ':a:b:c', // 4+ tokens, empty hashValue (first-colon split)
+      '5f4dcc3b5aa765d61d8327deb882cf99', // valid 1-token (control)
+    ].join('\n')
+    mockDownloadFile.mockImplementationOnce(() =>
+      Promise.resolve({
+        Body: { transformToWebStream: () => stringToReadableStream(emptyHashContent) },
+      })
+    )
+    const { createHashListParserWorker } =
+      await import('../../../src/queue/workers/hash-list-parser.js')
+    createHashListParserWorker({} as Redis)
+    const result = (await capturedProcessor!({
+      id: 'parse-empty',
+      data: { hashListId: 1, projectId: 1 },
+      updateProgress: mock(() => Promise.resolve()),
+      opts: { attempts: 3 },
+      attemptsMade: 1,
+    })) as { inserted: number; skippedLines: number }
+
+    // Only the 1-token control should have been inserted.
+    expect(result.inserted).toBe(1)
+    // Four empty-hashValue lines counted as skipped.
+    expect(result.skippedLines).toBe(4)
+    const inserted = mockInsertValues.mock.calls.flatMap(
+      (call: unknown[]) => call[0] as Array<Record<string, unknown>>
+    )
+    expect(inserted.length).toBe(1)
+    expect(inserted[0]?.['hashValue']).toBe('5f4dcc3b5aa765d61d8327deb882cf99')
+  })
+
+  test('parseHashLine: 3-token with empty username falls back to 2-token (no metadata)', async () => {
+    mockUpdateSetCalls.length = 0
+    countQueueOverrides.length = 0
+    mockInsertValues.mockReset()
+    mockInsertValues.mockImplementation(() => ({ onConflictDoNothing: mockInsertOnConflict }))
+    // `:hash:plain` -> 3 tokens but empty username; must drop metadata
+    // rather than persist `{ username: '' }` to JSONB.
+    const content = ':e99a18c428cb38d5f260853678922e03:secret'
+    mockDownloadFile.mockImplementationOnce(() =>
+      Promise.resolve({
+        Body: { transformToWebStream: () => stringToReadableStream(content) },
+      })
+    )
+    const { createHashListParserWorker } =
+      await import('../../../src/queue/workers/hash-list-parser.js')
+    createHashListParserWorker({} as Redis)
+    await capturedProcessor!({
+      id: 'parse-empty-user',
+      data: { hashListId: 1, projectId: 1 },
+      updateProgress: mock(() => Promise.resolve()),
+      opts: { attempts: 3 },
+      attemptsMade: 1,
+    })
+    const inserted = mockInsertValues.mock.calls.flatMap(
+      (call: unknown[]) => call[0] as Array<Record<string, unknown>>
+    )
+    expect(inserted.length).toBe(1)
+    expect(inserted[0]).toMatchObject({
+      hashValue: 'e99a18c428cb38d5f260853678922e03',
+      plaintext: 'secret',
+    })
+    expect(inserted[0]?.['metadata']).toBeUndefined()
+  })
+
+  test('atomic flip: skips emit when UPDATE returns zero rows (concurrent processor)', async () => {
+    mockUpdateSetCalls.length = 0
+    countQueueOverrides.length = 0
+    mockEmitResourceUpdate.mockReset()
+    mockEmitResourceUpdate.mockImplementation(() => undefined)
+    // Signal "another processor already flipped this row" by returning
+    // an empty .returning() result for the status update.
+    returningQueue.push([])
+    countQueueOverrides.push(3, 0)
+    const { createHashListParserWorker } =
+      await import('../../../src/queue/workers/hash-list-parser.js')
+    createHashListParserWorker({} as Redis)
+    await capturedProcessor!({
+      id: 'parse-no-flip',
+      data: { hashListId: 1, projectId: 1 },
+      updateProgress: mock(() => Promise.resolve()),
+      opts: { attempts: 3 },
+      attemptsMade: 1,
+    })
+    // No emit because the flip was a no-op (already-ready row).
+    expect(mockEmitResourceUpdate).not.toHaveBeenCalled()
+  })
+
   test('parseHashLine: supports 1/2/3-token + 4+-token fallback', async () => {
     mockUpdateSetCalls.length = 0
     countQueueOverrides.length = 0
