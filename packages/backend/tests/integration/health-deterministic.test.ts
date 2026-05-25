@@ -50,11 +50,11 @@ function buildSystemHealth(): SystemHealth {
   return {
     status: mockedAggregateStatus,
     timestamp: '2026-05-07T00:00:00.000Z',
-    version: '1.1.0',
+    version: '2.0.0',
     components: {
       database: buildComponent(mockedAggregateStatus === 'unhealthy' ? 'unhealthy' : 'healthy'),
       redis: buildComponent('healthy'),
-      minio: buildComponent('healthy'),
+      object_store: buildComponent('healthy'),
       queues: buildComponent(mockedAggregateStatus === 'degraded' ? 'degraded' : 'healthy'),
     },
   }

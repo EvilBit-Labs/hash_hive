@@ -85,7 +85,7 @@ if (IS_ISOLATED) {
         components: {
           database: { status: 'healthy' },
           redis: { status: 'healthy' },
-          minio: { status: 'healthy' },
+          object_store: { status: 'healthy' },
           queues: { status: 'healthy' },
         },
       })

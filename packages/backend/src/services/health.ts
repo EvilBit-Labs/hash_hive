@@ -14,6 +14,8 @@
  * from getSystemHealth().
  */
 
+import type { ComponentName, ComponentStatus } from '@hashhive/shared'
+
 import { sql } from 'drizzle-orm'
 
 import { env } from '../config/env.js'
@@ -22,18 +24,12 @@ import { checkObjectStoreHealth } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { getQueueManager } from '../queue/context.js'
 
-export type ComponentStatus = 'healthy' | 'degraded' | 'unhealthy'
-
-/**
- * Component names exposed on the wire (`components.<name>` on
- * `/api/v1/dashboard/health`, `services.<name>` on the legacy `/health` envelope).
- * `'minio'` is preserved as the wire identifier across the SeaweedFS swap
- * so frontend consumers (see `packages/frontend/src/hooks/use-system-health.ts`)
- * keep working without a coupled release. Internal symbols are migrated
- * to neutral terminology (`checkObjectStoreHealth`) where doing so does
- * not touch the wire.
- */
-export type ComponentName = 'database' | 'redis' | 'minio' | 'queues'
+// Re-export so existing callers (`import { ComponentName } from
+// '../services/health.js'`) continue to work without churn. The
+// canonical declaration lives in `@hashhive/shared` per AGENTS.md's
+// wire-shape rule. See `componentNameSchema` /
+// `componentStatusSchema` there.
+export type { ComponentName, ComponentStatus }
 
 /**
  * Probe result shape without a `durationMs` field — that field is
@@ -66,8 +62,15 @@ export interface SystemHealth {
  * since the health surface evolves on its own cadence; see the
  * Control API spec at packages/openapi/control-api.yaml for the
  * matching `info.version` it documents.
+ *
+ * 2.0.0 (issue #156) — `components.minio` renamed to `components.object_store`
+ *   across both the rich envelope and the legacy public envelope. No
+ *   back-compat alias; pre-2.0.0 probes keyed on the old name will see
+ *   the field absent.
+ * 1.1.0 (issue #109) — three-tier status, `components` map, per-component
+ *   `message`/`detail`/`durationMs`.
  */
-export const HEALTH_VERSION = '1.1.0'
+export const HEALTH_VERSION = '2.0.0'
 
 // Threshold semantics for the entire module: warn comparisons use `>=`
 // (inclusive boundary). "Warn at 10000" means 10000 is already the warn
@@ -320,7 +323,7 @@ export function __resetMaxConnectionsCache(): void {
 function buildDefaultProbes(): {
   database: DatabaseProbeDeps
   redis: RedisProbeDeps
-  minio: ObjectStoreProbeDeps
+  object_store: ObjectStoreProbeDeps
   queues: QueuesProbeDeps
 } {
   const qm = getQueueManager()
@@ -336,7 +339,7 @@ function buildDefaultProbes(): {
       // qm.getHealth().
       status: () => qm?.getRedisStatus() ?? 'disconnected',
     },
-    minio: { check: checkObjectStoreHealth },
+    object_store: { check: checkObjectStoreHealth },
     queues: {
       health: async () => {
         if (!qm) {
@@ -355,7 +358,7 @@ export interface SystemHealthOptions {
   probes?: {
     database?: DatabaseProbeDeps
     redis?: RedisProbeDeps
-    minio?: ObjectStoreProbeDeps
+    object_store?: ObjectStoreProbeDeps
     queues?: QueuesProbeDeps
   }
   /** Override thresholds for testing. */
@@ -372,7 +375,7 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
   const probes = {
     database: opts.probes?.database ?? defaults.database,
     redis: opts.probes?.redis ?? defaults.redis,
-    minio: opts.probes?.minio ?? defaults.minio,
+    object_store: opts.probes?.object_store ?? defaults.object_store,
     queues: opts.probes?.queues ?? defaults.queues,
   }
   const thresholds = {
@@ -382,7 +385,7 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
     dbConnectionWarnPct: opts.thresholds?.dbConnectionWarnPct ?? env.HEALTH_DB_CONNECTION_WARN_PCT,
   }
 
-  const [database, redis, minio, queues] = await Promise.all([
+  const [database, redis, object_store, queues] = await Promise.all([
     // probeFn signatures all accept (signal: AbortSignal) so runProbe
     // can abort the underlying driver call on timeout. probes that
     // don't need it (sync redis status check, queue stat fan-out)
@@ -394,8 +397,8 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
     ),
     runProbe('redis', () => probeRedis(probes.redis), thresholds.probeTimeoutMs),
     runProbe(
-      'minio',
-      (signal) => probeObjectStore(probes.minio, signal),
+      'object_store',
+      (signal) => probeObjectStore(probes.object_store, signal),
       thresholds.probeTimeoutMs
     ),
     runProbe(
@@ -405,7 +408,12 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
     ),
   ])
 
-  const components: Record<ComponentName, ComponentHealth> = { database, redis, minio, queues }
+  const components: Record<ComponentName, ComponentHealth> = {
+    database,
+    redis,
+    object_store,
+    queues,
+  }
   return {
     status: aggregateStatus(components),
     timestamp: new Date().toISOString(),
@@ -417,7 +425,7 @@ async function executeProbes(opts: SystemHealthOptions): Promise<SystemHealth> {
 // ─── Caching layer ──────────────────────────────────────────────────
 //
 // Each call fans out probes that hit Postgres (3 queries), Redis (status
-// + per-queue counts × 7 queues = ~21 calls), MinIO (HeadBucket), and
+// + per-queue counts × 7 queues = ~21 calls), object store (HeadBucket), and
 // usually completes in tens of ms. Without caching, three surfaces
 // (/health, /api/v1/control/health, /api/v1/dashboard/health) plus the
 // 30s scheduled monitor plus a polling dashboard could pile probes
@@ -475,12 +483,12 @@ export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<S
  * - `status: 'ok' | 'degraded'` — coarse two-tier signal kept for older
  *   monitors. The HTTP status code (503 on unhealthy) is the additional
  *   signal those monitors can opt into.
- * - `services.{database,redis,minio,queues}.status: 'connected' |
+ * - `services.{database,redis,object_store,queues}.status: 'connected' |
  *   'disconnected'` — coarse connectivity. A "degraded" component
  *   (queue depth above warn threshold, DB pool >= warn percent) is still
  *   `connected` since it's reachable; only `unhealthy` collapses to
  *   `disconnected`.
- * - `services.minio.bucket` — preserved.
+ * - `services.object_store.bucket` — current bucket name from `env.S3_BUCKET`.
  * - `services.queues.queues` — a flat `{ queueName: { waiting, active,
  *   failed } }` map matching what `qm.getHealth()` previously returned
  *   in the inline /health handler. Preserved so anonymous probes that
@@ -501,8 +509,8 @@ export async function getSystemHealth(opts: SystemHealthOptions = {}): Promise<S
  * Anti-leak guard fields on every legacy-envelope service entry: a
  * future PR adding `message` or `detail` here would silently leak
  * probe internals to anonymous callers, so we make it a compile error
- * instead. New per-service fields (like `bucket` on minio or `queues`
- * on queues) are added by intersection on the specific entry below.
+ * instead. New per-service fields (like `bucket` on `object_store` or
+ * `queues` on `queues`) are added by intersection on the specific entry below.
  */
 type LegacyServiceGuards = {
   message?: never
@@ -518,7 +526,7 @@ export interface LegacyHealthEnvelope {
   services: {
     database: LegacyServiceGuards & { status: 'connected' | 'disconnected' }
     redis: LegacyServiceGuards & { status: 'connected' | 'disconnected' }
-    minio: LegacyServiceGuards & {
+    object_store: LegacyServiceGuards & {
       status: 'connected' | 'disconnected'
       bucket: string
     }
@@ -542,11 +550,14 @@ function extractQueueStats(
 }
 
 export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope {
-  // Preserve the pre-#109 `services.minio.bucket` contract even when the
-  // probe timed out before setting `detail` — fall back to env.S3_BUCKET so
-  // monitors that read `body.services.minio.bucket.length` keep working.
-  const minioBucket =
-    (health.components.minio.detail?.['bucket'] as string | undefined) ?? env.S3_BUCKET
+  // On a healthy probe, `detail.bucket` carries the authoritative bucket
+  // name (which may differ from `env.S3_BUCKET` in unusual deploys). When
+  // the probe finished without populating `detail.bucket` (timeout,
+  // programming error, future probe variant), fall back to
+  // `env.S3_BUCKET` so anonymous monitors that read this field
+  // unconditionally do not break on a degraded probe outcome.
+  const objectStoreBucket =
+    (health.components.object_store.detail?.['bucket'] as string | undefined) ?? env.S3_BUCKET
   return {
     status: health.status === 'healthy' ? 'ok' : 'degraded',
     aggregateStatus: health.status,
@@ -555,9 +566,9 @@ export function legacyPublicEnvelope(health: SystemHealth): LegacyHealthEnvelope
     services: {
       database: { status: legacyServiceStatus(health.components.database.status) },
       redis: { status: legacyServiceStatus(health.components.redis.status) },
-      minio: {
-        status: legacyServiceStatus(health.components.minio.status),
-        bucket: minioBucket,
+      object_store: {
+        status: legacyServiceStatus(health.components.object_store.status),
+        bucket: objectStoreBucket,
       },
       queues: {
         status: legacyServiceStatus(health.components.queues.status),

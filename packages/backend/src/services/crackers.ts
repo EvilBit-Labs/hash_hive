@@ -1,7 +1,7 @@
 import { crackerBinaries, KNOWN_ENGINES, type KnownEngineName } from '@hashhive/shared'
 import { and, desc, eq, sql } from 'drizzle-orm'
 /**
- * Cracker binary registry — engine-aware, MinIO-backed, admin-managed.
+ * Cracker binary registry — engine-aware, object-store-backed, admin-managed.
  *
  * Hashcat is the default engine throughout: any caller that omits `engine`
  * resolves to `'hashcat'`. Engine values are stored lowercased so that a
@@ -256,7 +256,7 @@ export async function deleteCrackerBinary(
   const fileRef = readFileRef(row.fileRef)
 
   // Branch on lifecycle state. An in-progress multipart upload needs
-  // `abortMultipartUpload` to free MinIO's stored parts; calling
+  // `abortMultipartUpload` to free the object store's stored parts; calling
   // `deleteFile` on the key would leave orphaned parts behind because
   // the assembled object doesn't exist yet.
   if (fileRef.state === 'uploading') {
@@ -421,7 +421,7 @@ export async function getLatestCracker(opts: { engine?: string | undefined; plat
 
 /**
  * Generate a presigned download URL for a cracker binary. Used by agents
- * to stream the binary directly from MinIO without proxying through the
+ * to stream the binary directly from the object store without proxying through the
  * API (avoids tying up an API process for the duration of a multi-MB
  * download).
  *

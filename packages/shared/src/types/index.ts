@@ -7,6 +7,8 @@ import type {
   agentHeartbeatErrorSchema,
   agentHeartbeatResponseSchema,
   agentHeartbeatSchema,
+  componentNameSchema,
+  componentStatusSchema,
   agentStatusSchema,
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
@@ -231,6 +233,8 @@ export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>
 export type AgentHeartbeatResponse = z.infer<typeof agentHeartbeatResponseSchema>
+export type ComponentName = z.infer<typeof componentNameSchema>
+export type ComponentStatus = z.infer<typeof componentStatusSchema>
 export type AgentHardwareProfile = z.infer<typeof agentHardwareProfileSchema>
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>
 export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>

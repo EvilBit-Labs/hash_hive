@@ -33,7 +33,7 @@ function makeComponents(
   return {
     database: makeComponent(overrides.database ?? 'healthy'),
     redis: makeComponent(overrides.redis ?? 'healthy'),
-    minio: makeComponent(overrides.minio ?? 'healthy'),
+    object_store: makeComponent(overrides.object_store ?? 'healthy'),
     queues: makeComponent(overrides.queues ?? 'healthy'),
   }
 }
@@ -48,7 +48,7 @@ describe('aggregateStatus', () => {
   })
 
   test('returns unhealthy when any component is unhealthy regardless of degraded', () => {
-    expect(aggregateStatus(makeComponents({ minio: 'unhealthy', queues: 'degraded' }))).toBe(
+    expect(aggregateStatus(makeComponents({ object_store: 'unhealthy', queues: 'degraded' }))).toBe(
       'unhealthy'
     )
   })
@@ -59,7 +59,7 @@ describe('aggregateStatus', () => {
         makeComponents({
           database: 'unhealthy',
           redis: 'unhealthy',
-          minio: 'unhealthy',
+          object_store: 'unhealthy',
           queues: 'unhealthy',
         })
       )
@@ -350,7 +350,7 @@ describe('getSystemHealth', () => {
     redis: {
       status: () => 'connected' as const,
     },
-    minio: {
+    object_store: {
       check: async () => ({ status: 'connected' as const, bucket: 'test' }),
     },
     queues: {
@@ -364,11 +364,11 @@ describe('getSystemHealth', () => {
   test('returns SystemHealth shape with all four components and version', async () => {
     const result = await getSystemHealth({ probes: allHealthyProbes })
     expect(result.status).toBe('healthy')
-    expect(result.version).toBe('1.1.0')
+    expect(result.version).toBe('2.0.0')
     expect(result.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(result.components.database.status).toBe('healthy')
     expect(result.components.redis.status).toBe('healthy')
-    expect(result.components.minio.status).toBe('healthy')
+    expect(result.components.object_store.status).toBe('healthy')
     expect(result.components.queues.status).toBe('healthy')
   })
 
@@ -393,16 +393,16 @@ describe('getSystemHealth', () => {
     const result = await getSystemHealth({
       probes: {
         ...allHealthyProbes,
-        minio: {
+        object_store: {
           check: async () => {
-            throw new Error('minio down')
+            throw new Error('object_store down')
           },
         },
       },
     })
     expect(result.status).toBe('unhealthy')
-    expect(result.components.minio.status).toBe('unhealthy')
-    expect(result.components.minio.message).toBe('minio down')
+    expect(result.components.object_store.status).toBe('unhealthy')
+    expect(result.components.object_store.message).toBe('object_store down')
     // Other components still healthy — parallel probes did not short-circuit
     expect(result.components.database.status).toBe('healthy')
     expect(result.components.redis.status).toBe('healthy')
@@ -412,7 +412,7 @@ describe('getSystemHealth', () => {
   test('three async probes hanging simultaneously do not serialize wall-clock (parallelism proof, T-008)', async () => {
     // The redis probe's status() is synchronous so it can't hang on a
     // timeout — instead it reports unhealthy immediately. The three
-    // async probes (database, minio, queues) all hang and must time
+    // async probes (database, object_store, queues) all hang and must time
     // out in parallel, not one-after-another.
     const hangingProbe = () => new Promise<never>(() => {})
     const start = Date.now()
@@ -423,7 +423,7 @@ describe('getSystemHealth', () => {
           poolStats: async () => ({ used: 0, max: 100 }),
         },
         redis: { status: () => 'disconnected' },
-        minio: { check: hangingProbe },
+        object_store: { check: hangingProbe },
         queues: { health: hangingProbe },
       },
       thresholds: { probeTimeoutMs: 50 },
@@ -431,7 +431,7 @@ describe('getSystemHealth', () => {
     const elapsed = Date.now() - start
     expect(result.status).toBe('unhealthy')
     expect(result.components.database.message).toContain('timed out')
-    expect(result.components.minio.message).toContain('timed out')
+    expect(result.components.object_store.message).toContain('timed out')
     expect(result.components.queues.message).toContain('timed out')
     // Parallel execution: total wall-clock should be roughly one probe's
     // timeout, not three times it. Allow generous margin for CI.
@@ -483,7 +483,7 @@ describe('legacyPublicEnvelope', () => {
     overrides: Partial<{
       db: ComponentHealth['status']
       redis: ComponentHealth['status']
-      minio: ComponentHealth['status']
+      object_store: ComponentHealth['status']
       queues: ComponentHealth['status']
     }> = {}
   ): Promise<ReturnType<typeof getSystemHealth> extends Promise<infer T> ? T : never> {
@@ -501,9 +501,9 @@ describe('legacyPublicEnvelope', () => {
         redis: {
           status: () => (overrides.redis === 'unhealthy' ? 'disconnected' : 'connected'),
         },
-        minio: {
+        object_store: {
           check: async () => ({
-            status: overrides.minio === 'unhealthy' ? 'disconnected' : 'connected',
+            status: overrides.object_store === 'unhealthy' ? 'disconnected' : 'connected',
             bucket: 'hashhive-test',
           }),
         },
@@ -526,10 +526,10 @@ describe('legacyPublicEnvelope', () => {
     expect(env.aggregateStatus).toBe('healthy')
     expect(env.services.database.status).toBe('connected')
     expect(env.services.redis.status).toBe('connected')
-    expect(env.services.minio.status).toBe('connected')
-    expect(env.services.minio.bucket).toBe('hashhive-test')
+    expect(env.services.object_store.status).toBe('connected')
+    expect(env.services.object_store.bucket).toBe('hashhive-test')
     expect(env.services.queues.status).toBe('connected')
-    expect(env.version).toBe('1.1.0')
+    expect(env.version).toBe('2.0.0')
   })
 
   test('degraded maps to status="degraded" body, aggregateStatus="degraded", services stay "connected"', async () => {
@@ -546,10 +546,10 @@ describe('legacyPublicEnvelope', () => {
     // The body's coarse `status` collapses to 'degraded' for backward compat,
     // but the new `aggregateStatus` field carries the full three-tier value
     // so JSON-only monitors can distinguish degraded from unhealthy.
-    const env = legacyPublicEnvelope(await makeHealth({ minio: 'unhealthy' }))
+    const env = legacyPublicEnvelope(await makeHealth({ object_store: 'unhealthy' }))
     expect(env.status).toBe('degraded')
     expect(env.aggregateStatus).toBe('unhealthy')
-    expect(env.services.minio.status).toBe('disconnected')
+    expect(env.services.object_store.status).toBe('disconnected')
   })
 
   test('exposes services.queues.queues map with per-queue stats (api-contract-3)', async () => {

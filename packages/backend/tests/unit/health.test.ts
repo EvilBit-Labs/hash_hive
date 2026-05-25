@@ -30,24 +30,40 @@ describe('GET /health', () => {
     const body = await res.json()
     expect(['ok', 'degraded']).toContain(body['status'])
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body['aggregateStatus'])
-    expect(body['version']).toBe('1.1.0')
+    expect(body['version']).toBe('2.0.0')
     expect(body['timestamp']).toBeDefined()
     expect(body['services']['database']).toBeDefined()
     expect(['connected', 'disconnected']).toContain(body['services']['database']['status'])
   })
 
-  it('should include object-store health status under the legacy `minio` wire key', async () => {
-    // The wire key stays `minio` across the SeaweedFS swap so the dashboard
-    // and any external probe consumers do not need a coupled release.
+  it('should include object-store health status under `services.object_store`', async () => {
+    // The wire key is `object_store` (vendor-neutral). The pre-prod `minio`
+    // placeholder was dropped in this PR; see issue #156 AC 4.3.
     const res = await app.request('/health')
     expect(VALID_HTTP_STATUSES).toContain(res.status)
 
     const body = await res.json()
-    const objectStore = body['services']['minio']
+    const objectStore = body['services']['object_store']
     expect(objectStore).toBeDefined()
     expect(objectStore['status']).toBe('connected')
     expect(typeof objectStore['bucket']).toBe('string')
     expect(objectStore['bucket'].length).toBeGreaterThan(0)
+  })
+
+  it('should not expose the legacy `services.minio` wire key', async () => {
+    // Regression guard: AC 4.3 of issue #156 requires neutral naming.
+    // Reintroducing the `minio` field would silently re-violate the AC.
+    const res = await app.request('/health')
+    expect(VALID_HTTP_STATUSES).toContain(res.status)
+
+    const body = await res.json()
+    expect(body['services']['minio']).toBeUndefined()
+    // Positive assertion: the new `object_store` field carries the shape
+    // the old `minio` field used to (status + bucket). This pairs with the
+    // absence assertion above so the rename is enforced from both sides.
+    expect(['connected', 'disconnected']).toContain(body['services']['object_store']['status'])
+    expect(typeof body['services']['object_store']['bucket']).toBe('string')
+    expect(body['services']['object_store']['bucket'].length).toBeGreaterThan(0)
   })
 
   it('should expose services.queues.queues map (api-contract-3)', async () => {
@@ -89,13 +105,13 @@ describe('404 handler', () => {
   })
 })
 
-// ─── Object-store probe + legacy-wire contract regression tests ────────
+// ─── Object-store probe + wire-contract regression tests ────────
 //
-// These pin the post-SeaweedFS-swap behavior so renaming the internal
-// `ComponentName` value `'minio'` or dropping the legacy bucket fallback
-// becomes a test-time error instead of a frontend regression.
+// These pin the post-rename behavior so reintroducing the legacy `minio`
+// wire identifier or dropping the bucket fallback becomes a test-time
+// error instead of a frontend regression.
 
-describe('object-store probe + legacy wire contract', () => {
+describe('object-store probe + wire contract', () => {
   it('reports the documented error string when the object store is unreachable', async () => {
     const { probeObjectStore } = await import('../../src/services/health.js')
     const result = await probeObjectStore({
@@ -107,11 +123,11 @@ describe('object-store probe + legacy wire contract', () => {
     }
   })
 
-  it('preserves services.minio.bucket from env.S3_BUCKET even when probe detail is missing', async () => {
+  it('populates services.object_store.bucket from env.S3_BUCKET even when probe detail is missing', async () => {
     // Simulates the timeout/programming-error path where ComponentHealth
     // has no `detail` field. The legacy envelope must still surface
-    // `services.minio.bucket` so pre-#109 monitors that read it without
-    // optional-chaining keep working.
+    // `services.object_store.bucket` so anonymous monitors that read it
+    // without optional-chaining keep working.
     const { legacyPublicEnvelope } = await import('../../src/services/health.js')
     const envelope = legacyPublicEnvelope({
       status: 'unhealthy',
@@ -120,20 +136,21 @@ describe('object-store probe + legacy wire contract', () => {
       components: {
         database: { status: 'healthy', durationMs: 1 },
         redis: { status: 'healthy', durationMs: 1 },
-        minio: { status: 'unhealthy', message: 'probe timed out', durationMs: 1 },
+        object_store: { status: 'unhealthy', message: 'probe timed out', durationMs: 1 },
         queues: { status: 'healthy', durationMs: 1 },
       },
     })
-    expect(envelope.services.minio.status).toBe('disconnected')
-    expect(typeof envelope.services.minio.bucket).toBe('string')
-    expect(envelope.services.minio.bucket.length).toBeGreaterThan(0)
+    expect(envelope.services.object_store.status).toBe('disconnected')
+    expect(typeof envelope.services.object_store.bucket).toBe('string')
+    expect(envelope.services.object_store.bucket.length).toBeGreaterThan(0)
   })
 
-  it("pins ComponentName 'minio' as the wire identifier (regression: renaming breaks dashboard)", async () => {
+  it("pins ComponentName 'object_store' as the wire identifier (regression: renaming breaks dashboard)", async () => {
     // If the internal `ComponentName` union is ever renamed away from
-    // 'minio', the `components.minio` lookup below becomes a TypeScript
-    // error at compile time and this test stops building. The compile-time
-    // pin is the actual guard; the runtime assertion is the message.
+    // 'object_store', the `components.object_store` lookup below becomes a
+    // TypeScript error at compile time and this test stops building. The
+    // compile-time pin is the actual guard; the runtime assertion is the
+    // message.
     const { legacyPublicEnvelope } = await import('../../src/services/health.js')
     const envelope = legacyPublicEnvelope({
       status: 'healthy',
@@ -142,7 +159,7 @@ describe('object-store probe + legacy wire contract', () => {
       components: {
         database: { status: 'healthy', durationMs: 1 },
         redis: { status: 'healthy', durationMs: 1 },
-        minio: {
+        object_store: {
           status: 'healthy',
           detail: { bucket: 'pinned-bucket' },
           durationMs: 1,
@@ -150,6 +167,6 @@ describe('object-store probe + legacy wire contract', () => {
         queues: { status: 'healthy', durationMs: 1 },
       },
     })
-    expect(envelope.services.minio.bucket).toBe('pinned-bucket')
+    expect(envelope.services.object_store.bucket).toBe('pinned-bucket')
   })
 })

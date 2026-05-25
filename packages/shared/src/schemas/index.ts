@@ -536,6 +536,25 @@ export const agentHeartbeatResponseSchema = z
   })
   .strict()
 
+// ─── System Health API ─────────────────────────────────────────────
+
+/**
+ * Wire identifiers for the four health components surfaced on
+ * `/api/v1/control/health`, `/api/v1/dashboard/health`, and the legacy
+ * public `/health` envelope. Renamed in issue #156 (HEALTH_VERSION 2.0.0):
+ * the prior `'minio'` placeholder was dropped in favor of the neutral
+ * `'object_store'` so the wire shape stays vendor-agnostic across
+ * SeaweedFS and any future hosted AWS S3 deploy.
+ *
+ * Single source of truth — backend `services/health.ts`, frontend
+ * `hooks/use-system-health.ts`, and the OpenAPI control spec all
+ * consume this schema (per AGENTS.md "Wire shapes live in @hashhive/shared").
+ */
+export const componentNameSchema = z.enum(['database', 'redis', 'object_store', 'queues'])
+
+/** Three-tier component status used on the rich SystemHealth envelope. */
+export const componentStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy'])
+
 // ─── Cracker Check-Update API ───────────────────────────────────────
 
 /**

@@ -51,9 +51,14 @@ app.use(
 // ─── Health Check ───────────────────────────────────────────────────
 //
 // Public, unauthenticated endpoint used by load balancers. Delegates to
-// the centralized health service (issue #109) but keeps the legacy
-// envelope shape so older probes that read services.{database,redis,
-// minio}.status keep working. HTTP 503 fires only when the system is
+// the centralized health service (issue #109) and keeps the legacy
+// envelope shape (`status: ok | degraded`, `services` map, additive
+// `aggregateStatus`) for LB probes that read services.{database,redis,
+// object_store,queues}.status. Issue #156 renamed the object-store
+// component from `minio` to `object_store` and bumped `HEALTH_VERSION`
+// to 2.0.0; pre-2.0.0 probes keyed on `services.minio` will see
+// `undefined` after this change (pre-prod posture — no external
+// automation consumers known). HTTP 503 fires only when the system is
 // unhealthy; degraded queues stay 200 so we don't flap LB rotation on
 // transient warnings.
 

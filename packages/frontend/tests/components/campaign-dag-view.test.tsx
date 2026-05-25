@@ -44,7 +44,7 @@ mock.module('reactflow', () => {
       <div data-testid="react-flow-stub">
         <ul data-testid="dag-nodes">
           {nodes.map((n) => (
-            <li key={n.id} data-node-id={n.id} data-node-bg={String(n.style?.['background'] ?? '')}>
+            <li key={n.id} data-node-id={n.id} data-node-bg={n.style?.['background'] ?? ''}>
               {n.data.label}
             </li>
           ))}
