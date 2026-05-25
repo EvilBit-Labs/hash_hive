@@ -38,28 +38,34 @@ function parseHashLine(line: string, hashListId: number) {
     return { hashListId, hashValue: line }
   }
   if (tokens.length === 2) {
+    const [hashValue, plaintext] = tokens
+    if (!hashValue) return null // ':plain' - no hash to insert
     return {
       hashListId,
-      hashValue: tokens[0] ?? '',
-      plaintext: tokens[1] ?? '',
+      hashValue,
+      plaintext: plaintext ?? '',
       crackedAt: new Date(),
     }
   }
   if (tokens.length === 3) {
+    const [username, hashValue, plaintext] = tokens
+    if (!hashValue) return null // 'user::plain' - no hash to insert
     return {
       hashListId,
-      hashValue: tokens[1] ?? '',
-      plaintext: tokens[2] ?? '',
+      hashValue,
+      plaintext: plaintext ?? '',
       crackedAt: new Date(),
-      metadata: { username: tokens[0] ?? '' },
+      metadata: { username: username ?? '' },
     }
   }
   // 4+ tokens: legacy first-colon-as-separator. Preserves prior behavior for
   // hash:plaintext lines where the plaintext itself contains colons.
   const firstColon = line.indexOf(':')
+  const hashValue = line.substring(0, firstColon)
+  if (!hashValue) return null // ':plain:with:colons'
   return {
     hashListId,
-    hashValue: line.substring(0, firstColon),
+    hashValue,
     plaintext: line.substring(firstColon + 1),
     crackedAt: new Date(),
   }
@@ -69,7 +75,9 @@ function parseHashLine(line: string, hashListId: number) {
  * Flush a batch of parsed hash items to the database.
  * Uses onConflictDoNothing for idempotency on (hashListId, hashValue).
  */
-async function flushBatch(batch: ReadonlyArray<ReturnType<typeof parseHashLine>>): Promise<void> {
+type HashItemInsert = NonNullable<ReturnType<typeof parseHashLine>>
+
+async function flushBatch(batch: ReadonlyArray<HashItemInsert>): Promise<void> {
   if (batch.length === 0) return
   await db
     .insert(hashItems)
@@ -107,7 +115,7 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
       const reader = stream.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let batch: ReturnType<typeof parseHashLine>[] = []
+      let batch: HashItemInsert[] = []
       let linesProcessed = 0
       let skippedLines = 0
 
@@ -134,7 +142,14 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
             continue
           }
 
-          batch.push(parseHashLine(line, hashListId))
+          const parsed = parseHashLine(line, hashListId)
+          if (parsed === null) {
+            // Empty hashValue after split (e.g. ':plain', '::', '::plain') —
+            // skip rather than insert a blank-hash row.
+            skippedLines++
+            continue
+          }
+          batch.push(parsed)
 
           if (batch.length >= BATCH_SIZE) {
             await flushBatch(batch)
@@ -151,7 +166,12 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         if (finalLine.length > MAX_LINE_LENGTH) {
           skippedLines++
         } else {
-          batch.push(parseHashLine(finalLine, hashListId))
+          const parsed = parseHashLine(finalLine, hashListId)
+          if (parsed === null) {
+            skippedLines++
+          } else {
+            batch.push(parsed)
+          }
         }
       }
 
@@ -208,11 +228,25 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
       )
 
       if (flipped.length > 0) {
-        emitResourceUpdate(projectId, {
-          action: 'hash_list_ready',
-          hashListId,
-          statistics,
-        })
+        // Guard the emit: an EventService crash here happens AFTER the DB
+        // commit and AFTER the row is at status=ready. Letting the throw
+        // propagate would mark the BullMQ job failed and trigger a retry
+        // against an already-ready row — which the atomic-flip guard would
+        // then skip, permanently dropping the hash_list_ready event for
+        // every subscriber. The parse itself succeeded; log the emit
+        // failure and complete the job cleanly.
+        try {
+          emitResourceUpdate(projectId, {
+            action: 'hash_list_ready',
+            hashListId,
+            statistics,
+          })
+        } catch (emitErr) {
+          logger.error(
+            { hashListId, err: emitErr },
+            'Failed to emit hash_list_ready event after DB commit; subscribers will need to refresh manually'
+          )
+        }
       }
 
       return { inserted: linesProcessed, skippedLines }
@@ -241,11 +275,17 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         .set({ status: 'error', updatedAt: new Date() })
         .where(eq(hashLists.id, hashListId))
       if (typeof projectId === 'number') {
-        emitResourceUpdate(projectId, {
-          action: 'hash_list_failed',
-          hashListId,
-          error: errorMessage,
-        })
+        // Same guard as the success path — emit failure mustn't make the
+        // BullMQ failed-listener throw.
+        try {
+          emitResourceUpdate(projectId, {
+            action: 'hash_list_failed',
+            hashListId,
+            error: errorMessage,
+          })
+        } catch (emitErr) {
+          logger.error({ hashListId, err: emitErr }, 'Failed to emit hash_list_failed event')
+        }
       }
     } catch (cleanupErr) {
       // Hash list row likely stuck in non-error status; operator must reset manually.

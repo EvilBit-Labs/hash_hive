@@ -90,10 +90,12 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
     if (!(file instanceof File)) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
     }
-    if (typeof nameRaw !== 'string' || nameRaw.length === 0 || nameRaw.length > 200) {
+    // Align with createHashListRequestSchema (1-255 chars) so the multipart
+    // and JSON paths accept the same name lengths.
+    if (typeof nameRaw !== 'string' || nameRaw.length === 0 || nameRaw.length > 255) {
       return c.json(
         {
-          error: { code: 'VALIDATION_ERROR', message: 'name is required (1-200 chars)' },
+          error: { code: 'VALIDATION_ERROR', message: 'name is required (1-255 chars)' },
         },
         400
       )
@@ -198,12 +200,22 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
 
   const liveStats = await getHashListStats(hashListId)
 
+  // Strip legacy keys so a pre-rename row (parsed before U1 shipped) doesn't
+  // leak `{total, cracked, remaining, skippedLines}` into the response next
+  // to the new `{totalCount, crackedCount, crackRate, lastUpdated}` shape.
+  // `lastUpdated` is the only persisted-only field; everything else is
+  // recomputed from `liveStats` on every request so the response is always
+  // wire-shape-clean regardless of what's in the JSONB.
+  const persistedStats = (hl.statistics as Record<string, unknown> | null) ?? {}
+  const lastUpdated =
+    typeof persistedStats['lastUpdated'] === 'string' ? persistedStats['lastUpdated'] : undefined
+
   return c.json({
     hashList: {
       ...hl,
       statistics: {
-        ...(hl.statistics as Record<string, unknown> | null),
         ...liveStats,
+        ...(lastUpdated ? { lastUpdated } : {}),
       },
     },
   })

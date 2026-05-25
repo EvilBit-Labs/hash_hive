@@ -131,29 +131,51 @@ export async function deleteHashList(id: number, projectId: number): Promise<boo
   const hl = await getHashListById(id, projectId)
   if (!hl) return false
 
+  // Order matters: validate the row is FK-deletable FIRST by deleting the
+  // hash_lists row (which raises a FK violation if a campaign/attack still
+  // references it). Only after that succeeds do we cascade hash_items and
+  // delete the S3 object. The prior order wiped hash_items and S3 BEFORE
+  // the FK check, so a 409 (ResourceInUseError) would leave the hash list
+  // row intact but empty of items with its S3 object gone — corruption.
+  try {
+    // First: cascade hash_items inside an attempt that we can roll back via
+    // PG transaction semantics. Drizzle's top-level statements aren't
+    // transactional by default; the safer pattern is to test the FK with a
+    // probing DELETE on hash_lists first via PG's RETURNING. If the row
+    // can't be deleted (FK), no children are touched. If it can, we then
+    // run the explicit child cascade and the actual delete.
+    //
+    // Implementation: wrap the two DELETEs in a single transaction so a
+    // late FK violation rolls back the hash_items cascade. PG already
+    // serializes the two statements; the transaction is the rollback.
+    await db.transaction(async (tx) => {
+      await tx.delete(hashItems).where(eq(hashItems.hashListId, id))
+      await tx
+        .delete(hashLists)
+        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+    })
+  } catch (err) {
+    // Detect FK violation by SQLSTATE 23503 (foreign_key_violation) rather
+    // than regex against err.message — locale-stable and version-stable.
+    const code = err instanceof Error && 'code' in err ? (err as { code?: string }).code : undefined
+    if (
+      code === '23503' ||
+      (err instanceof Error && /foreign key|violates|reference/i.test(err.message))
+    ) {
+      throw new ResourceInUseError('hash list', id, 'one or more campaigns or attacks')
+    }
+    throw err
+  }
+
+  // S3 delete runs LAST and is best-effort: by this point the DB rows are
+  // gone, so a stale S3 object is a janitor problem, not a correctness one.
   const fileRef = hl.fileRef as { bucket?: string; key?: string } | null
   if (fileRef?.key) {
     try {
       await deleteFile(fileRef.key, fileRef.bucket)
     } catch (err) {
-      // Object may already be gone, or the bucket may be transient-unavailable —
-      // log and proceed. The DB row delete is the durable signal.
       logger.warn({ hashListId: id, err }, 'Failed to delete hash list S3 object; continuing')
     }
-  }
-
-  // Explicit cascade — no ON DELETE CASCADE on the FK.
-  await db.delete(hashItems).where(eq(hashItems.hashListId, id))
-
-  try {
-    await db.delete(hashLists).where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
-  } catch (err) {
-    // FK violation from a referencing table (campaigns, attacks) — surface
-    // as a domain error the route maps to 409.
-    if (err instanceof Error && /foreign key|violates|reference/i.test(err.message)) {
-      throw new ResourceInUseError('hash_list', id, 'one or more campaigns or attacks')
-    }
-    throw err
   }
   return true
 }
@@ -172,6 +194,21 @@ export async function deleteResource(
   const row = await getResourceById(table, id, projectId)
   if (!row) return false
 
+  // DB delete FIRST so a FK violation aborts before the S3 object is gone.
+  try {
+    await db.delete(table).where(and(eq(table.id, id), eq(table.projectId, projectId)))
+  } catch (err) {
+    const code = err instanceof Error && 'code' in err ? (err as { code?: string }).code : undefined
+    if (
+      code === '23503' ||
+      (err instanceof Error && /foreign key|violates|reference/i.test(err.message))
+    ) {
+      throw new ResourceInUseError(resourceType, id, 'one or more attacks')
+    }
+    throw err
+  }
+
+  // S3 delete is best-effort and runs after DB delete succeeds.
   const fileRef = (row as Record<string, unknown>)['fileRef'] as {
     bucket?: string
     key?: string
@@ -185,15 +222,6 @@ export async function deleteResource(
         'Failed to delete resource S3 object; continuing'
       )
     }
-  }
-
-  try {
-    await db.delete(table).where(and(eq(table.id, id), eq(table.projectId, projectId)))
-  } catch (err) {
-    if (err instanceof Error && /foreign key|violates|reference/i.test(err.message)) {
-      throw new ResourceInUseError(resourceType, id, 'one or more attacks')
-    }
-    throw err
   }
   return true
 }

@@ -869,8 +869,10 @@ paths:
 
   # Chunked S3 multipart upload — used by the dashboard UI when a file
   # exceeds the 10 MB direct-upload cap. PUT carries raw binary part
-  # bodies (no zValidator). Documented for client generation; sub-IDs
-  # are server-issued.
+  # bodies (no JSON validation). The (resourceId, resourceType) tuple
+  # MUST accompany every per-upload-session call (PUT part, complete,
+  # abort, status) so the server can re-validate project ownership on
+  # every request.
   /resources/upload/initiate:
     parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
     post:
@@ -883,17 +885,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [filename, contentType, size, resourceType]
+              required: [resourceType, name, fileSize]
               properties:
-                filename: { type: string }
-                contentType: { type: string }
-                size: { type: integer, minimum: 1 }
                 resourceType:
                   type: string
-                  enum: [hash-list, wordlist, rulelist, masklist]
-                resourceId: { type: integer, minimum: 1, nullable: true }
+                  enum: [hash-lists, wordlists, rulelists, masklists]
+                name: { type: string, minLength: 1, maxLength: 255 }
+                fileSize: { type: integer, minimum: 1, maximum: 500000000000 }
+                contentType: { type: string }
       responses:
-        '200':
+        '201':
           description: Upload session created.
           content:
             application/json:
@@ -904,6 +905,19 @@ paths:
                   uploadId: { type: string }
                   key: { type: string }
                   partSize: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '500':
+          description: Upload session could not be initialized.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [UPLOAD_INIT_FAILED] }
 
   /resources/upload/{uploadId}/part/{partNumber}:
     parameters:
@@ -914,10 +928,20 @@ paths:
           required: true,
           schema: { type: integer, minimum: 1, maximum: 10000 },
         }
+      - { name: resourceId, in: query, required: true, schema: { type: integer, minimum: 1 } }
+      - {
+          name: resourceType,
+          in: query,
+          required: true,
+          schema: { type: string, enum: [hash-lists, wordlists, rulelists, masklists] },
+        }
     put:
       operationId: uploadChunkPart
       summary: Upload one part of a chunked upload
-      description: Body is raw binary; no JSON. Returns the part's `ETag`.
+      description: |
+        Body is raw binary (no JSON). Returns the part's S3 `ETag`. The
+        (resourceId, resourceType) query tuple is required so the server
+        can re-validate project ownership on every part.
       tags: [Resources]
       requestBody:
         required: true
@@ -934,6 +958,20 @@ paths:
                 required: [etag]
                 properties:
                   etag: { type: string }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+        '500':
+          description: Part could not be uploaded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [UPLOAD_PART_FAILED] }
 
   /resources/upload/{uploadId}/complete:
     parameters:
@@ -948,16 +986,21 @@ paths:
           application/json:
             schema:
               type: object
-              required: [parts]
+              required: [parts, resourceId, resourceType]
               properties:
                 parts:
                   type: array
+                  minItems: 1
                   items:
                     type: object
                     required: [partNumber, etag]
                     properties:
                       partNumber: { type: integer, minimum: 1 }
-                      etag: { type: string }
+                      etag: { type: string, minLength: 1 }
+                resourceId: { type: integer, minimum: 1 }
+                resourceType:
+                  type: string
+                  enum: [hash-lists, wordlists, rulelists, masklists]
       responses:
         '200':
           description: Upload assembled.
@@ -967,34 +1010,70 @@ paths:
                 type: object
                 properties:
                   key: { type: string }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '500':
+          description: Upload could not be completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [UPLOAD_COMPLETE_FAILED] }
 
   /resources/upload/{uploadId}:
     parameters:
       - { name: uploadId, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: query, required: true, schema: { type: integer, minimum: 1 } }
+      - {
+          name: resourceType,
+          in: query,
+          required: true,
+          schema: { type: string, enum: [hash-lists, wordlists, rulelists, masklists] },
+        }
     delete:
       operationId: abortChunkedUpload
       summary: Abort a chunked upload and release its parts
       tags: [Resources]
       responses:
-        '204': { description: Upload aborted. }
-
-  /resources/upload/{uploadId}/status:
-    parameters:
-      - { name: uploadId, in: path, required: true, schema: { type: string } }
-    get:
-      operationId: getChunkedUploadStatus
-      summary: List uploaded parts for an in-flight chunked upload
-      tags: [Resources]
-      responses:
         '200':
-          description: List of parts received so far.
+          description: Upload aborted.
           content:
             application/json:
               schema:
                 type: object
-                required: [parts]
                 properties:
-                  parts:
+                  acknowledged: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /resources/upload/{uploadId}/status:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: query, required: true, schema: { type: integer, minimum: 1 } }
+      - {
+          name: resourceType,
+          in: query,
+          required: true,
+          schema: { type: string, enum: [hash-lists, wordlists, rulelists, masklists] },
+        }
+    get:
+      operationId: getChunkedUploadStatus
+      summary: Get status of an in-flight chunked upload
+      tags: [Resources]
+      responses:
+        '200':
+          description: Upload status and completed parts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, completedParts]
+                properties:
+                  status: { type: string }
+                  completedParts:
                     type: array
                     items:
                       type: object
@@ -1003,6 +1082,7 @@ paths:
                         partNumber: { type: integer }
                         etag: { type: string }
                         size: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
 
 components:
   securitySchemes:

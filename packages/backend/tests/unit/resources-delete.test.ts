@@ -17,7 +17,7 @@ const IS_ISOLATED = process.env['RESOURCES_DELETE_TEST_ISOLATED'] === '1'
 if (!IS_ISOLATED) {
   describe('resources-delete (skipped — runs in isolated phase)', () => {
     test('runs only with RESOURCES_DELETE_TEST_ISOLATED=1', () => {
-      // eslint-disable-next-line no-console
+      // oxlint-disable-next-line no-console -- surface phase-gating drift in CI logs
       console.warn(
         '[resources-delete] skipped — set RESOURCES_DELETE_TEST_ISOLATED=1 to run; this suite mocks @hashhive/shared so it must NOT run in the shared phase.'
       )
@@ -83,6 +83,8 @@ if (IS_ISOLATED) {
         }),
       }),
       delete: mockDelete,
+      transaction: async (fn: (tx: { delete: typeof mockDelete }) => Promise<unknown>) =>
+        fn({ delete: mockDelete }),
     },
   }))
 
@@ -134,22 +136,29 @@ if (IS_ISOLATED) {
       expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(2)
     })
 
-    test('throws ResourceInUseError when the hash_lists DELETE hits an FK violation', async () => {
+    test('throws ResourceInUseError when the hash_lists DELETE hits an FK violation (SQLSTATE 23503)', async () => {
       selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'k' } }])
       let callCount = 0
       deleteImpl = (table: string) => {
         callCount++
-        // First DELETE (hash_items) succeeds; second (hash_lists) fails with FK.
+        // hash_items in the tx succeeds; hash_lists raises SQLSTATE 23503.
+        // The tx rolls back so no children are actually wiped in PG; the
+        // test asserts the error mapping and the no-S3-delete invariant.
         if (callCount === 1) return Promise.resolve()
         if (table === 'hash_lists') {
-          return Promise.reject(
-            new Error('update or delete on table "hash_lists" violates foreign key constraint')
-          )
+          const err = new Error(
+            'update or delete on table "hash_lists" violates foreign key constraint'
+          ) as Error & { code: string }
+          err.code = '23503'
+          return Promise.reject(err)
         }
         return Promise.resolve()
       }
       const { deleteHashList, ResourceInUseError } = await import('../../src/services/resources.js')
       await expect(deleteHashList(5, 1)).rejects.toBeInstanceOf(ResourceInUseError)
+      // S3 must NOT be deleted when DB delete fails — order matters per the
+      // ordering fix (DB first so a 409 doesn't corrupt state).
+      expect(mockDeleteFile).not.toHaveBeenCalled()
     })
 
     test('skips S3 delete when fileRef is null (upload never finished)', async () => {

@@ -316,16 +316,24 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
  * `data.action` to decide whether to refetch detail (ready) or surface a
  * banner (failed).
  */
-export function emitResourceUpdate(
-  projectId: number,
-  payload:
-    | { action: 'hash_list_ready'; hashListId: number; statistics: Record<string, unknown> }
-    | { action: 'hash_list_failed'; hashListId: number; error: string }
-) {
+export type ResourceUpdatePayload =
+  | {
+      action: 'hash_list_ready'
+      hashListId: number
+      statistics: {
+        totalCount: number
+        crackedCount: number
+        crackRate: number
+        lastUpdated?: string
+      }
+    }
+  | { action: 'hash_list_failed'; hashListId: number; error: string }
+
+export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePayload) {
   emit({
     type: 'resource_update',
     projectId,
-    data: payload,
+    data: payload as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
   })
 }
