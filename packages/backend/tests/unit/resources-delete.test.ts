@@ -104,8 +104,15 @@ if (IS_ISOLATED) {
   describe('deleteHashList', () => {
     beforeEach(() => {
       selectByTable = new Map()
-      mockDeleteFile.mockClear()
-      mockDelete.mockClear()
+      mockDeleteFile.mockReset()
+      mockDelete.mockReset()
+      // mockReset clears the implementation per GOTCHAS.md — restore the
+      // chainable factory so `db.delete(table).where(...)` resolves to a
+      // routable Promise instead of `undefined`.
+      mockDeleteFile.mockImplementation((_key: string, _bucket?: string) => deleteFileImpl())
+      mockDelete.mockImplementation((_table: unknown) => ({
+        where: mock(() => deleteImpl(_table === HASH_LISTS_SENTINEL ? 'hash_lists' : 'other')),
+      }))
       deleteFileImpl = () => Promise.resolve()
       deleteImpl = () => Promise.resolve()
     })

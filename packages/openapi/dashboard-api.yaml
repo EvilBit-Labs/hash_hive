@@ -759,6 +759,7 @@ paths:
       tags: [Resources]
       responses:
         '204': { description: Rulelist deleted. }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
         '409':
           content:
@@ -784,6 +785,8 @@ paths:
                 file: { type: string, format: binary }
       responses:
         '200': { $ref: '#/components/responses/ResourceUploadResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /resources/rulelists/{id}/download:
@@ -795,6 +798,7 @@ paths:
       tags: [Resources]
       responses:
         '200': { $ref: '#/components/responses/ResourceDownloadUrl' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
 
   /resources/masklists:
@@ -829,6 +833,7 @@ paths:
       tags: [Resources]
       responses:
         '204': { description: Masklist deleted. }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
         '409':
           content:
@@ -854,6 +859,8 @@ paths:
                 file: { type: string, format: binary }
       responses:
         '200': { $ref: '#/components/responses/ResourceUploadResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /resources/masklists/{id}/download:
@@ -865,6 +872,7 @@ paths:
       tags: [Resources]
       responses:
         '200': { $ref: '#/components/responses/ResourceDownloadUrl' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
 
   # Chunked S3 multipart upload — used by the dashboard UI when a file
@@ -900,11 +908,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [uploadId, key, partSize]
+                required: [uploadId, key, partSize, resourceId]
                 properties:
                   uploadId: { type: string }
                   key: { type: string }
                   partSize: { type: integer }
+                  resourceId: { type: integer }
         '400': { $ref: '#/components/responses/ValidationFailed' }
         '500':
           description: Upload session could not be initialized.
@@ -1011,6 +1020,7 @@ paths:
                 properties:
                   key: { type: string }
         '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
         '500':
           description: Upload could not be completed.
           content:
@@ -1048,6 +1058,7 @@ paths:
                 properties:
                   acknowledged: { type: boolean }
         '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
 
   /resources/upload/{uploadId}/status:
     parameters:

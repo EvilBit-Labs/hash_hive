@@ -1,3 +1,5 @@
+import type { ResourceUpdateEventData } from '@hashhive/shared'
+
 import type { ComponentName, ComponentStatus } from './health.js'
 
 import { logger } from '../config/logger.js'
@@ -318,18 +320,11 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
  * `data.action` to decide whether to refetch detail (ready) or surface a
  * banner (failed).
  */
-export type ResourceUpdatePayload =
-  | {
-      action: 'hash_list_ready'
-      hashListId: number
-      statistics: {
-        totalCount: number
-        crackedCount: number
-        crackRate: number
-        lastUpdated?: string
-      }
-    }
-  | { action: 'hash_list_failed'; hashListId: number; error: string }
+// Re-export the shared wire type as a local alias so existing callers
+// don't need to update imports; the shape lives in @hashhive/shared
+// (resourceUpdateEventDataSchema → z.infer) so producer + subscriber
+// can't drift.
+export type ResourceUpdatePayload = ResourceUpdateEventData
 
 export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePayload) {
   // The cast widens the typed payload to AppEvent.data's

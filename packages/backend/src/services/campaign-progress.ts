@@ -172,7 +172,10 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
       hashProgress = {
         total: stats.totalCount,
         cracked: stats.crackedCount,
-        remaining: stats.totalCount - stats.crackedCount,
+        // Clamp to 0 so a transient inconsistency (race between the
+        // cracked-count update and the total-count update, or a manual
+        // DB edit) can't produce a negative "remaining" on the wire.
+        remaining: Math.max(0, stats.totalCount - stats.crackedCount),
         percentage: Math.round(stats.crackRate * 10000) / 10000,
       }
     }

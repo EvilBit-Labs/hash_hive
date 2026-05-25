@@ -268,7 +268,7 @@ if (!IS_ISOLATED) {
       mockGetHashListById.mockImplementation(async (id: number) =>
         makeHashList({ id, status: 'processing' })
       )
-      mockDeleteHashList.mockClear()
+      mockDeleteHashList.mockReset()
 
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'happy-list' },
@@ -392,10 +392,10 @@ if (!IS_ISOLATED) {
     })
 
     it('rejects with 413 BEFORE parseBody when content-length exceeds the wire cap', async () => {
-      mockCreateHashList.mockClear()
-      mockUploadHashListFile.mockClear()
-      mockDeleteHashList.mockClear()
-      mockImportHashList.mockClear()
+      mockCreateHashList.mockReset()
+      mockUploadHashListFile.mockReset()
+      mockDeleteHashList.mockReset()
+      mockImportHashList.mockReset()
 
       const { boundary } = buildMultipart([
         { name: 'name', value: 'huge' },
@@ -420,7 +420,7 @@ if (!IS_ISOLATED) {
     })
 
     it('rejects with 400 VALIDATION_ERROR when hashTypeId is not a positive integer', async () => {
-      mockCreateHashList.mockClear()
+      mockCreateHashList.mockReset()
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'bad-type' },
         { name: 'hashTypeId', value: 'not-a-number' },
@@ -441,7 +441,7 @@ if (!IS_ISOLATED) {
     })
 
     it('rejects with 400 VALIDATION_ERROR when hashTypeId is negative or zero', async () => {
-      mockCreateHashList.mockClear()
+      mockCreateHashList.mockReset()
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'bad-type' },
         { name: 'hashTypeId', value: '-3' },
@@ -532,7 +532,7 @@ if (!IS_ISOLATED) {
       mockUploadHashListFile.mockImplementation(async () => ({ key: 'k', size: 5 }))
       mockImportHashList.mockReset()
       mockImportHashList.mockImplementation(async () => ({ error: 'Queue offline' }))
-      mockDeleteHashList.mockClear()
+      mockDeleteHashList.mockReset()
 
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'queue-down' },
@@ -572,7 +572,7 @@ if (!IS_ISOLATED) {
     })
 
     it('malformed JSON body returns 400 VALIDATION_ERROR', async () => {
-      mockCreateHashList.mockClear()
+      mockCreateHashList.mockReset()
 
       const res = await app.request(HASH_LISTS_URL, {
         method: 'POST',
@@ -587,7 +587,7 @@ if (!IS_ISOLATED) {
     })
 
     it('JSON missing required name field returns 400 VALIDATION_ERROR', async () => {
-      mockCreateHashList.mockClear()
+      mockCreateHashList.mockReset()
 
       const res = await app.request(HASH_LISTS_URL, {
         method: 'POST',

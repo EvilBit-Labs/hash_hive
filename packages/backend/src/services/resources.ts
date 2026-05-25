@@ -205,6 +205,10 @@ const HASH_ITEMS_DELETE_MAX_ITERATIONS = 100_000
  */
 async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<void> {
   for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
+    // postgres-js's tx.execute returns the Drizzle execute result; for a
+    // DELETE that means `{ rowCount?: number }`. Other drivers diverge,
+    // but the MAX_ITERATIONS cap below catches a misreported rowCount
+    // so we don't need defensive parsing of count/Array.isArray here.
     const result = (await tx.execute(
       sql`DELETE FROM ${hashItems}
           WHERE ctid IN (
@@ -212,15 +216,8 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
             WHERE ${eq(hashItems.hashListId, hashListId)}
             LIMIT ${HASH_ITEMS_DELETE_CHUNK}
           )`
-    )) as { count?: number; rowCount?: number } | unknown[]
-    const deleted =
-      typeof (result as { count?: number }).count === 'number'
-        ? (result as { count: number }).count
-        : typeof (result as { rowCount?: number }).rowCount === 'number'
-          ? (result as { rowCount: number }).rowCount
-          : Array.isArray(result)
-            ? result.length
-            : 0
+    )) as { rowCount?: number }
+    const deleted = result.rowCount ?? 0
     if (deleted < HASH_ITEMS_DELETE_CHUNK) return
   }
   logger.error(
