@@ -58,6 +58,12 @@ describe('GET /health', () => {
 
     const body = await res.json()
     expect(body['services']['minio']).toBeUndefined()
+    // Positive assertion: the new `object_store` field carries the shape
+    // the old `minio` field used to (status + bucket). This pairs with the
+    // absence assertion above so the rename is enforced from both sides.
+    expect(['connected', 'disconnected']).toContain(body['services']['object_store']['status'])
+    expect(typeof body['services']['object_store']['bucket']).toBe('string')
+    expect(body['services']['object_store']['bucket'].length).toBeGreaterThan(0)
   })
 
   it('should expose services.queues.queues map (api-contract-3)', async () => {
