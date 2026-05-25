@@ -1,3 +1,5 @@
+import type { AgentHeartbeatResponse } from '@hashhive/shared'
+
 import {
   agentHeartbeatSchema,
   benchmarkSubmissionSchema,
@@ -98,10 +100,11 @@ agentRoutes.post(
     const { agentId } = c.get('agent')
     const data = c.req.valid('json')
     const result = await processHeartbeat(agentId, data)
-    return c.json({
+    const body: AgentHeartbeatResponse = {
       acknowledged: true,
       ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
-    })
+    }
+    return c.json(body)
   }
 )
 

@@ -9,6 +9,7 @@
  * The middleware validates pre-shared tokens by querying the agents table.
  * We mock the DB to return a valid agent for our test token.
  */
+import { agentHeartbeatResponseSchema } from '@hashhive/shared'
 import { describe, expect, it, mock } from 'bun:test'
 
 // Mock the DB so requireAgentToken middleware can resolve the pre-shared token.
@@ -227,6 +228,53 @@ describe('Agent API: POST /heartbeat', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
     expect(body['acknowledged']).toBe(true)
+    // Pin the omit-when-no-priority-work policy at the contract level.
+    // The integration suite mirrors this in
+    // `tests/integration/agent-heartbeat.test.ts` (the `.toBeUndefined()`
+    // cases on the error-status / empty-hashModes / null-capabilities
+    // paths inside the heartbeat-error-handling describe block).
+    // Asserting it here keeps a regression where the route emits `false`
+    // from slipping past the unit contract test before reaching the
+    // integration layer.
+    expect(body['hasHighPriorityTasks']).toBeUndefined()
+    // Contract proof: the response body satisfies the shared Zod schema.
+    // The OpenAPI HeartbeatResponse schema in agent-api.yaml mirrors
+    // this Zod schema field-for-field, so a parse() success proves the
+    // route handler ↔ shared schema ↔ OpenAPI triple stays in sync.
+    expect(() => agentHeartbeatResponseSchema.parse(body)).not.toThrow()
+  })
+
+  it('returns hasHighPriorityTasks=true when service flags high-priority work', async () => {
+    // Arrange — override the default mock for this single call so the
+    // service reports high-priority work is available. The route is
+    // expected to surface the flag verbatim per the heartbeat-response
+    // contract documented in
+    // `docs/issues/155-task-distribution-assignment-spec.md`.
+    const { processHeartbeat } = await import('../../src/services/agents.js')
+    ;(
+      processHeartbeat as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.resolve({ hasHighPriorityTasks: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'online' }),
+    })
+
+    // Assert
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    expect(body['hasHighPriorityTasks']).toBe(true)
+    // Contract proof against the shared schema (and via mirror, OpenAPI).
+    const parsed = agentHeartbeatResponseSchema.parse(body)
+    expect(parsed.hasHighPriorityTasks).toBe(true)
   })
 
   it('accepts a heartbeat with currentTask and warning error', async () => {

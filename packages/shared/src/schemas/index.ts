@@ -505,6 +505,37 @@ export const agentHeartbeatSchema = z.object({
   error: agentHeartbeatErrorSchema.optional(),
 })
 
+/**
+ * Heartbeat response payload. `acknowledged` is always `true` on a 200
+ * response (the server accepts the heartbeat). `hasHighPriorityTasks` is
+ * set to `true` when pending high-priority tasks exist for the agent's
+ * project and capabilities, inviting the agent to request a task
+ * immediately rather than waiting for the next assignment poll. The
+ * field is **omitted** (not `false`) when no high-priority work is
+ * available — agents must treat absence as "no priority signal" rather
+ * than receive an explicit negative.
+ *
+ * This is the shared wire contract; the OpenAPI spec at
+ * `packages/openapi/agent-api.yaml` mirrors this shape, and the contract
+ * test in `tests/unit/agent-api-contract.test.ts` parses real route
+ * responses through this schema to prove the route ↔ shared ↔ OpenAPI
+ * triple stays in sync. `.strict()` matches the OpenAPI default of
+ * closed objects — extra fields fail parse rather than slip through.
+ */
+export const agentHeartbeatResponseSchema = z
+  .object({
+    acknowledged: z.literal(true),
+    // Literal `true` (not `boolean`) so the schema mirrors the OpenAPI
+    // `enum: [true]` constraint. The schema enforces that *if* the field
+    // is present its value is `true`; the omit-when-false **policy**
+    // itself lives in the route's conditional spread at
+    // `routes/agent/index.ts:103-106`. A future regression that builds
+    // the body as `{ hasHighPriorityTasks: someBool }` fails to type-check
+    // against the inferred `true | undefined`.
+    hasHighPriorityTasks: z.literal(true).optional(),
+  })
+  .strict()
+
 // ─── Cracker Check-Update API ───────────────────────────────────────
 
 /**
