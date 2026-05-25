@@ -55,15 +55,14 @@ mock.module('../../../src/services/tasks.js', () => ({
 // Mock the events service — rebindable so individual tests can simulate a
 // throwing broadcast.
 let emitAgentStatusImpl: (projectId: number, agentId: number, status: string) => void = () => {}
-import { createEventsMockFactory } from '../../mocks/events.js'
-
-mock.module(
-  '../../../src/services/events.js',
-  createEventsMockFactory({
-    emitAgentStatus: (projectId: number, agentId: number, status: string) =>
-      emitAgentStatusImpl(projectId, agentId, status),
-  })
-)
+// Partial mock — see agent-api-contract.test.ts for why we don't use a
+// "full surface" shared factory: listing real exports here replaces them
+// process-wide and breaks events.test.ts on Linux.
+mock.module('../../../src/services/events.js', () => ({
+  emitAgentStatus: (projectId: number, agentId: number, status: string) =>
+    emitAgentStatusImpl(projectId, agentId, status),
+  emitResourceUpdate: () => undefined,
+}))
 
 // Mock BullMQ Worker to capture the processor function
 let capturedProcessor: ((job: unknown) => Promise<unknown>) | null = null

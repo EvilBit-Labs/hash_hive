@@ -83,9 +83,13 @@ mock.module('../../src/db/index.js', () => ({
   client: {},
 }))
 
-import { createEventsMockFactory } from '../mocks/events.js'
-
-mock.module('../../src/services/events.js', createEventsMockFactory())
+// Partial mock: only what this test file needs. See agent-api-contract
+// for the rationale (process-wide merge means listing more exports here
+// would replace the real ones for events.test.ts on Linux).
+mock.module('../../src/services/events.js', () => ({
+  emitCampaignStatus: mock(() => {}),
+  emitResourceUpdate: mock(() => {}),
+}))
 
 // Import module under test after DB/events mocks are registered
 const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js')
