@@ -229,10 +229,13 @@ describe('Agent API: POST /heartbeat', () => {
     const body = (await res.json()) as Record<string, unknown>
     expect(body['acknowledged']).toBe(true)
     // Pin the omit-when-no-priority-work policy at the contract level.
-    // The integration suite asserts this at lines 690/721/760 of
-    // tests/integration/agent-heartbeat.test.ts; mirroring it here keeps
-    // a regression where the route emits `false` from slipping past the
-    // unit contract test before reaching the integration layer.
+    // The integration suite mirrors this in
+    // `tests/integration/agent-heartbeat.test.ts` (the `.toBeUndefined()`
+    // cases on the error-status / empty-hashModes / null-capabilities
+    // paths inside the heartbeat-error-handling describe block).
+    // Asserting it here keeps a regression where the route emits `false`
+    // from slipping past the unit contract test before reaching the
+    // integration layer.
     expect(body['hasHighPriorityTasks']).toBeUndefined()
     // Contract proof: the response body satisfies the shared Zod schema.
     // The OpenAPI HeartbeatResponse schema in agent-api.yaml mirrors
@@ -244,7 +247,9 @@ describe('Agent API: POST /heartbeat', () => {
   it('returns hasHighPriorityTasks=true when service flags high-priority work', async () => {
     // Arrange — override the default mock for this single call so the
     // service reports high-priority work is available. The route is
-    // expected to surface the flag verbatim per AC 6.1 of issue #155.
+    // expected to surface the flag verbatim per the heartbeat-response
+    // contract documented in
+    // `docs/issues/155-task-distribution-assignment-spec.md`.
     const { processHeartbeat } = await import('../../src/services/agents.js')
     ;(
       processHeartbeat as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
