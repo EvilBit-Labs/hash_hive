@@ -62,7 +62,11 @@ paths:
               $ref: '#/components/schemas/Heartbeat'
       responses:
         '200':
-          $ref: '#/components/responses/Acknowledged'
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
         '401':
           $ref: '#/components/responses/AuthError'
 
@@ -347,6 +351,26 @@ components:
                 serialized — payloads larger than that are rejected with
                 400. Do not include secrets (tokens, passwords) —
                 operators with project access can read this field.
+
+    HeartbeatResponse:
+      type: object
+      required: [acknowledged]
+      properties:
+        acknowledged:
+          type: boolean
+          enum: [true]
+          description: Always `true` on a 200 response. The server accepted the heartbeat.
+        hasHighPriorityTasks:
+          type: boolean
+          enum: [true]
+          description: |
+            Set to `true` when pending high-priority tasks exist for the
+            agent's project and capabilities. **Omitted (not `false`)** when
+            no high-priority work is available — agents must treat absence
+            as "no priority signal" rather than receive an explicit
+            negative. When present, the agent may request a task
+            immediately via `POST /tasks/next` instead of waiting for the
+            next assignment poll.
 
     EngineDescriptor:
       type: object

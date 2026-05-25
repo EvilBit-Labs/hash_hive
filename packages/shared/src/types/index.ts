@@ -5,6 +5,7 @@ import type {
   agentHardwareProfileSchema,
   agentHeartbeatCurrentTaskSchema,
   agentHeartbeatErrorSchema,
+  agentHeartbeatResponseSchema,
   agentHeartbeatSchema,
   agentStatusSchema,
   agentTaskSummarySchema,
@@ -229,6 +230,7 @@ export type ResourceUpdateEventData = z.infer<typeof resourceUpdateEventDataSche
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>
+export type AgentHeartbeatResponse = z.infer<typeof agentHeartbeatResponseSchema>
 export type AgentHardwareProfile = z.infer<typeof agentHardwareProfileSchema>
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>
 export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>
