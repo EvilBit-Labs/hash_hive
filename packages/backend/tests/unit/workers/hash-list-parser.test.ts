@@ -507,16 +507,12 @@ describe('Hash list parser worker', () => {
 
       // Make `.where(...)` reject this time so the try/catch in the
       // listener's wrapping try-block hits the cleanupErr path.
-      const originalWhereImpl = mockUpdateSetWhere.getMockImplementation()
-      mockUpdateSetWhere.mockImplementationOnce(
-        () =>
-          ({
-            returning: mockUpdateReturning,
-            // oxlint-disable-next-line unicorn/no-thenable -- mock must satisfy await
-            then: (_resolve: (v: unknown) => unknown, reject: (err: Error) => unknown) =>
-              reject(new Error('db down')),
-          }) as unknown as ReturnType<typeof mockUpdateSetWhere>
-      )
+      // Post-status-guard refactor: the failed listener now calls
+      // `.where(...).returning(...)` — make .returning() reject so the
+      // catch fires (the prior thenable-reject hook fires only when the
+      // chain is awaited directly, which the new code no longer does).
+      const originalReturningImpl = mockUpdateReturning.getMockImplementation()
+      mockUpdateReturning.mockImplementationOnce(() => Promise.reject(new Error('db down')))
 
       try {
         const parserFailed = await getParserFailedListener()
@@ -535,8 +531,8 @@ describe('Hash list parser worker', () => {
         expect(loggerErrorMock).toHaveBeenCalled()
       } finally {
         // Restore for the next test.
-        if (originalWhereImpl) {
-          mockUpdateSetWhere.mockImplementation(originalWhereImpl)
+        if (originalReturningImpl) {
+          mockUpdateReturning.mockImplementation(originalReturningImpl)
         }
       }
     })

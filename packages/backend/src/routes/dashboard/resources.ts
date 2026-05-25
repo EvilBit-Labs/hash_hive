@@ -93,10 +93,30 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
   if (contentType.startsWith('multipart/form-data')) {
     // Reject oversize multipart payloads BEFORE parseBody buffers them.
     // Without this guard, an authenticated admin/contributor could OOM
-    // the backend with a multi-GB body. Headers-only check using
-    // Content-Length; clients without it fall through to parseBody, which
-    // still enforces the byte cap inside uploadHashListFile via
-    // UploadTooLargeError.
+    // the backend with a multi-GB body.
+    //
+    // Defense:
+    //   1. Reject `Transfer-Encoding: chunked` outright (411). chunked
+    //      omits Content-Length, so the size guard below couldn't
+    //      enforce a cap and the body would buffer unbounded into
+    //      parseBody. Callers with files of unknown size must use the
+    //      streaming chunked-upload endpoint at `/upload/initiate`.
+    //   2. Reject when declared Content-Length exceeds the cap.
+    //   3. Backstop: `uploadHashListFile` still enforces the byte cap
+    //      via `UploadTooLargeError` after parseBody.
+    const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
+    if (transferEncoding.includes('chunked')) {
+      return c.json(
+        {
+          error: {
+            code: 'LENGTH_REQUIRED',
+            message:
+              'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
+          },
+        },
+        411
+      )
+    }
     const contentLengthRaw = c.req.header('content-length')
     const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
     if (
@@ -194,7 +214,7 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
           {
             error: {
               code: 'PAYLOAD_TOO_LARGE',
-              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
             },
           },
           413
@@ -321,7 +341,7 @@ resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'
         {
           error: {
             code: 'PAYLOAD_TOO_LARGE',
-            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
           },
         },
         413
@@ -530,7 +550,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
           {
             error: {
               code: 'PAYLOAD_TOO_LARGE',
-              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload) for larger files.`,
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
             },
           },
           413

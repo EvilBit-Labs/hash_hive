@@ -34,7 +34,24 @@ if (IS_ISOLATED) {
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
-      update: () => ({ set: () => ({ where: () => dbUpdateImpl() }) }),
+      update: () => ({
+        set: () => ({
+          // Post-R refactor: hash-list-parser's failed listener now chains
+          // `.where(...).returning(...)` for the status-guarded flip.
+          // Make `where` return a thenable that also carries `.returning`
+          // so both call shapes work (await for legacy callers in this
+          // file, `.returning()` for the parser's atomic guard).
+          where: () => {
+            const p = dbUpdateImpl()
+            return {
+              returning: () => p.then(() => [{ id: 1 }]),
+              // oxlint-disable-next-line unicorn/no-thenable -- mock dual-shape
+              then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+                p.then(resolve, reject),
+            }
+          },
+        }),
+      }),
       select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
     },
   }))

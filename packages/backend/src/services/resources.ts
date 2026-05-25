@@ -46,7 +46,7 @@ export class ResourceInUseError extends Error {
  * flow (`initiateChunkedUpload` + `uploadChunkPart` + `completeChunkedUpload`),
  * which streams parts straight to S3 without buffering the whole file.
  *
- * Anything above this threshold should use `POST /api/v1/dashboard/resources/upload`
+ * Anything above this threshold should use `POST /api/v1/dashboard/resources/upload/initiate`
  * (the chunked endpoint) instead of the legacy `/upload` form-data endpoint.
  */
 export const MAX_DIRECT_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB
@@ -205,10 +205,12 @@ const HASH_ITEMS_DELETE_MAX_ITERATIONS = 100_000
  */
 async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<void> {
   for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
-    // postgres-js's tx.execute returns the Drizzle execute result; for a
-    // DELETE that means `{ rowCount?: number }`. Other drivers diverge,
-    // but the MAX_ITERATIONS cap below catches a misreported rowCount
-    // so we don't need defensive parsing of count/Array.isArray here.
+    // postgres-js v3.4.x exposes the DELETE affected-row count on
+    // `result.count` (it returns its own `Result` array with a `.count`
+    // property — NOT `rowCount`, which is the pg/node-pg convention).
+    // `rowCount` retained as a fallback for any future driver that
+    // diverges; the MAX_ITERATIONS cap below bails on either reporting
+    // bug. https://github.com/porsager/postgres
     const result = (await tx.execute(
       sql`DELETE FROM ${hashItems}
           WHERE ctid IN (
@@ -216,8 +218,8 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
             WHERE ${eq(hashItems.hashListId, hashListId)}
             LIMIT ${HASH_ITEMS_DELETE_CHUNK}
           )`
-    )) as { rowCount?: number }
-    const deleted = result.rowCount ?? 0
+    )) as { count?: number; rowCount?: number }
+    const deleted = result.count ?? result.rowCount ?? 0
     if (deleted < HASH_ITEMS_DELETE_CHUNK) return
   }
   logger.error(

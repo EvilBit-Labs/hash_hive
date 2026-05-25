@@ -78,23 +78,23 @@ function parseHashLine(line: string, hashListId: number) {
   if (tokens.length === 3) {
     const [username, hashValue, plaintext] = tokens
     if (!hashValue) return null // 'user::plain' - no hash to insert
-    // Empty username (`:hash:plain`) falls back to 2-token semantics
-    // instead of persisting `metadata: { username: '' }`, which would
-    // pollute the JSONB with empty-string usernames that the docstring's
-    // 3-token contract doesn't promise.
+    // `username:hash:` (empty plaintext) is the no-plaintext form per
+    // the docstring — don't stamp crackedAt for it, which would inflate
+    // the cracked count and progress %.
+    const hasPlaintext = !!plaintext && plaintext.length > 0
+    // Empty username (`:hash:plain`) falls back to 2-token semantics so
+    // the JSONB isn't polluted with empty-string usernames.
     if (!username) {
       return {
         hashListId,
         hashValue,
-        plaintext: plaintext ?? '',
-        crackedAt: new Date(),
+        ...(hasPlaintext ? { plaintext: plaintext as string, crackedAt: new Date() } : {}),
       }
     }
     return {
       hashListId,
       hashValue,
-      plaintext: plaintext ?? '',
-      crackedAt: new Date(),
+      ...(hasPlaintext ? { plaintext: plaintext as string, crackedAt: new Date() } : {}),
       metadata: { username },
     }
   }
@@ -314,11 +314,16 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
     const errorMessage = sanitizeParseError(err)
     logger.warn({ hashListId, err }, 'Hash list parse failed; emitting sanitized event')
     try {
-      await db
+      // Atomic guard: only flip processing -> error. If a concurrent
+      // processor / retry already moved the row to `ready`, do NOT
+      // clobber it back to error or emit a misleading hash_list_failed.
+      // Same pattern as the success-path flip in the processor body.
+      const markedError = await db
         .update(hashLists)
         .set({ status: 'error', updatedAt: new Date() })
-        .where(eq(hashLists.id, hashListId))
-      if (typeof projectId === 'number') {
+        .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'processing')))
+        .returning({ id: hashLists.id })
+      if (markedError.length > 0 && typeof projectId === 'number') {
         // Same guard as the success path — emit failure mustn't make the
         // BullMQ failed-listener throw.
         try {

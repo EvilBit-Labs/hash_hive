@@ -121,10 +121,15 @@ export async function getPresignedUrl(
   opts?: { bucket?: string; filename?: string }
 ): Promise<string> {
   const disposition = opts?.filename ? buildContentDisposition(opts.filename) : undefined
+  // Same bucket allowlist as deleteFile: refuse to issue a presigned
+  // download URL for any bucket other than env.S3_BUCKET. Defends
+  // against a hostile/forged fileRef.bucket ever leaking into this
+  // call site and producing a presigned URL for an unrelated bucket
+  // the IAM credentials happen to reach.
   return getSignedUrl(
     s3,
     new GetObjectCommand({
-      Bucket: opts?.bucket ?? env.S3_BUCKET,
+      Bucket: assertAllowedBucket(opts?.bucket),
       Key: key,
       ...(disposition ? { ResponseContentDisposition: disposition } : {}),
     }),

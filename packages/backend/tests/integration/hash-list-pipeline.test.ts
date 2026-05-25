@@ -167,14 +167,68 @@ if (IS_ISOLATED) {
     db: makeDbMock(),
   }))
 
+  // BullMQ — mock ONCE at the file level (bun:test's mock.module mutates
+  // a shared module-cache entry with ESM live bindings, so repeated
+  // mock.module('bullmq', ...) calls in individual tests corrupted the
+  // captured processor across tests). The captured processor lives at
+  // module scope; per-test beforeEach resets it.
+  let capturedProcessor: ((job: unknown) => Promise<unknown>) | null = null
+  mock.module('bullmq', () => ({
+    Worker: class MockWorker {
+      constructor(_name: string, processor: (job: unknown) => Promise<unknown>) {
+        capturedProcessor = processor
+      }
+      on() {
+        return this
+      }
+      close() {
+        return Promise.resolve()
+      }
+    },
+    Queue: class MockQueue {
+      add() {
+        return Promise.resolve()
+      }
+      close() {
+        return Promise.resolve()
+      }
+      getWaitingCount() {
+        return Promise.resolve(0)
+      }
+      getActiveCount() {
+        return Promise.resolve(0)
+      }
+      getFailedCount() {
+        return Promise.resolve(0)
+      }
+    },
+  }))
+
   function makeDbMock() {
     return {
       select: (fields?: Record<string, unknown>) => ({
         from: (table: unknown) => {
-          // Count selects: `.select({value: count()}).from(t).where(...)` — await directly.
-          // Row selects: `.select().from(t).where(...).limit(N)` — chain via .limit.
-          const isCountSelect = !!fields && 'value' in fields
-          const result = isCountSelect ? [{ value: countRowsForTable(table) }] : rowsForTable(table)
+          // Three select shapes the production code exercises:
+          //  - Legacy count: `.select({ value: count() })...` -> `[{ value }]`
+          //  - Worker combined stats (R17): `.select({ total: count(),
+          //    cracked: sql<...> })...` -> `[{ total, cracked }]`
+          //  - Row select: `.select().from(t).where(...).limit(N)` — chain
+          //    via `.limit` (returns rowsForTable).
+          const isLegacyCountSelect = !!fields && 'value' in fields
+          const isWorkerStatsSelect = !!fields && 'total' in fields && 'cracked' in fields
+          const result = isLegacyCountSelect
+            ? [{ value: countRowsForTable(table) }]
+            : isWorkerStatsSelect
+              ? [
+                  {
+                    total: countRowsForTable(table),
+                    // Test fixture has no pre-cracked rows; the worker's
+                    // FILTER(WHERE crackedAt IS NOT NULL) therefore counts 0.
+                    cracked: 0,
+                  },
+                ]
+              : rowsForTable(table)
+          const isCountSelect = isLegacyCountSelect || isWorkerStatsSelect
           return {
             where: () => {
               const whereResult = isCountSelect ? result : []
@@ -285,7 +339,8 @@ if (IS_ISOLATED) {
     // Reset shared state so each test sees a clean DB-like snapshot. Without
     // this, the row-select mock (which returns all rows for a table because
     // it doesn't inspect the `where` clause) bleeds the previous test's hash
-    // list into the next worker invocation.
+    // list into the next worker invocation. capturedProcessor is also reset
+    // so a stale Worker constructor reference from a prior test can't fire.
     beforeEach(() => {
       state.hashLists.clear()
       state.hashItemsByList.clear()
@@ -293,6 +348,7 @@ if (IS_ISOLATED) {
       state.emittedEvents = []
       state.enqueuedJobs = []
       state.nextId = 100
+      capturedProcessor = null
     })
 
     test('upload → parse → ready event end-to-end via worker', async () => {
@@ -321,40 +377,9 @@ if (IS_ISOLATED) {
       } as any)
       ;(state.uploadedFiles.get(`7/hash-lists/${id}.txt`) as any).bytes = buffer
 
-      // Run the worker processor directly. BullMQ is mocked at the Worker
-      // class level so we capture the processor function.
-      let capturedProcessor: ((job: unknown) => Promise<unknown>) | null = null
-      mock.module('bullmq', () => ({
-        Worker: class MockWorker {
-          constructor(_name: string, processor: (job: unknown) => Promise<unknown>) {
-            capturedProcessor = processor
-          }
-          on() {
-            return this
-          }
-          close() {
-            return Promise.resolve()
-          }
-        },
-        Queue: class MockQueue {
-          add() {
-            return Promise.resolve()
-          }
-          close() {
-            return Promise.resolve()
-          }
-          getWaitingCount() {
-            return Promise.resolve(0)
-          }
-          getActiveCount() {
-            return Promise.resolve(0)
-          }
-          getFailedCount() {
-            return Promise.resolve(0)
-          }
-        },
-      }))
-
+      // Run the worker processor directly. BullMQ is mocked once at the
+      // file level — instantiating the worker captures its processor into
+      // the file-scoped `capturedProcessor` (reset in beforeEach).
       const { createHashListParserWorker } =
         await import('../../src/queue/workers/hash-list-parser.js')
       createHashListParserWorker({} as any)
@@ -435,42 +460,13 @@ if (IS_ISOLATED) {
       state.hashItemsByList.set(id, [{ hashListId: id, hashValue: 'aaa', id: 1 }])
       state.emittedEvents = []
 
-      // Re-import the worker module (mocked at top, processor captured).
-      let processor: ((job: unknown) => Promise<unknown>) | null = null
-      mock.module('bullmq', () => ({
-        Worker: class {
-          constructor(_n: string, p: (job: unknown) => Promise<unknown>) {
-            processor = p
-          }
-          on() {
-            return this
-          }
-          close() {
-            return Promise.resolve()
-          }
-        },
-        Queue: class {
-          add() {
-            return Promise.resolve()
-          }
-          close() {
-            return Promise.resolve()
-          }
-          getWaitingCount() {
-            return Promise.resolve(0)
-          }
-          getActiveCount() {
-            return Promise.resolve(0)
-          }
-          getFailedCount() {
-            return Promise.resolve(0)
-          }
-        },
-      }))
+      // File-level bullmq mock + module re-import captures the fresh
+      // processor into the file-scoped capturedProcessor.
       const { createHashListParserWorker } =
         await import('../../src/queue/workers/hash-list-parser.js')
       createHashListParserWorker({} as any)
-      await processor!({
+      expect(capturedProcessor).not.toBeNull()
+      await capturedProcessor!({
         id: `parse-${id}`,
         data: { hashListId: id, projectId: 7 },
         updateProgress: mock(() => Promise.resolve()),

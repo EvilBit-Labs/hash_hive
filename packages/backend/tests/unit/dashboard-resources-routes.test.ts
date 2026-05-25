@@ -391,6 +391,30 @@ if (!IS_ISOLATED) {
       expect(mockImportHashList).not.toHaveBeenCalled()
     })
 
+    it('rejects with 411 LENGTH_REQUIRED on Transfer-Encoding: chunked multipart', async () => {
+      mockCreateHashList.mockReset()
+      mockUploadHashListFile.mockReset()
+      const { body, boundary } = buildMultipart([
+        { name: 'name', value: 'chunked' },
+        { name: 'file', value: { filename: 'h.txt', content: 'abc\n' } },
+      ])
+      const res = await app.request(HASH_LISTS_URL, {
+        method: 'POST',
+        headers: {
+          ...multipartHeaders(boundary),
+          'transfer-encoding': 'chunked',
+        },
+        body,
+      })
+      expect(res.status).toBe(411)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('LENGTH_REQUIRED')
+      // Critical: rejected BEFORE the upload pipeline even started — chunked
+      // multipart bypasses the Content-Length guard, so we close that door.
+      expect(mockCreateHashList).not.toHaveBeenCalled()
+      expect(mockUploadHashListFile).not.toHaveBeenCalled()
+    })
+
     it('rejects with 413 BEFORE parseBody when content-length exceeds the wire cap', async () => {
       mockCreateHashList.mockReset()
       mockUploadHashListFile.mockReset()

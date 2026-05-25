@@ -440,7 +440,7 @@ paths:
               required: [file, name]
               properties:
                 file: { type: string, format: binary }
-                name: { type: string, minLength: 1, maxLength: 200 }
+                name: { type: string, minLength: 1, maxLength: 255 }
                 hashTypeId: { type: integer, minimum: 1 }
       responses:
         '201':
@@ -558,8 +558,10 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [status, queued]
                 properties:
-                  enqueued: { type: boolean }
+                  status: { type: string, enum: [processing] }
+                  queued: { type: boolean }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
