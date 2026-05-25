@@ -83,10 +83,9 @@ mock.module('../../src/db/index.js', () => ({
   client: {},
 }))
 
-mock.module('../../src/services/events.js', () => ({
-  emitCampaignStatus: mock(() => {}),
-  emitResourceUpdate: mock(() => {}),
-}))
+import { createEventsMockFactory } from '../mocks/events.js'
+
+mock.module('../../src/services/events.js', createEventsMockFactory())
 
 // Import module under test after DB/events mocks are registered
 const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js')

@@ -11,9 +11,17 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 
 import { env } from './env.js'
 import { logger } from './logger.js'
+
+// Explicit connect + socket timeouts so a slow or hung S3 endpoint cannot
+// indefinitely tie up a worker slot or a route handler. Without these the
+// AWS SDK falls back to OS defaults (often minutes); a parser or DELETE
+// stuck on an unreachable bucket would consume the BullMQ slot forever.
+const S3_CONNECT_TIMEOUT_MS = 5_000
+const S3_SOCKET_TIMEOUT_MS = 30_000
 
 export const s3 = new S3Client({
   endpoint: env.S3_ENDPOINT,
@@ -23,6 +31,10 @@ export const s3 = new S3Client({
     secretAccessKey: env.S3_SECRET_KEY,
   },
   forcePathStyle: true,
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: S3_CONNECT_TIMEOUT_MS,
+    socketTimeout: S3_SOCKET_TIMEOUT_MS,
+  }),
 })
 
 export async function uploadFile(
@@ -51,16 +63,56 @@ export async function downloadFile(key: string, bucket?: string) {
 }
 
 export async function deleteFile(key: string, bucket?: string) {
+  // Validate key shape to defend against a hostile fileRef.key — even
+  // though current writers always derive keys server-side, the JSONB
+  // column means a future endpoint could let user input flow here.
+  if (key.startsWith('/') || key.includes('..')) {
+    throw new Error(`Invalid S3 object key: ${key}`)
+  }
   return s3.send(
     new DeleteObjectCommand({
-      Bucket: bucket ?? env.S3_BUCKET,
+      // Bucket override is intentionally limited: only env.S3_BUCKET is
+      // currently in use, but the param is retained for tests/multi-bucket
+      // futures. If `bucket` is supplied it must equal env.S3_BUCKET — we
+      // refuse to issue a DeleteObject against an arbitrary bucket the IAM
+      // credentials may also have access to.
+      Bucket: assertAllowedBucket(bucket),
       Key: key,
     })
   )
 }
 
-function sanitizeFilename(filename: string): string {
-  return filename.replace(/["\r\n;]/g, '_')
+function assertAllowedBucket(bucket: string | undefined): string {
+  if (bucket && bucket !== env.S3_BUCKET) {
+    throw new Error(`Refusing to operate on bucket "${bucket}": only "${env.S3_BUCKET}" is allowed`)
+  }
+  return env.S3_BUCKET
+}
+
+// Conservative ASCII charset for `filename=` (the legacy fallback). Anything
+// outside the whitelist is replaced with `_` so a hostile filename can't
+// break the Content-Disposition header.
+const ASCII_FILENAME_FALLBACK_PATTERN = /[^\w.-]/g
+const MAX_FILENAME_LENGTH = 200
+
+/**
+ * Build an RFC 5987-compliant Content-Disposition value for the presigned
+ * GET URL. We emit BOTH `filename=` (ASCII fallback for ancient clients)
+ * and `filename*=UTF-8''<percent-encoded>` (modern clients, full Unicode).
+ * Control chars, RTL overrides, and structural chars (`"`, `;`, `\r`,
+ * `\n`) are stripped before encoding.
+ */
+function buildContentDisposition(filename: string): string {
+  const trimmed = filename.slice(0, MAX_FILENAME_LENGTH)
+  // Strip all C0/C1 controls + DEL + RTL override (U+202E) + replacement (U+FFFD).
+  const cleaned = trimmed.replace(
+    // oxlint-disable-next-line no-control-regex -- explicitly stripping C0/C1 controls
+    /[\x00-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩�]/g,
+    ''
+  )
+  const asciiFallback = cleaned.replace(ASCII_FILENAME_FALLBACK_PATTERN, '_') || 'download'
+  const utf8Encoded = encodeURIComponent(cleaned)
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`
 }
 
 export async function getPresignedUrl(
@@ -68,15 +120,13 @@ export async function getPresignedUrl(
   expiresIn = 3600,
   opts?: { bucket?: string; filename?: string }
 ): Promise<string> {
-  const safeFilename = opts?.filename ? sanitizeFilename(opts.filename) : undefined
+  const disposition = opts?.filename ? buildContentDisposition(opts.filename) : undefined
   return getSignedUrl(
     s3,
     new GetObjectCommand({
       Bucket: opts?.bucket ?? env.S3_BUCKET,
       Key: key,
-      ...(safeFilename
-        ? { ResponseContentDisposition: `attachment; filename="${safeFilename}"` }
-        : {}),
+      ...(disposition ? { ResponseContentDisposition: disposition } : {}),
     }),
     { expiresIn }
   )

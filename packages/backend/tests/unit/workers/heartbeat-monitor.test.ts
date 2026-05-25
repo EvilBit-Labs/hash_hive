@@ -55,11 +55,15 @@ mock.module('../../../src/services/tasks.js', () => ({
 // Mock the events service — rebindable so individual tests can simulate a
 // throwing broadcast.
 let emitAgentStatusImpl: (projectId: number, agentId: number, status: string) => void = () => {}
-mock.module('../../../src/services/events.js', () => ({
-  emitAgentStatus: (projectId: number, agentId: number, status: string) =>
-    emitAgentStatusImpl(projectId, agentId, status),
-  emitResourceUpdate: () => undefined,
-}))
+import { createEventsMockFactory } from '../../mocks/events.js'
+
+mock.module(
+  '../../../src/services/events.js',
+  createEventsMockFactory({
+    emitAgentStatus: (projectId: number, agentId: number, status: string) =>
+      emitAgentStatusImpl(projectId, agentId, status),
+  })
+)
 
 // Mock BullMQ Worker to capture the processor function
 let capturedProcessor: ((job: unknown) => Promise<unknown>) | null = null

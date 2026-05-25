@@ -2,7 +2,7 @@ import type Redis from 'ioredis'
 
 import { hashItems, hashLists } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
-import { and, count, eq, isNotNull } from 'drizzle-orm'
+import { and, count, eq, sql } from 'drizzle-orm'
 
 import type { HashListParseJob } from '../types.js'
 
@@ -15,6 +15,31 @@ import { attachWorkerMetrics } from './metrics.js'
 
 const BATCH_SIZE = 5_000
 const MAX_LINE_LENGTH = 10_000 // 10 KB — skip malformed/binary lines
+
+/**
+ * Map a parse failure to an operator-facing string safe to broadcast over
+ * the resource_update WebSocket. Raw `err.message` from Drizzle / Postgres
+ * embeds SQL text and column names; this strips the wire payload down to
+ * a stable enum of operator-meaningful reasons.
+ */
+function sanitizeParseError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Hash list parse failed'
+  const msg = err.message.toLowerCase()
+  if (msg.includes('no file reference') || msg.includes('missing file')) {
+    return 'Hash list has no uploaded file'
+  }
+  if (msg.includes('empty file body') || msg.includes('empty body')) {
+    return 'Uploaded file is empty'
+  }
+  if (msg.includes('not found')) {
+    return 'Hash list not found'
+  }
+  if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('etimedout')) {
+    return 'Storage backend unavailable'
+  }
+  // Default — never leak the raw SQL/internal message to the wire.
+  return 'Hash list parse failed'
+}
 
 /**
  * Parse a single hash line into an insert value. Supports:
@@ -181,19 +206,18 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         linesProcessed += batch.length
       }
 
-      // Recompute statistics from actual data (crash-safe, not accumulated)
-      const [totalResult] = await db
-        .select({ value: count() })
+      // Recompute statistics from actual data (crash-safe, not accumulated).
+      // Single roundtrip: COUNT(*) + COUNT(*) FILTER (WHERE cracked_at IS NOT NULL).
+      const [statsResult] = await db
+        .select({
+          total: count(),
+          cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+        })
         .from(hashItems)
         .where(eq(hashItems.hashListId, hashListId))
 
-      const [crackedResult] = await db
-        .select({ value: count() })
-        .from(hashItems)
-        .where(and(eq(hashItems.hashListId, hashListId), isNotNull(hashItems.crackedAt)))
-
-      const total = totalResult?.value ?? 0
-      const cracked = crackedResult?.value ?? 0
+      const total = Number(statsResult?.total ?? 0)
+      const cracked = Number(statsResult?.cracked ?? 0)
 
       // Mark hash list as ready with computed statistics.
       // skippedLines is logged but not persisted in the wire JSONB.
@@ -268,7 +292,12 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
     const hashListId = job.data?.hashListId
     const projectId = job.data?.projectId
     if (typeof hashListId !== 'number') return
-    const errorMessage = err instanceof Error ? err.message : 'Hash list parse failed'
+    // Sanitize the wire error: raw Drizzle/Postgres messages include SQL
+    // text, table names, and column names — broadcasting them to every
+    // project subscriber would leak schema internals. The raw message
+    // still lands in the structured log below for operator forensics.
+    const errorMessage = sanitizeParseError(err)
+    logger.warn({ hashListId, err }, 'Hash list parse failed; emitting sanitized event')
     try {
       await db
         .update(hashLists)

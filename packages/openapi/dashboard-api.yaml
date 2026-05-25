@@ -647,7 +647,7 @@ paths:
       summary: List wordlists for the active project
       tags: [Resources]
       responses:
-        '200': { $ref: '#/components/responses/ResourceList' }
+        '200': { $ref: '#/components/responses/WordlistList' }
     post:
       operationId: createWordlist
       summary: Create an empty wordlist record
@@ -732,7 +732,7 @@ paths:
     get:
       operationId: listRulelists
       tags: [Resources]
-      responses: { '200': { $ref: '#/components/responses/ResourceList' } }
+      responses: { '200': { $ref: '#/components/responses/RulelistList' } }
     post:
       operationId: createRulelist
       tags: [Resources]
@@ -802,7 +802,7 @@ paths:
     get:
       operationId: listMasklists
       tags: [Resources]
-      responses: { '200': { $ref: '#/components/responses/ResourceList' } }
+      responses: { '200': { $ref: '#/components/responses/MasklistList' } }
     post:
       operationId: createMasklist
       tags: [Resources]
@@ -1433,15 +1433,39 @@ components:
 
   responses:
     # ─── Resources ────────────────────────────────────────────────────
-    ResourceList:
-      description: Generic resource list response.
+    WordlistList:
+      description: Project-scoped wordlists, newest first.
       content:
         application/json:
           schema:
             type: object
-            additionalProperties:
-              type: array
-              items: { $ref: '#/components/schemas/ResourceListItem' }
+            required: [wordlists]
+            properties:
+              wordlists:
+                type: array
+                items: { $ref: '#/components/schemas/ResourceListItem' }
+    RulelistList:
+      description: Project-scoped rulelists, newest first.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [rulelists]
+            properties:
+              rulelists:
+                type: array
+                items: { $ref: '#/components/schemas/ResourceListItem' }
+    MasklistList:
+      description: Project-scoped masklists, newest first.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [masklists]
+            properties:
+              masklists:
+                type: array
+                items: { $ref: '#/components/schemas/ResourceListItem' }
     ResourceCreated:
       description: Generic resource created.
       content:

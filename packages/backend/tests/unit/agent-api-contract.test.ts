@@ -86,12 +86,10 @@ mock.module('../../src/services/agents.js', () => ({
 // module cache (which leaks across test files via mock.module merge behavior).
 // campaigns.js is NOT mocked here — its mock.module overrides leak into other
 // files' real campaigns.js via ESM export merging, replacing resolveGenerationStrategy.
-mock.module('../../src/services/events.js', () => ({
-  emitCrackResult: mock(),
-  emitTaskUpdate: mock(),
-  emitCampaignStatus: mock(),
-  emitResourceUpdate: mock(),
-}))
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import { createEventsMockFactory } from '../mocks/events.js'
+
+mock.module('../../src/services/events.js', createEventsMockFactory())
 
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase
 // mapping is validated in tasks.test.ts; here we only test the route contract.

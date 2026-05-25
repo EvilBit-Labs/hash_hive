@@ -116,99 +116,58 @@ export async function listHashListsPaginated(
 }
 
 /**
- * Delete a hash list and its associated rows. Order of operations:
- *   1. Ownership check (404 if not in project)
- *   2. Best-effort S3 object delete (logged on failure but doesn't block)
- *   3. Cascade-delete `hash_items` rows (explicit because schema has no
- *      ON DELETE CASCADE — adding it would require a migration)
- *   4. Delete the `hash_lists` row
- *
- * Throws `ResourceInUseError` if another table (campaigns/attacks) still
- * references the row. Idempotent: returns `false` when the row was
- * already gone, `true` when this call performed the delete.
+ * Detect a Postgres foreign-key-violation either by SQLSTATE 23503 (the
+ * canonical, locale-stable signal) or by a regex against `err.message`
+ * (fallback for older PG / test mocks that don't surface the code).
  */
-export async function deleteHashList(id: number, projectId: number): Promise<boolean> {
-  const hl = await getHashListById(id, projectId)
-  if (!hl) return false
-
-  // Order matters: validate the row is FK-deletable FIRST by deleting the
-  // hash_lists row (which raises a FK violation if a campaign/attack still
-  // references it). Only after that succeeds do we cascade hash_items and
-  // delete the S3 object. The prior order wiped hash_items and S3 BEFORE
-  // the FK check, so a 409 (ResourceInUseError) would leave the hash list
-  // row intact but empty of items with its S3 object gone — corruption.
-  try {
-    // First: cascade hash_items inside an attempt that we can roll back via
-    // PG transaction semantics. Drizzle's top-level statements aren't
-    // transactional by default; the safer pattern is to test the FK with a
-    // probing DELETE on hash_lists first via PG's RETURNING. If the row
-    // can't be deleted (FK), no children are touched. If it can, we then
-    // run the explicit child cascade and the actual delete.
-    //
-    // Implementation: wrap the two DELETEs in a single transaction so a
-    // late FK violation rolls back the hash_items cascade. PG already
-    // serializes the two statements; the transaction is the rollback.
-    await db.transaction(async (tx) => {
-      await tx.delete(hashItems).where(eq(hashItems.hashListId, id))
-      await tx
-        .delete(hashLists)
-        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
-    })
-  } catch (err) {
-    // Detect FK violation by SQLSTATE 23503 (foreign_key_violation) rather
-    // than regex against err.message — locale-stable and version-stable.
-    const code = err instanceof Error && 'code' in err ? (err as { code?: string }).code : undefined
-    if (
-      code === '23503' ||
-      (err instanceof Error && /foreign key|violates|reference/i.test(err.message))
-    ) {
-      throw new ResourceInUseError('hash list', id, 'one or more campaigns or attacks')
-    }
-    throw err
-  }
-
-  // S3 delete runs LAST and is best-effort: by this point the DB rows are
-  // gone, so a stale S3 object is a janitor problem, not a correctness one.
-  const fileRef = hl.fileRef as { bucket?: string; key?: string } | null
-  if (fileRef?.key) {
-    try {
-      await deleteFile(fileRef.key, fileRef.bucket)
-    } catch (err) {
-      logger.warn({ hashListId: id, err }, 'Failed to delete hash list S3 object; continuing')
-    }
-  }
-  return true
+function isForeignKeyViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = 'code' in err ? (err as { code?: string }).code : undefined
+  if (code === '23503') return true
+  return /foreign key|violates|reference/i.test(err.message)
 }
 
 /**
- * Generic delete for `wordlists`, `rulelists`, `masklists`. Same flow as
- * `deleteHashList` but without the `hash_items` cascade. Throws
- * `ResourceInUseError` when attacks still reference the resource.
+ * Shared cascade-delete flow for resource tables. Steps:
+ *   1. Ownership check (404 if not in project) — handled by the caller via
+ *      `lookup`.
+ *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
+ *      FK violation rolls back the children).
+ *   3. Best-effort S3 object delete on the row's fileRef.
+ *
+ * Throws `ResourceInUseError` if a FK from another table still references
+ * the row. Idempotent: returns `false` when the row was already gone.
  */
-export async function deleteResource(
-  table: ResourceTable,
-  id: number,
-  projectId: number,
-  resourceType: string
-): Promise<boolean> {
-  const row = await getResourceById(table, id, projectId)
+async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
+  id: number
+  projectId: number
+  resourceLabel: string
+  referencedBy: string
+  lookup: () => Promise<TRow | null>
+  cascade?: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<void>
+  deleteOwner: (
+    runner: Parameters<Parameters<typeof db.transaction>[0]>[0] | typeof db
+  ) => Promise<void>
+}): Promise<boolean> {
+  const row = await args.lookup()
   if (!row) return false
 
-  // DB delete FIRST so a FK violation aborts before the S3 object is gone.
   try {
-    await db.delete(table).where(and(eq(table.id, id), eq(table.projectId, projectId)))
+    if (args.cascade) {
+      await db.transaction(async (tx) => {
+        await args.cascade!(tx)
+        await args.deleteOwner(tx)
+      })
+    } else {
+      await args.deleteOwner(db)
+    }
   } catch (err) {
-    const code = err instanceof Error && 'code' in err ? (err as { code?: string }).code : undefined
-    if (
-      code === '23503' ||
-      (err instanceof Error && /foreign key|violates|reference/i.test(err.message))
-    ) {
-      throw new ResourceInUseError(resourceType, id, 'one or more attacks')
+    if (isForeignKeyViolation(err)) {
+      throw new ResourceInUseError(args.resourceLabel, args.id, args.referencedBy)
     }
     throw err
   }
 
-  // S3 delete is best-effort and runs after DB delete succeeds.
   const fileRef = (row as Record<string, unknown>)['fileRef'] as {
     bucket?: string
     key?: string
@@ -218,12 +177,87 @@ export async function deleteResource(
       await deleteFile(fileRef.key, fileRef.bucket)
     } catch (err) {
       logger.warn(
-        { resourceType, resourceId: id, err },
+        { resourceLabel: args.resourceLabel, resourceId: args.id, err },
         'Failed to delete resource S3 object; continuing'
       )
     }
   }
   return true
+}
+
+// Maximum hash_items rows to remove per DELETE chunk during cascade. Bounds
+// the worst-case lock duration so a hash list with millions of items can
+// be deleted without holding row-level locks for minutes.
+const HASH_ITEMS_DELETE_CHUNK = 10_000
+
+/**
+ * Cascade-delete `hash_items` for `hashListId` in bounded batches. Each
+ * iteration deletes up to `HASH_ITEMS_DELETE_CHUNK` rows using a
+ * `ctid IN (SELECT ctid ... LIMIT N)` pattern (PG-specific; bounds the
+ * statement-level lock duration).
+ */
+async function deleteHashItemsBatched(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  hashListId: number
+): Promise<void> {
+  for (;;) {
+    const result = (await tx.execute(
+      sql`DELETE FROM ${hashItems}
+          WHERE ctid IN (
+            SELECT ctid FROM ${hashItems}
+            WHERE ${eq(hashItems.hashListId, hashListId)}
+            LIMIT ${HASH_ITEMS_DELETE_CHUNK}
+          )`
+    )) as { count?: number; rowCount?: number } | unknown[]
+    const deleted =
+      typeof (result as { count?: number }).count === 'number'
+        ? (result as { count: number }).count
+        : typeof (result as { rowCount?: number }).rowCount === 'number'
+          ? (result as { rowCount: number }).rowCount
+          : Array.isArray(result)
+            ? result.length
+            : 0
+    if (deleted < HASH_ITEMS_DELETE_CHUNK) break
+  }
+}
+
+export async function deleteHashList(id: number, projectId: number): Promise<boolean> {
+  return cascadeDeleteResource({
+    id,
+    projectId,
+    resourceLabel: 'hash list',
+    referencedBy: 'one or more campaigns or attacks',
+    lookup: () => getHashListById(id, projectId),
+    // Bounded-batch cascade: large hash lists (millions of items) get
+    // chunked DELETEs instead of one unbounded statement, capping the
+    // worst-case lock duration.
+    cascade: (tx) => deleteHashItemsBatched(tx, id),
+    deleteOwner: (runner) =>
+      runner
+        .delete(hashLists)
+        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+        .then(() => undefined),
+  })
+}
+
+export async function deleteResource(
+  table: ResourceTable,
+  id: number,
+  projectId: number,
+  resourceType: string
+): Promise<boolean> {
+  return cascadeDeleteResource({
+    id,
+    projectId,
+    resourceLabel: resourceType,
+    referencedBy: 'one or more attacks',
+    lookup: () => getResourceById(table, id, projectId),
+    deleteOwner: (runner) =>
+      runner
+        .delete(table)
+        .where(and(eq(table.id, id), eq(table.projectId, projectId)))
+        .then(() => undefined),
+  })
 }
 
 export async function getHashListById(id: number, projectId: number) {
@@ -311,26 +345,32 @@ export async function importHashList(hashListId: number, projectId: number) {
     return { error: 'Queue unavailable — cannot process hash list' }
   }
 
-  // Mark as processing
+  // Enqueue FIRST so the queue's success/failure is what gates the status
+  // flip. If enqueue throws or returns false, status stays at 'uploaded'
+  // and the caller can retry without a separate revert UPDATE that could
+  // itself fail and leave the row stuck mid-flight.
+  let enqueued = false
+  try {
+    enqueued = await qm.enqueue(QUEUE_NAMES.HASH_LIST_PARSING, {
+      hashListId,
+      projectId: hl.projectId,
+    })
+  } catch (err) {
+    logger.warn({ err, hashListId }, 'Failed to enqueue hash list parsing job')
+    return { error: 'Failed to enqueue hash list parsing job' }
+  }
+
+  if (!enqueued) {
+    return { error: 'Failed to enqueue hash list parsing job' }
+  }
+
+  // Status-guarded UPDATE: only flip rows currently in 'uploaded'. Any
+  // other state (already processing, ready, error) is left alone so a
+  // duplicate import call can't corrupt the row.
   await db
     .update(hashLists)
     .set({ status: 'processing', updatedAt: new Date() })
-    .where(eq(hashLists.id, hashListId))
-
-  // Enqueue async parsing job into the hash-list-parsing job queue
-  const enqueued = await qm.enqueue(QUEUE_NAMES.HASH_LIST_PARSING, {
-    hashListId,
-    projectId: hl.projectId,
-  })
-
-  if (!enqueued) {
-    // Revert status since the job was not enqueued
-    await db
-      .update(hashLists)
-      .set({ status: 'uploaded', updatedAt: new Date() })
-      .where(eq(hashLists.id, hashListId))
-    return { error: 'Failed to enqueue hash list parsing job' }
-  }
+    .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'uploaded')))
 
   return { status: 'processing' as const, queued: true }
 }

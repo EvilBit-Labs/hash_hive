@@ -33,6 +33,7 @@ import {
   listHashLists,
   listHashTypes,
   listResources,
+  MAX_DIRECT_UPLOAD_BYTES,
   type ResourceTable,
   ResourceInUseError,
   uploadChunkPart,
@@ -40,6 +41,14 @@ import {
   UploadTooLargeError,
   uploadResourceFile,
 } from '../../services/resources.js'
+
+// Cap the multipart wire body slightly above the direct-upload limit. The
+// extra 1 MB covers multipart overhead (boundaries, field headers) so a
+// genuine 10 MB file isn't rejected by the wire-size check before it
+// reaches the byte-size check in `uploadHashListFile`. Anything larger
+// is rejected before parseBody so the server doesn't buffer GBs into
+// memory. See the multipart branch in POST /hash-lists.
+const MULTIPART_BODY_LIMIT_BYTES = MAX_DIRECT_UPLOAD_BYTES + 1_048_576
 
 const resourceRoutes = new Hono<AppEnv>()
 
@@ -82,6 +91,29 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
 
   // ─── Multipart one-shot upload (ticket AC #1) ──────────────────────
   if (contentType.startsWith('multipart/form-data')) {
+    // Reject oversize multipart payloads BEFORE parseBody buffers them.
+    // Without this guard, an authenticated admin/contributor could OOM
+    // the backend with a multi-GB body. Headers-only check using
+    // Content-Length; clients without it fall through to parseBody, which
+    // still enforces the byte cap inside uploadHashListFile via
+    // UploadTooLargeError.
+    const contentLengthRaw = c.req.header('content-length')
+    const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
+    if (
+      typeof contentLength === 'number' &&
+      Number.isFinite(contentLength) &&
+      contentLength > MULTIPART_BODY_LIMIT_BYTES
+    ) {
+      return c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+          },
+        },
+        413
+      )
+    }
     const body = await c.req.parseBody()
     const file = body['file']
     const nameRaw = body['name']

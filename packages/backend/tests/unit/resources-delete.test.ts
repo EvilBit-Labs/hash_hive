@@ -83,8 +83,19 @@ if (IS_ISOLATED) {
         }),
       }),
       delete: mockDelete,
-      transaction: async (fn: (tx: { delete: typeof mockDelete }) => Promise<unknown>) =>
-        fn({ delete: mockDelete }),
+      // Production code uses tx.execute for the batched hash_items DELETE
+      // (PG LIMIT-on-DELETE isn't in Drizzle's typed API). Return
+      // rowCount=0 so the chunked loop terminates immediately under test.
+      transaction: async (
+        fn: (tx: {
+          delete: typeof mockDelete
+          execute: (sql: unknown) => Promise<{ rowCount: number }>
+        }) => Promise<unknown>
+      ) =>
+        fn({
+          delete: mockDelete,
+          execute: async () => ({ rowCount: 0 }),
+        }),
     },
   }))
 
@@ -110,7 +121,7 @@ if (IS_ISOLATED) {
       expect(mockDelete).not.toHaveBeenCalled()
     })
 
-    test('returns true after deleting the hash list and its hash items', async () => {
+    test('returns true after deleting the hash list and cascading hash items', async () => {
       selectByTable.set('hash_lists', [
         { id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'hash-lists/5/file.txt' } },
       ])
@@ -119,8 +130,9 @@ if (IS_ISOLATED) {
       expect(result).toBe(true)
       expect(mockDeleteFile).toHaveBeenCalledTimes(1)
       expect(mockDeleteFile).toHaveBeenCalledWith('hash-lists/5/file.txt', 'b')
-      // Two DELETEs: hash_items then hash_lists.
-      expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(2)
+      // hash_items cascade runs via tx.execute (raw SQL), hash_lists delete
+      // runs via tx.delete — so the tx.delete count is exactly 1.
+      expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
     })
 
     test('proceeds with DB delete when S3 object is already gone', async () => {
@@ -132,19 +144,15 @@ if (IS_ISOLATED) {
       const result = await deleteHashList(5, 1)
       expect(result).toBe(true)
       expect(mockDeleteFile).toHaveBeenCalledTimes(1)
-      // DB delete should still have run.
-      expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
     })
 
     test('throws ResourceInUseError when the hash_lists DELETE hits an FK violation (SQLSTATE 23503)', async () => {
       selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'k' } }])
-      let callCount = 0
+      // Post-R10 refactor: hash_items cascade runs via tx.execute (mocked
+      // to no-op above), THEN tx.delete(hash_lists) — which raises the FK
+      // violation. cascadeDeleteResource maps it to ResourceInUseError.
       deleteImpl = (table: string) => {
-        callCount++
-        // hash_items in the tx succeeds; hash_lists raises SQLSTATE 23503.
-        // The tx rolls back so no children are actually wiped in PG; the
-        // test asserts the error mapping and the no-S3-delete invariant.
-        if (callCount === 1) return Promise.resolve()
         if (table === 'hash_lists') {
           const err = new Error(
             'update or delete on table "hash_lists" violates foreign key constraint'

@@ -44,10 +44,22 @@ if (IS_ISOLATED) {
     reassignStaleTasks: mock(() => Promise.resolve({ reassigned: 0 })),
   }))
 
+  // Inline events mock — the file-level `createEventsMockFactory` helper
+  // can't be used here because this file is gated behind `IS_ISOLATED`
+  // and the helper is imported at module top, before the gate runs.
   mock.module('../../../src/services/events.js', () => ({
+    emit: mock(),
     emitAgentStatus: mock(),
-    broadcastSystemHealth: mock(),
+    emitAgentError: mock(),
+    emitCampaignStatus: mock(),
+    emitTaskUpdate: mock(),
+    emitCrackResult: mock(),
     emitResourceUpdate: mock(),
+    broadcastSystemHealth: mock(),
+    registerClient: mock(),
+    unregisterClient: mock(),
+    getClientCount: mock(() => 0),
+    __resetEventsForTesting: mock(),
   }))
 
   mock.module('../../../src/services/health.js', () => ({
