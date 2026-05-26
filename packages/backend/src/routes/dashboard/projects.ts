@@ -218,9 +218,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     // check and this guarded write. The session was updated above to
     // point at a project the user no longer belongs to; roll it back
     // so the next request sees session.projectId=null and the dashboard
-    // routes to the selector. Best-effort: if THIS fails too the user
-    // is wedged until the session expires, but we've already returned
-    // 5xx so the client knows to retry.
+    // routes to the selector.
     logger.warn(
       { userId, projectId, requestId },
       'projects/select: membership revoked mid-request; rolling back session.projectId'
@@ -231,9 +229,30 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
         body: { projectId: null },
       })
     } catch (err) {
+      // Rollback failed -- the session is now in an inconsistent state
+      // (scope still points at the forbidden project, but the user no
+      // longer has membership). 403 would be misleading (it implies
+      // the client can retry / re-select) but the session itself is
+      // poisoned and the client cannot recover without re-auth.
+      // Escalate to 500 with a distinct code so operators see this as
+      // a server-side incident and the client knows to surface a
+      // session-expired UX. The user's next dashboard request will
+      // either redirect via the 401 path on session expiry, or hit
+      // 403 PROJECT_NOT_SELECTED / AUTHZ_PROJECT_ACCESS_DENIED on the
+      // stale-scope route -- both of which the frontend already
+      // handles as "back to selector / login".
       logger.error(
         { err, userId, requestId },
-        'projects/select: failed to roll back session.projectId after membership-revoked detection'
+        'projects/select: rollback updateSession({ projectId: null }) failed; session scope is inconsistent'
+      )
+      return c.json(
+        {
+          error: {
+            code: 'AUTHZ_SESSION_ROLLBACK_FAILED',
+            message: 'Membership revoked mid-request and session rollback failed; re-authenticate.',
+          },
+        },
+        500
       )
     }
     return c.json(

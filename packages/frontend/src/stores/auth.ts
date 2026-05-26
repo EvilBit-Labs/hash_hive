@@ -73,9 +73,12 @@ export const useAuthStore = create<AuthState>((set) => ({
       // failures so a silent UX degradation is observable instead of
       // disappearing into a blank state. Treat as "no projects
       // available" so consumers fall through to the selector / login
-      // flow rather than spinning forever.
+      // flow rather than spinning forever. Clearing the UI selection
+      // too prevents guarded routes from rendering against a stale
+      // projectId after the auth state collapsed.
       // eslint-disable-next-line no-console
       console.error('useAuthStore.fetchProjects failed:', err)
+      useUiStore.getState().setSelectedProject(null)
       set({ projects: [], hasFetchedProjects: true })
     }
   },

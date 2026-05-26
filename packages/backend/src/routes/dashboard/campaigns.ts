@@ -781,6 +781,21 @@ campaignRoutes.delete(
   async (c) => {
     const campaignId = Number(c.req.param('id'))
     const attackId = Number(c.req.param('attackId'))
+    // Validate both IDs at the route boundary so NaN / negatives /
+    // floats produce the file's canonical 400 VALIDATION_ERROR
+    // envelope instead of falling through as misleading 404s from
+    // the service layer.
+    if (
+      !Number.isInteger(campaignId) ||
+      campaignId <= 0 ||
+      !Number.isInteger(attackId) ||
+      attackId <= 0
+    ) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign or attack id' } },
+        400
+      )
+    }
     const { projectId } = c.get('currentUser')
 
     // Verify the campaign exists AND belongs to the caller's current
