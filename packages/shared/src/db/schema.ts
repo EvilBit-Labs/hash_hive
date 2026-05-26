@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   index,
@@ -25,6 +26,22 @@ export const users = pgTable('users', {
   apiKeyHash: varchar('api_key_hash', { length: 255 }).unique(),
   apiKeyLastUsedAt: timestamp('api_key_last_used_at', { withTimezone: true }),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  // Global capability tier for the dashboard API. Distinct from
+  // project_users.roles (per-project membership: admin|contributor|viewer).
+  // Allowed values: 'admin' | 'operator' | 'analyst'. Default 'analyst' is
+  // the least-privileged tier so a forgotten role assignment fails closed;
+  // the application layer always sets this explicitly on insert.
+  roles: text('roles').array().notNull().default(['analyst']),
+  // Last project the user explicitly selected via POST /dashboard/projects/select.
+  // Read by databaseHooks.session.create.before (auth.ts) on next sign-in
+  // to rehydrate session.projectId for multi-project users, after re-
+  // validating membership. NULL means "no preference recorded".
+  // AnyPgColumn breaks the inference cycle: `users.lastProjectId -> projects.id`
+  // and `projects.createdBy -> users.id` form a loop that TypeScript can't
+  // resolve, leaving both tables typed as `any` without the explicit annotation.
+  lastProjectId: integer('last_project_id').references((): AnyPgColumn => projects.id, {
+    onDelete: 'set null',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

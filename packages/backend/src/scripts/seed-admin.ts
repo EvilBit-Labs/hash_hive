@@ -26,13 +26,17 @@ async function seed() {
   const passwordHash = await Bun.password.hash(ADMIN_PASSWORD, { algorithm: 'bcrypt', cost: 12 })
 
   await db.transaction(async (tx) => {
-    // Find-or-create admin user (email has a unique constraint)
+    // Find-or-create admin user (email has a unique constraint).
+    // `roles` is set explicitly on both insert and update branches so the
+    // 'analyst' column default (least-privileged tier for safety) never
+    // overrides the seed's intent, and re-seeds reaffirm admin tier if
+    // it was manually downgraded.
     const [user] = await tx
       .insert(users)
-      .values({ email: ADMIN_EMAIL, passwordHash, name: ADMIN_NAME })
+      .values({ email: ADMIN_EMAIL, passwordHash, name: ADMIN_NAME, roles: ['admin'] })
       .onConflictDoUpdate({
         target: users.email,
-        set: { name: ADMIN_NAME, passwordHash },
+        set: { name: ADMIN_NAME, passwordHash, roles: ['admin'] },
       })
       .returning({ id: users.id })
 
