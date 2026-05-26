@@ -43,6 +43,7 @@ export async function getUserWithProjects(userId: number) {
       email: user.email,
       name: user.name,
       status: user.status,
+      roles: user.roles,
     },
     projects: memberships.map((m) => ({
       id: m.projectId,
@@ -51,6 +52,37 @@ export async function getUserWithProjects(userId: number) {
       roles: m.roles,
     })),
   }
+}
+
+/**
+ * Read the user's `last_project_id` preference. Returns null if the
+ * user does not exist or has no recorded preference. Used by the
+ * BetterAuth `session.create.before` hook to rehydrate session.projectId
+ * for multi-project users on sign-in.
+ */
+export async function getUserLastProjectId(userId: number): Promise<number | null> {
+  const [row] = await db
+    .select({ lastProjectId: users.lastProjectId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  return row?.lastProjectId ?? null
+}
+
+/**
+ * Persist the user's last-selected project. Called by
+ * `POST /api/v1/dashboard/projects/select` in the same transaction as
+ * `auth.api.updateSession` so the preference and the active session
+ * agree. Pass null to clear the preference.
+ */
+export async function setUserLastProjectId(
+  userId: number,
+  projectId: number | null
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ lastProjectId: projectId, updatedAt: new Date() })
+    .where(eq(users.id, userId))
 }
 
 // ─── API Key Management ─────────────────────────────────────────────
