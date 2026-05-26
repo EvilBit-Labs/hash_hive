@@ -74,6 +74,8 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 
 **Mock Module Fundamentals:**
 
+> Named two-pattern taxonomy + decision rule: `docs/solutions/conventions/bun-test-mock-module-import-order.md` (Pattern A: mutable-impl variables + `beforeEach` reset; Pattern B: isolated-phase env gate + `await import()`). The entries below are the underlying mechanics that motivate that taxonomy.
+
 - **`mock.module()` before `await import()`**: Mock dependencies before dynamically importing the module under test — used for service tests that need DB/queue mocks
 - **Shared module cache gotcha**: `mock.module` **merges** mock exports into the real module's ESM namespace — non-mocked exports pass through, but mocked ones (e.g., `resolveGenerationStrategy: mock()`) silently replace the real function for ALL test files in the same run. Never mock individual exports of a module unless every consumer in every test file can tolerate the mock.
 - **Flaky module cache**: Tests relying on `mock.module` can pass in isolation but fail in the full suite non-deterministically. If a test fails in `bun --filter @hashhive/backend test` but passes alone, re-run the full suite once before debugging — bun's module evaluation order across files is not guaranteed.
