@@ -46,10 +46,11 @@ const driftWarnTimestamps = new Map<string, number>()
 
 /**
  * Retry budget before transitioning to the `fallback` (polling-only)
- * state. Three attempts is the existing exponential-backoff ceiling
- * doubled — the runtime backoff caps at 30s, so three attempts under
- * 4-8s backoff land the operator in fallback within roughly 15s on a
- * sustained outage instead of thrashing reconnects forever.
+ * state. With the budget at 3, the close-handler schedules `1s` then
+ * `2s` then drops into fallback — total active retry window ~3s before
+ * polling takes over, which prevents thrashing reconnects on a
+ * sustained outage without making the operator wait through a long
+ * exponential climb first.
  */
 const MAX_RECONNECT_ATTEMPTS = 3
 
@@ -397,7 +398,16 @@ export function useEvents(options: UseEventsOptions = {}) {
             setStatus('authenticating')
             authClient
               .getSession({ query: { disableCookieCache: true } })
-              .catch(() => null)
+              .catch((err: unknown) => {
+                // Surface refresh failures so the terminal 'error'
+                // state below isn't the only signal that the auth
+                // endpoint itself was the failure (vs. an actually
+                // expired session). Without this log, a degraded auth
+                // backend looks identical to a revoked session.
+                // oxlint-disable-next-line no-console -- client-side observability has no structured logger
+                console.warn('[useEvents] session refresh after 4001 close failed', err)
+                return null
+              })
               .finally(() => {
                 if (cancelled) return
                 reconnectTimeoutRef.current = setTimeout(connect, 0)
@@ -471,16 +481,32 @@ export function useEvents(options: UseEventsOptions = {}) {
     if (status !== 'fallback') return
 
     const interval = setInterval(() => {
-      void queryClient.invalidateQueries({ queryKey: ['dashboard-stats', sessionProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['agents', sessionProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['campaigns', sessionProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['agent'] })
-      void queryClient.invalidateQueries({ queryKey: ['agent-errors'] })
-      void queryClient.invalidateQueries({ queryKey: ['agent-tasks'] })
-      // Symmetric to the agent-detail keys above — without this a
-      // disconnected user sitting on /campaigns/:id sees frozen
-      // taskStats and activeAgents until the WS reconnects.
-      void queryClient.invalidateQueries({ queryKey: ['campaign'] })
+      // Track rejections so a silently-failing polling cycle (e.g.,
+      // backend down + cached 401 from auth) becomes visible in the
+      // console rather than letting "Offline — polling" mislead the
+      // operator into thinking caches are still being refreshed.
+      const settle = (p: Promise<unknown>) => p.catch((err: unknown) => err)
+      void Promise.all([
+        settle(queryClient.invalidateQueries({ queryKey: ['dashboard-stats', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agents', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['campaigns', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent'] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent-errors'] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent-tasks'] })),
+        // Symmetric to the agent-detail keys above — without this a
+        // disconnected user sitting on /campaigns/:id sees frozen
+        // taskStats and activeAgents until the WS reconnects.
+        settle(queryClient.invalidateQueries({ queryKey: ['campaign'] })),
+      ]).then((results) => {
+        const failures = results.filter((r): r is Error => r instanceof Error)
+        if (failures.length > 0) {
+          // oxlint-disable-next-line no-console -- polling fallback observability
+          console.warn('[useEvents] polling-fallback refresh failures', {
+            failureCount: failures.length,
+            firstMessage: failures[0]?.message,
+          })
+        }
+      })
     }, 30_000)
 
     return () => clearInterval(interval)

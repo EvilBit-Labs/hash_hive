@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js'
@@ -101,13 +102,15 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
   // session row. Read by /events/stream on next WS upgrade. Wrap in
   // try/catch so an underlying BetterAuth or FK failure surfaces as
   // the dashboard envelope rather than a raw 500 with the driver
-  // error string.
+  // error string. The error is captured + logged so operators can
+  // distinguish "session expired mid-call" from a real driver fault.
   try {
     await auth.api.updateSession({
       headers: c.req.raw.headers,
       body: { projectId },
     })
-  } catch {
+  } catch (err) {
+    logger.error({ err, userId, projectId }, 'projects/select: updateSession failed')
     return c.json(
       { error: { code: 'INTERNAL_ERROR', message: 'Failed to update session project' } },
       500

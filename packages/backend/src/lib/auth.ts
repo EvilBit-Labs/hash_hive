@@ -66,27 +66,37 @@ export const auth = betterAuth({
         // undefined and the dashboard surfaces an offline indicator
         // until they pick a project.
         before: async (session) => {
-          try {
-            const userId = Number(session.userId)
-            if (!Number.isInteger(userId) || userId <= 0) {
-              return { data: session }
-            }
-            const userWithProjects = await getUserWithProjects(userId)
-            if (!userWithProjects || userWithProjects.projects.length !== 1) {
-              return { data: session }
-            }
-            const projectId = userWithProjects.projects[0]?.id
-            if (typeof projectId !== 'number') {
-              return { data: session }
-            }
-            return { data: { ...session, projectId } }
-          } catch (err) {
-            // Never break sign-in on membership-lookup failure. Sign-in
-            // succeeds without a projectId; the user can still pick one
-            // explicitly via the selector UI when it ships.
-            logger.warn({ err }, 'session.create.before auto-select failed')
+          const userId = Number(session.userId)
+          if (!Number.isInteger(userId) || userId <= 0) {
             return { data: session }
           }
+
+          // Distinguish "lookup itself threw" (DB outage, schema
+          // mismatch — operator-visible incident) from the legitimate
+          // zero/multi-project branches. Both still allow sign-in to
+          // proceed without a projectId, but only the unexpected
+          // failure should log at error level so a Postgres event is
+          // visible in logs rather than buried under a warn that also
+          // fires for normal multi-project sign-ins.
+          let userWithProjects
+          try {
+            userWithProjects = await getUserWithProjects(userId)
+          } catch (err) {
+            logger.error(
+              { err, userId },
+              'session.create.before: project lookup failed; sign-in proceeding without auto-select'
+            )
+            return { data: session }
+          }
+
+          if (!userWithProjects || userWithProjects.projects.length !== 1) {
+            return { data: session }
+          }
+          const projectId = userWithProjects.projects[0]?.id
+          if (typeof projectId !== 'number') {
+            return { data: session }
+          }
+          return { data: { ...session, projectId } }
         },
       },
     },
