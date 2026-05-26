@@ -9,7 +9,7 @@ import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireParamMembershipRole, requireParamProjectAccess } from '../../middleware/rbac.js'
-import { findProjectMembership } from '../../services/auth.js'
+import { findProjectMembership, setUserLastProjectId } from '../../services/auth.js'
 import {
   addUserToProject,
   createProject,
@@ -179,6 +179,25 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     logger.error({ err, userId, projectId, requestId }, 'projects/select: updateSession failed')
     return c.json(
       { error: { code: 'INTERNAL_ERROR', message: 'Failed to update session project' } },
+      500
+    )
+  }
+
+  // Persist the user's "remember last project" preference (#159 U6)
+  // so the next sign-in rehydrates session.projectId via the
+  // session.create.before hook without forcing the user to re-pick.
+  // Treated as part of the contract, not best-effort: if the write
+  // fails, the active session is already updated but the next
+  // sign-in won't reattach, so we surface a 500 rather than mask it.
+  try {
+    await setUserLastProjectId(userId, projectId)
+  } catch (err) {
+    logger.error(
+      { err, userId, projectId, requestId },
+      'projects/select: setUserLastProjectId failed (session was updated but preference write failed)'
+    )
+    return c.json(
+      { error: { code: 'INTERNAL_ERROR', message: 'Failed to persist last project preference' } },
       500
     )
   }

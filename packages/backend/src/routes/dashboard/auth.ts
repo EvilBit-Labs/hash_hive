@@ -14,18 +14,27 @@ import {
 const authRouter = new Hono<AppEnv>()
 
 /**
- * GET /me -- returns the authenticated user's profile and project memberships.
- * Login/logout are now handled by BetterAuth at /api/auth/*.
+ * GET /me -- returns the authenticated user's profile, project
+ * memberships, and the currently selected project. The frontend
+ * (#160 selector UI) uses `selectedProjectId` to decide whether to
+ * land on the dashboard or the selector in a single round-trip,
+ * rather than waiting for the WebSocket subscription to hydrate
+ * `useUiStore.selectedProjectId`.
+ *
+ * `selectedProjectId` mirrors `currentUser.projectId` which is sourced
+ * exclusively from the server-managed BetterAuth session row (issue
+ * #159 U4). Login/logout transport is owned by BetterAuth at
+ * `/api/auth/*`.
  */
 authRouter.get('/me', requireSession, async (c) => {
-  const { userId } = c.get('currentUser')
+  const { userId, projectId } = c.get('currentUser')
   const result = await getUserWithProjects(userId)
 
   if (!result) {
     return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'User not found' } }, 404)
   }
 
-  return c.json(result)
+  return c.json({ ...result, selectedProjectId: projectId })
 })
 
 // Account API Key endpoints. Each handler is wrapped in try/catch so a
