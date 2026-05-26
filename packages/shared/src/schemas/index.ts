@@ -798,3 +798,31 @@ export const campaignDetailPayloadSchema = z.object({
   taskStats: campaignTaskStatsSchema,
   activeAgents: z.array(campaignActiveAgentSchema),
 })
+
+// ─── Realtime / WebSocket connection ────────────────────────────────
+
+/**
+ * The connection-status state machine surfaced by `useEvents` and
+ * consumed by the layout-level connection indicator. The six states are
+ * the only values the hook will ever emit; consumers can safely switch
+ * exhaustively on them.
+ */
+export const connectionStatusSchema = z.enum([
+  'connecting',
+  'open',
+  'authenticating',
+  'reconnecting',
+  'fallback',
+  'error',
+])
+
+/**
+ * Request body for `POST /api/v1/dashboard/projects/select`. Sets the
+ * server-managed `projectId` on the BetterAuth session after validating
+ * project membership.
+ */
+export const selectProjectRequestSchema = z
+  .object({
+    projectId: z.number().int().positive(),
+  })
+  .strict()

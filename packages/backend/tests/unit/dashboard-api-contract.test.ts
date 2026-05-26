@@ -4,45 +4,111 @@
  * Validates auth guards and request validation on dashboard endpoints.
  * Tests middleware layer behavior without requiring a running database.
  */
-import { describe, expect, it, mock } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 
-// ─── Mock BetterAuth ─────────────────────────────────────────────────
+// ─── Mock layer ─────────────────────────────────────────────────────
+//
+// All module mocks are registered ONCE at module load (before
+// `import { app }` below). The implementations route through mutable
+// state variables so per-test overrides happen via assignment, not by
+// calling `mock.module()` after the route handler has already
+// captured its imports. This keeps the test stable regardless of
+// import-order — the failure mode CodeRabbit flagged on the previous
+// pattern (mock.module() inside it() after top-level app import).
+//
+// Tests that need per-case behavior reassign the impls in their setup
+// and a top-level beforeEach restores defaults so leakage between
+// tests is structurally prevented.
+
+type SessionShape = {
+  user: { id: string; email: string; name: string; emailVerified: boolean; image: string | null }
+  session: {
+    id: string
+    userId: string
+    token: string
+    expiresAt: Date
+    projectId?: number | null
+  }
+} | null
+
+const VALID_SESSION: SessionShape = {
+  user: {
+    id: '1',
+    email: 'test@example.com',
+    name: 'Test User',
+    emailVerified: true,
+    image: null,
+  },
+  session: {
+    id: 'sess-1',
+    userId: '1',
+    token: 'tok-1',
+    expiresAt: new Date(Date.now() + 3600000),
+  },
+}
+
+const defaultGetSession = async ({ headers }: { headers: Headers }): Promise<SessionShape> => {
+  const cookie = headers.get('cookie') ?? ''
+  if (cookie.includes('hh.session_token=valid-session')) return VALID_SESSION
+  return null
+}
+
+let getSessionImpl: (input: { headers: Headers }) => Promise<SessionShape> = defaultGetSession
+let updateSessionImpl: (input: unknown) => Promise<unknown> = async () => ({})
+let findProjectMembershipImpl: (
+  userId: number,
+  projectId: number
+) => Promise<{ userId: number; projectId: number; roles: string[] } | null> = async () => null
+let getProjectByIdImpl: (
+  id: number
+) => Promise<{ id: number; name: string; slug: string } | null> = async () => null
 
 mock.module('../../src/lib/auth.js', () => ({
   auth: {
     api: {
-      getSession: async ({ headers }: { headers: Headers }) => {
-        // Check for the BetterAuth session cookie
-        const cookie = headers.get('cookie') ?? ''
-        if (cookie.includes('hh.session_token=valid-session')) {
-          return {
-            user: {
-              id: '1',
-              email: 'test@example.com',
-              name: 'Test User',
-              emailVerified: true,
-              image: null,
-            },
-            session: {
-              id: 'sess-1',
-              userId: '1',
-              token: 'tok-1',
-              expiresAt: new Date(Date.now() + 3600000),
-            },
-          }
-        }
-        return null
-      },
+      getSession: (input: { headers: Headers }) => getSessionImpl(input),
+      updateSession: (input: unknown) => updateSessionImpl(input),
     },
     handler: async () => new Response('ok'),
   },
 }))
 
-// Mock auth service functions still used by routes
 mock.module('../../src/services/auth.js', () => ({
   getUserWithProjects: async () => null,
-  findProjectMembership: async () => null,
+  findProjectMembership: (userId: number, projectId: number) =>
+    findProjectMembershipImpl(userId, projectId),
 }))
+
+mock.module('../../src/services/projects.js', () => ({
+  getProjectById: (id: number) => getProjectByIdImpl(id),
+  // Other exports referenced at module-load by the projects route. The
+  // /select endpoint doesn't use them; stub to no-ops to satisfy the
+  // import surface.
+  getUserProjects: async () => [],
+  createProject: async () => null,
+  getProjectMembers: async () => [],
+  addUserToProject: async () => null,
+  updateProject: async () => null,
+  updateMemberRoles: async () => null,
+  removeUserFromProject: async () => false,
+}))
+
+// Reset all mutable impls to their defaults before each test. Tests
+// that need a specific behavior reassign in their body and rely on
+// this hook to undo. No `mock.module()` re-registration ever happens
+// after this file's module load.
+beforeEach(() => {
+  getSessionImpl = defaultGetSession
+  updateSessionImpl = async () => ({})
+  findProjectMembershipImpl = async () => null
+  getProjectByIdImpl = async () => null
+})
+afterEach(() => {
+  getSessionImpl = defaultGetSession
+  updateSessionImpl = async () => ({})
+  findProjectMembershipImpl = async () => null
+  getProjectByIdImpl = async () => null
+})
 
 // Mock DB
 mock.module('../../src/db/index.js', () => ({
@@ -128,6 +194,7 @@ const DASH_BASE = '/api/v1/dashboard'
 describe('Dashboard API: Auth guards', () => {
   const protectedRoutes = [
     { method: 'GET', path: '/projects' },
+    { method: 'POST', path: '/projects/select' },
     { method: 'GET', path: '/agents' },
     { method: 'GET', path: '/campaigns' },
     { method: 'GET', path: '/resources/hash-types' },
@@ -194,5 +261,114 @@ describe('Dashboard API: POST /campaigns', () => {
       body: JSON.stringify({ name: 'test', projectId: 1, hashListId: 1, priority: 5 }),
     })
     expect(res.status).toBe(401)
+  })
+})
+
+// ─── POST /projects/select -- Set session project context ────────────
+
+describe('Dashboard API: POST /projects/select', () => {
+  it('should return 400 for missing projectId', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for non-integer projectId', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for unknown keys (strict schema)', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 1, extra: 'nope' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 403 when user is not a member of the project', async () => {
+    // Default mock for findProjectMembership returns null → 403.
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('AUTHZ_PROJECT_ACCESS_DENIED')
+  })
+
+  it('should return 403 with CSRF_ORIGIN_MISMATCH when Origin is cross-origin', async () => {
+    // host on app.request is "localhost"; an Origin of evil.example
+    // does not match and must be rejected before findProjectMembership
+    // is consulted.
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+        origin: 'https://evil.example.com',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('CSRF_ORIGIN_MISMATCH')
+  })
+
+  it('should return 200 with selected project on success', async () => {
+    // Per-test override via mutable impls (NOT mock.module() at runtime,
+    // which doesn't take effect after the top-level `import { app }`).
+    // The top-of-file beforeEach/afterEach restore defaults.
+    findProjectMembershipImpl = async () => ({
+      userId: 1,
+      projectId: 42,
+      roles: ['admin'],
+    })
+    getProjectByIdImpl = async (id) => ({
+      id,
+      name: 'Test Project',
+      slug: 'test-project',
+    })
+    let updateSessionCalled = false
+    updateSessionImpl = async () => {
+      updateSessionCalled = true
+      return { session: { projectId: 42 } }
+    }
+
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['project']).toBeDefined()
+    expect(body['project']['id']).toBe(42)
+    expect(body['project']['name']).toBe('Test Project')
+    expect(updateSessionCalled).toBe(true)
   })
 })

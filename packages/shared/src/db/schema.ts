@@ -69,6 +69,13 @@ export const baSessions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
+    // Server-managed project context for the session. Set by the
+    // single-project auto-select hook on sign-in, or by an explicit
+    // call to POST /api/v1/dashboard/projects/select. Read by the
+    // dashboard WebSocket upgrade to scope event broadcasts without
+    // trusting a client-supplied query param. Nullable so multi-project
+    // users land without a default until they pick one.
+    projectId: integer('project_id').references(() => projects.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

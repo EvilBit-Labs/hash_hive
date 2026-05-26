@@ -1,8 +1,9 @@
+import type { ConnectionStatus } from '@hashhive/shared'
+
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { authClient } from '../lib/auth-client'
-import { useUiStore } from '../stores/ui'
 
 /**
  * Single source of truth for both the `EventType` compile-time union
@@ -44,6 +45,32 @@ const DRIFT_WARN_COOLDOWN_MS = 60_000
 const driftWarnTimestamps = new Map<string, number>()
 
 /**
+ * Retry budget before transitioning to the `fallback` (polling-only)
+ * state. With the budget at 3, the close-handler schedules `1s` then
+ * `2s` then drops into fallback — total active retry window ~3s before
+ * polling takes over, which prevents thrashing reconnects on a
+ * sustained outage without making the operator wait through a long
+ * exponential climb first.
+ */
+const MAX_RECONNECT_ATTEMPTS = 3
+
+/**
+ * Cool-down before the hook leaves `fallback` to attempt one
+ * exploratory reconnect. Polling continues during cool-down, so the
+ * operator's cache stays fresh; the cool-down just throttles WS
+ * attempts.
+ */
+const FALLBACK_COOLDOWN_MS = 60_000
+
+/**
+ * System-wide event types whose `projectId` payload is the sentinel
+ * `0` (see `packages/backend/src/services/events.ts`
+ * SYSTEM_EVENT_PROJECT_ID). Bypass the project-scope filter for these
+ * — they're intentionally fan-out, not scoped to the active project.
+ */
+const SYSTEM_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>(['system_health'])
+
+/**
  * Sanitize an event-type string for safe logging. Strips characters
  * that could be used to inject ANSI escapes or distort log shape, and
  * caps length so a hostile backend cannot blow out console memory with
@@ -53,7 +80,10 @@ function sanitizeEventType(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '?').slice(0, 64)
 }
 
-function warnDriftOnce(scope: 'agent' | 'campaign' | 'unknown', eventType: string): boolean {
+function warnDriftOnce(
+  scope: 'agent' | 'campaign' | 'unknown' | 'projectId-mismatch',
+  eventType: string
+): boolean {
   const safeType = sanitizeEventType(eventType)
   const key = `${scope}:${safeType}`
   const last = driftWarnTimestamps.get(key) ?? 0
@@ -81,42 +111,75 @@ interface UseEventsOptions {
 
 /**
  * Connects to the backend WebSocket for real-time events.
- * Automatically reconnects on disconnect with exponential backoff.
- * Falls back to polling via TanStack Query invalidation when WS is unavailable.
+ *
+ * Surfaces a `status` value (`'connecting' | 'open' | 'authenticating'
+ * | 'reconnecting' | 'fallback' | 'error'`) consumed by the layout
+ * connection indicator. On auth-failure close (4001) the hook refreshes
+ * the session once via
+ * `authClient.getSession({ query: { disableCookieCache: true } })`
+ * and reconnects; further 4001s land in `error`. After
+ * `MAX_RECONNECT_ATTEMPTS` consecutive failed reconnects the hook
+ * transitions to `fallback`, where polling keeps caches fresh; one
+ * exploratory reconnect fires after `FALLBACK_COOLDOWN_MS`.
+ *
+ * Project context is derived from `session.session.projectId` — the
+ * server-managed BetterAuth additional field. The URL carries no
+ * `projectIds=` query parameter; the server's `events/stream` reads
+ * the session field. Incoming frames whose `projectId` doesn't match
+ * the session value are dropped client-side as defense-in-depth.
  */
 export function useEvents(options: UseEventsOptions = {}) {
   const { types, onEvent } = options
   // Stabilize types array to prevent unnecessary WS reconnections
   const stableTypes = useMemo(() => types?.join(','), [types])
   const { data: session } = authClient.useSession()
-  const { selectedProjectId } = useUiStore()
+  const sessionProjectId =
+    (session?.session as { projectId?: number | null } | undefined)?.projectId ?? null
   const queryClient = useQueryClient()
-  const [connected, setConnected] = useState(false)
-  const [polling, setPolling] = useState(false)
+  const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const reconnectAttemptsRef = useRef(0)
+  // Tracks whether the current lifecycle has already attempted a
+  // session refresh in response to a 4001 close. Reset on `open`.
+  // Prevents an infinite refresh-and-retry loop when the session is
+  // genuinely terminal (revoked, deleted).
+  const authRefreshAttemptedRef = useRef(false)
   const onEventRef = useRef(onEvent)
   onEventRef.current = onEvent
 
   useEffect(() => {
-    if (!session || !selectedProjectId) {
+    if (!session || !sessionProjectId) {
+      // Without an authenticated session and a server-managed project
+      // context, no WS upgrade can succeed. Surface that to the
+      // indicator as `error` so the operator can act (sign in, or call
+      // /projects/select via the selector UI).
+      setStatus(session ? 'error' : 'connecting')
       return
     }
 
-    const projectIds = String(selectedProjectId)
-    const typesParam = stableTypes ? `&types=${stableTypes}` : ''
+    const typesParam = stableTypes ? `?types=${stableTypes}` : ''
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/api/v1/dashboard/events/stream?projectIds=${projectIds}${typesParam}`
+    const url = `${protocol}//${window.location.host}/api/v1/dashboard/events/stream${typesParam}`
+
+    // Effect-scoped cancel flag. The 4001 auth-refresh path schedules
+    // a setTimeout via getSession().finally(); if the effect re-runs
+    // before that promise settles (e.g., because the refreshed session
+    // changed the session dep), cleanup cancels the timeout handle but
+    // the queued `.finally()` may still schedule the next connect()
+    // against a stale closure. The flag short-circuits the queued work.
+    let cancelled = false
 
     function connect() {
+      if (cancelled) return
+      setStatus(reconnectAttemptsRef.current === 0 ? 'connecting' : 'reconnecting')
       const ws = new WebSocket(url)
       wsRef.current = ws
 
       ws.onopen = () => {
-        setConnected(true)
-        setPolling(false)
+        setStatus('open')
         reconnectAttemptsRef.current = 0
+        authRefreshAttemptedRef.current = false
       }
 
       // Project-scoped query keys: invalidated with [key, selectedProjectId].
@@ -221,10 +284,44 @@ export function useEvents(options: UseEventsOptions = {}) {
             }
             return
           }
+
+          // Project-scope filter (defense-in-depth). The server scopes
+          // its broadcasts via the session's projectId already, but a
+          // buffered cross-project frame can arrive during the brief
+          // window between project switch and WS reconnect. System
+          // events carry the sentinel projectId 0 and are intentionally
+          // global — bypass the filter for those, but only when the
+          // sentinel is actually present. A `system_health` frame with
+          // a non-zero projectId is producer drift and should be dropped
+          // alongside ordinary project mismatches.
+          const frameProjectId = data['projectId'] as number
+          if (SYSTEM_EVENT_TYPES.has(eventType)) {
+            if (frameProjectId !== 0) {
+              if (warnDriftOnce('projectId-mismatch', eventType)) {
+                // oxlint-disable-next-line no-console -- protocol drift signal
+                console.warn('[useEvents] dropped system WS frame with non-sentinel projectId', {
+                  eventType: sanitizeEventType(eventType),
+                  frameProjectId,
+                })
+              }
+              return
+            }
+          } else if (frameProjectId !== sessionProjectId) {
+            if (warnDriftOnce('projectId-mismatch', eventType)) {
+              // oxlint-disable-next-line no-console -- protocol drift signal
+              console.warn('[useEvents] dropped WS frame with mismatched projectId', {
+                eventType: sanitizeEventType(eventType),
+                frameProjectId,
+                sessionProjectId,
+              })
+            }
+            return
+          }
+
           const projectKeys = invalidationKeys[eventType]
           if (projectKeys) {
             for (const key of projectKeys) {
-              void queryClient.invalidateQueries({ queryKey: [key, selectedProjectId] })
+              void queryClient.invalidateQueries({ queryKey: [key, sessionProjectId] })
             }
           }
           const agentScopedKeys = agentScopedKeysByEvent[eventType]
@@ -302,13 +399,70 @@ export function useEvents(options: UseEventsOptions = {}) {
         }
       }
 
-      ws.onclose = () => {
-        setConnected(false)
-        setPolling(true)
+      ws.onclose = (closeEvent) => {
         wsRef.current = null
-        // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
-        const delay = Math.min(1000 * 2 ** reconnectAttemptsRef.current, 30_000)
-        reconnectAttemptsRef.current++
+
+        // 4001 = auth failure. The session cookie was rejected by the
+        // BetterAuth handshake. Refresh the session once (cache-busted)
+        // and try one reconnect; if that also closes 4001 we're
+        // terminally unauthenticated and the indicator should reflect
+        // that, not keep cycling.
+        if (closeEvent.code === 4001) {
+          if (!authRefreshAttemptedRef.current) {
+            authRefreshAttemptedRef.current = true
+            setStatus('authenticating')
+            authClient
+              .getSession({ query: { disableCookieCache: true } })
+              .catch((err: unknown) => {
+                // Surface refresh failures so the terminal 'error'
+                // state below isn't the only signal that the auth
+                // endpoint itself was the failure (vs. an actually
+                // expired session). Without this log, a degraded auth
+                // backend looks identical to a revoked session.
+                // oxlint-disable-next-line no-console -- client-side observability has no structured logger
+                console.warn('[useEvents] session refresh after 4001 close failed', err)
+                return null
+              })
+              .finally(() => {
+                if (cancelled) return
+                reconnectTimeoutRef.current = setTimeout(connect, 0)
+              })
+            return
+          }
+          // Refresh didn't recover. Terminal.
+          setStatus('error')
+          return
+        }
+
+        // Non-auth close. Apply retry budget.
+        const attempts = reconnectAttemptsRef.current + 1
+        reconnectAttemptsRef.current = attempts
+
+        if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+          // Exhausted retries — drop into polling-only mode. The
+          // fallback effect below keeps caches fresh. One exploratory
+          // reconnect fires after the cool-down; if it lands in `open`,
+          // status returns to normal. If it fails again, we re-enter
+          // the retry budget from zero. Reset the auth-refresh flag so
+          // a session that expired during the outage can be refreshed
+          // again on the exploratory attempt (prevents RACE-002 dead
+          // flag after long network drops).
+          setStatus('fallback')
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectAttemptsRef.current = 0
+            authRefreshAttemptedRef.current = false
+            connect()
+          }, FALLBACK_COOLDOWN_MS)
+          return
+        }
+
+        setStatus('reconnecting')
+        // Exponential backoff. With MAX_RECONNECT_ATTEMPTS = 3 the
+        // actual schedule is: attempt 1 -> 1s, attempt 2 -> 2s, attempt
+        // 3 -> fallback (no delay, the budget check above wins). The
+        // 8s cap is defensive headroom for any future budget bump that
+        // would let attempt 4+ fire (would yield 4s, 8s).
+        const delay = Math.min(1000 * 2 ** (attempts - 1), 8_000)
         reconnectTimeoutRef.current = setTimeout(connect, delay)
       }
 
@@ -320,40 +474,63 @@ export function useEvents(options: UseEventsOptions = {}) {
     connect()
 
     return () => {
+      cancelled = true
       clearTimeout(reconnectTimeoutRef.current)
       if (wsRef.current) {
         wsRef.current.onclose = null // Prevent reconnect on intentional close
         wsRef.current.close()
         wsRef.current = null
       }
-      setConnected(false)
-      setPolling(false)
+      reconnectAttemptsRef.current = 0
+      authRefreshAttemptedRef.current = false
+      setStatus('connecting')
     }
-  }, [session, selectedProjectId, stableTypes, queryClient])
+  }, [session, sessionProjectId, stableTypes, queryClient])
 
-  // Polling fallback: invalidate queries every 30s when disconnected
-  // from the WebSocket. Includes the agent-detail keys (broadly, since
-  // no event payload is available during polling) so a disconnected
-  // detail page still refreshes its tasks/errors/agent caches instead
-  // of going stale until the WS reconnects.
+  // Polling fallback: invalidate queries every 30s when the WS is in
+  // `fallback` (retry budget exhausted). Includes the agent-detail
+  // keys (broadly, since no event payload is available during polling)
+  // so a disconnected detail page still refreshes its tasks/errors/
+  // agent caches instead of going stale until the WS reconnects.
   useEffect(() => {
-    if (!polling) return
+    if (status !== 'fallback') return
 
     const interval = setInterval(() => {
-      void queryClient.invalidateQueries({ queryKey: ['dashboard-stats', selectedProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['agents', selectedProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['campaigns', selectedProjectId] })
-      void queryClient.invalidateQueries({ queryKey: ['agent'] })
-      void queryClient.invalidateQueries({ queryKey: ['agent-errors'] })
-      void queryClient.invalidateQueries({ queryKey: ['agent-tasks'] })
-      // Symmetric to the agent-detail keys above — without this a
-      // disconnected user sitting on /campaigns/:id sees frozen
-      // taskStats and activeAgents until the WS reconnects.
-      void queryClient.invalidateQueries({ queryKey: ['campaign'] })
+      // Track rejections so a silently-failing polling cycle (e.g.,
+      // backend down + cached 401 from auth) becomes visible in the
+      // console rather than letting "Offline - polling" mislead the
+      // operator into thinking caches are still being refreshed.
+      const settle = (p: Promise<unknown>) => p.catch((err: unknown) => err)
+      void Promise.all([
+        settle(queryClient.invalidateQueries({ queryKey: ['dashboard-stats', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agents', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['campaigns', sessionProjectId] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent'] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent-errors'] })),
+        settle(queryClient.invalidateQueries({ queryKey: ['agent-tasks'] })),
+        // Symmetric to the agent-detail keys above — without this a
+        // disconnected user sitting on /campaigns/:id sees frozen
+        // taskStats and activeAgents until the WS reconnects.
+        settle(queryClient.invalidateQueries({ queryKey: ['campaign'] })),
+      ]).then((results) => {
+        const failures = results.filter((r): r is Error => r instanceof Error)
+        if (failures.length > 0) {
+          // oxlint-disable-next-line no-console -- polling fallback observability
+          console.warn('[useEvents] polling-fallback refresh failures', {
+            failureCount: failures.length,
+            firstMessage: failures[0]?.message,
+          })
+        }
+      })
     }, 30_000)
 
     return () => clearInterval(interval)
-  }, [polling, queryClient, selectedProjectId])
+  }, [status, queryClient, sessionProjectId])
 
-  return { connected, polling }
+  // Derived booleans for back-compat with existing callers that read
+  // `connected`/`polling`. New code should prefer `status`.
+  const connected = status === 'open'
+  const polling = status === 'fallback'
+
+  return { status, connected, polling }
 }

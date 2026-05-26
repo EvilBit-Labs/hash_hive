@@ -2,15 +2,16 @@ redactions = [ "*_SECRET", "*_KEY", "*_PASSWORD" ]
 
 # Many tools are set to "latest" to take advantage of idiomatic version files, which will automatically update the tool to the latest version when the version file is updated. This allows us to keep our tools up to date without having to manually update the version in this configuration file.
 [tools]
-bun               = "latest"
-just              = "latest"
-markdownlint-cli2 = "0.22.1"
-oxfmt             = "latest"
-oxlint            = "latest"
-"pipx:mdformat"   = { version = "1.0.0", uvx_args = "--with mdformat-gfm --with mdformat-admon --with mdformat-config --with mdformat-footnote --with mdformat-simple-breaks --with mdformat-web --with mdformat-ruff --with mdformat-gfm-alerts --with mdformat-toc --with mdformat-front-matters" }
-"pipx:pre-commit" = "4.6.0"
-syft              = "latest"
-taplo             = "latest"
+"aqua:vercel-labs/agent-browser" = "0.27.0"
+bun                              = "latest"
+just                             = "latest"
+markdownlint-cli2                = "0.22.1"
+oxfmt                            = "latest"
+oxlint                           = "latest"
+"pipx:mdformat"                  = { version = "1.0.0", uvx_args = "--with mdformat-gfm --with mdformat-admon --with mdformat-config --with mdformat-footnote --with mdformat-simple-breaks --with mdformat-web --with mdformat-ruff --with mdformat-gfm-alerts --with mdformat-toc --with mdformat-front-matters" }
+"pipx:pre-commit"                = "4.6.0"
+syft                             = "latest"
+taplo                            = "latest"
 
 # Many of these settings are defaults, but we are explicit in case they change in the future and to make it clear to users what is enabled.
 [settings]
