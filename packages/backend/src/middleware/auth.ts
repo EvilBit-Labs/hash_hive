@@ -63,17 +63,20 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
     throw authError('Authentication required')
   }
 
-  // The shared additionalFields.projectId is typed as `unknown` on the
-  // session object since BetterAuth doesn't infer it back into the
-  // public type. Cast at the boundary; the value is server-written
-  // (single-project auto-select hook, last_project_id rehydrate, or an
-  // explicit POST /projects/select) so we trust its shape.
-  const sessionProjectId = (session.session as { projectId?: number | null }).projectId ?? null
+  // BetterAuth's static types do NOT include `additionalFields.projectId`
+  // on the session or `users.roles` on the user. Pluck via a Record
+  // lookup so the narrowing is a real runtime check rather than an
+  // unsafe type assertion (the no-unsafe-type-assertion lint rule
+  // rejects the `as` form here).
+  const sessionRecord = session.session as unknown as Record<string, unknown>
+  const userRecord = session.user as unknown as Record<string, unknown>
+  const rawProjectId = sessionRecord['projectId']
+  const sessionProjectId = typeof rawProjectId === 'number' ? rawProjectId : null
 
   c.set('currentUser', {
     userId: Number(session.user.id),
     email: session.user.email,
-    roles: coerceRoles((session.user as { roles?: unknown }).roles),
+    roles: coerceRoles(userRecord['roles']),
     projectId: sessionProjectId,
   })
   await next()

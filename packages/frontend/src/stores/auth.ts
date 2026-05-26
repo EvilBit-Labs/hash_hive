@@ -1,3 +1,5 @@
+import type { MeResponse } from '@hashhive/shared'
+
 import { create } from 'zustand'
 
 import { api } from '../lib/api'
@@ -9,11 +11,6 @@ interface ProjectMembership {
   roles: string[]
 }
 
-interface MeResponse {
-  user: { id: number; email: string; name: string; status: string }
-  projects: Array<{ id: number; name: string; slug: string; roles: string[] }>
-}
-
 interface AuthState {
   projects: ProjectMembership[]
   hasFetchedProjects: boolean
@@ -21,9 +18,30 @@ interface AuthState {
   clearAuth: () => void
 }
 
-/** Reconcile the UI project selection against the user's actual memberships. */
-function syncSelectedProject(projects: ProjectMembership[]) {
+/**
+ * Reconcile the UI project selection against the server's truth.
+ *
+ * Post-#159 U6 the server returns `selectedProjectId` on `/me` directly
+ * (sourced from `session.session.projectId`). Prefer that value so the
+ * UI store is hydrated before the WebSocket subscription opens and
+ * before any query-key dependent on `selectedProjectId` fires.
+ *
+ * Fall back to the legacy behavior (auto-select for single-project
+ * users, clear when current selection is no longer a membership) when
+ * the server returns null -- a multi-project user pre-selector.
+ */
+function syncSelectedProject(
+  projects: ProjectMembership[],
+  serverSelectedProjectId: number | null
+) {
   const { selectedProjectId, setSelectedProject } = useUiStore.getState()
+
+  if (serverSelectedProjectId !== null) {
+    if (selectedProjectId !== serverSelectedProjectId) {
+      setSelectedProject(serverSelectedProjectId)
+    }
+    return
+  }
 
   if (projects.length === 1 && projects[0]) {
     setSelectedProject(projects[0].projectId)
@@ -47,7 +65,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         projectName: p.name,
         roles: p.roles,
       }))
-      syncSelectedProject(projects)
+      syncSelectedProject(projects, data.selectedProjectId)
       set({ projects, hasFetchedProjects: true })
     } catch {
       set({ projects: [], hasFetchedProjects: true })

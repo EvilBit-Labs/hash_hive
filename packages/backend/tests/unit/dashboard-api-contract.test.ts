@@ -383,3 +383,60 @@ describe('Dashboard API: POST /projects/select', () => {
     expect(updateSessionCalled).toBe(true)
   })
 })
+
+// ─── OpenAPI Sync (issue #159 U7) ──────────────────────────────────
+//
+// These assertions pin the dashboard-api.yaml ↔ code contract so a
+// future change to either side fails loudly here. The control-api
+// boundary is exercised so a stray edit doesn't accidentally remove
+// X-Project-Id from the control surface (which is stateless and DOES
+// rely on the header -- unlike the dashboard).
+//
+// Asserting against the raw YAML text (instead of parsing) keeps the
+// test dependency-free; the strings checked are structural enough
+// that a yaml parser would catch the same drift.
+
+import { readFileSync } from 'node:fs'
+
+const dashboardSpecPath = `${import.meta.dir}/../../../openapi/dashboard-api.yaml`
+const controlSpecPath = `${import.meta.dir}/../../../openapi/control-api.yaml`
+const dashboardYaml = readFileSync(dashboardSpecPath, 'utf8')
+const controlYaml = readFileSync(controlSpecPath, 'utf8')
+
+describe('Dashboard OpenAPI ↔ code contract (issue #159 U7)', () => {
+  it('documents the /auth/me path with MeResponse schema', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/auth\/me:/m)
+    expect(dashboardYaml).toMatch(/^\s+MeResponse:/m)
+  })
+
+  it('documents the /auth/me/api-key CRUD paths with ApiKeyMetadata schema', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/auth\/me\/api-key:/m)
+    expect(dashboardYaml).toMatch(/^\s+ApiKeyMetadata:/m)
+  })
+
+  it('documents the /projects list + create endpoint', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/projects:/m)
+  })
+
+  it('documents project detail + member management paths', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/projects\/\{projectId\}:/m)
+    expect(dashboardYaml).toMatch(/^\s+\/projects\/\{projectId\}\/members:/m)
+    expect(dashboardYaml).toMatch(/^\s+\/projects\/\{projectId\}\/members\/\{userId\}:/m)
+  })
+
+  it('has zero references to XProjectIdHeader on the dashboard surface (#159 U4)', () => {
+    expect(dashboardYaml).not.toContain('XProjectIdHeader')
+  })
+
+  it('control-api.yaml STILL references X-Project-Id (stateless boundary preserved)', () => {
+    // The control API is per-user API keys, no session; scope MUST
+    // come from the header. A regression here would silently break
+    // CLI/automation clients.
+    expect(controlYaml).toContain('X-Project-Id')
+  })
+
+  it('defines AuthRequired and Forbidden response shells', () => {
+    expect(dashboardYaml).toMatch(/^\s+AuthRequired:/m)
+    expect(dashboardYaml).toMatch(/^\s+Forbidden:/m)
+  })
+})

@@ -23,10 +23,10 @@ const EventsContext = createContext<EventsContextValue | null>(null)
  *
  * Also mirrors `session.session.projectId` → `useUiStore.selectedProjectId`.
  * The BetterAuth session is the server-managed source of truth for project
- * scope (used by the WS upgrade and POST /projects/select). The UI store
- * remains the source for the `X-Project-Id` REST header consumed by the
- * other ten-plus hooks until #159 unifies the path; until then the mirror
- * keeps the two in sync on every session change.
+ * scope (read by the WS upgrade, POST /projects/select, and every dashboard
+ * route after issue #159 U4). The UI store is a render-side hint used for
+ * query keys and the sidebar dropdown -- it is no longer sent to the
+ * backend in any request.
  *
  * Consumers read `status` / `connected` / `polling` via
  * `useEventsConnection()`. The full `ConnectionStatus` union (6 states)

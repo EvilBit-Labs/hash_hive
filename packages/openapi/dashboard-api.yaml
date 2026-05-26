@@ -17,8 +17,13 @@ info:
 
     - All authenticated requests carry the BetterAuth session cookie
       (`hh.session_token=...`).
-    - The user's active project is conveyed via the `x-project-id`
-      header and enforced server-side via `requireProjectAccess`.
+    - The user's active project is conveyed by the server-managed
+      `session.projectId` written via `POST /projects/select` and
+      enforced server-side via `requireProjectAccess`. The dashboard
+      API does NOT read `X-Project-Id` from request headers (issue
+      #159 U4) -- callers cannot override scope client-side. (The
+      control API at `/api/v1/control/*` is stateless and still uses
+      the `X-Project-Id` header; see `control-api.yaml`.)
     - All errors share the envelope `{ error: { code: string,
       message: string } }`.
     - Status codes:
@@ -125,6 +130,339 @@ paths:
             response is not produced by a successful upgrade; this entry
             is documentation of the close-code mapping.
 
+  /auth/me:
+    get:
+      operationId: getMe
+      summary: Authenticated user's profile, memberships, and selected project
+      description: |
+        Returns the active user, their project memberships, and the
+        server-managed `selectedProjectId` (sourced from
+        `session.session.projectId`). The frontend uses
+        `selectedProjectId` to decide "land on dashboard vs selector"
+        in a single round-trip without waiting for the WebSocket
+        subscription to hydrate.
+      tags: [Auth]
+      responses:
+        '200':
+          description: User profile + memberships + selected project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '404':
+          description: User row no longer exists (rare race).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [RESOURCE_NOT_FOUND] }
+
+  /auth/me/api-key:
+    post:
+      operationId: issueAccountApiKey
+      summary: Issue (or rotate) the active user's Control API key
+      description: |
+        Generates a new `cst_*` Control API key, stores only the bcrypt
+        hash on `users.api_key_hash`, and returns the raw token exactly
+        once. Subsequent reads only return the metadata (prefix +
+        lastUsedAt). Response is marked `Cache-Control: no-store` so
+        the raw token never enters an intermediary cache.
+      tags: [Auth]
+      responses:
+        '200':
+          description: Raw token plus metadata. Token is shown exactly once.
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+            Pragma: { schema: { type: string, enum: [no-cache] } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, metadata]
+                properties:
+                  token: { type: string, description: 'Raw `cst_*` token.' }
+                  metadata: { $ref: '#/components/schemas/ApiKeyMetadata' }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '500':
+          description: Key issue failed (DB error). Existing key, if any, is unchanged.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [API_KEY_ISSUE_FAILED] }
+    get:
+      operationId: getAccountApiKeyMetadata
+      summary: Read metadata for the active user's Control API key
+      description: |
+        Returns whether a key exists and, if so, its masked prefix and
+        `lastUsedAt`. The raw token is never returned by this endpoint
+        (only `POST /me/api-key` produces it).
+      tags: [Auth]
+      responses:
+        '200':
+          description: 'Key metadata. `hasKey: false` means no key has been issued.'
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyMetadata'
+        '401': { $ref: '#/components/responses/AuthRequired' }
+    delete:
+      operationId: revokeAccountApiKey
+      summary: Revoke the active user's Control API key
+      tags: [Auth]
+      responses:
+        '204': { description: Key revoked (or never existed). }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '500':
+          description: Revoke failed; hash may still be present.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [API_KEY_REVOKE_FAILED] }
+
+  /projects:
+    get:
+      operationId: listMyProjects
+      summary: List the active user's project memberships
+      tags: [Projects]
+      responses:
+        '200':
+          description: Membership list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, slug, roles]
+                      properties:
+                        id: { type: integer, minimum: 1 }
+                        name: { type: string }
+                        slug: { type: string }
+                        roles:
+                          type: array
+                          items: { type: string, enum: [admin, contributor, viewer] }
+                          description: |
+                            Per-project membership roles -- distinct
+                            from the global capability tier on
+                            `users.roles`.
+        '401': { $ref: '#/components/responses/AuthRequired' }
+    post:
+      operationId: createProject
+      summary: Create a new project
+      tags: [Projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+                slug: { type: string, pattern: '^[a-z0-9-]+$' }
+                description: { type: string }
+                settings: { type: object, additionalProperties: true }
+      responses:
+        '201':
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project]
+                properties:
+                  project: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+
+  /projects/{projectId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      operationId: getProject
+      summary: Project details (must be a member)
+      tags: [Projects]
+      responses:
+        '200':
+          description: Project row.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project]
+                properties:
+                  project: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    patch:
+      operationId: updateProject
+      summary: Update project metadata (per-project admin only)
+      tags: [Projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+                description: { type: string }
+                settings: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Project updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project]
+                properties:
+                  project: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
+  /projects/{projectId}/members:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      operationId: listProjectMembers
+      summary: List members of a project (must be a member)
+      tags: [Projects]
+      responses:
+        '200':
+          description: Member list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: addProjectMember
+      summary: Add a member to a project (per-project admin only)
+      tags: [Projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, roles]
+              properties:
+                userId: { type: integer, minimum: 1 }
+                roles:
+                  type: array
+                  items: { type: string, enum: [admin, contributor, viewer] }
+                  minItems: 1
+      responses:
+        '201':
+          description: Membership row created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [membership]
+                properties:
+                  membership: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/{projectId}/members/{userId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - name: userId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    patch:
+      operationId: updateProjectMemberRoles
+      summary: Replace a member's roles (per-project admin only)
+      tags: [Projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roles]
+              properties:
+                roles:
+                  type: array
+                  items: { type: string, enum: [admin, contributor, viewer] }
+                  minItems: 1
+      responses:
+        '200':
+          description: Membership row updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [membership]
+                properties:
+                  membership: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+    delete:
+      operationId: removeProjectMember
+      summary: Remove a member from a project (per-project admin only)
+      tags: [Projects]
+      responses:
+        '200':
+          description: Member removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success: { type: boolean, enum: [true] }
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
   /projects/select:
     post:
       operationId: selectProject
@@ -135,6 +473,14 @@ paths:
         session's additional fields. The next WebSocket upgrade on
         `/events/stream` reads this value as its broadcast scope; no
         client-supplied scoping parameter is trusted.
+
+        Also persists the selection to `users.last_project_id` (issue
+        #159 U6) so the next sign-in's `session.create.before` hook
+        rehydrates the same project automatically without forcing a
+        re-pick. If the preference write fails, the endpoint returns
+        500 -- the active session is already updated but the next
+        sign-in won't reattach, so silent best-effort would split
+        state.
 
         Returns the selected project. On membership failure, returns a
         403 with the dashboard error envelope.
@@ -193,8 +539,6 @@ paths:
                           code: { type: string, enum: [INTERNAL_ERROR] }
 
   /campaigns:
-    parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
     post:
       operationId: createCampaign
       summary: Create a new campaign (optionally with inline attacks)
@@ -249,7 +593,6 @@ paths:
 
   /campaigns/{id}:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - name: id
         in: path
         required: true
@@ -325,7 +668,6 @@ paths:
         `campaign_status` event.
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -353,7 +695,6 @@ paths:
       summary: Transition a running campaign to `paused`
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -375,7 +716,6 @@ paths:
       summary: Transition a paused campaign back to `running`
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -403,7 +743,6 @@ paths:
         campaign remains restartable.
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -425,7 +764,6 @@ paths:
       summary: Transition a campaign to `cancelled` (terminal)
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         '200':
@@ -445,7 +783,6 @@ paths:
         Preserved for clients that prefer the enum-style request.
       tags: [Campaigns]
       parameters:
-        - $ref: '#/components/parameters/XProjectIdHeader'
         - { name: id, in: path, required: true, schema: { type: integer } }
       requestBody:
         required: true
@@ -476,7 +813,6 @@ paths:
 
   /campaigns/{id}/attacks:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer } }
     post:
       operationId: addAttack
@@ -522,8 +858,6 @@ paths:
 
   # ─── Resources ─────────────────────────────────────────────────────
   /resources/hash-types:
-    parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
     get:
       operationId: listHashTypes
       summary: List supported hash types
@@ -542,8 +876,6 @@ paths:
                     items: { $ref: '#/components/schemas/HashType' }
 
   /resources/hash-lists:
-    parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
     get:
       operationId: listHashLists
       summary: List hash lists for the active project
@@ -609,7 +941,6 @@ paths:
 
   /resources/hash-lists/{id}:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getHashList
@@ -652,7 +983,6 @@ paths:
 
   /resources/hash-lists/{id}/upload:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     post:
       operationId: uploadHashListFile
@@ -687,7 +1017,6 @@ paths:
 
   /resources/hash-lists/{id}/import:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     post:
       operationId: importHashList
@@ -709,7 +1038,6 @@ paths:
 
   /resources/hash-lists/{id}/items:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
       - { name: status, in: query, schema: { type: string, enum: [all, cracked, uncracked] } }
       - { name: q, in: query, schema: { type: string, maxLength: 256 } }
@@ -738,7 +1066,6 @@ paths:
 
   /resources/hash-lists/{id}/download:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getHashListDownloadUrl
@@ -784,8 +1111,6 @@ paths:
   # Documented as parameterized paths under each prefix so generated
   # clients get one method per (resource, operation).
   /resources/wordlists:
-    parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
     get:
       operationId: listWordlists
       summary: List wordlists for the active project
@@ -807,7 +1132,6 @@ paths:
 
   /resources/wordlists/{id}:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getWordlist
@@ -832,7 +1156,6 @@ paths:
 
   /resources/wordlists/{id}/upload:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     post:
       operationId: uploadWordlistFile
@@ -855,7 +1178,6 @@ paths:
 
   /resources/wordlists/{id}/download:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getWordlistDownloadUrl
@@ -872,7 +1194,6 @@ paths:
   # identical shapes; clients should treat the three as a uniform family.
   # See operationIds: list/create/get/upload/download/delete<Rulelist|Masklist>.
   /resources/rulelists:
-    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
     get:
       operationId: listRulelists
       tags: [Resources]
@@ -890,7 +1211,6 @@ paths:
 
   /resources/rulelists/{id}:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getRulelist
@@ -913,7 +1233,6 @@ paths:
 
   /resources/rulelists/{id}/upload:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     post:
       operationId: uploadRulelistFile
@@ -935,7 +1254,6 @@ paths:
 
   /resources/rulelists/{id}/download:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getRulelistDownloadUrl
@@ -946,7 +1264,6 @@ paths:
         '404': { $ref: '#/components/responses/ResourceNotFound' }
 
   /resources/masklists:
-    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
     get:
       operationId: listMasklists
       tags: [Resources]
@@ -964,7 +1281,6 @@ paths:
 
   /resources/masklists/{id}:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getMasklist
@@ -987,7 +1303,6 @@ paths:
 
   /resources/masklists/{id}/upload:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     post:
       operationId: uploadMasklistFile
@@ -1009,7 +1324,6 @@ paths:
 
   /resources/masklists/{id}/download:
     parameters:
-      - $ref: '#/components/parameters/XProjectIdHeader'
       - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     get:
       operationId: getMasklistDownloadUrl
@@ -1026,7 +1340,6 @@ paths:
   # abort, status) so the server can re-validate project ownership on
   # every request.
   /resources/upload/initiate:
-    parameters: [{ $ref: '#/components/parameters/XProjectIdHeader' }]
     post:
       operationId: initiateChunkedUpload
       summary: Begin a chunked S3 multipart upload
@@ -1246,20 +1559,6 @@ components:
       in: cookie
       name: hh.session_token
 
-  parameters:
-    XProjectIdHeader:
-      name: x-project-id
-      in: header
-      required: true
-      description: |
-        The active project id for this request. Enforced server-side by
-        `requireProjectAccess` middleware against the BetterAuth
-        session. All campaign endpoints (and every project-scoped
-        dashboard route) require this header.
-      schema:
-        type: integer
-        minimum: 1
-
   schemas:
     Campaign:
       type: object
@@ -1412,6 +1711,78 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
+
+    MeResponse:
+      type: object
+      required: [user, projects, selectedProjectId]
+      properties:
+        user:
+          type: object
+          required: [id, email, name, status, roles]
+          properties:
+            id: { type: integer, minimum: 1 }
+            email: { type: string, format: email }
+            name: { type: string }
+            status: { type: string }
+            roles:
+              type: array
+              minItems: 1
+              items: { type: string, enum: [admin, operator, analyst] }
+              description: |
+                Global capability tier from `users.roles`. Distinct
+                from per-project membership roles below.
+        projects:
+          type: array
+          items:
+            type: object
+            required: [id, name, slug, roles]
+            properties:
+              id: { type: integer, minimum: 1 }
+              name: { type: string }
+              slug: { type: string }
+              roles:
+                type: array
+                minItems: 1
+                items: { type: string }
+                description: |
+                  Per-project membership roles (typically
+                  admin|contributor|viewer). Kept as `string` rather
+                  than an enum so this surface is not coupled to the
+                  per-project vocabulary if it evolves.
+        selectedProjectId:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: |
+            Server-managed active project (mirrors
+            `session.session.projectId`). `null` means the user has
+            not selected a project yet -- typically a multi-project
+            user pre-selector. Updated via
+            `POST /api/v1/dashboard/projects/select`.
+
+    ApiKeyMetadata:
+      oneOf:
+        - type: object
+          required: [hasKey]
+          properties:
+            hasKey: { type: boolean, enum: [false] }
+        - type: object
+          required: [hasKey, prefix, lastUsedAt]
+          properties:
+            hasKey: { type: boolean, enum: [true] }
+            prefix:
+              type: string
+              description: |
+                Masked prefix (e.g. `cst_42_…`). Shown to the user as
+                a reminder that a key exists; never the raw token.
+            lastUsedAt:
+              type: string
+              format: date-time
+              nullable: true
+              description: |
+                Timestamp of the last successful Control API request
+                that authenticated with this key. `null` if the key
+                has never been used.
 
     ValidationError:
       allOf:
@@ -1686,6 +2057,39 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
+
+    AuthRequired:
+      description: |
+        No valid BetterAuth session cookie. Frontend should redirect to
+        the login page.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorEnvelope'
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code: { type: string, enum: [AUTH_TOKEN_INVALID] }
+
+    Forbidden:
+      description: |
+        Caller is authenticated but lacks the required role -- either a
+        per-project membership intersection (per-project guard) or a
+        global capability tier (global guard).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorEnvelope'
+              - type: object
+                properties:
+                  error:
+                    properties:
+                      code:
+                        type: string
+                        enum: [AUTHZ_INSUFFICIENT_PERMISSIONS, AUTHZ_PROJECT_ACCESS_DENIED]
 
     CampaignWrapper:
       description: Returns the campaign envelope.
