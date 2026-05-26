@@ -24,10 +24,23 @@ function authError(message: string): HTTPException {
  * union. BetterAuth's TypeScript inference treats additional user
  * columns as `unknown`, so we narrow at the boundary rather than
  * sprinkling casts through the route layer.
+ *
+ * Drops any value not in the global tier vocabulary. When the input
+ * contained values but ALL were dropped, logs a warning so operators
+ * can distinguish "users.roles contained junk" (data drift) from
+ * "user genuinely has no roles" (expected for a brand-new account
+ * that was inserted without an explicit roles value).
  */
-function coerceRoles(raw: unknown): UserRole[] {
+export function coerceRoles(raw: unknown, userId: number | string): UserRole[] {
   if (!Array.isArray(raw)) return []
-  return raw.filter((r): r is UserRole => r === 'admin' || r === 'operator' || r === 'analyst')
+  const out = raw.filter((r): r is UserRole => r === 'admin' || r === 'operator' || r === 'analyst')
+  if (raw.length > 0 && out.length === 0) {
+    logger.warn(
+      { userId, rawRoles: raw },
+      'requireSession: users.roles contains no recognized global tier values (admin|operator|analyst); user will fail all requireRole() checks'
+    )
+  }
+  return out
 }
 
 /**
@@ -73,10 +86,21 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   const rawProjectId = sessionRecord['projectId']
   const sessionProjectId = typeof rawProjectId === 'number' ? rawProjectId : null
 
+  // Operator-visible signal when BetterAuth surfaces session.projectId
+  // as a non-number / non-null type (would indicate adapter drift or
+  // serialization quirk). The fail-closed branch above silently sets
+  // null; this log makes the type-confusion path observable.
+  if (rawProjectId !== undefined && rawProjectId !== null && typeof rawProjectId !== 'number') {
+    logger.warn(
+      { userId: session.user.id, rawProjectIdType: typeof rawProjectId, rawProjectId },
+      'requireSession: session.projectId surfaced as non-number; treating as null (session field type drift)'
+    )
+  }
+
   c.set('currentUser', {
     userId: Number(session.user.id),
     email: session.user.email,
-    roles: coerceRoles(userRecord['roles']),
+    roles: coerceRoles(userRecord['roles'], session.user.id),
     projectId: sessionProjectId,
   })
   await next()

@@ -28,13 +28,22 @@ const authRouter = new Hono<AppEnv>()
  */
 authRouter.get('/me', requireSession, async (c) => {
   const { userId, projectId } = c.get('currentUser')
-  const result = await getUserWithProjects(userId)
-
-  if (!result) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'User not found' } }, 404)
+  // Wrapped in try/catch for symmetry with sibling /me/api-key routes.
+  // A DB blip during getUserWithProjects would otherwise bubble as an
+  // unstructured 500 and bypass the dashboard error envelope.
+  try {
+    const result = await getUserWithProjects(userId)
+    if (!result) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'User not found' } }, 404)
+    }
+    return c.json({ ...result, selectedProjectId: projectId })
+  } catch (err) {
+    logger.error({ err, userId, op: 'getUserWithProjects' }, 'GET /me lookup failed')
+    return c.json(
+      { error: { code: 'INTERNAL_ERROR', message: 'Failed to read user profile' } },
+      500
+    )
   }
-
-  return c.json({ ...result, selectedProjectId: projectId })
 })
 
 // Account API Key endpoints. Each handler is wrapped in try/catch so a

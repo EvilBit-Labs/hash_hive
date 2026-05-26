@@ -219,6 +219,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiKeyMetadata'
         '401': { $ref: '#/components/responses/AuthRequired' }
+        '500':
+          description: Metadata read failed (DB error). Existing key state is unchanged.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [API_KEY_READ_FAILED] }
     delete:
       operationId: revokeAccountApiKey
       summary: Revoke the active user's Control API key
@@ -442,6 +454,7 @@ paths:
                 required: [membership]
                 properties:
                   membership: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
         '401': { $ref: '#/components/responses/AuthRequired' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/ResourceNotFound' }
@@ -505,6 +518,7 @@ paths:
                     description: Selected project row.
                     additionalProperties: true
         '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/AuthRequired' }
         '403':
           description: |
             User is not a member of the requested project, or the
@@ -523,10 +537,18 @@ paths:
                             enum: [AUTHZ_PROJECT_ACCESS_DENIED, CSRF_ORIGIN_MISMATCH]
         '500':
           description: |
-            Session update failed (auth.api.updateSession threw), or the
-            membership row references a project row that no longer
-            exists (FK invariant broken — should not happen in normal
-            operation, surfaced rather than masked).
+            Three failure modes share the INTERNAL_ERROR code:
+              (1) `auth.api.updateSession` threw — typically a
+                  BetterAuth / driver fault.
+              (2) The membership row references a project row that no
+                  longer exists (FK invariant broken — should not happen
+                  in normal operation, surfaced rather than masked).
+              (3) `setUserLastProjectId` threw after `updateSession`
+                  succeeded — the active session is updated but the
+                  `users.last_project_id` preference write failed; the
+                  next sign-in will NOT rehydrate the project. The
+                  endpoint is safe to retry (both writes are idempotent
+                  for the same projectId).
           content:
             application/json:
               schema:

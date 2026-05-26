@@ -305,10 +305,17 @@ export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>
 export type UserRole = z.infer<typeof userRoleSchema>
 
 /**
- * Resolved session context backend handlers receive via
- * `c.get('currentUser')`. The shape is mirrored in
- * `AppEnv['Variables']['currentUser']` so route code and middleware
- * speak the same type as the frontend.
+ * Wire-shape contract for the active session. Used by the dashboard
+ * frontend (where `selectedProjectId` mirrors the server-managed
+ * BetterAuth `session.session.projectId`) and as the canonical Zod
+ * schema for `meResponseSchema.user`.
+ *
+ * NOTE: backend `AppEnv['Variables']['currentUser']` is a closely
+ * related but DISTINCT shape — it stores the same scope under the
+ * internal field name `projectId` (no `selected` prefix) and is
+ * populated by `requireSession` / `requireApiKey`. Cross-boundary
+ * code should consume `SessionUser` (Zod-validated); internal
+ * backend code reads `currentUser.projectId`.
  */
 export type SessionUser = z.infer<typeof sessionUserSchema>
 

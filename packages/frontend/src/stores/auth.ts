@@ -67,7 +67,15 @@ export const useAuthStore = create<AuthState>((set) => ({
       }))
       syncSelectedProject(projects, data.selectedProjectId)
       set({ projects, hasFetchedProjects: true })
-    } catch {
+    } catch (err) {
+      // /me failure typically means session expired (lib/api.ts already
+      // redirects to /login on 401 before we get here), but log other
+      // failures so a silent UX degradation is observable. Per
+      // ~/.claude/rules/coding-style.md "never silently swallow errors".
+      // Treat as "no projects available" so consumers fall through to the
+      // selector / login flow rather than spinning.
+      // eslint-disable-next-line no-console
+      console.error('useAuthStore.fetchProjects failed:', err)
       set({ projects: [], hasFetchedProjects: true })
     }
   },

@@ -17,7 +17,7 @@
 
 import type { Context } from 'hono'
 
-import { type UserRole, users } from '@hashhive/shared'
+import { users } from '@hashhive/shared'
 import { eq } from 'drizzle-orm'
 import { createMiddleware } from 'hono/factory'
 
@@ -28,6 +28,7 @@ import { db } from '../db/index.js'
 import { BCRYPT_COST, parseApiKey, verifyApiKey } from '../lib/api-key.js'
 import { parseProjectIdHeader } from '../lib/headers.js'
 import { problemResponse } from '../lib/problem-details.js'
+import { coerceRoles } from './auth.js'
 
 const ACTIVE_STATUS = 'active'
 
@@ -95,9 +96,12 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
   c.set('currentUser', {
     userId: row.id,
     email: row.email,
-    // Narrow text[] -> UserRole[]; trust the column's enum-by-convention
-    // since values come from our own schema, not user input.
-    roles: row.roles as UserRole[],
+    // Reuse the dashboard middleware's coerceRoles narrowing so both
+    // auth surfaces apply the same UserRole allowlist (drops unknown
+    // values, emits a warn log when all values were dropped). Avoids
+    // the previous asymmetric `row.roles as UserRole[]` cast that
+    // would let a corrupted users.roles row reach RBAC unchanged.
+    roles: coerceRoles(row.roles, row.id),
     // Control API is stateless -- scope comes from the X-Project-Id
     // header. Unlike the dashboard surface (which uses session.projectId),
     // there is no session row to read from here.
