@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import type { EventType } from '../../services/events.js'
 import type { AppEnv } from '../../types.js'
 
+import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { findProjectMembership } from '../../services/auth.js'
 import { getClientCount, registerClient, unregisterClient } from '../../services/events.js'
@@ -35,10 +36,29 @@ function getWsAuthTimeoutMs(): number {
 }
 
 /**
- * Race a promise against a timeout. Rejects with `Error('timeout')` if
- * the timer wins. Callers are expected to chain `.catch(() => null)`
- * (or similar) to convert the rejection into a fail-closed close code,
- * keeping the WS lifecycle deterministic on upstream degradation.
+ * Marker error thrown by `withTimeout` when the timeout wins. Distinct
+ * class so callers can distinguish "the upstream call took too long"
+ * from "the upstream call threw" — the two require different close
+ * codes and different log levels. Without this distinction, a
+ * `.catch(() => null)` would collapse BetterAuth/DB faults into the
+ * missing-auth (4001) path, hiding the real failure and routing the
+ * client through an inappropriate recovery flow (session refresh
+ * instead of retry-budget).
+ */
+class WsTimeoutError extends Error {
+  constructor() {
+    super('timeout')
+    this.name = 'WsTimeoutError'
+  }
+}
+
+/**
+ * Race a promise against a timeout. Throws `WsTimeoutError` if the
+ * timer wins; otherwise the inner promise's resolution/rejection
+ * passes through unchanged. Callers are expected to branch on the
+ * error class so true timeouts map to the timeout-specific close
+ * codes (4001 / 4500) and unexpected upstream errors are logged and
+ * mapped to a generic internal-error close code.
  */
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -46,7 +66,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('timeout')), ms)
+        timeoutId = setTimeout(() => reject(new WsTimeoutError()), ms)
       }),
     ])
   } finally {
@@ -91,16 +111,30 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
           // by the browser). No bearer token, no token query param; CLI
           // and TUI clients use the Control API (cst_* keys) per
           // AGENTS.md, not this surface.
-          // Bound the BetterAuth lookup so a degraded auth backend
-          // doesn't strand the upgrade in a non-terminal state. On
-          // timeout, fail closed via the existing 4001 path: the
-          // session is treated as missing, the frontend will refresh
-          // and retry once, and a persistent outage lands in the
-          // terminal `error` state instead of an indefinite hang.
-          const session = await withTimeout(
-            auth.api.getSession({ headers: c.req.raw.headers }),
-            getWsAuthTimeoutMs()
-          ).catch(() => null)
+          //
+          // Three outcomes:
+          //   - session resolves with a value -> proceed
+          //   - session resolves null OR getSession throws WsTimeoutError -> 4001
+          //     (frontend will refresh + retry once; a persistent outage
+          //     lands in terminal `error` instead of an indefinite hang)
+          //   - getSession throws any other error -> log + close 1011 internal
+          //     (do NOT collapse to 4001 -- a DB fault is not a missing
+          //     session and shouldn't trigger an auth-refresh recovery)
+          let session: Awaited<ReturnType<typeof auth.api.getSession>>
+          try {
+            session = await withTimeout(
+              auth.api.getSession({ headers: c.req.raw.headers }),
+              getWsAuthTimeoutMs()
+            )
+          } catch (err) {
+            if (err instanceof WsTimeoutError) {
+              ws.close(4001, 'Auth lookup timed out')
+              return
+            }
+            logger.error({ err }, 'WS upgrade: auth.api.getSession threw unexpectedly')
+            ws.close(1011, 'Internal server error during auth lookup')
+            return
+          }
 
           if (!session) {
             ws.close(4001, 'Missing authentication (valid session cookie required)')
@@ -127,27 +161,31 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
           }
 
           // Defense-in-depth: confirm the user is still a member of the
-          // session's project. The membership was validated when the
-          // projectId was written to the session, but it may have been
-          // revoked since (e.g., admin removed the user from the
-          // project). Without this check, a stale session would keep
-          // receiving broadcasts for a project the user no longer has
-          // access to.
-          // Bound the membership lookup. On timeout we deliberately
-          // close 4500 (not 4003): 4003 is a hard authorization
-          // failure that should not trigger client retry on its own,
-          // while 4500 signals "backend degraded, try again" and the
-          // frontend's retry-budget path (any non-4001 close) handles
-          // it correctly. Distinguishing the two keeps the lifecycle
-          // semantics honest -- a transient outage shouldn't look like
-          // a revoked membership.
-          const membership = await withTimeout(
-            findProjectMembership(userId, sessionProjectId),
-            getWsAuthTimeoutMs()
-          ).catch(() => 'timeout' as const)
-
-          if (membership === 'timeout') {
-            ws.close(4500, 'Backend degraded (membership lookup timeout)')
+          // session's project. Three outcomes mirror the session lookup
+          // above:
+          //   - resolves with a row -> proceed
+          //   - resolves null -> 4003 (revoked membership)
+          //   - throws WsTimeoutError -> 4500 (backend degraded; the
+          //     frontend's retry-budget path handles transient outages
+          //     without mistaking them for a permission decision)
+          //   - throws any other error -> log + 1011 (DB faults are
+          //     server-side problems, not authorization signals)
+          let membership: Awaited<ReturnType<typeof findProjectMembership>>
+          try {
+            membership = await withTimeout(
+              findProjectMembership(userId, sessionProjectId),
+              getWsAuthTimeoutMs()
+            )
+          } catch (err) {
+            if (err instanceof WsTimeoutError) {
+              ws.close(4500, 'Backend degraded (membership lookup timeout)')
+              return
+            }
+            logger.error(
+              { err, userId, projectId: sessionProjectId },
+              'WS upgrade: findProjectMembership threw unexpectedly'
+            )
+            ws.close(1011, 'Internal server error during membership lookup')
             return
           }
 
