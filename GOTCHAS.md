@@ -131,3 +131,15 @@ Read the relevant section before working in that area. See also [ARCHITECTURE.md
 - **No fancy punctuation in UI text**: Use `...` not `…`, `-` not `—`/`–`. Plain ASCII only.
 - **No arbitrary pixel font sizes**: Use Tailwind's rem-based scale (`text-xs`, `text-sm`, etc.), never `text-[11px]` or similar — these don't respect user zoom preferences.
 - **Tailwind v4 custom colors in `border-l-*` don't generate CSS**: Classes like `border-l-ctp-teal` using custom color tokens produce no output. Use inline `style={{ borderLeftColor: 'hsl(var(--ctp-teal))' }}` with `border-l-2` class for the width.
+
+## Workspace tooling
+
+- **`bun --filter @hashhive/<pkg> test <path>` does NOT scope to one file.** It runs the package's full `test` script and ignores the path argument. To target one file, `cd packages/<pkg> && bun test --preload ./tests/setup.ts <path>`. The `--preload` is required for frontend tests (they need `window`).
+- **Backend scripts must run from `packages/backend/`** — env validation reads `packages/backend/.env` relative to CWD. `bun src/scripts/seed-admin.ts` from repo root fails with "DATABASE_URL: Invalid input"; `cd packages/backend && bun src/scripts/seed-admin.ts` works.
+- **Rebuild `@hashhive/shared` before backend type-check after schema or schema-types edits.** Backend imports from `dist`, not `src`. After any `packages/shared/src/schemas/*.ts` or `types/*.ts` change, run `bun --filter @hashhive/shared build` before `bun --filter @hashhive/backend type-check` or you'll get "no exported member" errors.
+- **Drizzle migration SQL gets reformatted by the pre-commit hook on first commit attempt.** Both the `.sql` file and `meta/NNNN_snapshot.json` come back as "files were modified by this hook" — re-stage them and re-commit. (Path: `packages/shared/src/db/migrations/`.)
+- **Tests that `mock.module('../../src/services/events.js')` must mirror every export imported by upstream consumers.** Adding a new export to `services/events.ts` that any route (e.g., `routes/dashboard/events.ts`) imports at top-level breaks ~10 test files at import time with "Export named 'X' not found." Either update every mock, or keep new constants local to the consumer file.
+
+## Infrastructure quirks
+
+- **`docker-compose.yml` seaweedfs healthcheck uses `localhost`** which resolves to IPv6 `::1` in the container while seaweedfs binds only to IPv4 (`127.0.0.1` + container IP). `just docker-up` fails the `bucket-init` dependency check on first start even though seaweedfs is actually healthy. Workaround: `docker run --rm --network hash_hive_default -e AWS_ACCESS_KEY_ID=minioadmin -e AWS_SECRET_ACCESS_KEY=minioadmin amazon/aws-cli:2.27.8 --endpoint-url http://seaweedfs:8333 s3 mb s3://hashhive`. Real fix: change the healthcheck to `127.0.0.1` in `docker-compose.yml`.
