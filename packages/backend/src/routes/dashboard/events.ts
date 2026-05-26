@@ -11,6 +11,49 @@ import { getClientCount, registerClient, unregisterClient } from '../../services
 
 type UpgradeWebSocket = ReturnType<typeof createBunWebSocket>['upgradeWebSocket']
 
+const WS_AUTH_TIMEOUT_DEFAULT_MS = 10_000
+
+/**
+ * Upper bound on how long the WS upgrade handler will wait on any
+ * single upstream call (BetterAuth session lookup, membership lookup).
+ * Without this, a hung upstream (degraded Postgres, hung BetterAuth
+ * request) leaves the WebSocket in a non-terminal state: the client
+ * sees no `connected` frame and no close code, and the in-flight
+ * promise pins the handler forever. 10s is well above p99 latency for
+ * a session+membership lookup on a healthy stack and short enough that
+ * the client's retry-budget kicks in before the user notices a hang.
+ *
+ * Read at call time (not module load) so tests can override via
+ * `HH_WS_AUTH_TIMEOUT_MS` without fighting ESM import hoisting, and so
+ * operators can adjust the ceiling without redeploying.
+ */
+function getWsAuthTimeoutMs(): number {
+  const raw = process.env['HH_WS_AUTH_TIMEOUT_MS']
+  if (!raw) return WS_AUTH_TIMEOUT_DEFAULT_MS
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : WS_AUTH_TIMEOUT_DEFAULT_MS
+}
+
+/**
+ * Race a promise against a timeout. Rejects with `Error('timeout')` if
+ * the timer wins. Callers are expected to chain `.catch(() => null)`
+ * (or similar) to convert the rejection into a fail-closed close code,
+ * keeping the WS lifecycle deterministic on upstream degradation.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('timeout')), ms)
+      }),
+    ])
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
+  }
+}
+
 /**
  * Runtime allowlist for the `?types=` query parameter. Without this,
  * `typesParam.split(',') as EventType[]` would silently accept any
@@ -48,9 +91,16 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
           // by the browser). No bearer token, no token query param; CLI
           // and TUI clients use the Control API (cst_* keys) per
           // AGENTS.md, not this surface.
-          const session = await auth.api
-            .getSession({ headers: c.req.raw.headers })
-            .catch(() => null)
+          // Bound the BetterAuth lookup so a degraded auth backend
+          // doesn't strand the upgrade in a non-terminal state. On
+          // timeout, fail closed via the existing 4001 path: the
+          // session is treated as missing, the frontend will refresh
+          // and retry once, and a persistent outage lands in the
+          // terminal `error` state instead of an indefinite hang.
+          const session = await withTimeout(
+            auth.api.getSession({ headers: c.req.raw.headers }),
+            getWsAuthTimeoutMs()
+          ).catch(() => null)
 
           if (!session) {
             ws.close(4001, 'Missing authentication (valid session cookie required)')
@@ -83,7 +133,24 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
           // project). Without this check, a stale session would keep
           // receiving broadcasts for a project the user no longer has
           // access to.
-          const membership = await findProjectMembership(userId, sessionProjectId)
+          // Bound the membership lookup. On timeout we deliberately
+          // close 4500 (not 4003): 4003 is a hard authorization
+          // failure that should not trigger client retry on its own,
+          // while 4500 signals "backend degraded, try again" and the
+          // frontend's retry-budget path (any non-4001 close) handles
+          // it correctly. Distinguishing the two keeps the lifecycle
+          // semantics honest -- a transient outage shouldn't look like
+          // a revoked membership.
+          const membership = await withTimeout(
+            findProjectMembership(userId, sessionProjectId),
+            getWsAuthTimeoutMs()
+          ).catch(() => 'timeout' as const)
+
+          if (membership === 'timeout') {
+            ws.close(4500, 'Backend degraded (membership lookup timeout)')
+            return
+          }
+
           if (!membership) {
             ws.close(4003, 'User is not a member of the session project')
             return

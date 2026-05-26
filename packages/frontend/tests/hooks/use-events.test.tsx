@@ -42,9 +42,10 @@ function EventsTestComponent({
   types?: EventType[]
   onEvent?: (e: unknown) => void
 }) {
-  const { connected, polling } = useEvents({ types, onEvent })
+  const { status, connected, polling } = useEvents({ types, onEvent })
   return (
     <div>
+      <span data-testid="status">{status}</span>
       <span data-testid="connected">{String(connected)}</span>
       <span data-testid="polling">{String(polling)}</span>
     </div>
@@ -614,6 +615,51 @@ describe('useEvents', () => {
     await waitFor(() => {
       expect(wsMock.instances.length).toBeGreaterThanOrEqual(2)
     })
+  })
+
+  it('lands in terminal error on a second 4001 close without further refresh or reconnect', async () => {
+    // After one auth-refresh attempt, a second 4001 means the session
+    // is terminally unauthenticated. The hook must NOT call getSession
+    // again, must NOT open another WS, and must report `status === 'error'`.
+    setAuthenticatedWithProject(1)
+    getSessionMock.mockClear()
+    renderEventsHook()
+
+    const ws1 = wsMock.instances[0]!
+    await act(async () => {
+      ws1.simulateOpen()
+    })
+    expect(screen.getByTestId('connected').textContent).toBe('true')
+
+    // First 4001 triggers a single session refresh + reconnect.
+    await act(async () => {
+      ws1.simulateClose(4001)
+    })
+    await waitFor(() => {
+      expect(wsMock.instances.length).toBeGreaterThanOrEqual(2)
+    })
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+
+    const ws2 = wsMock.instances[1]!
+    // Second 4001 on the refreshed connection — this is the terminal path.
+    await act(async () => {
+      ws2.simulateClose(4001)
+    })
+    // Allow any queued microtasks to settle (defensive — terminal path
+    // is synchronous, but a hypothetical regression that re-schedules
+    // would surface here).
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // No additional session refresh attempts.
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+    // No additional WS instances created (still just the original two).
+    expect(wsMock.instances.length).toBe(2)
+    // Status reports the terminal error; connected/polling both false.
+    expect(screen.getByTestId('status').textContent).toBe('error')
+    expect(screen.getByTestId('connected').textContent).toBe('false')
+    expect(screen.getByTestId('polling').textContent).toBe('false')
   })
 
   it('invalidates [system-health] (un-scoped) on system_health event', async () => {

@@ -160,7 +160,9 @@ paths:
                     additionalProperties: true
         '400': { $ref: '#/components/responses/ValidationFailed' }
         '403':
-          description: User is not a member of the requested project.
+          description: |
+            User is not a member of the requested project, or the
+            request failed the same-origin CSRF defense-in-depth check.
           content:
             application/json:
               schema:
@@ -170,8 +172,25 @@ paths:
                     properties:
                       error:
                         properties:
-                          code: { type: string, enum: [FORBIDDEN] }
-        '404': { $ref: '#/components/responses/ResourceNotFound' }
+                          code:
+                            type: string
+                            enum: [AUTHZ_PROJECT_ACCESS_DENIED, CSRF_ORIGIN_MISMATCH]
+        '500':
+          description: |
+            Session update failed (auth.api.updateSession threw), or the
+            membership row references a project row that no longer
+            exists (FK invariant broken — should not happen in normal
+            operation, surfaced rather than masked).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [INTERNAL_ERROR] }
 
   /campaigns:
     parameters:

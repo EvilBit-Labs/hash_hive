@@ -115,7 +115,8 @@ interface UseEventsOptions {
  * Surfaces a `status` value (`'connecting' | 'open' | 'authenticating'
  * | 'reconnecting' | 'fallback' | 'error'`) consumed by the layout
  * connection indicator. On auth-failure close (4001) the hook refreshes
- * the session once via `authClient.getSession({ disableCookieCache })`
+ * the session once via
+ * `authClient.getSession({ query: { disableCookieCache: true } })`
  * and reconnects; further 4001s land in `error`. After
  * `MAX_RECONNECT_ATTEMPTS` consecutive failed reconnects the hook
  * transitions to `fallback`, where polling keeps caches fresh; one
@@ -289,9 +290,23 @@ export function useEvents(options: UseEventsOptions = {}) {
           // buffered cross-project frame can arrive during the brief
           // window between project switch and WS reconnect. System
           // events carry the sentinel projectId 0 and are intentionally
-          // global — bypass the filter for those.
+          // global — bypass the filter for those, but only when the
+          // sentinel is actually present. A `system_health` frame with
+          // a non-zero projectId is producer drift and should be dropped
+          // alongside ordinary project mismatches.
           const frameProjectId = data['projectId'] as number
-          if (!SYSTEM_EVENT_TYPES.has(eventType) && frameProjectId !== sessionProjectId) {
+          if (SYSTEM_EVENT_TYPES.has(eventType)) {
+            if (frameProjectId !== 0) {
+              if (warnDriftOnce('projectId-mismatch', eventType)) {
+                // oxlint-disable-next-line no-console -- protocol drift signal
+                console.warn('[useEvents] dropped system WS frame with non-sentinel projectId', {
+                  eventType: sanitizeEventType(eventType),
+                  frameProjectId,
+                })
+              }
+              return
+            }
+          } else if (frameProjectId !== sessionProjectId) {
             if (warnDriftOnce('projectId-mismatch', eventType)) {
               // oxlint-disable-next-line no-console -- protocol drift signal
               console.warn('[useEvents] dropped WS frame with mismatched projectId', {
@@ -483,7 +498,7 @@ export function useEvents(options: UseEventsOptions = {}) {
     const interval = setInterval(() => {
       // Track rejections so a silently-failing polling cycle (e.g.,
       // backend down + cached 401 from auth) becomes visible in the
-      // console rather than letting "Offline — polling" mislead the
+      // console rather than letting "Offline - polling" mislead the
       // operator into thinking caches are still being refreshed.
       const settle = (p: Promise<unknown>) => p.catch((err: unknown) => err)
       void Promise.all([

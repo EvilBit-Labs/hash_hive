@@ -35,12 +35,12 @@ describe('ConnectionIndicator', () => {
     expect(document.querySelector('.bg-warning')).not.toBeNull()
   })
 
-  it('shows "Offline — polling" with destructive dot for fallback status', () => {
+  it('shows "Offline - polling" with destructive dot for fallback status', () => {
     renderWithProviders(<ConnectionIndicator status="fallback" />)
 
-    expect(screen.getByText('Offline — polling')).toBeDefined()
+    expect(screen.getByText('Offline - polling')).toBeDefined()
     expect(document.querySelector('.bg-destructive')).not.toBeNull()
-    expect(screen.getByRole('status').getAttribute('aria-label')).toBe('Offline — polling')
+    expect(screen.getByRole('status').getAttribute('aria-label')).toBe('Offline - polling')
   })
 
   it('shows "Disconnected" with destructive dot for error status', () => {

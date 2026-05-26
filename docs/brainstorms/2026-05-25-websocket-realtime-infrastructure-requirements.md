@@ -127,7 +127,7 @@ A separate issue (#159) is queued next to add server-managed `projectId` on the 
 
 ### Deferred to Planning
 
-- [Affects R9][Technical] How many frontend hooks currently read `selectedProjectId` from the UI store directly, and does converting it to a session-derived reflection require changes to those consumers or only to the UI store's update path?
-- [Affects R15][Technical] When BetterAuth fires a sign-in event, what's the right hook to perform the single-project auto-select — a BetterAuth lifecycle hook, a `POST /sign-in/email` middleware, or first-request lazy initialization on any dashboard endpoint?
-- [Affects R17][Needs research] Does the existing OpenAPI contract test (`tests/contract/`) verify the absence of removed parameters, or only the presence of declared ones? If only presence, the `?projectIds=` removal needs a test addition.
-- [Affects R8][Technical] Does the current `events.ts` backend actually attach `projectId` to outgoing frames in every code path that emits events? If any code path emits events without `projectId`, the client filter's drop-on-mismatch would silently swallow valid frames.
+- **[Affects R9][Technical]** How many frontend hooks currently read `selectedProjectId` from the UI store directly, and does converting it to a session-derived reflection require changes to those consumers or only to the UI store's update path?
+- **[Affects R15][Technical]** When BetterAuth fires a sign-in event, what's the right hook to perform the single-project auto-select — a BetterAuth lifecycle hook, a `POST /sign-in/email` middleware, or first-request lazy initialization on any dashboard endpoint?
+- **[Affects R17][Needs research]** Does the existing OpenAPI contract test (`tests/contract/`) verify the absence of removed parameters, or only the presence of declared ones? If only presence, the `?projectIds=` removal needs a test addition.
+- **[Affects R8][Technical]** Does the current `events.ts` backend actually attach `projectId` to outgoing frames in every code path that emits events? If any code path emits events without `projectId`, the client filter's drop-on-mismatch would silently swallow valid frames.

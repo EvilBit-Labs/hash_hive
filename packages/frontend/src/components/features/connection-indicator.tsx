@@ -41,8 +41,8 @@ function visualForStatus(status: ConnectionStatus): VisualState {
         dotClass: 'bg-destructive',
         labelClass: 'text-destructive',
         pulse: false,
-        ariaLabel: 'Offline — polling',
-        text: 'Offline — polling',
+        ariaLabel: 'Offline - polling',
+        text: 'Offline - polling',
       }
     case 'error':
       return {

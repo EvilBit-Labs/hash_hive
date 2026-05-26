@@ -249,6 +249,133 @@ describe('Dashboard API: POST /projects/select', () => {
     })
     expect(res.status).toBe(403)
     const body = await res.json()
-    expect(body['error']['code']).toBe('FORBIDDEN')
+    expect(body['error']['code']).toBe('AUTHZ_PROJECT_ACCESS_DENIED')
+  })
+
+  it('should return 403 with CSRF_ORIGIN_MISMATCH when Origin is cross-origin', async () => {
+    // host on app.request is "localhost"; an Origin of evil.example
+    // does not match and must be rejected before findProjectMembership
+    // is consulted.
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+        origin: 'https://evil.example.com',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('CSRF_ORIGIN_MISMATCH')
+  })
+
+  it('should return 200 with selected project on success', async () => {
+    // Per-test override: membership exists and project row exists.
+    // Also stub auth.api.updateSession so the handler's try/catch
+    // resolves successfully.
+    mock.module('../../src/services/auth.js', () => ({
+      getUserWithProjects: async () => null,
+      findProjectMembership: async () => ({
+        userId: 1,
+        projectId: 42,
+        roles: ['admin'],
+      }),
+    }))
+    mock.module('../../src/services/projects.js', () => ({
+      getProjectById: async (id: number) => ({
+        id,
+        name: 'Test Project',
+        slug: 'test-project',
+      }),
+      // Other exports unused by /select but referenced at module-load.
+      getUserProjects: async () => [],
+      createProject: async () => null,
+      getProjectMembers: async () => [],
+      addUserToProject: async () => null,
+      updateProject: async () => null,
+      updateMemberRoles: async () => null,
+      removeUserFromProject: async () => false,
+    }))
+    mock.module('../../src/lib/auth.js', () => ({
+      auth: {
+        api: {
+          getSession: async ({ headers }: { headers: Headers }) => {
+            const cookie = headers.get('cookie') ?? ''
+            if (cookie.includes('hh.session_token=valid-session')) {
+              return {
+                user: {
+                  id: '1',
+                  email: 'test@example.com',
+                  name: 'Test User',
+                  emailVerified: true,
+                  image: null,
+                },
+                session: {
+                  id: 'sess-1',
+                  userId: '1',
+                  token: 'tok-1',
+                  expiresAt: new Date(Date.now() + 3600000),
+                },
+              }
+            }
+            return null
+          },
+          updateSession: async () => ({ session: { projectId: 42 } }),
+        },
+        handler: async () => new Response('ok'),
+      },
+    }))
+
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['project']).toBeDefined()
+    expect(body['project']['id']).toBe(42)
+    expect(body['project']['name']).toBe('Test Project')
+
+    // Restore default mocks so subsequent suites see the original null
+    // membership and stub auth (no updateSession). This file's
+    // 401-guard suite runs first; restoring here keeps the file robust
+    // to test-ordering changes.
+    mock.module('../../src/services/auth.js', () => ({
+      getUserWithProjects: async () => null,
+      findProjectMembership: async () => null,
+    }))
+    mock.module('../../src/lib/auth.js', () => ({
+      auth: {
+        api: {
+          getSession: async ({ headers }: { headers: Headers }) => {
+            const cookie = headers.get('cookie') ?? ''
+            if (cookie.includes('hh.session_token=valid-session')) {
+              return {
+                user: {
+                  id: '1',
+                  email: 'test@example.com',
+                  name: 'Test User',
+                  emailVerified: true,
+                  image: null,
+                },
+                session: {
+                  id: 'sess-1',
+                  userId: '1',
+                  token: 'tok-1',
+                  expiresAt: new Date(Date.now() + 3600000),
+                },
+              }
+            }
+            return null
+          },
+        },
+        handler: async () => new Response('ok'),
+      },
+    }))
   })
 })
