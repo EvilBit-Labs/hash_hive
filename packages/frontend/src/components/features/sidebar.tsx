@@ -21,7 +21,6 @@ import { useAuthStore } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { Select } from '../ui/select'
 import { ConnectionIndicator } from './connection-indicator'
-import { useEventsConnection } from './events-provider'
 
 const ICON_CLASS = 'h-4 w-4'
 
@@ -79,7 +78,6 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { projects, clearAuth } = useAuthStore()
   const { data: session } = authClient.useSession()
   const { selectedProjectId, setSelectedProject } = useUiStore()
-  const { connected } = useEventsConnection()
   const { can } = usePermissions()
 
   const visibleNavItems = useMemo(
@@ -148,7 +146,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
 
       {/* Footer */}
       <div className="border-surface-0/50 space-y-2 border-t px-3 py-3">
-        <ConnectionIndicator connected={connected} />
+        <ConnectionIndicator />
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground max-w-[130px] truncate text-xs">
             {session?.user.email}

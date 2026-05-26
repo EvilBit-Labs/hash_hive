@@ -39,6 +39,10 @@ servers:
     description: Dashboard API base path
 
 tags:
+  - name: Projects
+    description: Project context for the active session.
+  - name: Realtime
+    description: WebSocket event stream for dashboard live updates.
   - name: Campaigns
     description: Campaign orchestration — create, edit, list, lifecycle, attacks.
   - name: Resources
@@ -50,6 +54,125 @@ tags:
       S3 multipart endpoints under `/resources/upload/*`.
 
 paths:
+  /events/stream:
+    get:
+      operationId: streamEvents
+      summary: WebSocket upgrade for real-time dashboard events
+      description: |
+        Upgrades the connection to a WebSocket scoped to the active
+        session's `projectId` (set via `POST /projects/select` or the
+        single-project auto-select hook on sign-in). The browser sends
+        the BetterAuth session cookie automatically on upgrade.
+
+        ## Scoping
+
+        Project scope is derived **exclusively** from the
+        server-managed `session.projectId` field. No query parameters
+        are honored for scoping. Earlier revisions of this surface
+        accepted `?projectIds=`; that path is removed.
+
+        ## Optional query parameters
+
+        - `types` (string, comma-separated): subset of event types to
+          subscribe to (`agent_status`, `campaign_status`, `task_update`,
+          `crack_result`, `resource_update`, `agent_error`,
+          `system_health`). Omit to receive all event types.
+
+        ## Close codes
+
+        - `4001` — missing or invalid session cookie. Frontend should
+          refresh the session and reconnect once before surfacing a
+          terminal error.
+        - `4002` — session has no active project. Call
+          `POST /projects/select` first.
+        - `4003` — user is not (or no longer) a member of the session's
+          project. Re-select via `POST /projects/select`.
+        - `1000` — normal closure (client-initiated).
+
+        ## Event envelope
+
+        Once connected, the server emits frames shaped as:
+
+        ```json
+        {
+          "type": "task_update",
+          "projectId": 1,
+          "data": { /* event-type-specific payload */ },
+          "timestamp": "2026-05-25T00:00:00.000Z"
+        }
+        ```
+
+        Plus two control frames the client should ignore for
+        invalidation purposes: `{ "type": "connected", ... }` on open
+        and `{ "type": "pong" }` in response to client pings.
+      tags: [Realtime]
+      parameters:
+        - name: types
+          in: query
+          required: false
+          description: |
+            Optional comma-separated subscription filter. When omitted,
+            all known event types are delivered.
+          schema:
+            type: string
+            example: agent_status,task_update,crack_result
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket upgrade accepted.
+        '401':
+          description: |
+            Auth failure surfaced as WebSocket close code `4001`. HTTP
+            response is not produced by a successful upgrade; this entry
+            is documentation of the close-code mapping.
+
+  /projects/select:
+    post:
+      operationId: selectProject
+      summary: Set the server-managed project context on the active session
+      description: |
+        Validates that the authenticated user is a member of the
+        requested project, then writes `projectId` to the BetterAuth
+        session's additional fields. The next WebSocket upgrade on
+        `/events/stream` reads this value as its broadcast scope; no
+        client-supplied scoping parameter is trusted.
+
+        Returns the selected project. On membership failure, returns a
+        403 with the dashboard error envelope.
+      tags: [Projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectProjectRequest'
+      responses:
+        '200':
+          description: Project selected; session updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project]
+                properties:
+                  project:
+                    type: object
+                    description: Selected project row.
+                    additionalProperties: true
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403':
+          description: User is not a member of the requested project.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [FORBIDDEN] }
+        '404': { $ref: '#/components/responses/ResourceNotFound' }
+
   /campaigns:
     parameters:
       - $ref: '#/components/parameters/XProjectIdHeader'
@@ -1249,6 +1372,16 @@ components:
           type: array
           items: { type: integer, minimum: 1 }
           description: Real attack IDs (not indices).
+
+    SelectProjectRequest:
+      type: object
+      required: [projectId]
+      additionalProperties: false
+      properties:
+        projectId:
+          type: integer
+          minimum: 1
+          description: Project id to bind to the active session.
 
     ErrorEnvelope:
       type: object

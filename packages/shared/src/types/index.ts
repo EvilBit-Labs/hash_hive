@@ -22,6 +22,7 @@ import type {
   campaignSortFieldSchema,
   campaignSortOrderSchema,
   campaignTaskStatsSchema,
+  connectionStatusSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
   createAttackRequestSchema,
@@ -69,6 +70,7 @@ import type {
   selectHashTypeSchema,
   selectMaskListSchema,
   selectOperatingSystemSchema,
+  selectProjectRequestSchema,
   selectProjectSchema,
   selectProjectUserSchema,
   selectRuleListSchema,
@@ -276,4 +278,17 @@ export interface IssueApiKeyResponse {
 
 export type AgentWorstSeverity = z.infer<typeof agentWorstSeveritySchema>
 export type AgentCurrentTask = z.infer<typeof agentCurrentTaskSchema>
+
+// ─── Realtime / WebSocket connection ────────────────────────────────
+
+/**
+ * Frontend WebSocket connection state machine emitted by `useEvents`
+ * and consumed by the layout-level connection indicator.
+ */
+export type ConnectionStatus = z.infer<typeof connectionStatusSchema>
+
+/**
+ * Request body for `POST /api/v1/dashboard/projects/select`.
+ */
+export type SelectProjectRequest = z.infer<typeof selectProjectRequestSchema>
 export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>

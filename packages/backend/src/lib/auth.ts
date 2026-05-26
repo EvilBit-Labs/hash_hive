@@ -3,7 +3,9 @@ import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 
 import { env } from '../config/env.js'
+import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { getUserWithProjects } from '../services/auth.js'
 
 export const auth = betterAuth({
   basePath: '/api/auth',
@@ -40,6 +42,54 @@ export const auth = betterAuth({
     updateAge: 3600, // Refresh every hour on activity
     // No cookieCache -- immediate session revocation is more important than
     // saving a DB lookup per request for 1-3 concurrent dashboard users.
+    additionalFields: {
+      // Server-managed project context. Read by the dashboard WebSocket
+      // upgrade (packages/backend/src/routes/dashboard/events.ts) to scope
+      // broadcasts without trusting a client-supplied query param. Set by
+      // the single-project auto-select hook below or by an explicit call
+      // to POST /api/v1/dashboard/projects/select.
+      projectId: {
+        type: 'number',
+        required: false,
+      },
+    },
+  },
+
+  databaseHooks: {
+    session: {
+      create: {
+        // Single-project auto-select: when a user with exactly one
+        // project membership signs in, populate session.projectId so the
+        // first WebSocket upgrade (and any downstream surface that ends
+        // up reading it) has a project context without waiting for the
+        // selector UI (#160). Multi-project users land with projectId
+        // undefined and the dashboard surfaces an offline indicator
+        // until they pick a project.
+        before: async (session) => {
+          try {
+            const userId = Number(session.userId)
+            if (!Number.isInteger(userId) || userId <= 0) {
+              return { data: session }
+            }
+            const userWithProjects = await getUserWithProjects(userId)
+            if (!userWithProjects || userWithProjects.projects.length !== 1) {
+              return { data: session }
+            }
+            const projectId = userWithProjects.projects[0]?.id
+            if (typeof projectId !== 'number') {
+              return { data: session }
+            }
+            return { data: { ...session, projectId } }
+          } catch (err) {
+            // Never break sign-in on membership-lookup failure. Sign-in
+            // succeeds without a projectId; the user can still pick one
+            // explicitly via the selector UI when it ships.
+            logger.warn({ err }, 'session.create.before auto-select failed')
+            return { data: session }
+          }
+        },
+      },
+    },
   },
 
   user: {

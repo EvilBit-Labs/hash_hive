@@ -128,6 +128,7 @@ const DASH_BASE = '/api/v1/dashboard'
 describe('Dashboard API: Auth guards', () => {
   const protectedRoutes = [
     { method: 'GET', path: '/projects' },
+    { method: 'POST', path: '/projects/select' },
     { method: 'GET', path: '/agents' },
     { method: 'GET', path: '/campaigns' },
     { method: 'GET', path: '/resources/hash-types' },
@@ -194,5 +195,60 @@ describe('Dashboard API: POST /campaigns', () => {
       body: JSON.stringify({ name: 'test', projectId: 1, hashListId: 1, priority: 5 }),
     })
     expect(res.status).toBe(401)
+  })
+})
+
+// ─── POST /projects/select -- Set session project context ────────────
+
+describe('Dashboard API: POST /projects/select', () => {
+  it('should return 400 for missing projectId', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for non-integer projectId', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for unknown keys (strict schema)', async () => {
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 1, extra: 'nope' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('should return 403 when user is not a member of the project', async () => {
+    // Default mock for findProjectMembership returns null → 403.
+    const res = await app.request(`${DASH_BASE}/projects/select`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=valid-session',
+      },
+      body: JSON.stringify({ projectId: 42 }),
+    })
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('FORBIDDEN')
   })
 })
