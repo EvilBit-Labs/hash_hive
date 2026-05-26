@@ -843,16 +843,21 @@ export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
 
 /**
  * Wire-shape contract for the active session as exposed to the
- * frontend (e.g. inside `meResponseSchema.user` and any future control-
- * API session payload). `selectedProjectId` is the server-managed
- * scope, sourced from `session.session.projectId` -- never trust a
- * client-supplied header for project scope on the dashboard surface.
+ * frontend. `selectedProjectId` is the server-managed scope, sourced
+ * from `session.session.projectId` -- never trust a client-supplied
+ * header for project scope on the dashboard surface.
  *
- * NOTE: the backend internal `AppEnv['Variables']['currentUser']` is a
- * closely related but distinct shape (uses the field name `projectId`
- * instead of `selectedProjectId`). Cross-boundary code should consume
- * `SessionUser` (Zod-validated); internal backend code reads
- * `currentUser.projectId`.
+ * NOTE: this is NOT the same shape as `meResponseSchema.user` (which
+ * uses `id`/`name`/`status` and does not carry `selectedProjectId` --
+ * the top-level `meResponseSchema.selectedProjectId` carries it
+ * instead). `sessionUserSchema` is reserved for future session-payload
+ * contracts (e.g. a Control-API `/users/me` enriched with scope).
+ *
+ * Also NOT the same shape as the backend internal
+ * `AppEnv['Variables']['currentUser']`, which stores the same scope
+ * under the internal field name `projectId` (no `selected` prefix).
+ * Cross-boundary code consumes `SessionUser` (Zod-validated); internal
+ * backend code reads `currentUser.projectId`.
  */
 export const sessionUserSchema = z.object({
   userId: z.number().int().positive(),

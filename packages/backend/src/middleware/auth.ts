@@ -112,16 +112,24 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   const sessionRecord = session.session as unknown as Record<string, unknown>
   const userRecord = session.user as unknown as Record<string, unknown>
   const rawProjectId = sessionRecord['projectId']
-  const sessionProjectId = typeof rawProjectId === 'number' ? rawProjectId : null
+  // Tighter than `typeof === 'number'`: rejects NaN, Infinity, negatives,
+  // and floats. A bad-row projectId of -1 or 1.5 would otherwise reach
+  // downstream `findProjectMembership` and surface as a misleading 403
+  // instead of the "no project selected" 400 the caller expects.
+  const sessionProjectId =
+    typeof rawProjectId === 'number' && Number.isInteger(rawProjectId) && rawProjectId > 0
+      ? rawProjectId
+      : null
 
   // Operator-visible signal when BetterAuth surfaces session.projectId
-  // as a non-number / non-null type (would indicate adapter drift or
-  // serialization quirk). The fail-closed branch above silently sets
-  // null; this log makes the type-confusion path observable.
-  if (rawProjectId !== undefined && rawProjectId !== null && typeof rawProjectId !== 'number') {
+  // as anything other than null/undefined/positive-integer (would
+  // indicate adapter drift, schema mismatch, or a corrupt row). The
+  // fail-closed branch above silently sets null; this log makes the
+  // drift path observable.
+  if (rawProjectId !== undefined && rawProjectId !== null && sessionProjectId === null) {
     logger.warn(
       { userId: session.user.id, rawProjectIdType: typeof rawProjectId, rawProjectId },
-      'requireSession: session.projectId surfaced as non-number; treating as null (session field type drift)'
+      'requireSession: session.projectId is not a positive integer; treating as null (session field type drift)'
     )
   }
 

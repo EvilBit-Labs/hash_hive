@@ -99,7 +99,12 @@ describe('requireRole(admin, operator)', () => {
 describe('requireRole(admin, operator, analyst)', () => {
   const app = makeApp('admin', 'operator', 'analyst')
 
-  it.each([['admin'], ['operator'], ['analyst']] as UserRole[][])('allows %s', async (role) => {
+  // Flat array (not 2D) so each it.each row is a scalar UserRole. With
+  // a nested form like [['admin']] the static type was UserRole[] per
+  // row even though Jest/bun's it.each runtime unpacks to the first
+  // element -- confusing the reader and tripping copilot-pull-request-
+  // reviewer's static type-check.
+  it.each(['admin', 'operator', 'analyst'] as const)('allows %s', async (role) => {
     currentRoles = [role]
     expect((await app.request('/x')).status).toBe(200)
   })
