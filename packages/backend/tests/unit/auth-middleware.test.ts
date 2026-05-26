@@ -28,8 +28,21 @@ mock.module('../../src/db/index.js', () => ({
 // ─── Mock BetterAuth session lookup ──────────────────────────────────
 
 let mockSession: {
-  user: { id: string; email: string; name: string; emailVerified: boolean; image: string | null }
-  session: { id: string; userId: string; token: string; expiresAt: Date }
+  user: {
+    id: string
+    email: string
+    name: string
+    emailVerified: boolean
+    image: string | null
+    roles?: string[]
+  }
+  session: {
+    id: string
+    userId: string
+    token: string
+    expiresAt: Date
+    projectId?: number | null
+  }
 } | null = null
 
 let mockGetSessionError: Error | null = null
@@ -54,7 +67,12 @@ import {
 
 /** Build a valid mock session for the given user id and email. */
 function buildMockSession(
-  overrides: { id?: string; email?: string } = {}
+  overrides: {
+    id?: string
+    email?: string
+    roles?: string[]
+    projectId?: number | null
+  } = {}
 ): NonNullable<typeof mockSession> {
   const id = overrides.id ?? '1'
   return {
@@ -64,12 +82,14 @@ function buildMockSession(
       name: 'Test User',
       emailVerified: true,
       image: null,
+      roles: overrides.roles ?? ['admin'],
     },
     session: {
       id: `sess-${id}`,
       userId: id,
       token: `tok-${id}`,
       expiresAt: new Date(Date.now() + 3600000),
+      projectId: overrides.projectId ?? null,
     },
   }
 }
@@ -79,7 +99,12 @@ function createSessionApp() {
   app.use('*', requireSession)
   app.get('/protected', (c) => {
     const user = c.get('currentUser')
-    return c.json({ userId: user.userId, email: user.email, projectId: user.projectId })
+    return c.json({
+      userId: user.userId,
+      email: user.email,
+      roles: user.roles,
+      projectId: user.projectId,
+    })
   })
   return app
 }
@@ -139,21 +164,18 @@ describe('requireSession middleware (BetterAuth)', () => {
     expect(body['email']).toBe('test@example.com')
   })
 
-  it('should read projectId from X-Project-Id header', async () => {
-    mockSession = buildMockSession()
+  it('reads projectId from session.session.projectId (positive integer)', async () => {
+    mockSession = buildMockSession({ projectId: 42 })
     const res = await app.request('/protected', {
-      headers: {
-        cookie: 'hh.session_token=valid-session',
-        'x-project-id': '42',
-      },
+      headers: { cookie: 'hh.session_token=valid-session' },
     })
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body['projectId']).toBe(42)
   })
 
-  it('should set projectId to null when X-Project-Id header is missing', async () => {
-    mockSession = buildMockSession()
+  it('sets projectId to null when session.session.projectId is null', async () => {
+    mockSession = buildMockSession({ projectId: null })
     const res = await app.request('/protected', {
       headers: { cookie: 'hh.session_token=valid-session' },
     })
@@ -161,38 +183,60 @@ describe('requireSession middleware (BetterAuth)', () => {
     const body = await res.json()
     expect(body['projectId']).toBeNull()
   })
-  it('should set projectId to null for malformed X-Project-Id values', async () => {
-    mockSession = buildMockSession()
 
-    // Non-numeric
-    let res = await app.request('/protected', {
-      headers: { cookie: 'hh.session_token=valid-session', 'x-project-id': 'abc' },
+  it('IGNORES the X-Project-Id header on the dashboard surface (security invariant #159)', async () => {
+    // The session has projectId=1; the caller tries to flip scope to 99
+    // via the header. Pre-#159 this used to win; post-#159 the header
+    // is dead weight on dashboard routes and the session value is the
+    // only source of truth.
+    mockSession = buildMockSession({ projectId: 1 })
+    const res = await app.request('/protected', {
+      headers: {
+        cookie: 'hh.session_token=valid-session',
+        'x-project-id': '99',
+      },
     })
-    expect((await res.json())['projectId']).toBeNull()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['projectId']).toBe(1)
+  })
 
-    // Zero
-    res = await app.request('/protected', {
-      headers: { cookie: 'hh.session_token=valid-session', 'x-project-id': '0' },
+  it('populates currentUser.roles from session.user.roles', async () => {
+    mockSession = buildMockSession({ roles: ['operator', 'analyst'] })
+    const res = await app.request('/protected', {
+      headers: { cookie: 'hh.session_token=valid-session' },
     })
-    expect((await res.json())['projectId']).toBeNull()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['roles']).toEqual(['operator', 'analyst'])
+  })
 
-    // Negative
-    res = await app.request('/protected', {
-      headers: { cookie: 'hh.session_token=valid-session', 'x-project-id': '-1' },
+  it('filters unknown role values out of currentUser.roles', async () => {
+    // The schema constrains roles to admin|operator|analyst. If a row
+    // somehow contains an unknown value, the middleware drops it
+    // rather than passing the unknown string into RBAC checks.
+    mockSession = buildMockSession({ roles: ['admin', 'superuser'] })
+    const res = await app.request('/protected', {
+      headers: { cookie: 'hh.session_token=valid-session' },
     })
-    expect((await res.json())['projectId']).toBeNull()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['roles']).toEqual(['admin'])
+  })
 
-    // Float
-    res = await app.request('/protected', {
-      headers: { cookie: 'hh.session_token=valid-session', 'x-project-id': '1.5' },
+  it('returns currentUser.roles as [] when session.user has no roles field', async () => {
+    // Defensive: BetterAuth's typing is permissive; if the user row
+    // somehow surfaces without roles, the middleware should fall back
+    // to an empty array rather than throwing.
+    const session = buildMockSession()
+    delete session.user.roles
+    mockSession = session
+    const res = await app.request('/protected', {
+      headers: { cookie: 'hh.session_token=valid-session' },
     })
-    expect((await res.json())['projectId']).toBeNull()
-
-    // Empty string
-    res = await app.request('/protected', {
-      headers: { cookie: 'hh.session_token=valid-session', 'x-project-id': '' },
-    })
-    expect((await res.json())['projectId']).toBeNull()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body['roles']).toEqual([])
   })
 })
 

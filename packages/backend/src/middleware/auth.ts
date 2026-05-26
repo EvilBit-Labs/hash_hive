@@ -1,4 +1,4 @@
-import { agents } from '@hashhive/shared'
+import { type UserRole, agents } from '@hashhive/shared'
 import { eq } from 'drizzle-orm'
 import { deleteCookie, getCookie } from 'hono/cookie'
 import { createMiddleware } from 'hono/factory'
@@ -9,7 +9,6 @@ import type { AppEnv } from '../types.js'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { auth } from '../lib/auth.js'
-import { parseProjectIdHeader } from '../lib/headers.js'
 
 function authError(message: string): HTTPException {
   return new HTTPException(401, {
@@ -21,10 +20,31 @@ function authError(message: string): HTTPException {
 }
 
 /**
- * Dashboard auth middleware -- validates BetterAuth session from cookie.
- * Sets currentUser on context with userId, email, and projectId from X-Project-Id header.
+ * Coerce the `roles` array off `session.user` into the strict UserRole
+ * union. BetterAuth's TypeScript inference treats additional user
+ * columns as `unknown`, so we narrow at the boundary rather than
+ * sprinkling casts through the route layer.
+ */
+function coerceRoles(raw: unknown): UserRole[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((r): r is UserRole => r === 'admin' || r === 'operator' || r === 'analyst')
+}
+
+/**
+ * Dashboard auth middleware -- validates the BetterAuth cookie session.
+ * Sets currentUser on context with:
+ *   - userId, email, roles  read from session.user (users table)
+ *   - projectId              read from session.session.projectId
+ *                            (additionalFields, server-managed)
  *
- * Also cleans up legacy "session" cookies from the old JWT-based auth.
+ * Project scope is derived EXCLUSIVELY from the server-managed
+ * session.projectId. The X-Project-Id header is not read on the
+ * dashboard surface (issue #159 U4); use POST
+ * /api/v1/dashboard/projects/select to update it. The control API
+ * (per-user API keys, stateless) still uses the header via
+ * `requireApiKey` -- that surface has no session row to read from.
+ *
+ * Also cleans up legacy "session" cookies from the pre-BetterAuth JWT auth.
  */
 export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   // TODO: remove legacy cookie cleanup after first production deploy cycle (2026-Q2)
@@ -43,10 +63,18 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
     throw authError('Authentication required')
   }
 
+  // The shared additionalFields.projectId is typed as `unknown` on the
+  // session object since BetterAuth doesn't infer it back into the
+  // public type. Cast at the boundary; the value is server-written
+  // (single-project auto-select hook, last_project_id rehydrate, or an
+  // explicit POST /projects/select) so we trust its shape.
+  const sessionProjectId = (session.session as { projectId?: number | null }).projectId ?? null
+
   c.set('currentUser', {
     userId: Number(session.user.id),
     email: session.user.email,
-    projectId: parseProjectIdHeader(c.req.header('x-project-id')),
+    roles: coerceRoles((session.user as { roles?: unknown }).roles),
+    projectId: sessionProjectId,
   })
   await next()
 })

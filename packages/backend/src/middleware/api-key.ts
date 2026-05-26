@@ -17,7 +17,7 @@
 
 import type { Context } from 'hono'
 
-import { users } from '@hashhive/shared'
+import { type UserRole, users } from '@hashhive/shared'
 import { eq } from 'drizzle-orm'
 import { createMiddleware } from 'hono/factory'
 
@@ -77,6 +77,7 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
       email: users.email,
       status: users.status,
       apiKeyHash: users.apiKeyHash,
+      roles: users.roles,
     })
     .from(users)
     .where(eq(users.id, parsed.userId))
@@ -94,6 +95,12 @@ export const requireApiKey = createMiddleware<AppEnv>(async (c, next): Promise<R
   c.set('currentUser', {
     userId: row.id,
     email: row.email,
+    // Narrow text[] -> UserRole[]; trust the column's enum-by-convention
+    // since values come from our own schema, not user input.
+    roles: row.roles as UserRole[],
+    // Control API is stateless -- scope comes from the X-Project-Id
+    // header. Unlike the dashboard surface (which uses session.projectId),
+    // there is no session row to read from here.
     projectId: parseProjectIdHeader(c.req.header('x-project-id')),
   })
 
