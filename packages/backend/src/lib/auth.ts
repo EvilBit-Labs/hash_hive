@@ -30,6 +30,14 @@ import {
  */
 export async function computeInitialSessionProjectId(userId: number): Promise<number | null> {
   if (!Number.isInteger(userId) || userId <= 0) {
+    // Distinct from the "multi-project pre-selector" branch below
+    // which legitimately returns null. A non-integer or non-positive
+    // userId here means session.userId surfaced as NaN, 0, or a
+    // string -- adapter drift that should be observable, not silent.
+    logger.error(
+      { rawUserId: userId },
+      'computeInitialSessionProjectId: invalid userId from session; sign-in proceeding without auto-select'
+    )
     return null
   }
 

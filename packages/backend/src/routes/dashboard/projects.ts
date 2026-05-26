@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
@@ -101,7 +102,14 @@ function isSameOriginRequest(c: {
   try {
     const sourceHost = new URL(sourceUrl).host
     // Dev exception: localhost:3000 frontend → localhost:4000 backend.
-    if (sourceHost === 'localhost:3000' && host?.startsWith('localhost')) {
+    // Env-gated so the escape hatch can never ship to production --
+    // air-gapped deployments serve frontend and backend behind one
+    // reverse proxy and same-origin is the only legitimate path.
+    if (
+      env.NODE_ENV !== 'production' &&
+      sourceHost === 'localhost:3000' &&
+      host?.startsWith('localhost')
+    ) {
       return true
     }
     return sourceHost === host

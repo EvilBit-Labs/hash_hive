@@ -20,24 +20,38 @@ function authError(message: string): HTTPException {
 }
 
 /**
- * Coerce the `roles` array off `session.user` into the strict UserRole
- * union. BetterAuth's TypeScript inference treats additional user
- * columns as `unknown`, so we narrow at the boundary rather than
- * sprinkling casts through the route layer.
+ * Coerce the `roles` array off `session.user` (or the equivalent
+ * Control-API `users.roles` row) into the strict UserRole union.
+ * BetterAuth's TypeScript inference treats additional user columns
+ * as `unknown`, so we narrow at the boundary rather than sprinkling
+ * casts through the route layer.
  *
- * Drops any value not in the global tier vocabulary. When the input
- * contained values but ALL were dropped, logs a warning so operators
- * can distinguish "users.roles contained junk" (data drift) from
- * "user genuinely has no roles" (expected for a brand-new account
- * that was inserted without an explicit roles value).
+ * Drops any value not in the global tier vocabulary. Emits a warning
+ * whenever ANY value was dropped (partial or total) so partial
+ * corruption (`['admin', 'superuser']` → `['admin']`) is observable,
+ * not just total corruption. Non-array input (null, undefined, scalar,
+ * object) yields `[]` and -- when the input was a defined non-array
+ * value -- also logs, since a typed-but-wrong shape signals adapter
+ * drift more strongly than a missing column.
  */
 export function coerceRoles(raw: unknown, userId: number | string): UserRole[] {
-  if (!Array.isArray(raw)) return []
+  if (!Array.isArray(raw)) {
+    if (raw !== null && raw !== undefined) {
+      logger.warn(
+        { userId, rawType: typeof raw, raw },
+        'coerceRoles: users.roles surfaced as non-array; treating as empty (adapter drift or schema mismatch)'
+      )
+    }
+    return []
+  }
   const out = raw.filter((r): r is UserRole => r === 'admin' || r === 'operator' || r === 'analyst')
-  if (raw.length > 0 && out.length === 0) {
+  if (out.length < raw.length) {
+    const dropped = raw.filter((r) => !(out as unknown[]).includes(r))
     logger.warn(
-      { userId, rawRoles: raw },
-      'requireSession: users.roles contains no recognized global tier values (admin|operator|analyst); user will fail all requireRole() checks'
+      { userId, dropped, kept: out },
+      out.length === 0
+        ? 'coerceRoles: all users.roles values dropped; user will fail every requireRole() check'
+        : 'coerceRoles: some users.roles values dropped (data drift signal)'
     )
   }
   return out
