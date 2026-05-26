@@ -269,11 +269,17 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, name, slug, roles]
+                      required: [id, name, slug, roles, createdAt]
                       properties:
                         id: { type: integer, minimum: 1 }
                         name: { type: string }
                         slug: { type: string }
+                        description: { type: string, nullable: true }
+                        settings:
+                          type: object
+                          additionalProperties: true
+                          nullable: true
+                          description: Opaque project-scoped settings bag (jsonb column).
                         roles:
                           type: array
                           items: { type: string, enum: [admin, contributor, viewer] }
@@ -281,6 +287,7 @@ paths:
                             Per-project membership roles -- distinct
                             from the global capability tier on
                             `users.roles`.
+                        createdAt: { type: string, format: date-time }
         '401': { $ref: '#/components/responses/AuthRequired' }
     post:
       operationId: createProject
