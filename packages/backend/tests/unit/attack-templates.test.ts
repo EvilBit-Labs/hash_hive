@@ -190,22 +190,35 @@ mock.module('../../src/lib/auth.js', () => ({
     api: {
       getSession: async ({ headers }: { headers: Headers }) => {
         const cookie = headers.get('cookie') ?? ''
+        const baseUser = {
+          id: '1',
+          email: 'test@example.com',
+          name: 'Test User',
+          emailVerified: true,
+          image: null,
+          roles: ['admin'],
+        }
+        const baseSession = {
+          id: 'sess-1',
+          userId: '1',
+          token: 'tok-1',
+          expiresAt: new Date(Date.now() + 3600000),
+        }
         if (cookie.includes('hh.session_token=valid-session')) {
-          return {
-            user: {
-              id: '1',
-              email: 'test@example.com',
-              name: 'Test User',
-              emailVerified: true,
-              image: null,
-            },
-            session: {
-              id: 'sess-1',
-              userId: '1',
-              token: 'tok-1',
-              expiresAt: new Date(Date.now() + 3600000),
-            },
-          }
+          // Default: project 1 (member). Server-managed scope per
+          // issue #159 U4; the dashboard ignores X-Project-Id.
+          return { user: baseUser, session: { ...baseSession, projectId: 1 } }
+        }
+        if (cookie.includes('hh.session_token=no-project-session')) {
+          // Multi-project user pre-selector: session.projectId is null.
+          // requireProjectAccess should return 400 PROJECT_NOT_SELECTED.
+          return { user: baseUser, session: { ...baseSession, projectId: null } }
+        }
+        if (cookie.includes('hh.session_token=non-member-session')) {
+          // Session points at a project the user doesn't have membership
+          // in (defensive: should not happen via normal flows, but the
+          // middleware must enforce 403 if it does).
+          return { user: baseUser, session: { ...baseSession, projectId: 999 } }
         }
         return null
       },
@@ -343,20 +356,43 @@ describe('Attack Templates API: Auth guards', () => {
   }
 })
 
-describe('Attack Templates API: Project scope enforcement', () => {
-  it('should return 400 for GET / without project header', async () => {
+describe('Attack Templates API: Project scope enforcement (issue #159 U4)', () => {
+  it('returns 400 PROJECT_NOT_SELECTED when session has no projectId', async () => {
+    // Multi-project user pre-selector: session.projectId is null.
+    // Pre-#159 this was driven by the X-Project-Id header being
+    // absent; post-#159 the session row is the only source of truth.
     const res = await app.request(BASE, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        cookie: 'hh.session_token=valid-session',
+        cookie: 'hh.session_token=no-project-session',
       },
     })
-    // Without X-Project-Id, middleware throws 400 PROJECT_NOT_SELECTED
     expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('PROJECT_NOT_SELECTED')
   })
 
-  it('should return 403 for non-member project', async () => {
+  it('returns 403 when session.projectId points to a project the user is not a member of', async () => {
+    const res = await app.request(BASE, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: 'hh.session_token=non-member-session',
+      },
+    })
+    expect(res.status).toBe(403)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('AUTHZ_PROJECT_ACCESS_DENIED')
+  })
+
+  it('IGNORES X-Project-Id header (security invariant)', async () => {
+    // Caller tries to override scope to 999 (non-member) via the
+    // header. Session.projectId stays at 1 (member) so the auth +
+    // scope layer must NOT reject with 400 PROJECT_NOT_SELECTED or
+    // 403 AUTHZ_PROJECT_ACCESS_DENIED. Handler-internal failures
+    // (5xx) are out of scope for this assertion -- the security
+    // property is "the header didn't poison the scope decision".
     const res = await app.request(BASE, {
       method: 'GET',
       headers: {
@@ -365,7 +401,12 @@ describe('Attack Templates API: Project scope enforcement', () => {
         'x-project-id': '999',
       },
     })
-    expect(res.status).toBe(403)
+    expect([400, 403]).not.toContain(res.status)
+    if (res.status >= 400) {
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).not.toBe('PROJECT_NOT_SELECTED')
+      expect(body.error?.code).not.toBe('AUTHZ_PROJECT_ACCESS_DENIED')
+    }
   })
 })
 

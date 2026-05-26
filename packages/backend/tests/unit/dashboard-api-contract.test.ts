@@ -21,7 +21,14 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 // tests is structurally prevented.
 
 type SessionShape = {
-  user: { id: string; email: string; name: string; emailVerified: boolean; image: string | null }
+  user: {
+    id: string
+    email: string
+    name: string
+    emailVerified: boolean
+    image: string | null
+    roles?: string[]
+  }
   session: {
     id: string
     userId: string
@@ -38,12 +45,16 @@ const VALID_SESSION: SessionShape = {
     name: 'Test User',
     emailVerified: true,
     image: null,
+    // Global capability tier (issue #159 U5).
+    roles: ['admin'],
   },
   session: {
     id: 'sess-1',
     userId: '1',
     token: 'tok-1',
     expiresAt: new Date(Date.now() + 3600000),
+    // Server-managed scope (issue #159 U4).
+    projectId: null,
   },
 }
 

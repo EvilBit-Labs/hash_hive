@@ -43,12 +43,15 @@ if (!IS_ISOLATED) {
                 name: 'Admin',
                 emailVerified: true,
                 image: null,
+                roles: ['admin'],
               },
               session: {
                 id: 'sess',
                 userId: '1',
                 token: 'tok',
                 expiresAt: new Date(Date.now() + 3600000),
+                // Server-managed scope (issue #159 U4).
+                projectId: 1,
               },
             }
           }

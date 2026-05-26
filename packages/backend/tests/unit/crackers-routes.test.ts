@@ -39,12 +39,20 @@ mock.module('../../src/lib/auth.js', () => ({
               name: isAdmin ? 'Admin' : 'Viewer',
               emailVerified: true,
               image: null,
+              // Global capability tier (users.roles). Crackers are
+              // cluster-wide resources gated by global requireRole, so
+              // the session must surface roles -- per-project
+              // membership alone isn't enough.
+              roles: isAdmin ? ['admin'] : ['analyst'],
             },
             session: {
               id: 'sess',
               userId: isAdmin ? '1' : '2',
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
+              // session.projectId is null in this suite; crackers
+              // endpoints use the global tier guard, not project scope.
+              projectId: null,
             },
           }
         }

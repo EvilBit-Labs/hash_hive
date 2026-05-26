@@ -1,0 +1,84 @@
+/**
+ * Per-project membership guard (issue #159 U5). Was named `requireRole`
+ * pre-#159; renamed to `requireMembershipRole` so the two RBAC layers
+ * stay visually distinct in route files. Behavior unchanged from the
+ * pre-rename version.
+ */
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { Hono } from 'hono'
+
+import type { AppEnv } from '../../../src/types.js'
+
+let mockMembership: { id: number; userId: number; projectId: number; roles: string[] } | null = null
+
+mock.module('../../../src/db/index.js', () => ({ db: {} as never, client: {} }))
+mock.module('../../../src/services/auth.js', () => ({
+  findProjectMembership: async () => mockMembership,
+}))
+
+import { requireMembershipRole } from '../../../src/middleware/rbac.js'
+
+type CurrentUser = AppEnv['Variables']['currentUser']
+
+function makeApp(allowedRoles: Parameters<typeof requireMembershipRole>, user: CurrentUser) {
+  const app = new Hono<AppEnv>()
+  app.use('*', async (c, next) => {
+    c.set('currentUser', user)
+    await next()
+  })
+  app.use('*', requireMembershipRole(...allowedRoles))
+  app.get('/x', (c) => c.text('ok'))
+  return app
+}
+
+const baseUser: CurrentUser = {
+  userId: 1,
+  email: 'u@test',
+  roles: ['admin'],
+  projectId: 1,
+}
+
+beforeEach(() => {
+  mockMembership = null
+})
+
+describe('requireMembershipRole', () => {
+  it('returns 400 PROJECT_NOT_SELECTED when currentUser.projectId is null', async () => {
+    const app = makeApp(['admin'], { ...baseUser, projectId: null })
+    const res = await app.request('/x')
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('PROJECT_NOT_SELECTED')
+  })
+
+  it('returns 403 AUTHZ_PROJECT_ACCESS_DENIED when no membership row exists', async () => {
+    mockMembership = null
+    const app = makeApp(['admin'], baseUser)
+    const res = await app.request('/x')
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('AUTHZ_PROJECT_ACCESS_DENIED')
+  })
+
+  it("allows when membership.roles intersects the request's allowedRoles", async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['admin'] }
+    const app = makeApp(['admin'], baseUser)
+    const res = await app.request('/x')
+    expect(res.status).toBe(200)
+  })
+
+  it('allows when ANY of the requested roles intersects', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['contributor'] }
+    const app = makeApp(['admin', 'contributor'], baseUser)
+    expect((await app.request('/x')).status).toBe(200)
+  })
+
+  it('rejects when membership exists but roles do not intersect (403 INSUFFICIENT_PERMISSIONS)', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['viewer'] }
+    const app = makeApp(['admin'], baseUser)
+    const res = await app.request('/x')
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body['error']['code']).toBe('AUTHZ_INSUFFICIENT_PERMISSIONS')
+  })
+})

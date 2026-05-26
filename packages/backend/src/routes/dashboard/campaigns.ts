@@ -7,7 +7,7 @@ import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
+import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
   createAttack,
   createCampaign,
@@ -108,7 +108,7 @@ const createCampaignSchema = z.object({
 
 campaignRoutes.post(
   '/',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', createCampaignSchema),
   async (c) => {
     const data = c.req.valid('json')
@@ -213,7 +213,7 @@ campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
   })
 })
 
-campaignRoutes.delete('/:id', requireRole('admin', 'contributor'), async (c) => {
+campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
@@ -349,8 +349,16 @@ const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<App
 // PATCH is partial, PUT is full-replace. The handler bypasses
 // zValidator's default envelope so all error responses use the
 // dashboard's `{ error: { code, message } }` shape.
-campaignRoutes.patch('/:id', requireRole('admin', 'contributor'), updateCampaignHandler('PATCH'))
-campaignRoutes.put('/:id', requireRole('admin', 'contributor'), updateCampaignHandler('PUT'))
+campaignRoutes.patch(
+  '/:id',
+  requireMembershipRole('admin', 'contributor'),
+  updateCampaignHandler('PATCH')
+)
+campaignRoutes.put(
+  '/:id',
+  requireMembershipRole('admin', 'contributor'),
+  updateCampaignHandler('PUT')
+)
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
 
@@ -364,7 +372,7 @@ const lifecycleSchema = z.object({
 
 campaignRoutes.post(
   '/:id/lifecycle',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', lifecycleSchema),
   async (c) => {
     const id = Number(c.req.param('id'))
@@ -511,23 +519,27 @@ const lifecycleAliasHandler =
 
 campaignRoutes.post(
   '/:id/start',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   lifecycleAliasHandler('start')
 )
 campaignRoutes.post(
   '/:id/pause',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   lifecycleAliasHandler('pause')
 )
 campaignRoutes.post(
   '/:id/resume',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   lifecycleAliasHandler('resume')
 )
-campaignRoutes.post('/:id/stop', requireRole('admin', 'contributor'), lifecycleAliasHandler('stop'))
+campaignRoutes.post(
+  '/:id/stop',
+  requireMembershipRole('admin', 'contributor'),
+  lifecycleAliasHandler('stop')
+)
 campaignRoutes.post(
   '/:id/cancel',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   lifecycleAliasHandler('cancel')
 )
 
@@ -564,7 +576,7 @@ const SYNTHETIC_NEW_ATTACK_ID = -1
 
 campaignRoutes.post(
   '/:id/attacks',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', createAttackSchema),
   async (c) => {
     const campaignId = Number(c.req.param('id'))
@@ -572,7 +584,7 @@ campaignRoutes.post(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
     }
 
-    // Project-scope guard: requireRole only validates that the caller
+    // Project-scope guard: requireMembershipRole only validates that the caller
     // is a contributor *somewhere*; without this check a contributor
     // in project A could create attacks against a campaign in project
     // B by guessing the campaign id. 404 on cross-project to avoid
@@ -674,7 +686,7 @@ const updateAttackSchema = z.object({
 
 campaignRoutes.patch(
   '/:id/attacks/:attackId',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', updateAttackSchema),
   async (c) => {
     const campaignId = Number(c.req.param('id'))
@@ -763,23 +775,27 @@ campaignRoutes.patch(
   }
 )
 
-campaignRoutes.delete('/:id/attacks/:attackId', requireRole('admin', 'contributor'), async (c) => {
-  const campaignId = Number(c.req.param('id'))
-  const attackId = Number(c.req.param('attackId'))
+campaignRoutes.delete(
+  '/:id/attacks/:attackId',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const campaignId = Number(c.req.param('id'))
+    const attackId = Number(c.req.param('attackId'))
 
-  // Verify attack belongs to the specified campaign
-  const existing = await getAttackById(attackId)
-  if (!existing || existing.campaignId !== campaignId) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+    // Verify attack belongs to the specified campaign
+    const existing = await getAttackById(attackId)
+    if (!existing || existing.campaignId !== campaignId) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+    }
+
+    const attack = await deleteAttack(attackId)
+
+    if (!attack) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+    }
+
+    return c.json({ deleted: true })
   }
-
-  const attack = await deleteAttack(attackId)
-
-  if (!attack) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
-  }
-
-  return c.json({ deleted: true })
-})
+)
 
 export { campaignRoutes }

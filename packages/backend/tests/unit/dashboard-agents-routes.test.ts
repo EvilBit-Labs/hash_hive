@@ -25,12 +25,18 @@ mock.module('../../src/lib/auth.js', () => ({
               name: 'Admin',
               emailVerified: true,
               image: null,
+              // Global capability tier (users.roles) -- read by the
+              // new global requireRole guard from issue #159 U5.
+              roles: ['admin'],
             },
             session: {
               id: 'sess',
               userId: '1',
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
+              // Server-managed scope -- after issue #159 U4 the
+              // dashboard ignores X-Project-Id and reads this instead.
+              projectId: 1,
             },
           }
         }

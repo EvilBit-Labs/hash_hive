@@ -8,7 +8,7 @@ import type { AppEnv } from '../../types.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js'
+import { requireParamMembershipRole, requireParamProjectAccess } from '../../middleware/rbac.js'
 import { findProjectMembership } from '../../services/auth.js'
 import {
   addUserToProject,
@@ -201,7 +201,7 @@ projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
 // PATCH /projects/:projectId — update project (admin only)
 projectRoutes.patch(
   '/:projectId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateProjectSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -226,7 +226,7 @@ projectRoutes.get('/:projectId/members', requireParamProjectAccess(), async (c) 
 // POST /projects/:projectId/members — add a member (admin only)
 projectRoutes.post(
   '/:projectId/members',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', addMemberSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -239,7 +239,7 @@ projectRoutes.post(
 // PATCH /projects/:projectId/members/:userId — update roles (admin only)
 projectRoutes.patch(
   '/:projectId/members/:userId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateRolesSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -256,16 +256,20 @@ projectRoutes.patch(
 )
 
 // DELETE /projects/:projectId/members/:userId — remove a member (admin only)
-projectRoutes.delete('/:projectId/members/:userId', requireParamProjectRole('admin'), async (c) => {
-  const projectId = Number(c.req.param('projectId'))
-  const userId = Number(c.req.param('userId'))
-  const removed = await removeUserFromProject(projectId, userId)
+projectRoutes.delete(
+  '/:projectId/members/:userId',
+  requireParamMembershipRole('admin'),
+  async (c) => {
+    const projectId = Number(c.req.param('projectId'))
+    const userId = Number(c.req.param('userId'))
+    const removed = await removeUserFromProject(projectId, userId)
 
-  if (!removed) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+    if (!removed) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+    }
+
+    return c.json({ success: true })
   }
-
-  return c.json({ success: true })
-})
+)
 
 export { projectRoutes }
