@@ -5,7 +5,7 @@ import {
   projectUsers,
   users,
 } from '@hashhive/shared'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, exists } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { API_KEY_PREFIX, generateApiKey } from '../lib/api-key.js'
@@ -43,6 +43,7 @@ export async function getUserWithProjects(userId: number) {
       email: user.email,
       name: user.name,
       status: user.status,
+      roles: user.roles,
     },
     projects: memberships.map((m) => ({
       id: m.projectId,
@@ -51,6 +52,68 @@ export async function getUserWithProjects(userId: number) {
       roles: m.roles,
     })),
   }
+}
+
+/**
+ * Read the user's `last_project_id` preference. Returns null if the
+ * user does not exist or has no recorded preference. Used by the
+ * BetterAuth `session.create.before` hook to rehydrate session.projectId
+ * for multi-project users on sign-in.
+ */
+export async function getUserLastProjectId(userId: number): Promise<number | null> {
+  const [row] = await db
+    .select({ lastProjectId: users.lastProjectId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  return row?.lastProjectId ?? null
+}
+
+/**
+ * Persist the user's last-selected project. Called by
+ * `POST /api/v1/dashboard/projects/select` immediately after
+ * `auth.api.updateSession` so the persisted preference catches up to
+ * the active session scope. The two writes are NOT in a shared
+ * transaction (BetterAuth owns its own session update); the route
+ * handler returns 500 if this preference write fails after the
+ * session write succeeds, so the caller knows to retry. Pass null
+ * to clear the preference.
+ */
+export async function setUserLastProjectId(
+  userId: number,
+  projectId: number | null
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ lastProjectId: projectId, updatedAt: new Date() })
+    .where(eq(users.id, userId))
+}
+
+/**
+ * Persist `users.last_project_id` conditionally on the user still
+ * being a member of `projectId`. Returns the number of rows updated:
+ * 1 on success, 0 when membership was revoked between the route's
+ * earlier membership check and this write (concurrent admin removal).
+ *
+ * The conditional UPDATE is atomic at the SQL level -- no transaction
+ * needed -- so a race against `removeUserFromProject` cannot leave
+ * `users.last_project_id` pointing at a project the user no longer
+ * belongs to.
+ */
+export async function setUserLastProjectIdIfMember(
+  userId: number,
+  projectId: number
+): Promise<number> {
+  const memberExists = db
+    .select({ x: projectUsers.id })
+    .from(projectUsers)
+    .where(and(eq(projectUsers.userId, userId), eq(projectUsers.projectId, projectId)))
+  const updated = await db
+    .update(users)
+    .set({ lastProjectId: projectId, updatedAt: new Date() })
+    .where(and(eq(users.id, userId), exists(memberExists)))
+    .returning({ id: users.id })
+  return updated.length
 }
 
 // ─── API Key Management ─────────────────────────────────────────────

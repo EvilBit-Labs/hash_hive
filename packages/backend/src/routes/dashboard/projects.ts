@@ -5,11 +5,12 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js'
-import { findProjectMembership } from '../../services/auth.js'
+import { requireParamMembershipRole, requireParamProjectAccess } from '../../middleware/rbac.js'
+import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
   createProject,
@@ -101,7 +102,14 @@ function isSameOriginRequest(c: {
   try {
     const sourceHost = new URL(sourceUrl).host
     // Dev exception: localhost:3000 frontend → localhost:4000 backend.
-    if (sourceHost === 'localhost:3000' && host?.startsWith('localhost')) {
+    // Env-gated so the escape hatch can never ship to production --
+    // air-gapped deployments serve frontend and backend behind one
+    // reverse proxy and same-origin is the only legitimate path.
+    if (
+      env.NODE_ENV !== 'production' &&
+      sourceHost === 'localhost:3000' &&
+      host?.startsWith('localhost')
+    ) {
       return true
     }
     return sourceHost === host
@@ -183,6 +191,78 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     )
   }
 
+  // Persist the user's "remember last project" preference so the next
+  // sign-in rehydrates session.projectId via the session.create.before
+  // hook without forcing the user to re-pick. The conditional write is
+  // gated on membership at the SQL level (atomic against a concurrent
+  // removeUserFromProject) -- if the user lost membership between the
+  // initial check and now, the UPDATE affects 0 rows and we clear the
+  // session scope to match. Treated as part of the contract, not
+  // best-effort: a thrown error surfaces as 500 so the caller knows
+  // to retry.
+  let preferenceRowsUpdated: number
+  try {
+    preferenceRowsUpdated = await setUserLastProjectIdIfMember(userId, projectId)
+  } catch (err) {
+    logger.error(
+      { err, userId, projectId, requestId },
+      'projects/select: setUserLastProjectIdIfMember failed (session was updated but preference write failed)'
+    )
+    return c.json(
+      { error: { code: 'INTERNAL_ERROR', message: 'Failed to persist last project preference' } },
+      500
+    )
+  }
+  if (preferenceRowsUpdated === 0) {
+    // Membership was revoked between the original findProjectMembership
+    // check and this guarded write. The session was updated above to
+    // point at a project the user no longer belongs to; roll it back
+    // so the next request sees session.projectId=null and the dashboard
+    // routes to the selector.
+    logger.warn(
+      { userId, projectId, requestId },
+      'projects/select: membership revoked mid-request; rolling back session.projectId'
+    )
+    try {
+      await auth.api.updateSession({
+        headers: c.req.raw.headers,
+        body: { projectId: null },
+      })
+    } catch (err) {
+      // Rollback failed -- the session is now in an inconsistent state
+      // (scope still points at the forbidden project, but the user no
+      // longer has membership). 403 would be misleading (it implies
+      // the client can retry / re-select) but the session itself is
+      // poisoned and the client cannot recover without re-auth.
+      // Escalate to 500 with a distinct code so operators see this as
+      // a server-side incident and the client knows to surface a
+      // session-expired UX. The user's next dashboard request will
+      // either redirect via the 401 path on session expiry, or hit
+      // 403 PROJECT_NOT_SELECTED / AUTHZ_PROJECT_ACCESS_DENIED on the
+      // stale-scope route -- both of which the frontend already
+      // handles as "back to selector / login".
+      logger.error(
+        { err, userId, requestId },
+        'projects/select: rollback updateSession({ projectId: null }) failed; session scope is inconsistent'
+      )
+      return c.json(
+        {
+          error: {
+            code: 'AUTHZ_SESSION_ROLLBACK_FAILED',
+            message: 'Membership revoked mid-request and session rollback failed; re-authenticate.',
+          },
+        },
+        500
+      )
+    }
+    return c.json(
+      {
+        error: { code: 'AUTHZ_PROJECT_ACCESS_DENIED', message: 'Membership revoked mid-request' },
+      },
+      403
+    )
+  }
+
   return c.json({ project })
 })
 
@@ -201,7 +281,7 @@ projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
 // PATCH /projects/:projectId — update project (admin only)
 projectRoutes.patch(
   '/:projectId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateProjectSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -226,7 +306,7 @@ projectRoutes.get('/:projectId/members', requireParamProjectAccess(), async (c) 
 // POST /projects/:projectId/members — add a member (admin only)
 projectRoutes.post(
   '/:projectId/members',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', addMemberSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -239,7 +319,7 @@ projectRoutes.post(
 // PATCH /projects/:projectId/members/:userId — update roles (admin only)
 projectRoutes.patch(
   '/:projectId/members/:userId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateRolesSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -256,16 +336,20 @@ projectRoutes.patch(
 )
 
 // DELETE /projects/:projectId/members/:userId — remove a member (admin only)
-projectRoutes.delete('/:projectId/members/:userId', requireParamProjectRole('admin'), async (c) => {
-  const projectId = Number(c.req.param('projectId'))
-  const userId = Number(c.req.param('userId'))
-  const removed = await removeUserFromProject(projectId, userId)
+projectRoutes.delete(
+  '/:projectId/members/:userId',
+  requireParamMembershipRole('admin'),
+  async (c) => {
+    const projectId = Number(c.req.param('projectId'))
+    const userId = Number(c.req.param('userId'))
+    const removed = await removeUserFromProject(projectId, userId)
 
-  if (!removed) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+    if (!removed) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+    }
+
+    return c.json({ success: true })
   }
-
-  return c.json({ success: true })
-})
+)
 
 export { projectRoutes }

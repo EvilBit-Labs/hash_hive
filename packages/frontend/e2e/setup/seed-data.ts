@@ -42,10 +42,10 @@ export async function seedTestData(databaseUrl: string): Promise<{
       VALUES (${TEST_USER.email}, ${passwordHash}, ${TEST_USER.name}, 'active', true)
       RETURNING id
     `
-    if (!user) {
+    if (!user || typeof user['id'] !== 'number') {
       throw new Error('Failed to insert test user')
     }
-    const userId = user.id as number
+    const userId = user['id']
 
     // Insert project
     const [project] = await sql`
@@ -53,10 +53,10 @@ export async function seedTestData(databaseUrl: string): Promise<{
       VALUES (${TEST_PROJECT.name}, ${TEST_PROJECT.slug}, ${userId})
       RETURNING id
     `
-    if (!project) {
+    if (!project || typeof project['id'] !== 'number') {
       throw new Error('Failed to insert test project')
     }
-    const projectId = project.id as number
+    const projectId = project['id']
 
     // Insert project membership with admin role
     await sql`

@@ -25,12 +25,18 @@ mock.module('../../src/lib/auth.js', () => ({
               name: 'Admin',
               emailVerified: true,
               image: null,
+              // Global capability tier (users.roles) -- read by the
+              // new global requireRole guard from issue #159 U5.
+              roles: ['admin'],
             },
             session: {
               id: 'sess',
               userId: '1',
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
+              // Server-managed scope -- after issue #159 U4 the
+              // dashboard ignores X-Project-Id and reads this instead.
+              projectId: 1,
             },
           }
         }
@@ -55,6 +61,10 @@ mock.module('../../src/services/auth.js', () => ({
     if (userId === 1) return { projectId: 1, roles: ['admin'] }
     return null
   },
+  // Issue #159 U3 / U6: preference helpers.
+  getUserLastProjectId: async () => null,
+  setUserLastProjectIdIfMember: async () => 1,
+  setUserLastProjectId: async () => undefined,
 }))
 
 // ─── Mock the Agents Service Layer ───────────────────────────────────

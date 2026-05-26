@@ -149,6 +149,10 @@ if (!IS_ISOLATED) {
     issueUserApiKey: async () => ({ token: 'stub', metadata: { hasKey: false } }),
     revokeUserApiKey: async () => undefined,
     getUserApiKeyMetadata: async () => ({ hasKey: false }),
+    // Issue #159 U3 / U6: preference helpers.
+    getUserLastProjectId: async () => null,
+    setUserLastProjectIdIfMember: async () => 1,
+    setUserLastProjectId: async () => undefined,
   }))
 
   // Dynamic import: ESM static imports can't live inside a control

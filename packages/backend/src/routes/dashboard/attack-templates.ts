@@ -14,7 +14,7 @@ import type { AppEnv } from '../../types.js'
 
 import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
+import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
   createAttackTemplate,
   DuplicateAttackTemplateNameError,
@@ -148,7 +148,7 @@ attackTemplateRoutes.get(
 
 attackTemplateRoutes.post(
   '/',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', createAttackTemplateRequestSchema),
   async (c) => {
     const data = c.req.valid('json')
@@ -206,7 +206,7 @@ attackTemplateRoutes.get(
 
 attackTemplateRoutes.patch(
   '/:id',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('param', templateIdParamSchema),
   zValidator('json', updateTemplateSchema),
   async (c) => {
@@ -257,7 +257,7 @@ attackTemplateRoutes.patch(
 
 attackTemplateRoutes.delete(
   '/:id',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('param', templateIdParamSchema),
   async (c) => {
     const { id } = c.req.valid('param')
@@ -287,7 +287,7 @@ attackTemplateRoutes.delete(
 
 attackTemplateRoutes.post(
   '/import',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', importTemplateSchema),
   async (c) => {
     const data = c.req.valid('json')

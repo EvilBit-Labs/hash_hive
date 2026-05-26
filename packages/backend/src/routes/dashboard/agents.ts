@@ -5,7 +5,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../../types.js'
 
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
+import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
   getAgentById,
   getAgentErrors,
@@ -91,7 +91,7 @@ const updateAgentSchema = z.object({
 
 dashboardAgentRoutes.patch(
   '/:id',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('param', agentIdParamSchema, (result, c) =>
     result.success ? undefined : c.json(validationErrorEnvelope, 400)
   ),

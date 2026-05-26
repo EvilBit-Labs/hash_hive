@@ -1,4 +1,4 @@
-import { projects, projectUsers } from '@hashhive/shared'
+import { baSessions, projects, projectUsers, users } from '@hashhive/shared'
 import { and, count, desc, eq } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
@@ -142,12 +142,39 @@ export async function addUserToProject(projectId: number, userId: number, roles:
 }
 
 export async function removeUserFromProject(projectId: number, userId: number) {
-  const [removed] = await db
-    .delete(projectUsers)
-    .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
-    .returning()
-
-  return removed ?? null
+  // Wrap the membership delete and session-scope cleanup in a transaction
+  // so a partial failure leaves neither side stale. Without the session
+  // cleanup, a user whose membership is revoked stays wedged on the
+  // dashboard with session.projectId still pointing at the (now
+  // forbidden) project until their cookie session expires (8h) -- every
+  // request 403s with no in-app recovery. Issue #159 adversarial
+  // finding adv-001.
+  //
+  // We null `session.projectId` (rather than DELETE the session row)
+  // so the user keeps their auth state and the dashboard routes them to
+  // the project selector instead of forcing a re-sign-in. Also clears
+  // `users.last_project_id` if it pointed at this project so the next
+  // sign-in's session.create.before hook doesn't try to rehydrate a
+  // project the user no longer has membership in (the membership-check
+  // branch would catch it, but clearing the preference is cleaner).
+  return db.transaction(async (tx) => {
+    const [removed] = await tx
+      .delete(projectUsers)
+      .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
+      .returning()
+    if (!removed) {
+      return null
+    }
+    await tx
+      .update(baSessions)
+      .set({ projectId: null })
+      .where(and(eq(baSessions.userId, userId), eq(baSessions.projectId, projectId)))
+    await tx
+      .update(users)
+      .set({ lastProjectId: null })
+      .where(and(eq(users.id, userId), eq(users.lastProjectId, projectId)))
+    return removed
+  })
 }
 
 export async function getProjectMembers(projectId: number) {

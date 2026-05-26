@@ -826,3 +826,71 @@ export const selectProjectRequestSchema = z
     projectId: z.number().int().positive(),
   })
   .strict()
+
+// ─── Session User / Global RBAC ─────────────────────────────────────
+
+/**
+ * Global capability tier for the dashboard API. Stored on `users.roles`
+ * and surfaced on `session.user.roles` via BetterAuth. Distinct from
+ * `project_users.roles` (per-project membership: admin|contributor|viewer)
+ * which gates "what can this account do *within this project*".
+ *
+ * - `admin`    full access incl. user/project/cracker-binary admin
+ * - `operator` campaigns + resources (incl. run/stop/delete)
+ * - `analyst`  create + view; no destructive ops
+ */
+export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
+
+/**
+ * Wire-shape contract for the active session as exposed to the
+ * frontend. `selectedProjectId` is the server-managed scope, sourced
+ * from `session.session.projectId` -- never trust a client-supplied
+ * header for project scope on the dashboard surface.
+ *
+ * NOTE: this is NOT the same shape as `meResponseSchema.user` (which
+ * uses `id`/`name`/`status` and does not carry `selectedProjectId` --
+ * the top-level `meResponseSchema.selectedProjectId` carries it
+ * instead). `sessionUserSchema` is reserved for future session-payload
+ * contracts (e.g. a Control-API `/users/me` enriched with scope).
+ *
+ * Also NOT the same shape as the backend internal
+ * `AppEnv['Variables']['currentUser']`, which stores the same scope
+ * under the internal field name `projectId` (no `selected` prefix).
+ * Cross-boundary code consumes `SessionUser` (Zod-validated); internal
+ * backend code reads `currentUser.projectId`.
+ */
+export const sessionUserSchema = z.object({
+  userId: z.number().int().positive(),
+  email: z.email(),
+  roles: z.array(userRoleSchema).min(1),
+  selectedProjectId: z.number().int().positive().nullable(),
+})
+
+/**
+ * Response body for `GET /api/v1/dashboard/auth/me`. `selectedProjectId`
+ * is added by issue #159 so the frontend can decide "land on dashboard
+ * vs project selector" in a single round-trip without waiting for the
+ * WebSocket subscription to hydrate `useUiStore.selectedProjectId`.
+ */
+export const meResponseSchema = z.object({
+  user: z.object({
+    id: z.number().int().positive(),
+    email: z.email(),
+    name: z.string(),
+    status: z.string(),
+    roles: z.array(userRoleSchema).min(1),
+  }),
+  projects: z.array(
+    z.object({
+      id: z.number().int().positive(),
+      name: z.string(),
+      slug: z.string(),
+      // Per-project membership roles -- distinct vocabulary from
+      // userRoleSchema (global tier). Kept as z.string() so the
+      // shared schema is not coupled to today's three-value enum if
+      // per-project roles evolve independently.
+      roles: z.array(z.string()).min(1),
+    })
+  ),
+  selectedProjectId: z.number().int().positive().nullable(),
+})

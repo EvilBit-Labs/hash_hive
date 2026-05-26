@@ -13,7 +13,7 @@ import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
+import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import { guessHashType } from '../../services/hash-analysis.js'
 import {
   abortChunkedUpload,
@@ -50,6 +50,73 @@ import {
 // memory. See the multipart branch in POST /hash-lists.
 const MULTIPART_BODY_LIMIT_BYTES = MAX_DIRECT_UPLOAD_BYTES + 1_048_576
 
+/**
+ * Reject oversize multipart payloads BEFORE `c.req.parseBody()` buffers
+ * the whole body. Two protections:
+ *   1. `Transfer-Encoding: chunked` lacks Content-Length, so the cap
+ *      below can't enforce. Reject chunked outright (411) and steer
+ *      the caller to the streaming chunked-upload endpoint.
+ *   2. Declared Content-Length above `MULTIPART_BODY_LIMIT_BYTES` →
+ *      413 PAYLOAD_TOO_LARGE.
+ * `uploadHashListFile` / `uploadResourceFile` enforce the post-parse
+ * byte cap via `UploadTooLargeError` as a backstop. Without this
+ * pre-parse guard an authenticated admin/contributor could OOM the
+ * backend with a multi-GB body.
+ *
+ * Returns a Response when the request must be rejected; returns null
+ * when the caller should proceed to parseBody().
+ */
+function enforceMultipartSizeLimit(c: {
+  req: { header: (k: string) => string | undefined }
+  json: (body: unknown, status: number) => Response
+}): Response | null {
+  const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
+  if (transferEncoding.includes('chunked')) {
+    return c.json(
+      {
+        error: {
+          code: 'LENGTH_REQUIRED',
+          message:
+            'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
+        },
+      },
+      411
+    )
+  }
+  const contentLengthRaw = c.req.header('content-length')
+  const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
+  if (
+    typeof contentLength === 'number' &&
+    Number.isFinite(contentLength) &&
+    contentLength > MULTIPART_BODY_LIMIT_BYTES
+  ) {
+    return c.json(
+      {
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+        },
+      },
+      413
+    )
+  }
+  return null
+}
+
+/**
+ * Shared query-shape validator for the chunked-upload GET-status /
+ * DELETE-abort endpoints. Both routes accept `uploadId` (path) plus
+ * `resourceId` (positive integer query) + `resourceType` (one of the
+ * known resource buckets) -- truthiness checks alone admitted
+ * `resourceId=-1` and arbitrary `resourceType` strings, leaking
+ * invalid input into the service layer.
+ */
+const RESOURCE_TYPES = ['hash-lists', 'wordlists', 'rulelists', 'masklists'] as const
+const uploadStatusQuerySchema = z.object({
+  resourceId: z.coerce.number().int().positive(),
+  resourceType: z.enum(RESOURCE_TYPES),
+})
+
 const resourceRoutes = new Hono<AppEnv>()
 
 resourceRoutes.use('*', requireSession)
@@ -81,7 +148,7 @@ resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
 // (still in use by the CLI and older frontend code paths).
 // We cannot apply zValidator at registration because the validator binds
 // per content-type; instead we dispatch inside the handler.
-resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c) => {
+resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor'), async (c) => {
   const { projectId } = c.get('currentUser')
   if (!projectId) {
     return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
@@ -91,49 +158,8 @@ resourceRoutes.post('/hash-lists', requireRole('admin', 'contributor'), async (c
 
   // ─── Multipart one-shot upload (ticket AC #1) ──────────────────────
   if (contentType.startsWith('multipart/form-data')) {
-    // Reject oversize multipart payloads BEFORE parseBody buffers them.
-    // Without this guard, an authenticated admin/contributor could OOM
-    // the backend with a multi-GB body.
-    //
-    // Defense:
-    //   1. Reject `Transfer-Encoding: chunked` outright (411). chunked
-    //      omits Content-Length, so the size guard below couldn't
-    //      enforce a cap and the body would buffer unbounded into
-    //      parseBody. Callers with files of unknown size must use the
-    //      streaming chunked-upload endpoint at `/upload/initiate`.
-    //   2. Reject when declared Content-Length exceeds the cap.
-    //   3. Backstop: `uploadHashListFile` still enforces the byte cap
-    //      via `UploadTooLargeError` after parseBody.
-    const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
-    if (transferEncoding.includes('chunked')) {
-      return c.json(
-        {
-          error: {
-            code: 'LENGTH_REQUIRED',
-            message:
-              'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
-          },
-        },
-        411
-      )
-    }
-    const contentLengthRaw = c.req.header('content-length')
-    const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
-    if (
-      typeof contentLength === 'number' &&
-      Number.isFinite(contentLength) &&
-      contentLength > MULTIPART_BODY_LIMIT_BYTES
-    ) {
-      return c.json(
-        {
-          error: {
-            code: 'PAYLOAD_TOO_LARGE',
-            message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-          },
-        },
-        413
-      )
-    }
+    const sizeGuardResponse = enforceMultipartSizeLimit(c)
+    if (sizeGuardResponse) return sizeGuardResponse
     let body: Awaited<ReturnType<typeof c.req.parseBody>>
     try {
       body = await c.req.parseBody()
@@ -287,96 +313,123 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   })
 })
 
-resourceRoutes.delete('/hash-lists/:id', requireRole('admin', 'contributor'), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
-
-  const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid hash list id' } }, 400)
-  }
-
-  try {
-    const deleted = await deleteHashList(id, projectId)
-    if (!deleted) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
-    }
-    return c.body(null, 204)
-  } catch (err) {
-    if (err instanceof ResourceInUseError) {
-      return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
-    }
-    throw err
-  }
-})
-
-resourceRoutes.post('/hash-lists/:id/upload', requireRole('admin', 'contributor'), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
-
-  const id = Number(c.req.param('id'))
-  const hashList = await getHashListById(id, projectId)
-
-  if (!hashList) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
-  }
-
-  const body = await c.req.parseBody()
-  const file = body['file']
-
-  if (!(file instanceof File)) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
-  }
-
-  try {
-    const result = await uploadHashListFile(id, projectId, file)
-    return c.json(result)
-  } catch (err) {
-    if (err instanceof UploadTooLargeError) {
+resourceRoutes.delete(
+  '/hash-lists/:id',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
       return c.json(
-        {
-          error: {
-            code: 'PAYLOAD_TOO_LARGE',
-            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-          },
-        },
-        413
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
       )
     }
-    throw err
+
+    const id = Number(c.req.param('id'))
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid hash list id' } }, 400)
+    }
+
+    try {
+      const deleted = await deleteHashList(id, projectId)
+      if (!deleted) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } },
+          404
+        )
+      }
+      return c.body(null, 204)
+    } catch (err) {
+      if (err instanceof ResourceInUseError) {
+        return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+      }
+      throw err
+    }
   }
-})
+)
 
-resourceRoutes.post('/hash-lists/:id/import', requireRole('admin', 'contributor'), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
+resourceRoutes.post(
+  '/hash-lists/:id/upload',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
+
+    const id = Number(c.req.param('id'))
+    const hashList = await getHashListById(id, projectId)
+
+    if (!hashList) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+
+    const sizeGuardResponse = enforceMultipartSizeLimit(c)
+    if (sizeGuardResponse) return sizeGuardResponse
+
+    const body = await c.req.parseBody()
+    const file = body['file']
+
+    if (!(file instanceof File)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+    }
+
+    try {
+      const result = await uploadHashListFile(id, projectId, file)
+      return c.json(result)
+    } catch (err) {
+      if (err instanceof UploadTooLargeError) {
+        return c.json(
+          {
+            error: {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+            },
+          },
+          413
+        )
+      }
+      throw err
+    }
   }
+)
 
-  const id = Number(c.req.param('id'))
+resourceRoutes.post(
+  '/hash-lists/:id/import',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
 
-  // Verify hash list belongs to project before importing
-  const hl = await getHashListById(id, projectId)
-  if (!hl) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    const id = Number(c.req.param('id'))
+
+    // Verify hash list belongs to project before importing
+    const hl = await getHashListById(id, projectId)
+    if (!hl) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+
+    const result = await importHashList(id, projectId)
+
+    if (!result) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    }
+
+    if ('error' in result) {
+      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503)
+    }
+
+    return c.json(result)
   }
-
-  const result = await importHashList(id, projectId)
-
-  if (!result) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
-  }
-
-  if ('error' in result) {
-    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503)
-  }
-
-  return c.json(result)
-})
+)
 
 resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) => {
   const { projectId } = c.get('currentUser')
@@ -479,7 +532,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
 
   resourceRoutes.post(
     `/${prefix}`,
-    requireRole('admin', 'contributor'),
+    requireMembershipRole('admin', 'contributor'),
     zValidator('json', createSchema),
     async (c) => {
       const data = c.req.valid('json')
@@ -516,78 +569,92 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     return c.json({ item })
   })
 
-  resourceRoutes.post(`/${prefix}/:id/upload`, requireRole('admin', 'contributor'), async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
-    const id = Number(c.req.param('id'))
-    const item = await getResourceById(table, id, projectId)
-
-    if (!item) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
-        404
-      )
-    }
-
-    const body = await c.req.parseBody()
-    const file = body['file']
-
-    if (!(file instanceof File)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
-    }
-
-    try {
-      const result = await uploadResourceFile(table, id, projectId, prefix, file)
-      return c.json(result)
-    } catch (err) {
-      if (err instanceof UploadTooLargeError) {
+  resourceRoutes.post(
+    `/${prefix}/:id/upload`,
+    requireMembershipRole('admin', 'contributor'),
+    async (c) => {
+      const { projectId } = c.get('currentUser')
+      if (!projectId) {
         return c.json(
-          {
-            error: {
-              code: 'PAYLOAD_TOO_LARGE',
-              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-            },
-          },
-          413
+          { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+          400
         )
       }
-      throw err
-    }
-  })
+      const id = Number(c.req.param('id'))
+      const item = await getResourceById(table, id, projectId)
 
-  resourceRoutes.delete(`/${prefix}/:id`, requireRole('admin', 'contributor'), async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
-    const id = Number(c.req.param('id'))
-    if (!Number.isInteger(id) || id <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
-    }
-    try {
-      const deleted = await deleteResource(table, id, projectId, prefix)
-      if (!deleted) {
+      if (!item) {
         return c.json(
           { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
           404
         )
       }
-      return c.body(null, 204)
-    } catch (err) {
-      if (err instanceof ResourceInUseError) {
-        return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+
+      const sizeGuardResponse = enforceMultipartSizeLimit(c)
+      if (sizeGuardResponse) return sizeGuardResponse
+
+      const body = await c.req.parseBody()
+      const file = body['file']
+
+      if (!(file instanceof File)) {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: 'file field is required' } },
+          400
+        )
       }
-      throw err
+
+      try {
+        const result = await uploadResourceFile(table, id, projectId, prefix, file)
+        return c.json(result)
+      } catch (err) {
+        if (err instanceof UploadTooLargeError) {
+          return c.json(
+            {
+              error: {
+                code: 'PAYLOAD_TOO_LARGE',
+                message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+              },
+            },
+            413
+          )
+        }
+        throw err
+      }
     }
-  })
+  )
+
+  resourceRoutes.delete(
+    `/${prefix}/:id`,
+    requireMembershipRole('admin', 'contributor'),
+    async (c) => {
+      const { projectId } = c.get('currentUser')
+      if (!projectId) {
+        return c.json(
+          { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+          400
+        )
+      }
+      const id = Number(c.req.param('id'))
+      if (!Number.isInteger(id) || id <= 0) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
+      }
+      try {
+        const deleted = await deleteResource(table, id, projectId, prefix)
+        if (!deleted) {
+          return c.json(
+            { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
+            404
+          )
+        }
+        return c.body(null, 204)
+      } catch (err) {
+        if (err instanceof ResourceInUseError) {
+          return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+        }
+        throw err
+      }
+    }
+  )
 
   resourceRoutes.get(`/${prefix}/:id/download`, requireProjectAccess(), async (c) => {
     const { projectId } = c.get('currentUser')
@@ -646,7 +713,7 @@ const initiateUploadSchema = z.object({
 
 resourceRoutes.post(
   '/upload/initiate',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', initiateUploadSchema),
   async (c) => {
     const data = c.req.valid('json')
@@ -673,7 +740,7 @@ resourceRoutes.post(
 
 resourceRoutes.put(
   '/upload/:uploadId/part/:partNumber',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   async (c) => {
     const uploadId = c.req.param('uploadId')
     const partNumber = Number(c.req.param('partNumber'))
@@ -743,7 +810,7 @@ const completeUploadSchema = z.object({
 
 resourceRoutes.post(
   '/upload/:uploadId/complete',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', completeUploadSchema),
   async (c) => {
     const uploadId = c.req.param('uploadId')
@@ -775,60 +842,84 @@ resourceRoutes.post(
   }
 )
 
-resourceRoutes.delete('/upload/:uploadId', requireRole('admin', 'contributor'), async (c) => {
-  const uploadId = c.req.param('uploadId')
-  const resourceId = Number(c.req.query('resourceId'))
-  const resourceType = c.req.query('resourceType')
-
-  if (!uploadId || !resourceId || !resourceType) {
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'uploadId, resourceId, and resourceType are required',
+resourceRoutes.delete(
+  '/upload/:uploadId',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const uploadId = c.req.param('uploadId')
+    if (!uploadId) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+    }
+    const parsed = uploadStatusQuerySchema.safeParse({
+      resourceId: c.req.query('resourceId'),
+      resourceType: c.req.query('resourceType'),
+    })
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues.map((i) => i.message).join('; '),
+          },
         },
-      },
-      400
-    )
+        400
+      )
+    }
+    const { resourceId, resourceType } = parsed.data
+
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
+
+    await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
+    return c.json({ acknowledged: true })
   }
+)
 
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
-
-  await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
-  return c.json({ acknowledged: true })
-})
-
-resourceRoutes.get('/upload/:uploadId/status', requireRole('admin', 'contributor'), async (c) => {
-  const uploadId = c.req.param('uploadId')
-  const resourceId = Number(c.req.query('resourceId'))
-  const resourceType = c.req.query('resourceType')
-
-  if (!uploadId || !resourceId || !resourceType) {
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'uploadId, resourceId, and resourceType are required',
+resourceRoutes.get(
+  '/upload/:uploadId/status',
+  requireMembershipRole('admin', 'contributor'),
+  async (c) => {
+    const uploadId = c.req.param('uploadId')
+    if (!uploadId) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+    }
+    const parsed = uploadStatusQuerySchema.safeParse({
+      resourceId: c.req.query('resourceId'),
+      resourceType: c.req.query('resourceType'),
+    })
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues.map((i) => i.message).join('; '),
+          },
         },
-      },
-      400
-    )
-  }
+        400
+      )
+    }
+    const { resourceId, resourceType } = parsed.data
 
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+    const { projectId } = c.get('currentUser')
+    if (!projectId) {
+      return c.json(
+        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
+        400
+      )
+    }
 
-  const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
-  if (!result) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Upload not found' } }, 404)
-  }
+    const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
+    if (!result) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Upload not found' } }, 404)
+    }
 
-  return c.json({ uploadId, ...result })
-})
+    return c.json({ uploadId, ...result })
+  }
+)
 
 export { resourceRoutes }

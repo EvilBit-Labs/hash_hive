@@ -8,20 +8,14 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
-import { useUiStore } from '../stores/ui'
 
-/**
- * Backend `requireRole('admin')` middleware derives project context from
- * the `X-Project-Id` header, so any non-`api` fetch (e.g., raw FormData
- * uploads, raw binary PUTs) must add it explicitly. Returns an empty
- * record when no project is selected so the request still goes through
- * — the backend will respond with `PROJECT_NOT_SELECTED` and the user
- * sees a typed error rather than a silent failure.
- */
-function projectHeaders(): Record<string, string> {
-  const projectId = useUiStore.getState().selectedProjectId
-  return projectId ? { 'X-Project-Id': String(projectId) } : {}
-}
+// Pre-#159 a `projectHeaders()` helper injected `X-Project-Id` on raw
+// fetch calls (FormData uploads, binary PUTs) because the backend
+// dashboard middleware read scope from the header. Issue #159 U4
+// moved that read to the BetterAuth session row, so the header is
+// dead weight on dashboard requests and the helper was removed.
+// Cracker binaries are cluster-wide (not project-scoped) and gated
+// by the global `requireRole('admin')` tier; no scope header needed.
 
 /**
  * Wire DTO for cracker binaries. Derived from `SelectCrackerBinary` so a
@@ -165,7 +159,6 @@ export function useUploadCrackerFile(callbacks: MutationCallbacks = {}) {
       const res = await fetch(`/api/v1/dashboard/crackers/${input.id}/upload`, {
         method: 'POST',
         credentials: 'include',
-        headers: projectHeaders(),
         body: fd,
       })
       if (!res.ok) {
@@ -249,7 +242,6 @@ export function useUploadCrackerChunked(callbacks: MutationCallbacks = {}) {
           const res = await fetch(url, {
             method: 'PUT',
             credentials: 'include',
-            headers: projectHeaders(),
             body: chunk,
             ...(signal ? { signal } : {}),
           })
