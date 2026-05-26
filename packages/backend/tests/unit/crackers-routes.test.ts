@@ -81,6 +81,9 @@ mock.module('../../src/services/auth.js', () => ({
     if (userId === 2) return { projectId: 1, roles: ['viewer'] }
     return null
   },
+  // Issue #159 U3 / U6: preference helpers.
+  getUserLastProjectId: async () => null,
+  setUserLastProjectId: async () => undefined,
 }))
 
 // ─── Mock the Cracker Service Layer ──────────────────────────────────

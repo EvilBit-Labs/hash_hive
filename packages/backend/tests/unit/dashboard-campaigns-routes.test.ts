@@ -79,6 +79,10 @@ if (!IS_ISOLATED) {
       if (userId === 1) return { projectId: 1, roles: ['admin'] }
       return null
     },
+    // Issue #159 U3 / U6: stub the preference helpers so projects.ts
+    // and lib/auth.ts module imports resolve without errors.
+    getUserLastProjectId: async () => null,
+    setUserLastProjectId: async () => undefined,
     issueUserApiKey: mock(async () => ({ apiKey: 'cst_test', metadata: null })),
     revokeUserApiKey: mock(async () => undefined),
     getUserApiKeyMetadata: mock(async () => null),

@@ -61,6 +61,9 @@ mock.module('../../src/services/auth.js', () => ({
     if (userId === 1) return { projectId: 1, roles: ['admin'] }
     return null
   },
+  // Issue #159 U3 / U6: preference helpers.
+  getUserLastProjectId: async () => null,
+  setUserLastProjectId: async () => undefined,
 }))
 
 // ─── Mock the Agents Service Layer ───────────────────────────────────
