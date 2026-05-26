@@ -56,6 +56,7 @@ import type {
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
   loginRequestSchema,
+  meResponseSchema,
   requiredCapabilitiesSchema,
   resourceUpdateEventDataSchema,
   selectAgentBenchmarkSchema,
@@ -77,8 +78,10 @@ import type {
   selectTaskSchema,
   selectUserSchema,
   selectWordListSchema,
+  sessionUserSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
+  userRoleSchema,
   workRangeSchema,
 } from '../schemas/index.js'
 
@@ -292,3 +295,26 @@ export type ConnectionStatus = z.infer<typeof connectionStatusSchema>
  */
 export type SelectProjectRequest = z.infer<typeof selectProjectRequestSchema>
 export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>
+
+// ─── Session User / Global RBAC ─────────────────────────────────────
+
+/**
+ * Global capability tier. See `userRoleSchema` for the meaning of each
+ * value. Distinct from per-project membership roles on `projectUsers`.
+ */
+export type UserRole = z.infer<typeof userRoleSchema>
+
+/**
+ * Resolved session context backend handlers receive via
+ * `c.get('currentUser')`. The shape is mirrored in
+ * `AppEnv['Variables']['currentUser']` so route code and middleware
+ * speak the same type as the frontend.
+ */
+export type SessionUser = z.infer<typeof sessionUserSchema>
+
+/**
+ * Response body for `GET /api/v1/dashboard/auth/me`. Consumed by
+ * `packages/frontend/src/stores/auth.ts` to hydrate the auth + UI
+ * stores in a single round-trip.
+ */
+export type MeResponse = z.infer<typeof meResponseSchema>
