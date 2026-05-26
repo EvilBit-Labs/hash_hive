@@ -77,6 +77,7 @@ if (!IS_ISOLATED) {
     // Issue #159 U3 / U6: preference helpers must resolve at module
     // import time even if no test exercises them.
     getUserLastProjectId: async () => null,
+    setUserLastProjectIdIfMember: async () => 1,
     setUserLastProjectId: async () => undefined,
     issueUserApiKey: mock(async () => ({ apiKey: 'cst_test', metadata: null })),
     revokeUserApiKey: mock(async () => undefined),

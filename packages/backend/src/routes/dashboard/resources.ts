@@ -50,6 +50,73 @@ import {
 // memory. See the multipart branch in POST /hash-lists.
 const MULTIPART_BODY_LIMIT_BYTES = MAX_DIRECT_UPLOAD_BYTES + 1_048_576
 
+/**
+ * Reject oversize multipart payloads BEFORE `c.req.parseBody()` buffers
+ * the whole body. Two protections:
+ *   1. `Transfer-Encoding: chunked` lacks Content-Length, so the cap
+ *      below can't enforce. Reject chunked outright (411) and steer
+ *      the caller to the streaming chunked-upload endpoint.
+ *   2. Declared Content-Length above `MULTIPART_BODY_LIMIT_BYTES` →
+ *      413 PAYLOAD_TOO_LARGE.
+ * `uploadHashListFile` / `uploadResourceFile` enforce the post-parse
+ * byte cap via `UploadTooLargeError` as a backstop. Without this
+ * pre-parse guard an authenticated admin/contributor could OOM the
+ * backend with a multi-GB body.
+ *
+ * Returns a Response when the request must be rejected; returns null
+ * when the caller should proceed to parseBody().
+ */
+function enforceMultipartSizeLimit(c: {
+  req: { header: (k: string) => string | undefined }
+  json: (body: unknown, status: number) => Response
+}): Response | null {
+  const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
+  if (transferEncoding.includes('chunked')) {
+    return c.json(
+      {
+        error: {
+          code: 'LENGTH_REQUIRED',
+          message:
+            'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
+        },
+      },
+      411
+    )
+  }
+  const contentLengthRaw = c.req.header('content-length')
+  const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
+  if (
+    typeof contentLength === 'number' &&
+    Number.isFinite(contentLength) &&
+    contentLength > MULTIPART_BODY_LIMIT_BYTES
+  ) {
+    return c.json(
+      {
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+        },
+      },
+      413
+    )
+  }
+  return null
+}
+
+/**
+ * Shared query-shape validator for the chunked-upload GET-status /
+ * DELETE-abort endpoints. Both routes accept `uploadId` (path) plus
+ * `resourceId` (positive integer query) + `resourceType` (one of the
+ * known resource buckets) -- truthiness checks alone admitted
+ * `resourceId=-1` and arbitrary `resourceType` strings, leaking
+ * invalid input into the service layer.
+ */
+const RESOURCE_TYPES = ['hash-lists', 'wordlists', 'rulelists', 'masklists'] as const
+const uploadStatusQuerySchema = z.object({
+  resourceId: z.coerce.number().int().positive(),
+  resourceType: z.enum(RESOURCE_TYPES),
+})
+
 const resourceRoutes = new Hono<AppEnv>()
 
 resourceRoutes.use('*', requireSession)
@@ -91,49 +158,8 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
 
   // ─── Multipart one-shot upload (ticket AC #1) ──────────────────────
   if (contentType.startsWith('multipart/form-data')) {
-    // Reject oversize multipart payloads BEFORE parseBody buffers them.
-    // Without this guard, an authenticated admin/contributor could OOM
-    // the backend with a multi-GB body.
-    //
-    // Defense:
-    //   1. Reject `Transfer-Encoding: chunked` outright (411). chunked
-    //      omits Content-Length, so the size guard below couldn't
-    //      enforce a cap and the body would buffer unbounded into
-    //      parseBody. Callers with files of unknown size must use the
-    //      streaming chunked-upload endpoint at `/upload/initiate`.
-    //   2. Reject when declared Content-Length exceeds the cap.
-    //   3. Backstop: `uploadHashListFile` still enforces the byte cap
-    //      via `UploadTooLargeError` after parseBody.
-    const transferEncoding = (c.req.header('transfer-encoding') ?? '').toLowerCase()
-    if (transferEncoding.includes('chunked')) {
-      return c.json(
-        {
-          error: {
-            code: 'LENGTH_REQUIRED',
-            message:
-              'Multipart uploads must include Content-Length. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for streamed/large files.',
-          },
-        },
-        411
-      )
-    }
-    const contentLengthRaw = c.req.header('content-length')
-    const contentLength = contentLengthRaw ? Number(contentLengthRaw) : undefined
-    if (
-      typeof contentLength === 'number' &&
-      Number.isFinite(contentLength) &&
-      contentLength > MULTIPART_BODY_LIMIT_BYTES
-    ) {
-      return c.json(
-        {
-          error: {
-            code: 'PAYLOAD_TOO_LARGE',
-            message: `Multipart body (${contentLength} bytes) exceeds ${MULTIPART_BODY_LIMIT_BYTES} bytes. Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-          },
-        },
-        413
-      )
-    }
+    const sizeGuardResponse = enforceMultipartSizeLimit(c)
+    if (sizeGuardResponse) return sizeGuardResponse
     let body: Awaited<ReturnType<typeof c.req.parseBody>>
     try {
       body = await c.req.parseBody()
@@ -340,6 +366,9 @@ resourceRoutes.post(
     if (!hashList) {
       return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
     }
+
+    const sizeGuardResponse = enforceMultipartSizeLimit(c)
+    if (sizeGuardResponse) return sizeGuardResponse
 
     const body = await c.req.parseBody()
     const file = body['file']
@@ -560,6 +589,9 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
           404
         )
       }
+
+      const sizeGuardResponse = enforceMultipartSizeLimit(c)
+      if (sizeGuardResponse) return sizeGuardResponse
 
       const body = await c.req.parseBody()
       const file = body['file']
@@ -815,20 +847,25 @@ resourceRoutes.delete(
   requireMembershipRole('admin', 'contributor'),
   async (c) => {
     const uploadId = c.req.param('uploadId')
-    const resourceId = Number(c.req.query('resourceId'))
-    const resourceType = c.req.query('resourceType')
-
-    if (!uploadId || !resourceId || !resourceType) {
+    if (!uploadId) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+    }
+    const parsed = uploadStatusQuerySchema.safeParse({
+      resourceId: c.req.query('resourceId'),
+      resourceType: c.req.query('resourceType'),
+    })
+    if (!parsed.success) {
       return c.json(
         {
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'uploadId, resourceId, and resourceType are required',
+            message: parsed.error.issues.map((i) => i.message).join('; '),
           },
         },
         400
       )
     }
+    const { resourceId, resourceType } = parsed.data
 
     const { projectId } = c.get('currentUser')
     if (!projectId) {
@@ -848,20 +885,25 @@ resourceRoutes.get(
   requireMembershipRole('admin', 'contributor'),
   async (c) => {
     const uploadId = c.req.param('uploadId')
-    const resourceId = Number(c.req.query('resourceId'))
-    const resourceType = c.req.query('resourceType')
-
-    if (!uploadId || !resourceId || !resourceType) {
+    if (!uploadId) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+    }
+    const parsed = uploadStatusQuerySchema.safeParse({
+      resourceId: c.req.query('resourceId'),
+      resourceType: c.req.query('resourceType'),
+    })
+    if (!parsed.success) {
       return c.json(
         {
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'uploadId, resourceId, and resourceType are required',
+            message: parsed.error.issues.map((i) => i.message).join('; '),
           },
         },
         400
       )
     }
+    const { resourceId, resourceType } = parsed.data
 
     const { projectId } = c.get('currentUser')
     if (!projectId) {

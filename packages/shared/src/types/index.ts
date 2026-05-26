@@ -305,17 +305,21 @@ export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>
 export type UserRole = z.infer<typeof userRoleSchema>
 
 /**
- * Wire-shape contract for the active session. Used by the dashboard
- * frontend (where `selectedProjectId` mirrors the server-managed
- * BetterAuth `session.session.projectId`) and as the canonical Zod
- * schema for `meResponseSchema.user`.
+ * Wire-shape contract for the active session — `userId`, `email`,
+ * `roles`, and `selectedProjectId`. `selectedProjectId` mirrors the
+ * server-managed BetterAuth `session.session.projectId`.
  *
- * NOTE: backend `AppEnv['Variables']['currentUser']` is a closely
- * related but DISTINCT shape — it stores the same scope under the
- * internal field name `projectId` (no `selected` prefix) and is
- * populated by `requireSession` / `requireApiKey`. Cross-boundary
- * code should consume `SessionUser` (Zod-validated); internal
- * backend code reads `currentUser.projectId`.
+ * NOTE: this is NOT the same shape as `meResponseSchema.user`, which
+ * uses `id`/`name`/`status` and excludes `selectedProjectId` (the
+ * top-level `meResponseSchema.selectedProjectId` carries it instead).
+ * `SessionUser` is the canonical session-state contract; `MeResponse.user`
+ * is the user-profile slice returned on `/auth/me`.
+ *
+ * Also NOT the same shape as backend `AppEnv['Variables']['currentUser']`,
+ * which stores the same scope under the internal field name `projectId`
+ * (no `selected` prefix) and is populated by `requireSession` /
+ * `requireApiKey`. Cross-boundary code consumes `SessionUser`
+ * (Zod-validated); internal backend code reads `currentUser.projectId`.
  */
 export type SessionUser = z.infer<typeof sessionUserSchema>
 

@@ -238,6 +238,7 @@ mock.module('../../src/services/auth.js', () => ({
   },
   // Issue #159 U3 / U6: preference helpers.
   getUserLastProjectId: async () => null,
+  setUserLastProjectIdIfMember: async () => 1,
   setUserLastProjectId: async () => undefined,
 }))
 

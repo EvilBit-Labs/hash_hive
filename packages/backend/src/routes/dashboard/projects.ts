@@ -10,7 +10,7 @@ import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireParamMembershipRole, requireParamProjectAccess } from '../../middleware/rbac.js'
-import { findProjectMembership, setUserLastProjectId } from '../../services/auth.js'
+import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
   createProject,
@@ -191,22 +191,56 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     )
   }
 
-  // Persist the user's "remember last project" preference (#159 U6)
-  // so the next sign-in rehydrates session.projectId via the
-  // session.create.before hook without forcing the user to re-pick.
-  // Treated as part of the contract, not best-effort: if the write
-  // fails, the active session is already updated but the next
-  // sign-in won't reattach, so we surface a 500 rather than mask it.
+  // Persist the user's "remember last project" preference so the next
+  // sign-in rehydrates session.projectId via the session.create.before
+  // hook without forcing the user to re-pick. The conditional write is
+  // gated on membership at the SQL level (atomic against a concurrent
+  // removeUserFromProject) -- if the user lost membership between the
+  // initial check and now, the UPDATE affects 0 rows and we clear the
+  // session scope to match. Treated as part of the contract, not
+  // best-effort: a thrown error surfaces as 500 so the caller knows
+  // to retry.
+  let preferenceRowsUpdated: number
   try {
-    await setUserLastProjectId(userId, projectId)
+    preferenceRowsUpdated = await setUserLastProjectIdIfMember(userId, projectId)
   } catch (err) {
     logger.error(
       { err, userId, projectId, requestId },
-      'projects/select: setUserLastProjectId failed (session was updated but preference write failed)'
+      'projects/select: setUserLastProjectIdIfMember failed (session was updated but preference write failed)'
     )
     return c.json(
       { error: { code: 'INTERNAL_ERROR', message: 'Failed to persist last project preference' } },
       500
+    )
+  }
+  if (preferenceRowsUpdated === 0) {
+    // Membership was revoked between the original findProjectMembership
+    // check and this guarded write. The session was updated above to
+    // point at a project the user no longer belongs to; roll it back
+    // so the next request sees session.projectId=null and the dashboard
+    // routes to the selector. Best-effort: if THIS fails too the user
+    // is wedged until the session expires, but we've already returned
+    // 5xx so the client knows to retry.
+    logger.warn(
+      { userId, projectId, requestId },
+      'projects/select: membership revoked mid-request; rolling back session.projectId'
+    )
+    try {
+      await auth.api.updateSession({
+        headers: c.req.raw.headers,
+        body: { projectId: null },
+      })
+    } catch (err) {
+      logger.error(
+        { err, userId, requestId },
+        'projects/select: failed to roll back session.projectId after membership-revoked detection'
+      )
+    }
+    return c.json(
+      {
+        error: { code: 'AUTHZ_PROJECT_ACCESS_DENIED', message: 'Membership revoked mid-request' },
+      },
+      403
     )
   }
 

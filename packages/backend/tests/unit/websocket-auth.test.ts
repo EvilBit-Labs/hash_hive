@@ -151,6 +151,7 @@ if (!IS_ISOLATED) {
     getUserApiKeyMetadata: async () => ({ hasKey: false }),
     // Issue #159 U3 / U6: preference helpers.
     getUserLastProjectId: async () => null,
+    setUserLastProjectIdIfMember: async () => 1,
     setUserLastProjectId: async () => undefined,
   }))
 

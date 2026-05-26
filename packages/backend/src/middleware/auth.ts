@@ -90,6 +90,20 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
     throw authError('Authentication required')
   }
 
+  // BetterAuth surfaces user.id as a string (see GOTCHAS.md). Validate
+  // before coercing so an invalid principal (NaN, 0, junk) cannot land
+  // in currentUser and reach downstream RBAC / membership checks. Fail
+  // closed with the existing AUTH_TOKEN_INVALID 401 instead of letting
+  // the request proceed with a corrupt userId.
+  const userId = Number(session.user.id)
+  if (!Number.isInteger(userId) || userId <= 0) {
+    logger.warn(
+      { rawUserId: session.user.id },
+      'requireSession: invalid user.id from BetterAuth session (adapter drift or NaN coerce)'
+    )
+    throw authError('Authentication required')
+  }
+
   // BetterAuth's static types do NOT include `additionalFields.projectId`
   // on the session or `users.roles` on the user. Pluck via a Record
   // lookup so the narrowing is a real runtime check rather than an
@@ -112,9 +126,9 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   c.set('currentUser', {
-    userId: Number(session.user.id),
+    userId,
     email: session.user.email,
-    roles: coerceRoles(userRecord['roles'], session.user.id),
+    roles: coerceRoles(userRecord['roles'], userId),
     projectId: sessionProjectId,
   })
   await next()

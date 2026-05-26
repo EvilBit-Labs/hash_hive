@@ -5,7 +5,7 @@ import {
   projectUsers,
   users,
 } from '@hashhive/shared'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, exists } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { API_KEY_PREFIX, generateApiKey } from '../lib/api-key.js'
@@ -71,9 +71,13 @@ export async function getUserLastProjectId(userId: number): Promise<number | nul
 
 /**
  * Persist the user's last-selected project. Called by
- * `POST /api/v1/dashboard/projects/select` in the same transaction as
- * `auth.api.updateSession` so the preference and the active session
- * agree. Pass null to clear the preference.
+ * `POST /api/v1/dashboard/projects/select` immediately after
+ * `auth.api.updateSession` so the persisted preference catches up to
+ * the active session scope. The two writes are NOT in a shared
+ * transaction (BetterAuth owns its own session update); the route
+ * handler returns 500 if this preference write fails after the
+ * session write succeeds, so the caller knows to retry. Pass null
+ * to clear the preference.
  */
 export async function setUserLastProjectId(
   userId: number,
@@ -83,6 +87,33 @@ export async function setUserLastProjectId(
     .update(users)
     .set({ lastProjectId: projectId, updatedAt: new Date() })
     .where(eq(users.id, userId))
+}
+
+/**
+ * Persist `users.last_project_id` conditionally on the user still
+ * being a member of `projectId`. Returns the number of rows updated:
+ * 1 on success, 0 when membership was revoked between the route's
+ * earlier membership check and this write (concurrent admin removal).
+ *
+ * The conditional UPDATE is atomic at the SQL level -- no transaction
+ * needed -- so a race against `removeUserFromProject` cannot leave
+ * `users.last_project_id` pointing at a project the user no longer
+ * belongs to.
+ */
+export async function setUserLastProjectIdIfMember(
+  userId: number,
+  projectId: number
+): Promise<number> {
+  const memberExists = db
+    .select({ x: projectUsers.id })
+    .from(projectUsers)
+    .where(and(eq(projectUsers.userId, userId), eq(projectUsers.projectId, projectId)))
+  const updated = await db
+    .update(users)
+    .set({ lastProjectId: projectId, updatedAt: new Date() })
+    .where(and(eq(users.id, userId), exists(memberExists)))
+    .returning({ id: users.id })
+  return updated.length
 }
 
 // ─── API Key Management ─────────────────────────────────────────────

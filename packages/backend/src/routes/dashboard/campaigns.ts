@@ -781,6 +781,17 @@ campaignRoutes.delete(
   async (c) => {
     const campaignId = Number(c.req.param('id'))
     const attackId = Number(c.req.param('attackId'))
+    const { projectId } = c.get('currentUser')
+
+    // Verify the campaign exists AND belongs to the caller's current
+    // project scope. requireMembershipRole only proves the caller is a
+    // member of the active project; without this check, a user in
+    // project A who knew a valid {campaignId, attackId} pair from
+    // project B could delete project B's attack.
+    const parent = await getCampaignById(campaignId)
+    if (!parent || (projectId !== null && parent.projectId !== projectId)) {
+      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    }
 
     // Verify attack belongs to the specified campaign
     const existing = await getAttackById(attackId)

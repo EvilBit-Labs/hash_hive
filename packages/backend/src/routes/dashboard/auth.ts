@@ -36,7 +36,9 @@ authRouter.get('/me', requireSession, async (c) => {
     if (!result) {
       return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'User not found' } }, 404)
     }
-    return c.json({ ...result, selectedProjectId: projectId })
+    // Coerce undefined → null explicitly so the field is always present
+    // in the response per meResponseSchema's `nullable()` contract.
+    return c.json({ ...result, selectedProjectId: projectId ?? null })
   } catch (err) {
     logger.error({ err, userId, op: 'getUserWithProjects' }, 'GET /me lookup failed')
     return c.json(

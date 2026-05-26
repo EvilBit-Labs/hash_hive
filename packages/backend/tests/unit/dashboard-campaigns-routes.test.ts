@@ -82,6 +82,7 @@ if (!IS_ISOLATED) {
     // Issue #159 U3 / U6: stub the preference helpers so projects.ts
     // and lib/auth.ts module imports resolve without errors.
     getUserLastProjectId: async () => null,
+    setUserLastProjectIdIfMember: async () => 1,
     setUserLastProjectId: async () => undefined,
     issueUserApiKey: mock(async () => ({ apiKey: 'cst_test', metadata: null })),
     revokeUserApiKey: mock(async () => undefined),

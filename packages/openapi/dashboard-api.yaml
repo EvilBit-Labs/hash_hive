@@ -207,7 +207,7 @@ paths:
       description: |
         Returns whether a key exists and, if so, its masked prefix and
         `lastUsedAt`. The raw token is never returned by this endpoint
-        (only `POST /me/api-key` produces it).
+        (only `POST /auth/me/api-key` produces it).
       tags: [Auth]
       responses:
         '200':

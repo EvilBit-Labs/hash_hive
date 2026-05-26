@@ -842,10 +842,17 @@ export const selectProjectRequestSchema = z
 export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
 
 /**
- * Resolved session context exposed to dashboard route handlers via
- * `c.get('currentUser')`. `selectedProjectId` is the server-managed
- * scope read from `session.session.projectId` -- never trust a
+ * Wire-shape contract for the active session as exposed to the
+ * frontend (e.g. inside `meResponseSchema.user` and any future control-
+ * API session payload). `selectedProjectId` is the server-managed
+ * scope, sourced from `session.session.projectId` -- never trust a
  * client-supplied header for project scope on the dashboard surface.
+ *
+ * NOTE: the backend internal `AppEnv['Variables']['currentUser']` is a
+ * closely related but distinct shape (uses the field name `projectId`
+ * instead of `selectedProjectId`). Cross-boundary code should consume
+ * `SessionUser` (Zod-validated); internal backend code reads
+ * `currentUser.projectId`.
  */
 export const sessionUserSchema = z.object({
   userId: z.number().int().positive(),
