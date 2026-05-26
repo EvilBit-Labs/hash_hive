@@ -88,6 +88,15 @@ mock.module('../../src/services/auth.js', () => ({
   getUserWithProjects: async () => null,
   findProjectMembership: (userId: number, projectId: number) =>
     findProjectMembershipImpl(userId, projectId),
+  // Preference helpers added in #159 U6 + the membership-guarded variant
+  // added during PR review feedback. The /projects/select happy path
+  // invokes setUserLastProjectIdIfMember after updateSession; stub to
+  // return 1 row updated (membership still holds) so the route flows
+  // through the 200 success branch instead of triggering the revoked-
+  // membership rollback path.
+  setUserLastProjectId: async () => undefined,
+  setUserLastProjectIdIfMember: async () => 1,
+  getUserLastProjectId: async () => null,
 }))
 
 mock.module('../../src/services/projects.js', () => ({
