@@ -27,14 +27,19 @@ Object.assign(globalThis, {
   HTMLDivElement: window.HTMLDivElement,
   HTMLSpanElement: window.HTMLSpanElement,
   MutationObserver: window.MutationObserver,
-  // happy-dom v20 ships ResizeObserver on window but the previous list
-  // didn't surface it on globalThis. ReactFlow (loaded indirectly by
-  // CampaignDetailPage and other graph-rendering pages) reads it from the
-  // global scope at module-init time and throws `ReferenceError:
-  // ResizeObserver is not defined` on Linux happy-dom — the macOS build
-  // happens to have a fallback that masks this. Injecting the global
-  // keeps the polyfill portable across runners.
+  // happy-dom v20 ships these on window but the previous list didn't
+  // surface them on globalThis. ReactFlow (loaded indirectly by
+  // CampaignDetailPage and other graph-rendering pages) reads
+  // ResizeObserver + SVG element classes from the global scope at
+  // module-init time and throws `ReferenceError` on Linux happy-dom —
+  // the macOS build happens to have fallbacks that mask this. Injecting
+  // them keeps the polyfill portable across runners.
   ResizeObserver: window.ResizeObserver,
+  IntersectionObserver: window.IntersectionObserver,
+  SVGElement: window.SVGElement,
+  SVGSVGElement: window.SVGSVGElement,
+  Image: window.Image,
+  HTMLImageElement: window.HTMLImageElement,
   Node: window.Node,
   Text: window.Text,
   DocumentFragment: window.DocumentFragment,
