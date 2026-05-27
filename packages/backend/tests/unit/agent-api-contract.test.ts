@@ -277,6 +277,45 @@ describe('Agent API: POST /heartbeat', () => {
     expect(parsed.hasHighPriorityTasks).toBe(true)
   })
 
+  it('returns Agent-shaped envelope with HEARTBEAT_ERROR when processHeartbeat throws', async () => {
+    // Arrange — force the service to reject so the route's failure path
+    // is exercised. The negative-shape assertions on `timestamp` and
+    // `requestId` are what discriminate the Agent envelope from the
+    // dashboard envelope emitted by the global `app.onError`; without
+    // them a regression that falls through to the global handler could
+    // still satisfy `error.code === 'HEARTBEAT_ERROR'` by accident in a
+    // future world where that code is assigned globally. See
+    // GitHub #170.
+    const { processHeartbeat } = await import('../../src/services/agents.js')
+    ;(
+      processHeartbeat as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'online' }),
+    })
+
+    // Assert
+    expect(res.status).toBe(500)
+    const body = (await res.json()) as { error: Record<string, unknown> }
+    expect(body.error.code).toBe('HEARTBEAT_ERROR')
+    expect(typeof body.error.message).toBe('string')
+    expect((body.error.message as string).length).toBeGreaterThan(0)
+    // Negative shape: the Agent envelope omits `timestamp` and
+    // `requestId`. Their presence would mean we fell through to the
+    // dashboard envelope at `app.onError`.
+    expect(body.error['timestamp']).toBeUndefined()
+    expect(body.error['requestId']).toBeUndefined()
+  })
+
   it('accepts a heartbeat with currentTask and warning error', async () => {
     // Arrange
     const token = agentToken(TEST_AGENT_TOKEN)

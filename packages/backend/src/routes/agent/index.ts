@@ -99,12 +99,30 @@ agentRoutes.post(
   async (c) => {
     const { agentId } = c.get('agent')
     const data = c.req.valid('json')
-    const result = await processHeartbeat(agentId, data)
-    const body: AgentHeartbeatResponse = {
-      acknowledged: true,
-      ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
+    try {
+      const result = await processHeartbeat(agentId, data)
+      const body: AgentHeartbeatResponse = {
+        acknowledged: true,
+        ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
+      }
+      return c.json(body)
+    } catch (err: unknown) {
+      // Heartbeat is the agent's hot-path liveness primitive. Without
+      // this try/catch the throw would fall through to the global
+      // `app.onError` and return the dashboard envelope
+      // (`{ error: { code: 'INTERNAL_SERVER_ERROR', timestamp, requestId } }`),
+      // which violates the Agent API's `{ error: { code, message } }`
+      // contract documented in AGENTS.md. Mirrors the /benchmark handler
+      // below. See GitHub #170.
+      logger.error(
+        { err, agentId, status: data.status, hasError: Boolean(data.error) },
+        'Heartbeat processing failed'
+      )
+      return c.json(
+        { error: { code: 'HEARTBEAT_ERROR', message: 'Failed to process heartbeat' } },
+        500
+      )
     }
-    return c.json(body)
   }
 )
 
