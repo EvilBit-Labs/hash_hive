@@ -655,21 +655,40 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   const { updated, transition } = txResult
 
   // Post-commit emits + audit log. If the transaction rolled back,
-  // none of these fire and SSE listeners stay consistent.
+  // none of these fire and SSE listeners stay consistent. The try/catch
+  // around the block swallows failures (log without rethrow) so a flaky
+  // SSE bus or audit sink cannot cause the route to return 500 *after*
+  // the agent row was already committed — that would mislead operators
+  // into thinking the heartbeat failed when DB state was actually
+  // persisted. The agent re-heartbeats and SSE listeners catch up on
+  // the next cycle.
+  //
+  // The catch is block-level on purpose: if any single emit throws, the
+  // remaining emits and the audit log are skipped. The three emits share
+  // an SSE bus so a failure in one is a strong signal the next would
+  // also fail, and the audit miss is intentional rather than logged
+  // twice — the next heartbeat heals SSE state regardless.
   if (updated) {
-    if (data.error) {
-      emitAgentError(updated.projectId, updated.id, data.error.severity)
-    }
-    emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus)
+    try {
+      if (data.error) {
+        emitAgentError(updated.projectId, updated.id, data.error.severity)
+      }
+      emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus)
 
-    if (transition.kind === 'transition') {
-      logStatusTransition({
-        agentId: updated.id,
-        projectId: updated.projectId,
-        fromStatus: transition.fromStatus,
-        toStatus: transition.effectiveStatus,
-        reason: transition.reason,
-      })
+      if (transition.kind === 'transition') {
+        logStatusTransition({
+          agentId: updated.id,
+          projectId: updated.projectId,
+          fromStatus: transition.fromStatus,
+          toStatus: transition.effectiveStatus,
+          reason: transition.reason,
+        })
+      }
+    } catch (postCommitErr: unknown) {
+      logger.error(
+        { err: postCommitErr, agentId: updated.id, projectId: updated.projectId },
+        'Post-commit heartbeat emit/audit failed; agent state was already committed'
+      )
     }
   } else {
     // Auth middleware verified the agent's bearer token, so the row was

@@ -122,6 +122,17 @@ const mockCamelCaseTask = {
   updatedAt: mockSnakeCaseTaskRow.updated_at,
 }
 
+// Pull the real pure helpers in BEFORE mock.module runs so the mock
+// factory can re-export them. Without re-export, `agents-service.test.ts`
+// would receive our stubs instead of the genuine implementations for
+// any file bun loads after this one — the same Linux/macOS-load-order
+// CI flake documented in GOTCHAS.md "Re-export the real implementation
+// when you must mock siblings."
+import {
+  AGENT_TASK_ACTIVE_STATUSES as realAgentTaskActiveStatuses,
+  projectAgentTaskRows as realProjectAgentTaskRows,
+} from '../../src/services/tasks.js'
+
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase
 // mapping is validated in tasks.test.ts; here we only test the route contract.
 // This also removes the need to mock campaigns.js (which tasks.js imported).
@@ -133,6 +144,43 @@ mock.module('../../src/services/tasks.js', () => ({
   reassignStaleTasks: mock(() => Promise.resolve([])),
   getTaskById: mock(() => Promise.resolve(null)),
   listTasks: mock(() => Promise.resolve([])),
+  getZapsForTask: mock(() => Promise.resolve({ taskId: 1, hashes: [] })),
+  // Re-export real impls so sibling tests see the genuine functions.
+  AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
+  projectAgentTaskRows: realProjectAgentTaskRows,
+}))
+
+// Pull the real pure helpers in BEFORE mock.module runs for crackers.js
+// so the mock factory can re-export them. Without this, sibling tests
+// (crackers-routes.test.ts and any compareCrackerVersions unit suite)
+// would receive our stubs instead of the genuine impls — process-global
+// mock.module merge per GOTCHAS.md "Re-export the real implementation
+// when you must mock siblings."
+import {
+  compareCrackerVersions as realCompareCrackerVersions,
+  isKnownEngine as realIsKnownEngine,
+  normalizeEngineName as realNormalizeEngineName,
+} from '../../src/services/crackers.js'
+
+// Mock resources.js and crackers.js so the /resources and /cracker routes
+// have reachable rejection paths in the contract test. The real modules
+// touch the DB and object store; here we only validate the wire envelope
+// and exercise the route-level catch with mockImplementationOnce.
+mock.module('../../src/services/resources.js', () => ({
+  getAgentDownloadUrl: mock(() =>
+    Promise.resolve({ url: 'https://example.test/object', expiresIn: 600 })
+  ),
+}))
+
+mock.module('../../src/services/crackers.js', () => ({
+  // DB-touching surfaces get stubbed; pure helpers are re-exported real.
+  getLatestCracker: mock(() => Promise.resolve(null)),
+  getCrackerDownloadUrl: mock(() =>
+    Promise.resolve({ url: 'https://example.test/cracker', expiresIn: 600 })
+  ),
+  compareCrackerVersions: realCompareCrackerVersions,
+  isKnownEngine: realIsKnownEngine,
+  normalizeEngineName: realNormalizeEngineName,
 }))
 
 mock.module('../../src/db/index.js', () => ({
@@ -141,6 +189,22 @@ mock.module('../../src/db/index.js', () => ({
     execute: mockExecute,
   },
   client: {},
+}))
+
+// Mock the logger so route-layer log-shape assertions (the hasError
+// branch on /heartbeat's failure-path log, and similar structured logs
+// on other agent routes) can verify their argument shape without
+// scraping stdout. Mirrors the integration test's pattern in
+// tests/integration/agent-heartbeat.test.ts.
+const loggerMock = {
+  info: mock(),
+  warn: mock(),
+  error: mock(),
+  debug: mock(),
+}
+
+mock.module('../../src/config/logger.js', () => ({
+  logger: loggerMock,
 }))
 
 import { app } from '../../src/index.js'
@@ -275,6 +339,94 @@ describe('Agent API: POST /heartbeat', () => {
     // Contract proof against the shared schema (and via mirror, OpenAPI).
     const parsed = agentHeartbeatResponseSchema.parse(body)
     expect(parsed.hasHighPriorityTasks).toBe(true)
+  })
+
+  it('returns Agent-shaped envelope with HEARTBEAT_ERROR when processHeartbeat throws', async () => {
+    // Arrange — force the service to reject so the route's failure path
+    // is exercised. The negative-shape assertions on `timestamp` and
+    // `requestId` discriminate the Agent envelope from the dashboard
+    // envelope emitted by the global `app.onError`; without them a
+    // regression that falls through to the global handler could still
+    // satisfy `error.code === 'HEARTBEAT_ERROR'` by accident.
+    const { processHeartbeat } = await import('../../src/services/agents.js')
+    ;(
+      processHeartbeat as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'online' }),
+    })
+
+    // Assert
+    expect(res.status).toBe(500)
+    const body = (await res.json()) as { error: Record<string, unknown> }
+    expect(body.error.code).toBe('HEARTBEAT_ERROR')
+    // Pin to the literal message. A regression that switches the wire
+    // message to `err.message` (e.g., 'db down') would leak internal
+    // diagnostic detail to agents; asserting the static string blocks
+    // that class of change.
+    expect(body.error.message).toBe('Failed to process heartbeat')
+    // Negative shape: the Agent envelope omits `timestamp` and
+    // `requestId`. Their presence would mean we fell through to the
+    // dashboard envelope at `app.onError`.
+    expect(body.error['timestamp']).toBeUndefined()
+    expect(body.error['requestId']).toBeUndefined()
+    // Log shape: the route logs the four documented keys (err, agentId,
+    // status, hasError). No error payload was posted so hasError stays
+    // false; the hasError=true branch is pinned by the next test.
+    const heartbeatErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+      const arg = call[0] as Record<string, unknown> | undefined
+      return arg?.['err'] !== undefined && arg?.['agentId'] === 1
+    })
+    expect(heartbeatErrorLogs).toHaveLength(1)
+    const logCtx = heartbeatErrorLogs[0]?.[0] as Record<string, unknown>
+    expect(logCtx['status']).toBe('online')
+    expect(logCtx['hasError']).toBe(false)
+  })
+
+  it('logs hasError=true when heartbeat carries an error payload and processHeartbeat throws', async () => {
+    // Arrange — pin the second branch of the route's failure-path log
+    // (`hasError: Boolean(data.error)`). Without this test a regression
+    // that always logs `hasError: false` would land green.
+    loggerMock.error.mockClear()
+    const { processHeartbeat } = await import('../../src/services/agents.js')
+    ;(
+      processHeartbeat as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'error',
+        error: { severity: 'fatal', message: 'gpu hung' },
+      }),
+    })
+
+    // Assert
+    expect(res.status).toBe(500)
+    const heartbeatErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+      const arg = call[0] as Record<string, unknown> | undefined
+      return arg?.['err'] !== undefined && arg?.['agentId'] === 1
+    })
+    expect(heartbeatErrorLogs).toHaveLength(1)
+    const logCtx = heartbeatErrorLogs[0]?.[0] as Record<string, unknown>
+    expect(logCtx['status']).toBe('error')
+    expect(logCtx['hasError']).toBe(true)
   })
 
   it('accepts a heartbeat with currentTask and warning error', async () => {
@@ -675,5 +827,140 @@ describe('Agent API: POST /errors', () => {
     })
 
     expect(res.status).toBe(400)
+  })
+})
+
+// ─── Failure-path envelope contract across all wrapped agent routes ──
+//
+// Every agent route now wraps its primary service call in try/catch and
+// returns the Agent envelope `{ error: { code, message } }` at HTTP 500
+// instead of falling through to the global `app.onError` (which would
+// emit the dashboard envelope). These tests pin each route's coarse
+// code value AND assert the negative envelope shape — the same
+// regression guard already in place for HEARTBEAT_ERROR.
+
+/**
+ * Verify that the response is the Agent envelope at HTTP 500 with the
+ * expected coarse code. `timestamp`/`requestId` MUST be absent;
+ * presence means we fell through to the dashboard envelope at
+ * `app.onError`.
+ */
+async function expectAgentFailureEnvelope(res: Response, expectedCode: string): Promise<void> {
+  expect(res.status).toBe(500)
+  const body = (await res.json()) as { error: Record<string, unknown> }
+  expect(body.error.code).toBe(expectedCode)
+  expect(typeof body.error.message).toBe('string')
+  expect((body.error.message as string).length).toBeGreaterThan(0)
+  expect(body.error['timestamp']).toBeUndefined()
+  expect(body.error['requestId']).toBeUndefined()
+}
+
+describe('Agent API: failure-path envelope shape', () => {
+  it('POST /tasks/next returns TASK_ASSIGN_ERROR when assignNextTask throws', async () => {
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.assignNextTask as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/next`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    await expectAgentFailureEnvelope(res, 'TASK_ASSIGN_ERROR')
+  })
+
+  it('POST /tasks/:id/report returns TASK_REPORT_ERROR when updateTaskProgress throws', async () => {
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.updateTaskProgress as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    await expectAgentFailureEnvelope(res, 'TASK_REPORT_ERROR')
+  })
+
+  it('GET /tasks/:id/zaps returns TASK_ZAP_ERROR when getZapsForTask throws', async () => {
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.getZapsForTask as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/zaps`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    await expectAgentFailureEnvelope(res, 'TASK_ZAP_ERROR')
+  })
+
+  it('POST /errors returns ERROR_INGEST_ERROR when logAgentError throws', async () => {
+    const agentsMod = await import('../../src/services/agents.js')
+    ;(
+      agentsMod.logAgentError as unknown as { mockImplementationOnce: (fn: () => unknown) => void }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/errors`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ severity: 'warning', message: 'test' }),
+    })
+
+    await expectAgentFailureEnvelope(res, 'ERROR_INGEST_ERROR')
+  })
+
+  it('GET /resources/:type/:id/download-url returns RESOURCE_URL_ERROR when getAgentDownloadUrl throws', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.reject(new Error('object store down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/wordlist/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    await expectAgentFailureEnvelope(res, 'RESOURCE_URL_ERROR')
+  })
+
+  it('POST /cracker/check-update returns CRACKER_UPDATE_ERROR when getLatestCracker throws', async () => {
+    const crackersMod = await import('../../src/services/crackers.js')
+    ;(
+      crackersMod.getLatestCracker as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/cracker/check-update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ engine: 'hashcat', platform: 'linux-x86_64', version: '6.2.7' }),
+    })
+
+    await expectAgentFailureEnvelope(res, 'CRACKER_UPDATE_ERROR')
   })
 })
