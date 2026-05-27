@@ -655,15 +655,19 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   const { updated, transition } = txResult
 
   // Post-commit emits + audit log. If the transaction rolled back,
-  // none of these fire and SSE listeners stay consistent. We swallow
-  // failures here (log without rethrow) so a flaky SSE bus or audit
-  // sink cannot cause the route to return HEARTBEAT_ERROR 500 *after*
+  // none of these fire and SSE listeners stay consistent. The try/catch
+  // around the block swallows failures (log without rethrow) so a flaky
+  // SSE bus or audit sink cannot cause the route to return 500 *after*
   // the agent row was already committed — that would mislead operators
   // into thinking the heartbeat failed when DB state was actually
-  // persisted. The agent will re-heartbeat and SSE listeners will
-  // catch up on the next cycle. See GitHub #170 and the post-commit
-  // hardening delta in
-  // docs/plans/2026-05-26-002-fix-agent-heartbeat-envelope-plan.md.
+  // persisted. The agent re-heartbeats and SSE listeners catch up on
+  // the next cycle.
+  //
+  // The catch is block-level on purpose: if any single emit throws, the
+  // remaining emits and the audit log are skipped. The three emits share
+  // an SSE bus so a failure in one is a strong signal the next would
+  // also fail, and the audit miss is intentional rather than logged
+  // twice — the next heartbeat heals SSE state regardless.
   if (updated) {
     try {
       if (data.error) {

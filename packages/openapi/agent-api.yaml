@@ -67,8 +67,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HeartbeatResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/next:
     post:
@@ -91,6 +95,8 @@ paths:
                       - type: 'null'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/{taskId}/report:
     post:
@@ -114,8 +120,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/{taskId}/zaps:
     get:
@@ -157,6 +167,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ZapResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
         '404':
@@ -165,6 +177,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /benchmark:
     post:
@@ -182,8 +196,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /errors:
     post:
@@ -201,8 +219,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /cracker/check-update:
     post:
@@ -234,6 +256,62 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /resources/{type}/{id}/download-url:
+    get:
+      operationId: getResourceDownloadUrl
+      summary: Presigned download URL for a resource bound to this agent's project
+      description: |
+        Returns a short-lived presigned URL the agent uses to fetch a
+        resource (wordlist, rule, mask) from object storage. The resource
+        must belong to a project the agent is a member of; cross-project
+        lookups return 404. The URL is single-use and expires per the
+        `expiresIn` field. Failures during URL generation return the
+        Agent envelope at HTTP 500 with code `RESOURCE_URL_ERROR`.
+      tags: [Resources]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: type
+          in: path
+          required: true
+          description: Resource kind (e.g., `wordlist`, `rule`, `mask`).
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresIn]
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                  expiresIn:
+                    type: integer
+                    description: Seconds until the URL expires.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '404':
+          description: Resource not found or has no file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
 components:
   securitySchemes:
@@ -731,6 +809,22 @@ components:
 
     ValidationError:
       description: Request body or query parameters failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ServerError:
+      description: |
+        Server-side processing failed. Each route returns its own coarse
+        error code on the catch-all failure path so agents can switch on
+        `error.code` and treat known codes specifically. Known codes:
+        `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`,
+        `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`,
+        `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`. The response shape
+        is the Agent envelope (`{ error: { code, message } }`) — no
+        `timestamp` or `requestId` fields. Distinct from the dashboard
+        envelope returned by other API surfaces on internal errors.
       content:
         application/json:
           schema:
