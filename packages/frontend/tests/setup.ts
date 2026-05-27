@@ -27,6 +27,14 @@ Object.assign(globalThis, {
   HTMLDivElement: window.HTMLDivElement,
   HTMLSpanElement: window.HTMLSpanElement,
   MutationObserver: window.MutationObserver,
+  // happy-dom v20 ships ResizeObserver on window but the previous list
+  // didn't surface it on globalThis. ReactFlow (loaded indirectly by
+  // CampaignDetailPage and other graph-rendering pages) reads it from the
+  // global scope at module-init time and throws `ReferenceError:
+  // ResizeObserver is not defined` on Linux happy-dom — the macOS build
+  // happens to have a fallback that masks this. Injecting the global
+  // keeps the polyfill portable across runners.
+  ResizeObserver: window.ResizeObserver,
   Node: window.Node,
   Text: window.Text,
   DocumentFragment: window.DocumentFragment,
