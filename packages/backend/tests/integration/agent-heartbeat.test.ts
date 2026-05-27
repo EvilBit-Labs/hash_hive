@@ -767,5 +767,49 @@ if (!IS_ISOLATED) {
       })
       expect(warnCallsForAgent).toHaveLength(1)
     })
+
+    it('post-commit emit throws are swallowed so a successful tx returns 200 (issue #170)', async () => {
+      // Arrange — force emitAgentStatus to throw on the post-commit
+      // broadcast. The DB transaction has already committed by the time
+      // emitAgentStatus is called (see services/agents.ts:659-683), so the
+      // failure must be logged and absorbed rather than propagated to
+      // the route's new HEARTBEAT_ERROR catch — otherwise the route
+      // would return 500 to an agent whose state was actually persisted,
+      // misleading operators and breaking the wire signal's contract
+      // that HEARTBEAT_ERROR means the transaction itself failed.
+      emitAgentStatusMock.mockImplementationOnce(() => {
+        throw new Error('SSE bus dropped the connection')
+      })
+
+      const token = agentToken(TEST_AGENT_TOKEN)
+
+      // Act — vanilla online heartbeat, no error payload, default state.
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      })
+
+      // Assert — the route returns 200 (DB state was committed), and
+      // the post-commit failure was logged at error level for ops.
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
+      // DB UPDATE landed before the throw, so the captured update is present.
+      expect(state.capturedAgentUpdates.some((u) => u.status === 'online')).toBe(true)
+      // The post-commit hardening logs at error level with the agentId.
+      const postCommitErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined
+        return (
+          arg?.['agentId'] === 1 &&
+          typeof call[1] === 'string' &&
+          (call[1] as string).startsWith('Post-commit heartbeat emit/audit failed')
+        )
+      })
+      expect(postCommitErrorLogs).toHaveLength(1)
+    })
   })
 }

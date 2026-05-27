@@ -655,21 +655,36 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   const { updated, transition } = txResult
 
   // Post-commit emits + audit log. If the transaction rolled back,
-  // none of these fire and SSE listeners stay consistent.
+  // none of these fire and SSE listeners stay consistent. We swallow
+  // failures here (log without rethrow) so a flaky SSE bus or audit
+  // sink cannot cause the route to return HEARTBEAT_ERROR 500 *after*
+  // the agent row was already committed — that would mislead operators
+  // into thinking the heartbeat failed when DB state was actually
+  // persisted. The agent will re-heartbeat and SSE listeners will
+  // catch up on the next cycle. See GitHub #170 and the post-commit
+  // hardening delta in
+  // docs/plans/2026-05-26-002-fix-agent-heartbeat-envelope-plan.md.
   if (updated) {
-    if (data.error) {
-      emitAgentError(updated.projectId, updated.id, data.error.severity)
-    }
-    emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus)
+    try {
+      if (data.error) {
+        emitAgentError(updated.projectId, updated.id, data.error.severity)
+      }
+      emitAgentStatus(updated.projectId, updated.id, transition.effectiveStatus)
 
-    if (transition.kind === 'transition') {
-      logStatusTransition({
-        agentId: updated.id,
-        projectId: updated.projectId,
-        fromStatus: transition.fromStatus,
-        toStatus: transition.effectiveStatus,
-        reason: transition.reason,
-      })
+      if (transition.kind === 'transition') {
+        logStatusTransition({
+          agentId: updated.id,
+          projectId: updated.projectId,
+          fromStatus: transition.fromStatus,
+          toStatus: transition.effectiveStatus,
+          reason: transition.reason,
+        })
+      }
+    } catch (postCommitErr: unknown) {
+      logger.error(
+        { err: postCommitErr, agentId: updated.id, projectId: updated.projectId },
+        'Post-commit heartbeat emit/audit failed; agent state was already committed'
+      )
     }
   } else {
     // Auth middleware verified the agent's bearer token, so the row was
