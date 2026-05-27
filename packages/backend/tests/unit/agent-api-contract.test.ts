@@ -150,6 +150,18 @@ mock.module('../../src/services/tasks.js', () => ({
   projectAgentTaskRows: realProjectAgentTaskRows,
 }))
 
+// Pull the real pure helpers in BEFORE mock.module runs for crackers.js
+// so the mock factory can re-export them. Without this, sibling tests
+// (crackers-routes.test.ts and any compareCrackerVersions unit suite)
+// would receive our stubs instead of the genuine impls — process-global
+// mock.module merge per GOTCHAS.md "Re-export the real implementation
+// when you must mock siblings."
+import {
+  compareCrackerVersions as realCompareCrackerVersions,
+  isKnownEngine as realIsKnownEngine,
+  normalizeEngineName as realNormalizeEngineName,
+} from '../../src/services/crackers.js'
+
 // Mock resources.js and crackers.js so the /resources and /cracker routes
 // have reachable rejection paths in the contract test. The real modules
 // touch the DB and object store; here we only validate the wire envelope
@@ -161,15 +173,14 @@ mock.module('../../src/services/resources.js', () => ({
 }))
 
 mock.module('../../src/services/crackers.js', () => ({
+  // DB-touching surfaces get stubbed; pure helpers are re-exported real.
   getLatestCracker: mock(() => Promise.resolve(null)),
   getCrackerDownloadUrl: mock(() =>
     Promise.resolve({ url: 'https://example.test/cracker', expiresIn: 600 })
   ),
-  compareCrackerVersions: mock(() => 0),
-  isKnownEngine: mock(() => true),
-  normalizeEngineName: mock((value: unknown) =>
-    typeof value === 'string' && value.length > 0 ? value.toLowerCase() : 'hashcat'
-  ),
+  compareCrackerVersions: realCompareCrackerVersions,
+  isKnownEngine: realIsKnownEngine,
+  normalizeEngineName: realNormalizeEngineName,
 }))
 
 mock.module('../../src/db/index.js', () => ({
