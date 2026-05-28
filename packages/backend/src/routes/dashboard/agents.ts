@@ -153,7 +153,7 @@ dashboardAgentRoutes.get(
     if (!agent || agent.projectId !== projectId) {
       return c.json(notFoundEnvelope, 404)
     }
-    const tasks = await listTasksByAgent(agentId)
+    const tasks = await listTasksByAgent(agentId, projectId as number)
     return c.json({ tasks })
   }
 )

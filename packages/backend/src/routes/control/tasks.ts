@@ -42,6 +42,7 @@ controlTaskRoutes.get('/', async (c) => {
 
     const { tasks, total } = await listTasks({
       ...filters,
+      projectId,
       limit: query.limit,
       offset: query.offset,
     })
@@ -55,12 +56,12 @@ controlTaskRoutes.get('/:id', async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c)
     const id = parseIdParam(c.req.param('id'))
-    const task = await getTaskById(id)
+    // getTaskById now enforces the projectId predicate at the service
+    // layer via INNER JOIN on campaigns; the prior fetch-then-verify
+    // dance against getCampaignById was a sequential round-trip we no
+    // longer need.
+    const task = await getTaskById(id, projectId)
     if (!task) return problemResponse(c, 404, 'not_found', 'task not found')
-    const campaign = await getCampaignById(task.campaignId)
-    if (!campaign || campaign.projectId !== projectId) {
-      return problemResponse(c, 404, 'not_found', 'task not found')
-    }
     return c.json(task)
   } catch (err) {
     return controlErrorResponse(c, err)
