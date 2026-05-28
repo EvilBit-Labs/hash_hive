@@ -265,11 +265,13 @@ paths:
       summary: Presigned download URL for a resource bound to this agent's project
       description: |
         Returns a short-lived presigned URL the agent uses to fetch a
-        resource (wordlist, rule, mask) from object storage. The resource
-        must belong to a project the agent is a member of; cross-project
-        lookups return 404. The URL is single-use and expires per the
-        `expiresIn` field. Failures during URL generation return the
-        Agent envelope at HTTP 500 with code `RESOURCE_URL_ERROR`.
+        resource (hash list, wordlist, rule list, mask list) from object
+        storage. The resource must belong to a project the agent is a
+        member of; cross-project lookups return 404. The URL is a
+        standard S3 `GetObject` presigned URL — it is reusable until it
+        expires per the `expiresIn` field (currently 6 hours), not
+        single-use. Failures during URL generation return the Agent
+        envelope at HTTP 500 with code `RESOURCE_URL_ERROR`.
       tags: [Resources]
       security:
         - BearerAuth: []
@@ -277,9 +279,13 @@ paths:
         - name: type
           in: path
           required: true
-          description: Resource kind (e.g., `wordlist`, `rule`, `mask`).
+          description: |
+            Resource kind. Must be one of the documented values
+            recognized by `getAgentDownloadUrl`'s table map; unknown
+            values return 404.
           schema:
             type: string
+            enum: [hash-lists, wordlists, rulelists, masklists]
         - name: id
           in: path
           required: true
