@@ -2,6 +2,12 @@
 
 HashHive is a distributed password-cracking platform that orchestrates [hashcat](https://hashcat.net/) across multiple agents on a private LAN. It's a 2026 TypeScript reimplementation of [CipherSwarm](https://github.com/unclesp1d3r/CipherSwarm), built for air-gapped lab environments.
 
+## Operator Console
+
+![Operator console: login, project selection, dashboard, logout](docs/feature_demo/operator-console-login.gif)
+
+Multi-project sign-in flow: login → project selector (with "remember this project on next sign-in") → dashboard → sidebar sign-out. Captured via the e2e harness in `packages/frontend/e2e/demo-capture.spec.ts`.
+
 ## Stack
 
 | Layer | Tech |
