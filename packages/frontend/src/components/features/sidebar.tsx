@@ -90,9 +90,14 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   )
 
   const handleProjectChange = (value: string) => {
+    // Gate re-entry while a switch is in flight. Overlapping mutations
+    // can resolve out of order; if a slower earlier POST settles after
+    // a later one, onSuccess would write the stale projectId back into
+    // the UI store and invalidate queries for the wrong scope.
+    if (selectProject.isPending) return
     // The "All Projects" option (`''`) is a no-op: the server requires
     // a concrete projectId on the session, so we can't clear scope from
-    // the sidebar. Removing the option entirely is a UX ticket.
+    // the sidebar.
     if (!value) return
     const projectId = Number(value)
     if (!Number.isFinite(projectId)) return
@@ -116,6 +121,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
             aria-label="Select project"
             className="px-2.5 py-1.5 text-xs"
             value={selectedProjectId ?? ''}
+            disabled={selectProject.isPending}
             onChange={(e) => handleProjectChange(e.target.value)}
           >
             <option value="">All Projects</option>

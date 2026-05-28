@@ -54,8 +54,15 @@ export function LoginPage() {
 
     // Fetch project memberships -- syncSelectedProject auto-selects when the
     // server has pre-selected (single-project user, or BetterAuth restored
-    // a previous session.projectId).
-    await fetchProjects()
+    // a previous session.projectId). The store's catch swallows /me errors
+    // and clears state, but we still surface a user-visible message rather
+    // than leaving the form silently stuck.
+    try {
+      await fetchProjects()
+    } catch {
+      setError('Failed to load projects. Please try again.')
+      return
+    }
 
     // Honor "remember last project" when the server hasn't pre-selected.
     // syncSelectedProject already won for single-project / server-set cases,

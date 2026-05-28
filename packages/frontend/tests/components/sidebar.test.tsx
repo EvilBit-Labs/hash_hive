@@ -72,8 +72,7 @@ describe('Sidebar project switcher', () => {
     const select = screen.getByLabelText('Select project') as HTMLSelectElement
     fireEvent.change(select, { target: { value: '' } })
 
-    // No request should be issued for the All Projects option
-    await new Promise((r) => setTimeout(r, 10))
+    // Empty value is a synchronous no-op — assert immediately.
     const calls = fetchMock.mock.calls.filter((c) => {
       const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
       return url.includes('/dashboard/projects/select')

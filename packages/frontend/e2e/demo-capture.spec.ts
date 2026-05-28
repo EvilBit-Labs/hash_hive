@@ -3,21 +3,21 @@ import { test } from '@playwright/test'
  * One-shot demo capture for the operator-console login flow.
  *
  * Walks the multi-project select flow and emits one PNG per step into
- * /tmp/demo-reel-160/. Stitched into a GIF for docs/feature_demo/.
+ * /tmp/demo-reel-operator-console/. Stitched into a GIF for docs/feature_demo/.
  * Excluded from the default e2e suite via playwright.config.ts because
  * the side-effect on users.last_project_id leaks into subsequent tests
  * in CI's sequential worker mode.
  *
  * Re-record with:
  *   cd packages/frontend && PLAYWRIGHT_INCLUDE_DEMO=1 bunx playwright test demo-capture.spec.ts --workers=1
- *   ffmpeg -y -framerate 1 -pattern_type glob -i '/tmp/demo-reel-160/*.png' \
+ *   ffmpeg -y -framerate 1 -pattern_type glob -i '/tmp/demo-reel-operator-console/*.png' \
  *     -vf "scale=960:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
  *     -loop 0 docs/feature_demo/operator-console-login.gif
  */
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const OUT_DIR = '/tmp/demo-reel-160'
+const OUT_DIR = '/tmp/demo-reel-operator-console'
 const TEST_EMAIL = 'test@hashhive.local'
 const TEST_PASSWORD = 'TestPassword123!'
 

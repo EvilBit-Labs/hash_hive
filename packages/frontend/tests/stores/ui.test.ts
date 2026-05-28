@@ -53,13 +53,16 @@ describe('useUiStore', () => {
   })
 
   it('does NOT persist selectedProjectId (server-managed, must not leak across reloads)', () => {
+    // Seed a persisted field too so the storage entry is guaranteed to exist;
+    // otherwise a "no storage key at all" outcome would falsely satisfy the
+    // "selectedProjectId is absent" check.
+    useUiStore.getState().setRememberLastProject(true)
     useUiStore.getState().setSelectedProject(99)
 
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as { state: Record<string, unknown> }
-      expect(parsed.state).not.toHaveProperty('selectedProjectId')
-    }
+    expect(raw).not.toBeNull()
+    const parsed = JSON.parse(raw as string) as { state: Record<string, unknown> }
+    expect(parsed.state).not.toHaveProperty('selectedProjectId')
     // The in-memory value is still set; we only care that storage didn't capture it.
     expect(useUiStore.getState().selectedProjectId).toBe(99)
   })

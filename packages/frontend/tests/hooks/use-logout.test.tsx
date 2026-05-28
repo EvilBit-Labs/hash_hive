@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 
 const callOrder: string[] = []
-const signOutMock = mock(async () => {
-  callOrder.push('signOut')
-  return { data: null, error: null }
-})
-
 let signOutShouldReject = false
 
 mock.module('../../src/lib/auth-client', () => ({
@@ -30,7 +25,6 @@ afterEach(() => {
   cleanupAll()
   callOrder.length = 0
   signOutShouldReject = false
-  signOutMock.mockClear()
 })
 
 function Probe() {
