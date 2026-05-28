@@ -99,6 +99,17 @@ dashboardAgentRoutes.patch(
   async (c) => {
     const { id: agentId } = c.req.valid('param')
     const data = c.req.valid('json')
+    const { projectId } = c.get('currentUser')
+    // Verify the target agent belongs to the caller's active project before
+    // mutating. requireMembershipRole proves the caller is a project admin/
+    // contributor for *their* session scope, but does NOT cross-check the
+    // path-param agent ID. Returning 404 (not 403) on a cross-project hit
+    // matches the sibling GET handler and avoids leaking that the agent
+    // exists in a project the caller can't see.
+    const existing = await getAgentById(agentId)
+    if (!existing || existing.projectId !== projectId) {
+      return c.json(notFoundEnvelope, 404)
+    }
     const agent = await updateAgent(agentId, data)
     if (!agent) {
       return c.json(notFoundEnvelope, 404)

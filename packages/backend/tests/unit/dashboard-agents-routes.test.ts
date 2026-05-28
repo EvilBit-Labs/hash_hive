@@ -105,12 +105,31 @@ const mockGetAgentById = mock(async (id: number) => {
   return null
 })
 
+const mockUpdateAgent = mock(async (id: number, patch: { name?: string; status?: string }) => {
+  if (id === 100) {
+    return {
+      id: 100,
+      name: patch.name ?? 'Rig Alpha',
+      status: patch.status ?? 'online',
+      lastSeenAt: new Date(),
+      projectId: 1,
+      capabilities: null,
+      hardwareProfile: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authToken: 'tok',
+      crackerVersion: null,
+    }
+  }
+  return null
+})
+
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
   getAgentErrors: mock(async () => []),
   getBenchmarksForAgent: mock(async () => []),
   listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
-  updateAgent: mock(async () => null),
+  updateAgent: mockUpdateAgent,
 }))
 
 mock.module('../../src/services/tasks.js', () => ({
@@ -203,5 +222,42 @@ describe('Dashboard agents routes: project isolation', () => {
   it('GET /:id/tasks returns 401 without a session cookie', async () => {
     const res = await app.request(`${DASH_AGENTS}/100/tasks`)
     expect(res.status).toBe(401)
+  })
+
+  // Regression: S-C1 (cross-project horizontal privilege escalation).
+  // Pre-fix, PATCH /:id had no projectId check; a contributor in any project
+  // could rename or force-offline any agent system-wide.
+  it('PATCH /:id returns 404 when target agent belongs to a different project', async () => {
+    const res = await app.request(`${DASH_AGENTS}/200`, {
+      method: 'PATCH',
+      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'offline' }),
+    })
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
+    // Critically, updateAgent should NOT have been called for the foreign agent.
+    const calls = mockUpdateAgent.mock.calls.filter(([id]) => id === 200)
+    expect(calls.length).toBe(0)
+  })
+
+  it('PATCH /:id returns 200 for an agent in the active project', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100`, {
+      method: 'PATCH',
+      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed Rig' }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { agent?: { name?: string } }
+    expect(body.agent?.name).toBe('Renamed Rig')
+  })
+
+  it('PATCH /:id returns 404 when the agent does not exist', async () => {
+    const res = await app.request(`${DASH_AGENTS}/9999`, {
+      method: 'PATCH',
+      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'offline' }),
+    })
+    expect(res.status).toBe(404)
   })
 })
