@@ -85,11 +85,109 @@ describe('SelectProjectPage', () => {
     expect(roleTexts.length).toBe(2)
   })
 
-  it('selects project and redirects to /', async () => {
+  it('selects project via POST /projects/select and redirects to /', async () => {
     fetchMock = mockFetch({
-      '/dashboard/projects/select': { status: 200, body: undefined },
+      '/dashboard/projects/select': { POST: { status: 200, body: {} } },
     })
     setAuthenticatedUser(2)
+
+    renderWithRouter(
+      [
+        { path: '/select-project', element: <SelectProjectPage /> },
+        { path: '/', element: <div>Dashboard Home</div> },
+      ],
+      { initialRoute: '/select-project' }
+    )
+
+    // Pre-click: store is still empty (no synchronous mutation)
+    expect(useUiStore.getState().selectedProjectId).toBeNull()
+    fireEvent.click(screen.getByText('Project 1'))
+
+    await waitFor(() => {
+      expect(useUiStore.getState().selectedProjectId).toBe(1)
+    })
+
+    // Verify the request actually went out
+    const call = fetchMock.mock.calls.find((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
+      return url.includes('/dashboard/projects/select')
+    })
+    expect(call).toBeDefined()
+    const init = call?.[1] as RequestInit | undefined
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ projectId: 1 })
+  })
+
+  it('shows an error banner when /projects/select returns 403', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/projects/select': {
+        POST: {
+          status: 403,
+          body: {
+            error: { code: 'RBAC_FORBIDDEN', message: 'not a member of this project' },
+          },
+        },
+      },
+    })
+    setAuthenticatedUser(2)
+
+    renderWithRouter([{ path: '/select-project', element: <SelectProjectPage /> }], {
+      initialRoute: '/select-project',
+    })
+
+    fireEvent.click(screen.getByText('Project 1'))
+
+    await waitFor(() => {
+      expect(screen.getByText('not a member of this project')).toBeDefined()
+    })
+    expect(useUiStore.getState().selectedProjectId).toBeNull()
+  })
+
+  it('renders the remember-last checkbox unchecked by default and toggles the store', () => {
+    fetchMock = mockFetch()
+    setAuthenticatedUser(2)
+
+    renderWithRouter([{ path: '/select-project', element: <SelectProjectPage /> }], {
+      initialRoute: '/select-project',
+    })
+
+    const checkbox = screen.getByLabelText(
+      'Remember this project on next sign-in'
+    ) as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+
+    fireEvent.click(checkbox)
+    expect(useUiStore.getState().rememberLastProject).toBe(true)
+  })
+
+  it('persists lastProjectId on success when remember-last is on', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/projects/select': { POST: { status: 200, body: {} } },
+    })
+    setAuthenticatedUser(2)
+    useUiStore.setState({ rememberLastProject: true })
+
+    renderWithRouter(
+      [
+        { path: '/select-project', element: <SelectProjectPage /> },
+        { path: '/', element: <div>Dashboard Home</div> },
+      ],
+      { initialRoute: '/select-project' }
+    )
+
+    fireEvent.click(screen.getByText('Project 2'))
+
+    await waitFor(() => {
+      expect(useUiStore.getState().lastProjectId).toBe(2)
+    })
+  })
+
+  it('does NOT persist lastProjectId when remember-last is off', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/projects/select': { POST: { status: 200, body: {} } },
+    })
+    setAuthenticatedUser(2)
+    useUiStore.setState({ rememberLastProject: false })
 
     renderWithRouter(
       [
@@ -104,6 +202,8 @@ describe('SelectProjectPage', () => {
     await waitFor(() => {
       expect(useUiStore.getState().selectedProjectId).toBe(1)
     })
+
+    expect(useUiStore.getState().lastProjectId).toBeNull()
   })
 
   it('shows empty state when no projects', () => {

@@ -13,7 +13,9 @@ import { type ReactNode, useEffect, useMemo, useRef } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import logoSvg from '../../assets/logo.svg'
+import { useLogout } from '../../hooks/use-logout'
 import { usePermissions } from '../../hooks/use-permissions'
+import { useSelectProject } from '../../hooks/use-select-project'
 import { authClient } from '../../lib/auth-client'
 import { Permission, type PermissionKey } from '../../lib/permissions'
 import { cn } from '../../lib/utils'
@@ -75,10 +77,12 @@ const navItems: readonly NavItem[] = [
 /** Shared sidebar content used by both desktop and mobile variants. */
 function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { pathname } = useLocation()
-  const { projects, clearAuth } = useAuthStore()
+  const { projects } = useAuthStore()
   const { data: session } = authClient.useSession()
-  const { selectedProjectId, setSelectedProject } = useUiStore()
+  const { selectedProjectId } = useUiStore()
   const { can } = usePermissions()
+  const selectProject = useSelectProject()
+  const logout = useLogout()
 
   const visibleNavItems = useMemo(
     () => navItems.filter((item) => !item.permission || can(item.permission)),
@@ -86,8 +90,18 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   )
 
   const handleProjectChange = (value: string) => {
-    const projectId = value ? Number(value) : null
-    setSelectedProject(projectId)
+    // Gate re-entry while a switch is in flight. Overlapping mutations
+    // can resolve out of order; if a slower earlier POST settles after
+    // a later one, onSuccess would write the stale projectId back into
+    // the UI store and invalidate queries for the wrong scope.
+    if (selectProject.isPending) return
+    // The "All Projects" option (`''`) is a no-op: the server requires
+    // a concrete projectId on the session, so we can't clear scope from
+    // the sidebar.
+    if (!value) return
+    const projectId = Number(value)
+    if (!Number.isFinite(projectId)) return
+    selectProject.mutate(projectId)
   }
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))
@@ -107,6 +121,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
             aria-label="Select project"
             className="px-2.5 py-1.5 text-xs"
             value={selectedProjectId ?? ''}
+            disabled={selectProject.isPending}
             onChange={(e) => handleProjectChange(e.target.value)}
           >
             <option value="">All Projects</option>
@@ -154,9 +169,8 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
           <button
             type="button"
             className="text-muted-foreground hover:text-foreground text-xs transition-colors"
-            onClick={async () => {
-              await authClient.signOut()
-              clearAuth()
+            onClick={() => {
+              void logout()
             }}
           >
             Sign out
