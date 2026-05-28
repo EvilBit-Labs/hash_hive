@@ -12,6 +12,11 @@ export const TEST_PROJECT = {
   slug: 'test-project',
 } as const
 
+export const TEST_PROJECT_SECONDARY = {
+  name: 'Secondary Project',
+  slug: 'secondary-project',
+} as const
+
 /**
  * Hashes a password using Bun's built-in bcrypt via a subprocess.
  * Playwright runs under Node.js, so we delegate to Bun for bcrypt support.
@@ -62,6 +67,22 @@ export async function seedTestData(databaseUrl: string): Promise<{
     await sql`
       INSERT INTO project_users (user_id, project_id, roles)
       VALUES (${userId}, ${projectId}, ${sql.array(['admin'])})
+    `
+
+    // Seed a second project + membership so e2e covers the multi-project
+    // selector flow (issue #160 AC §2). Single-project users would
+    // bypass the selector via syncSelectedProject's auto-select.
+    const [secondaryProject] = await sql`
+      INSERT INTO projects (name, slug, created_by)
+      VALUES (${TEST_PROJECT_SECONDARY.name}, ${TEST_PROJECT_SECONDARY.slug}, ${userId})
+      RETURNING id
+    `
+    if (!secondaryProject || typeof secondaryProject['id'] !== 'number') {
+      throw new Error('Failed to insert secondary test project')
+    }
+    await sql`
+      INSERT INTO project_users (user_id, project_id, roles)
+      VALUES (${userId}, ${secondaryProject['id']}, ${sql.array(['operator'])})
     `
 
     return { userId, projectId }

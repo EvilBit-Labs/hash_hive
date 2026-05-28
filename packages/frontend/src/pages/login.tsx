@@ -10,6 +10,7 @@ import logoSvg from '../assets/logo.svg'
 import { Button } from '../components/ui/button'
 import { ErrorBanner } from '../components/ui/error-banner'
 import { Input } from '../components/ui/input'
+import { useSelectProject } from '../hooks/use-select-project'
 import { authClient } from '../lib/auth-client'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
@@ -19,6 +20,7 @@ export function LoginPage() {
   const { selectedProjectId } = useUiStore()
   const { fetchProjects, hasFetchedProjects } = useAuthStore()
   const [error, setError] = useState<string | null>(null)
+  const selectProject = useSelectProject()
 
   const {
     register,
@@ -50,10 +52,28 @@ export function LoginPage() {
       return
     }
 
-    // Fetch project memberships -- syncSelectedProject auto-selects if one project.
-    // Navigation is handled reactively by the <Navigate> guards above when
-    // useSession() picks up the new session and projects are fetched.
+    // Fetch project memberships -- syncSelectedProject auto-selects when the
+    // server has pre-selected (single-project user, or BetterAuth restored
+    // a previous session.projectId).
     await fetchProjects()
+
+    // Honor "remember last project" when the server hasn't pre-selected.
+    // syncSelectedProject already won for single-project / server-set cases,
+    // so we only need to handle the multi-project no-server-selection case.
+    const ui = useUiStore.getState()
+    if (ui.selectedProjectId === null && ui.rememberLastProject && ui.lastProjectId !== null) {
+      const projects = useAuthStore.getState().projects
+      const stillMember = projects.some((p) => p.projectId === ui.lastProjectId)
+      if (stillMember) {
+        try {
+          await selectProject.mutateAsync(ui.lastProjectId)
+        } catch {
+          // Selection failed (membership stale despite local check, RBAC
+          // tightened, transient server error). Fall through to the
+          // selector page rather than stranding the user.
+        }
+      }
+    }
   }
 
   return (
