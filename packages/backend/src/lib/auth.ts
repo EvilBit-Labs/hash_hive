@@ -179,6 +179,16 @@ export const auth = betterAuth({
       },
     },
     cookiePrefix: 'hh',
+    // SameSite=Strict prevents the browser from attaching the session
+    // cookie to cross-site requests, blocking most CSRF vectors at the
+    // cookie layer. The middleware/csrf.ts same-origin check is the
+    // belt-and-suspenders for historical browsers + future policy drift.
+    // `secure: true` requires HTTPS in production; dev allows http://localhost.
+    defaultCookieAttributes: {
+      sameSite: 'strict',
+      secure: env.NODE_ENV === 'production',
+      httpOnly: true,
+    },
   },
 
   // In production (air-gapped Docker Compose), frontend and backend are same-origin
