@@ -1,3 +1,5 @@
+import type { SelectProjectRequest } from '@hashhive/shared'
+
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
@@ -30,7 +32,8 @@ export function useSelectProject(callbacks: MutationCallbacks = {}) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (projectId: number) => {
-      await api.post<unknown>('/dashboard/projects/select', { projectId })
+      const body: SelectProjectRequest = { projectId }
+      await api.post<unknown>('/dashboard/projects/select', body)
       return { projectId }
     },
     onSuccess: ({ projectId }) => {

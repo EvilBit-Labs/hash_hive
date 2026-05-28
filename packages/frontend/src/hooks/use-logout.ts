@@ -25,9 +25,6 @@ export function useLogout(): () => Promise<void> {
       // next request.
     }
     useAuthStore.getState().clearAuth()
-    // react-router's `navigate()` returns `void | Promise<void>` in v7,
-    // so the lint rule treats the call as a floating promise. `void`
-    // makes the intent explicit -- we don't await the transition.
     void navigate('/login', { replace: true })
   }
 }
