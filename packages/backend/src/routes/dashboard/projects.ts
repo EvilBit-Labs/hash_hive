@@ -9,7 +9,11 @@ import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireParamMembershipRole, requireParamProjectAccess } from '../../middleware/rbac.js'
+import {
+  requireParamMembershipRole,
+  requireParamProjectAccess,
+  requireRole,
+} from '../../middleware/rbac.js'
 import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
@@ -61,12 +65,25 @@ projectRoutes.get('/', async (c) => {
 })
 
 // POST /projects — create a new project
-projectRoutes.post('/', zValidator('json', createProjectSchema), async (c) => {
-  const { userId } = c.get('currentUser')
-  const data = c.req.valid('json')
-  const project = await createProject({ ...data, createdBy: userId })
-  return c.json({ project }, 201)
-})
+//
+// Gated behind the global `admin` capability tier (users.roles). Without
+// this gate, any authenticated user (operator/analyst) could create a
+// project and was auto-granted project-admin on it -- a self-elevation
+// path that gave non-admin accounts admin-tier project RBAC primitives
+// (add/remove members, change roles, delete project). createProject
+// auto-grants admin to the creator by design; only platform admins
+// should hold that hammer.
+projectRoutes.post(
+  '/',
+  requireRole('admin'),
+  zValidator('json', createProjectSchema),
+  async (c) => {
+    const { userId } = c.get('currentUser')
+    const data = c.req.valid('json')
+    const project = await createProject({ ...data, createdBy: userId })
+    return c.json({ project }, 201)
+  }
+)
 
 // POST /projects/select — set the server-managed projectId on the
 // BetterAuth session after validating membership. Used by the
