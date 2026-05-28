@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   type AnyPgColumn,
   bigint,
@@ -183,6 +184,10 @@ export const agents = pgTable(
     index('agents_project_id_idx').on(table.projectId),
     index('agents_status_idx').on(table.status),
     index('agents_auth_token_idx').on(table.authToken),
+    // Heartbeat-monitor sweep filters by lastSeenAt to detect stale
+    // agents. Without this index it does a seq scan once per sweep
+    // interval (default 30s) -- linear in the agent count.
+    index('agents_last_seen_at_idx').on(table.lastSeenAt),
   ]
 )
 
@@ -444,6 +449,22 @@ export const tasks = pgTable(
     index('tasks_status_idx').on(table.status),
     index('tasks_status_campaign_id_idx').on(table.status, table.campaignId),
     index('tasks_campaign_id_status_idx').on(table.campaignId, table.status),
+    // P-H3: assignNextTask + heartbeat hint filter by JSONB
+    // requiredCapabilities. Without expression indexes, the planner
+    // falls back to filtering each candidate row by parsing the JSONB
+    // -- O(unassigned_pending_tasks) per claim at 10-50 claims/sec
+    // hits 100-300ms p99 with 100K pending tasks.
+    index('tasks_required_capabilities_gpu_idx').on(sql`((required_capabilities ->> 'gpu'))`),
+    index('tasks_required_capabilities_hashcat_mode_idx').on(
+      sql`((required_capabilities ->> 'hashcatMode'))`
+    ),
+    // Partial index for the assignNextTask hot path: the planner
+    // scans pending/unassigned tasks per claim. Bounding the index
+    // to (status='pending' AND agent_id IS NULL) keeps it tiny
+    // even as completed task history grows.
+    index('tasks_pending_unassigned_idx')
+      .on(table.campaignId, table.id)
+      .where(sql`status = 'pending' AND agent_id IS NULL`),
   ]
 )
 
