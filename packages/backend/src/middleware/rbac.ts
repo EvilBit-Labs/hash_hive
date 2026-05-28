@@ -55,9 +55,19 @@ export function requireRole(...allowedRoles: UserRole[]) {
 
 // ─── Per-project membership RBAC ────────────────────────────────────
 
-async function checkMembership(c: {
-  get: (key: 'currentUser') => { userId: number; projectId: number | null } | undefined
-}) {
+/**
+ * Hono context shape with the per-request membership cache. We use a
+ * narrow signature so checkMembership stays mockable for unit tests
+ * (the existing tests pass a minimal { get } shape) while still
+ * carrying set() when the real Hono Context is in play.
+ */
+type MembershipCtx = {
+  get: ((key: 'currentUser') => { userId: number; projectId: number | null } | undefined) &
+    ((key: 'membership') => { projectId: number; userId: number; roles: string[] } | undefined)
+  set?: (key: 'membership', value: { projectId: number; userId: number; roles: string[] }) => void
+}
+
+async function checkMembership(c: MembershipCtx) {
   const user = c.get('currentUser')
   if (!user) {
     throw httpError(401, 'AUTH_TOKEN_INVALID', 'Authentication required')
@@ -72,11 +82,22 @@ async function checkMembership(c: {
     )
   }
 
+  // P-C1: reuse the per-request lookup when a prior guard already
+  // resolved the same (userId, projectId) tuple. Saves a SELECT per
+  // request when both requireProjectAccess and requireMembershipRole
+  // are stacked (common on the dashboard surface), and when route
+  // handlers re-call findProjectMembership for their own enforcement.
+  const cached = c.get('membership')
+  if (cached && cached.userId === user.userId && cached.projectId === projectId) {
+    return cached
+  }
+
   const membership = await findProjectMembership(user.userId, projectId)
   if (!membership) {
     throw httpError(403, 'AUTHZ_PROJECT_ACCESS_DENIED', 'Not a member of this project')
   }
 
+  c.set?.('membership', { ...membership, userId: user.userId })
   return membership
 }
 
@@ -113,10 +134,11 @@ export function requireProjectAccess() {
  * Checks membership for a project specified by URL param (e.g., /:projectId).
  * Used for project management routes where the target project is in the URL.
  */
-async function checkParamProjectMembership(c: {
-  get: (key: 'currentUser') => { userId: number; projectId: number | null } | undefined
-  req: { param: (key: string) => string | undefined }
-}) {
+async function checkParamProjectMembership(
+  c: MembershipCtx & {
+    req: { param: (key: string) => string | undefined }
+  }
+) {
   const user = c.get('currentUser')
   if (!user) {
     throw httpError(401, 'AUTH_TOKEN_INVALID', 'Authentication required')
@@ -127,11 +149,20 @@ async function checkParamProjectMembership(c: {
     throw httpError(400, 'VALIDATION_FAILED', 'Project ID is required for this operation')
   }
 
+  // P-C1: same per-request cache as checkMembership. The cache is keyed
+  // by projectId so a param-project route won't reuse a session-project
+  // membership entry when the param differs.
+  const cached = c.get('membership')
+  if (cached && cached.userId === user.userId && cached.projectId === projectId) {
+    return cached
+  }
+
   const membership = await findProjectMembership(user.userId, projectId)
   if (!membership) {
     throw httpError(403, 'AUTHZ_PROJECT_ACCESS_DENIED', 'Not a member of this project')
   }
 
+  c.set?.('membership', { ...membership, userId: user.userId })
   return membership
 }
 
