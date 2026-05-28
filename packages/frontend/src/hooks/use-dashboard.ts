@@ -91,7 +91,7 @@ interface Campaign {
 export type AgentError = Omit<SelectAgentError, 'createdAt'> & { createdAt: string }
 
 export function useDashboardStats() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery<DashboardStats>({
     queryKey: ['dashboard-stats', selectedProjectId],
@@ -102,7 +102,7 @@ export function useDashboardStats() {
 }
 
 export function useAgents(options?: { status?: string; limit?: number; offset?: number }) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['agents', selectedProjectId, options],
@@ -122,7 +122,7 @@ export function useAgents(options?: { status?: string; limit?: number; offset?: 
 }
 
 export function useAgent(agentId: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['agent', agentId, selectedProjectId],
@@ -132,7 +132,7 @@ export function useAgent(agentId: number) {
 }
 
 export function useAgentErrors(agentId: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['agent-errors', agentId, selectedProjectId],
@@ -150,7 +150,7 @@ type AgentBenchmarkResponse = Omit<
 > & { benchmarkedAt: string }
 
 export function useAgentBenchmarks(agentId: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['agent-benchmarks', agentId, selectedProjectId],
@@ -161,7 +161,7 @@ export function useAgentBenchmarks(agentId: number) {
 }
 
 export function useAgentTasks(agentId: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['agent-tasks', agentId, selectedProjectId],
@@ -171,7 +171,7 @@ export function useAgentTasks(agentId: number) {
 }
 
 export function useCampaigns(options?: UseCampaignsOptions) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['campaigns', selectedProjectId, options],
@@ -203,7 +203,7 @@ export function useCampaigns(options?: UseCampaignsOptions) {
  * `task_update` events that carry the matching `campaignId`.
  */
 export function useCampaignDetail(campaignId: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['campaign', campaignId, selectedProjectId],

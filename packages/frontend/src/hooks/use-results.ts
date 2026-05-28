@@ -31,7 +31,7 @@ export function useResults(options?: {
   limit?: number
   offset?: number
 }) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery<ResultsResponse>({
     queryKey: ['results', selectedProjectId, options],
@@ -55,7 +55,7 @@ export function useResultsExportUrl(options?: {
   hashListId?: number
   search?: string
 }) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   if (!selectedProjectId) return null
 

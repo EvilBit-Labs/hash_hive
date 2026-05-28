@@ -17,8 +17,9 @@ import { useUiStore } from '../stores/ui'
 
 export function LoginPage() {
   const { data: session } = authClient.useSession()
-  const { selectedProjectId } = useUiStore()
-  const { fetchProjects, hasFetchedProjects } = useAuthStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
+  const fetchProjects = useAuthStore((s) => s.fetchProjects)
+  const hasFetchedProjects = useAuthStore((s) => s.hasFetchedProjects)
   const [error, setError] = useState<string | null>(null)
   const selectProject = useSelectProject()
 

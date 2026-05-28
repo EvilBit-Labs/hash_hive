@@ -8,7 +8,7 @@ import { EventsProvider } from './events-provider'
 import { MobileSidebar, Sidebar } from './sidebar'
 
 export function AppLayout() {
-  const { setMobileSidebar } = useUiStore()
+  const setMobileSidebar = useUiStore((s) => s.setMobileSidebar)
 
   return (
     <EventsProvider>

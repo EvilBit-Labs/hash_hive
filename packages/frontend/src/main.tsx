@@ -62,7 +62,8 @@ const queryClient = new QueryClient({
 
 function App() {
   const { data: session } = authClient.useSession()
-  const { fetchProjects, hasFetchedProjects } = useAuthStore()
+  const fetchProjects = useAuthStore((s) => s.fetchProjects)
+  const hasFetchedProjects = useAuthStore((s) => s.hasFetchedProjects)
 
   // Fetch project memberships when session is available
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Navigate } from 'react-router'
+import { useShallow } from 'zustand/shallow'
 
 import logoSvg from '../assets/logo.svg'
 import { EmptyState } from '../components/ui/empty-state'
@@ -11,9 +12,16 @@ import { useUiStore } from '../stores/ui'
 
 export function SelectProjectPage() {
   const { data: session, isPending } = authClient.useSession()
-  const { projects } = useAuthStore()
+  const projects = useAuthStore((s) => s.projects)
   const { selectedProjectId, rememberLastProject, setRememberLastProject, setLastProjectId } =
-    useUiStore()
+    useUiStore(
+      useShallow((s) => ({
+        selectedProjectId: s.selectedProjectId,
+        rememberLastProject: s.rememberLastProject,
+        setRememberLastProject: s.setRememberLastProject,
+        setLastProjectId: s.setLastProjectId,
+      }))
+    )
   const [error, setError] = useState<string | null>(null)
   const selectProject = useSelectProject({
     onError: (msg) => {

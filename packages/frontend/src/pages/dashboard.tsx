@@ -7,7 +7,7 @@ import { useDashboardStats } from '../hooks/use-dashboard'
 import { useUiStore } from '../stores/ui'
 
 export function DashboardPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { data: stats, isLoading } = useDashboardStats()
 
   if (!selectedProjectId) {

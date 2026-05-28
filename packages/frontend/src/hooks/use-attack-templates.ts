@@ -34,7 +34,7 @@ interface InstantiateResponse {
 }
 
 export function useAttackTemplates() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['attack-templates', selectedProjectId],
@@ -45,7 +45,7 @@ export function useAttackTemplates() {
 }
 
 export function useAttackTemplate(id: number) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['attack-template', id, selectedProjectId],

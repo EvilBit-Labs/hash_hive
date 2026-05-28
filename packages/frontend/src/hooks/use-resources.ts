@@ -39,7 +39,7 @@ export function useHashTypes() {
 }
 
 export function useHashLists() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['hash-lists', selectedProjectId],
@@ -56,7 +56,7 @@ function useResourceList(
   type: 'wordlists' | 'rulelists' | 'masklists',
   options?: ResourceListOptions
 ) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const enabledOverride = options?.enabled ?? true
 
   return useQuery({
@@ -166,7 +166,7 @@ export function useHashListItems(
     offset?: number
   }
 ) {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   return useQuery({
     queryKey: ['hash-list-items', id, opts],

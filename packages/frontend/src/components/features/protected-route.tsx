@@ -5,7 +5,7 @@ import { useUiStore } from '../../stores/ui'
 
 export function ProtectedRoute() {
   const { data: session, isPending } = authClient.useSession()
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
 
   if (isPending) {
     return (
