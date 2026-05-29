@@ -3,9 +3,8 @@ info:
   title: HashHive Dashboard API
   description: |
     REST API consumed by the HashHive React dashboard. Authenticated by
-    BetterAuth cookie sessions, paginated with `page`/`pageSize` (or
-    `limit`/`offset` on some surfaces), and returns errors in the
-    envelope `{ error: { code, message } }`.
+    BetterAuth cookie sessions, paginated with `limit`/`offset`, and
+    returns errors in the envelope `{ error: { code, message } }`.
 
     This document covers the **Campaign Orchestration** surface
     completed in PR #151. The full dashboard surface (auth, projects,
