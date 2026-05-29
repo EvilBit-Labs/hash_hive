@@ -149,11 +149,11 @@ version = "0.22.1"
 backend = "npm:markdownlint-cli2"
 
 [[tools.oxfmt]]
-version = "0.50.0"
+version = "0.51.0"
 backend = "npm:oxfmt"
 
 [[tools.oxlint]]
-version = "1.65.0"
+version = "1.66.0"
 backend = "npm:oxlint"
 
 [[tools."pipx:mdformat"]]
