@@ -99,10 +99,8 @@ dashboardAgentRoutes.patch(
   async (c) => {
     const { id: agentId } = c.req.valid('param')
     const data = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (projectId === null) {
-      return c.json(notFoundEnvelope, 404)
-    }
+    // requireMembershipRole sets scopedUser (CQ-H3).
+    const { projectId } = c.get('scopedUser')!
     // Atomic UPDATE ... WHERE projectId enforces project scope inside
     // the write itself, closing the read-then-write TOCTOU window the
     // earlier getAgentById-then-updateAgent pattern left open. A null

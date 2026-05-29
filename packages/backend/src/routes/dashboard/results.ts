@@ -76,13 +76,7 @@ resultsRoutes.get(
   requireProjectAccess(),
   zValidator('query', listResultsQuerySchema),
   async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const { limit, offset, campaignId, hashListId, q } = c.req.valid('query')
     const conditions = buildResultFilters(projectId, { campaignId, hashListId, q })
@@ -132,13 +126,7 @@ resultsRoutes.get(
   requireProjectAccess(),
   zValidator('query', exportResultsQuerySchema),
   async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const { campaignId, hashListId, q } = c.req.valid('query')
     const conditions = buildResultFilters(projectId, { campaignId, hashListId, q })

@@ -131,10 +131,7 @@ resourceRoutes.get('/hash-types', async (c) => {
 // ─── Hash Lists ─────────────────────────────────────────────────────
 
 resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  const { projectId } = c.get('scopedUser')!
 
   const hashLists = await listHashLists(projectId)
   return c.json({ hashLists })
@@ -149,10 +146,7 @@ resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
 // We cannot apply zValidator at registration because the validator binds
 // per content-type; instead we dispatch inside the handler.
 resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor'), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  const { projectId } = c.get('scopedUser')!
 
   const contentType = c.req.header('content-type') ?? ''
 
@@ -278,10 +272,7 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
 })
 
 resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  const { projectId } = c.get('scopedUser')!
 
   const hashListId = Number(c.req.param('id'))
   const hl = await getHashListById(hashListId, projectId)
@@ -317,13 +308,7 @@ resourceRoutes.delete(
   '/hash-lists/:id',
   requireMembershipRole('admin', 'contributor'),
   async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const id = Number(c.req.param('id'))
     if (!Number.isInteger(id) || id <= 0) {
@@ -352,13 +337,7 @@ resourceRoutes.post(
   '/hash-lists/:id/upload',
   requireMembershipRole('admin', 'contributor'),
   async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const id = Number(c.req.param('id'))
     const hashList = await getHashListById(id, projectId)
@@ -401,13 +380,7 @@ resourceRoutes.post(
   '/hash-lists/:id/import',
   requireMembershipRole('admin', 'contributor'),
   async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const id = Number(c.req.param('id'))
 
@@ -432,10 +405,7 @@ resourceRoutes.post(
 )
 
 resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  const { projectId } = c.get('scopedUser')!
 
   const hashListId = Number(c.req.param('id'))
 
@@ -462,10 +432,7 @@ resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) =>
 })
 
 resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  const { projectId } = c.get('scopedUser')!
 
   const id = Number(c.req.param('id'))
   const hashList = await getHashListById(id, projectId)
@@ -518,13 +485,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
   })
 
   resourceRoutes.get(`/${prefix}`, requireProjectAccess(), async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const items = await listResources(table, projectId)
     return c.json({ [prefix]: items })
@@ -536,26 +497,14 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     zValidator('json', createSchema),
     async (c) => {
       const data = c.req.valid('json')
-      const { projectId } = c.get('currentUser')
-      if (!projectId) {
-        return c.json(
-          { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-          400
-        )
-      }
+      const { projectId } = c.get('scopedUser')!
       const item = await createResource(table, { ...data, projectId })
       return c.json({ item }, 201)
     }
   )
 
   resourceRoutes.get(`/${prefix}/:id`, requireProjectAccess(), async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
     const id = Number(c.req.param('id'))
     const item = await getResourceById(table, id, projectId)
 
@@ -573,13 +522,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     `/${prefix}/:id/upload`,
     requireMembershipRole('admin', 'contributor'),
     async (c) => {
-      const { projectId } = c.get('currentUser')
-      if (!projectId) {
-        return c.json(
-          { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-          400
-        )
-      }
+      const { projectId } = c.get('scopedUser')!
       const id = Number(c.req.param('id'))
       const item = await getResourceById(table, id, projectId)
 
@@ -627,13 +570,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     `/${prefix}/:id`,
     requireMembershipRole('admin', 'contributor'),
     async (c) => {
-      const { projectId } = c.get('currentUser')
-      if (!projectId) {
-        return c.json(
-          { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-          400
-        )
-      }
+      const { projectId } = c.get('scopedUser')!
       const id = Number(c.req.param('id'))
       if (!Number.isInteger(id) || id <= 0) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
@@ -657,13 +594,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
   )
 
   resourceRoutes.get(`/${prefix}/:id/download`, requireProjectAccess(), async (c) => {
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
     const id = Number(c.req.param('id'))
     const item = await getResourceById(table, id, projectId)
 
@@ -717,13 +648,7 @@ resourceRoutes.post(
   zValidator('json', initiateUploadSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     try {
       const result = await initiateChunkedUpload({ ...data, projectId })
@@ -767,13 +692,7 @@ resourceRoutes.put(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is empty' } }, 400)
     }
 
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     try {
       const result = await uploadChunkPart(
@@ -815,13 +734,7 @@ resourceRoutes.post(
   async (c) => {
     const uploadId = c.req.param('uploadId')
     const { parts, resourceId, resourceType } = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     try {
       const result = await completeChunkedUpload(
@@ -867,13 +780,7 @@ resourceRoutes.delete(
     }
     const { resourceId, resourceType } = parsed.data
 
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
     return c.json({ acknowledged: true })
@@ -905,13 +812,7 @@ resourceRoutes.get(
     }
     const { resourceId, resourceType } = parsed.data
 
-    const { projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { projectId } = c.get('scopedUser')!
 
     const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
     if (!result) {

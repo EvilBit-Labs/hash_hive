@@ -112,13 +112,7 @@ campaignRoutes.post(
   zValidator('json', createCampaignSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { userId, projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { userId, projectId } = c.get('scopedUser')!
 
     // No attacks supplied → legacy single-row insert (backward compatible).
     if (!data.attacks || data.attacks.length === 0) {

@@ -131,15 +131,8 @@ attackTemplateRoutes.get(
   requireProjectAccess(),
   zValidator('query', listTemplatesQuerySchema),
   async (c) => {
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const { limit, offset } = c.req.valid('query')
-
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
 
     const result = await listAttackTemplates({ projectId, limit, offset })
     return c.json(result)
@@ -152,13 +145,7 @@ attackTemplateRoutes.post(
   zValidator('json', createAttackTemplateRequestSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { userId, projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { userId, projectId } = c.get('scopedUser')!
 
     const refError = await validateTemplateReferences(data, projectId)
     if (refError) {
@@ -291,13 +278,7 @@ attackTemplateRoutes.post(
   zValidator('json', importTemplateSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { userId, projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { userId, projectId } = c.get('scopedUser')!
 
     const refError = await validateTemplateReferences(data, projectId)
     if (refError) {
