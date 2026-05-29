@@ -455,8 +455,15 @@ export const tasks = pgTable(
     // -- O(unassigned_pending_tasks) per claim at 10-50 claims/sec
     // hits 100-300ms p99 with 100K pending tasks.
     index('tasks_required_capabilities_gpu_idx').on(sql`((required_capabilities ->> 'gpu'))`),
+    // Indexed on the casted int expression so the planner can use it
+    // for the actual hot-path predicate, which does
+    // `(required_capabilities ->> 'hashcatMode')::int = ANY(...)`
+    // (services/tasks.ts buildCapabilityPredicate). Postgres expression
+    // indexes only match when the indexed expression matches the
+    // query expression exactly -- a text-only index would never be
+    // used here despite looking correct on paper.
     index('tasks_required_capabilities_hashcat_mode_idx').on(
-      sql`((required_capabilities ->> 'hashcatMode'))`
+      sql`(((required_capabilities ->> 'hashcatMode'))::int)`
     ),
     // Partial index for the assignNextTask hot path: the planner
     // scans pending/unassigned tasks per claim. Bounding the index

@@ -21,6 +21,14 @@
 -- Heartbeat-monitor sweep filters by lastSeenAt to detect stale agents.
 CREATE INDEX "agents_last_seen_at_idx" ON "agents" USING btree ("last_seen_at");--> statement-breakpoint
 -- assignNextTask + heartbeat hint filter by JSONB requiredCapabilities.
+-- NOTE: the hashcat_mode index expression below is text-only and does
+-- NOT match the service predicate, which casts to int
+-- (`(required_capabilities->>'hashcatMode')::int = ANY($1::int[])`).
+-- Postgres expression indexes are only used when the indexed
+-- expression matches the query expression exactly, so this index is
+-- a no-op for the hot path. Superseded by migration 0012, which drops
+-- and recreates the index with the casted expression. Forward-only
+-- correction kept rather than rewriting 0011 in place.
 CREATE INDEX "tasks_required_capabilities_gpu_idx" ON "tasks" USING btree (((required_capabilities ->> 'gpu')));--> statement-breakpoint
 CREATE INDEX "tasks_required_capabilities_hashcat_mode_idx" ON "tasks" USING btree (((required_capabilities ->> 'hashcatMode')));--> statement-breakpoint
 -- Partial index for the assignNextTask hot path. Bounded to pending+
