@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef } from 'react'
 import { Link, useLocation } from 'react-router'
+import { useShallow } from 'zustand/shallow'
 
 import logoSvg from '../../assets/logo.svg'
 import { useLogout } from '../../hooks/use-logout'
@@ -77,9 +78,9 @@ const navItems: readonly NavItem[] = [
 /** Shared sidebar content used by both desktop and mobile variants. */
 function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { pathname } = useLocation()
-  const { projects } = useAuthStore()
+  const projects = useAuthStore((s) => s.projects)
   const { data: session } = authClient.useSession()
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { can } = usePermissions()
   const selectProject = useSelectProject()
   const logout = useLogout()
@@ -183,7 +184,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
 
 /** Desktop sidebar - hidden below md breakpoint. */
 export function Sidebar() {
-  const { sidebarOpen } = useUiStore()
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen)
 
   if (!sidebarOpen) return null
 
@@ -196,7 +197,12 @@ export function Sidebar() {
 
 /** Mobile sidebar - slides in as an overlay drawer below md. */
 export function MobileSidebar() {
-  const { mobileSidebarOpen, setMobileSidebar } = useUiStore()
+  const { mobileSidebarOpen, setMobileSidebar } = useUiStore(
+    useShallow((s) => ({
+      mobileSidebarOpen: s.mobileSidebarOpen,
+      setMobileSidebar: s.setMobileSidebar,
+    }))
+  )
   const { pathname } = useLocation()
   const prevPathname = useRef(pathname)
 

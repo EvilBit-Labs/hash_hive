@@ -10,13 +10,14 @@ import { Hono } from 'hono'
 import type { AppEnv } from '../../../src/types.js'
 
 let mockMembership: { id: number; userId: number; projectId: number; roles: string[] } | null = null
+const findProjectMembershipMock = mock(async () => mockMembership)
 
 mock.module('../../../src/db/index.js', () => ({ db: {} as never, client: {} }))
 mock.module('../../../src/services/auth.js', () => ({
-  findProjectMembership: async () => mockMembership,
+  findProjectMembership: findProjectMembershipMock,
 }))
 
-import { requireMembershipRole } from '../../../src/middleware/rbac.js'
+import { requireMembershipRole, requireProjectAccess } from '../../../src/middleware/rbac.js'
 
 type CurrentUser = AppEnv['Variables']['currentUser']
 
@@ -40,6 +41,15 @@ const baseUser: CurrentUser = {
 
 beforeEach(() => {
   mockMembership = null
+  // mockReset() clears history AND removes any per-test implementation
+  // overrides (mockResolvedValueOnce etc.) -- mockClear() preserves the
+  // overrides and would leak them into subsequent tests. Bun's mockReset
+  // ALSO removes the default implementation, so we re-establish it here
+  // pointing at the mutable `mockMembership` binding. This is the
+  // recommended pattern per the bun:test docs:
+  // https://bun.com/docs/test/mocks
+  findProjectMembershipMock.mockReset()
+  findProjectMembershipMock.mockImplementation(async () => mockMembership)
 })
 
 describe('requireMembershipRole', () => {
@@ -80,5 +90,40 @@ describe('requireMembershipRole', () => {
     expect(res.status).toBe(403)
     const body = await res.json()
     expect(body['error']['code']).toBe('AUTHZ_INSUFFICIENT_PERMISSIONS')
+  })
+})
+
+// P-C1 regression: per-request membership cache.
+describe('per-request membership cache (P-C1)', () => {
+  it('hits findProjectMembership exactly once when both requireProjectAccess + requireMembershipRole are stacked', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['admin'] }
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('currentUser', baseUser)
+      await next()
+    })
+    app.use('*', requireProjectAccess())
+    app.use('*', requireMembershipRole('admin'))
+    app.get('/x', (c) => c.text('ok'))
+
+    const res = await app.request('/x')
+    expect(res.status).toBe(200)
+    expect(findProjectMembershipMock.mock.calls.length).toBe(1)
+  })
+
+  it('does NOT leak the cached membership across separate requests', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['admin'] }
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('currentUser', baseUser)
+      await next()
+    })
+    app.use('*', requireMembershipRole('admin'))
+    app.get('/x', (c) => c.text('ok'))
+
+    await app.request('/x')
+    await app.request('/x')
+    // Two separate requests => two separate cache scopes => two DB hits.
+    expect(findProjectMembershipMock.mock.calls.length).toBe(2)
   })
 })

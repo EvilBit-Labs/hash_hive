@@ -1074,12 +1074,25 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
 
 // ─── Task Queries ───────────────────────────────────────────────────
 
-export async function getTaskById(id: number) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1)
-  return task ?? null
+/**
+ * Fetch a task by id, scoped to a project. Joins through campaigns to
+ * derive project ownership (tasks do not carry projectId directly).
+ * Returns null when the task does not exist OR when it belongs to a
+ * different project — a defense-in-depth guard that keeps cross-project
+ * enumeration impossible even if a caller forgets the boundary check.
+ */
+export async function getTaskById(id: number, projectId: number) {
+  const [row] = await db
+    .select({ task: tasks })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(and(eq(tasks.id, id), eq(campaigns.projectId, projectId)))
+    .limit(1)
+  return row?.task ?? null
 }
 
 export async function listTasks(filters: {
+  projectId: number
   campaignId?: number | undefined
   attackId?: number | undefined
   agentId?: number | undefined
@@ -1087,9 +1100,10 @@ export async function listTasks(filters: {
   limit?: number | undefined
   offset?: number | undefined
 }) {
-  let query = db.select().from(tasks).$dynamic()
-
-  const conditions = []
+  // Project scope is enforced at the service boundary via INNER JOIN
+  // on campaigns. Every caller MUST pass projectId; we deliberately
+  // do not expose an unscoped overload.
+  const conditions = [eq(campaigns.projectId, filters.projectId)]
   if (filters.campaignId) {
     conditions.push(eq(tasks.campaignId, filters.campaignId))
   }
@@ -1102,23 +1116,30 @@ export async function listTasks(filters: {
   if (filters.status) {
     conditions.push(eq(tasks.status, filters.status))
   }
-  if (conditions.length > 0) {
-    query = query.where(and(...conditions))
-  }
 
   const limit = filters.limit ?? 50
   const offset = filters.offset ?? 0
 
+  const whereClause = and(...conditions)
+
   const [results, countResult] = await Promise.all([
-    query.limit(limit).offset(offset).orderBy(desc(tasks.createdAt)),
+    db
+      .select({ task: tasks })
+      .from(tasks)
+      .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+      .where(whereClause)
+      .limit(limit)
+      .offset(offset)
+      .orderBy(desc(tasks.createdAt)),
     db
       .select({ count: sql<number>`count(*)` })
       .from(tasks)
-      .where(conditions.length > 0 ? and(...conditions) : undefined),
+      .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+      .where(whereClause),
   ])
 
   return {
-    tasks: results,
+    tasks: results.map((r) => r.task),
     total: Number(countResult[0]?.count ?? 0),
     limit,
     offset,
@@ -1228,10 +1249,15 @@ export function projectAgentTaskRows(
  * Returns active tasks assigned to an agent (pending, assigned, running),
  * joined with campaign and attack names for display in the agent detail UI.
  *
- * Project scoping is the caller's responsibility — verify the agent belongs
- * to the caller's project before invoking.
+ * Project scope is enforced at the service boundary via the campaigns
+ * INNER JOIN. The caller is still expected to verify the agent itself
+ * belongs to the project (404 vs leaking "this agent exists elsewhere"),
+ * but the projectId predicate here is defense-in-depth.
  */
-export async function listTasksByAgent(agentId: number): Promise<AgentTaskSummary[]> {
+export async function listTasksByAgent(
+  agentId: number,
+  projectId: number
+): Promise<AgentTaskSummary[]> {
   const rows = await db
     .select({
       id: tasks.id,
@@ -1247,7 +1273,13 @@ export async function listTasksByAgent(agentId: number): Promise<AgentTaskSummar
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
     .innerJoin(attacks, eq(tasks.attackId, attacks.id))
-    .where(and(eq(tasks.agentId, agentId), inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])))
+    .where(
+      and(
+        eq(tasks.agentId, agentId),
+        eq(campaigns.projectId, projectId),
+        inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])
+      )
+    )
     .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt))
 
   return projectAgentTaskRows(rows)

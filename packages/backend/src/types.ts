@@ -21,5 +21,16 @@ export type AppEnv = {
       projectId: number
       capabilities: Record<string, unknown>
     }
+    // Per-request membership cache. Populated by checkMembership the
+    // first time a project-scoped guard runs; reused by any later guard
+    // (requireProjectAccess, requireMembershipRole, requireParamProjectAccess)
+    // OR by route handlers that re-fetch via findProjectMembership.
+    // Keyed by projectId so the param-project variant doesn't return a
+    // stale session-project membership when the param differs.
+    membership?: {
+      projectId: number
+      userId: number
+      roles: string[]
+    }
   }
 }

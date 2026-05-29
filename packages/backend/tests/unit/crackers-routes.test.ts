@@ -253,7 +253,13 @@ describe('Dashboard cracker routes: validation', () => {
   it('POST / rejects unknown engine via zod enum', async () => {
     const res = await app.request(DASH_CRACKERS, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
       body: JSON.stringify({ engine: 'cain', version: '6.2.6', platform: 'linux-x64' }),
     })
     expect(res.status).toBe(400)
@@ -262,7 +268,13 @@ describe('Dashboard cracker routes: validation', () => {
   it('POST / rejects unknown platform via zod enum', async () => {
     const res = await app.request(DASH_CRACKERS, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
       body: JSON.stringify({ engine: 'hashcat', version: '6.2.6', platform: 'aix-ppc' }),
     })
     expect(res.status).toBe(400)
@@ -270,7 +282,12 @@ describe('Dashboard cracker routes: validation', () => {
 
   it('GET /:id rejects non-numeric id', async () => {
     const res = await app.request(`${DASH_CRACKERS}/notanumber`, {
-      headers: { cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error: { code: string } }
@@ -286,6 +303,8 @@ describe('Dashboard cracker routes: direct upload size cap', () => {
       method: 'POST',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-length': String(200 * 1024 * 1024), // 200 MB > 100 MB cap
         'content-type': 'multipart/form-data; boundary=----test',
@@ -306,6 +325,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
       method: 'PUT',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-type': 'application/octet-stream',
       },
@@ -321,6 +342,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
         method: 'PUT',
         headers: {
           cookie: ADMIN_COOKIE,
+          origin: 'http://lab.local',
+          host: 'lab.local',
           'X-Project-Id': '1',
           'content-type': 'application/octet-stream',
         },
@@ -335,6 +358,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
       method: 'PUT',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-type': 'application/octet-stream',
       },

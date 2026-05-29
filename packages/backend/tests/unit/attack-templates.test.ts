@@ -336,6 +336,8 @@ const BASE = '/api/v1/dashboard/attack-templates'
 const authHeaders = {
   'Content-Type': 'application/json',
   cookie: 'hh.session_token=valid-session',
+  origin: 'http://lab.local',
+  host: 'lab.local',
   'x-project-id': '1',
 }
 
@@ -370,6 +372,8 @@ describe('Attack Templates API: Project scope enforcement (issue #159 U4)', () =
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=no-project-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
     })
     expect(res.status).toBe(400)
@@ -383,6 +387,8 @@ describe('Attack Templates API: Project scope enforcement (issue #159 U4)', () =
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=non-member-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
     })
     expect(res.status).toBe(403)
@@ -402,6 +408,8 @@ describe('Attack Templates API: Project scope enforcement (issue #159 U4)', () =
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'x-project-id': '999',
       },
     })

@@ -86,7 +86,7 @@ const SORT_FIELD_OPTIONS: Array<{ label: string; value: CampaignSortField }> = [
 ]
 
 export function CampaignsPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 

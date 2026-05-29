@@ -821,17 +821,27 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   }
 }
 
+/**
+ * Update an agent, enforcing project scope inside the UPDATE WHERE
+ * predicate. The atomic form closes the TOCTOU window the previous
+ * "read with getAgentById then write with updateAgent" pattern left
+ * open: ownership could change between the read and the write, and
+ * the write would still land. Returns null when the row does not
+ * exist OR when it belongs to a different project -- both cases
+ * collapse to "not found" at the caller.
+ */
 export async function updateAgent(
   agentId: number,
   data: {
     name?: string | undefined
     status?: string | undefined
-  }
+  },
+  projectId: number
 ) {
   const [updated] = await db
     .update(agents)
     .set({ ...data, updatedAt: new Date() })
-    .where(eq(agents.id, agentId))
+    .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
     .returning()
 
   if (updated && data.status) {

@@ -181,6 +181,18 @@ if (!IS_ISOLATED) {
     return `ws://localhost:${server.port}${path}`
   }
 
+  /**
+   * Build WS upgrade headers with a same-origin `Origin` matching the
+   * dev server's host:port. The `requireSameOriginForWS()` gate
+   * mounted on /api/v1/dashboard/events/* rejects upgrades whose
+   * `Origin` doesn't match the request `Host`. Tests intentionally
+   * exercising the no-Origin or cross-origin paths should build their
+   * headers inline.
+   */
+  function wsHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return { origin: `http://localhost:${server.port}`, ...extra }
+  }
+
   function waitForMessage(ws: WebSocket): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out waiting for message')), 3000)
@@ -204,7 +216,7 @@ if (!IS_ISOLATED) {
   describe('WebSocket BetterAuth session authentication', () => {
     it('should accept a session with a server-managed projectId', async () => {
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
-        headers: { cookie: 'hh.session_token=valid-session' },
+        headers: wsHeaders({ cookie: 'hh.session_token=valid-session' }),
       })
 
       const msg = await waitForMessage(ws)
@@ -214,7 +226,14 @@ if (!IS_ISOLATED) {
     })
 
     it('should close with 4001 when no auth is provided', async () => {
-      const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'))
+      // Send a same-origin Origin so requireSameOriginForWS lets us
+      // through; the cookie is absent so the upgrade handler's
+      // BetterAuth getSession returns null and closes 4001. Without
+      // the Origin we'd be blocked pre-upgrade with a 403 (also
+      // correct, but tests the CSRF gate not the auth path).
+      const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
+        headers: wsHeaders(),
+      })
       const { code } = await waitForClose(ws)
       expect(code).toBe(4001)
     })
@@ -223,7 +242,7 @@ if (!IS_ISOLATED) {
       // Multi-project user pre-selector: session exists but projectId is
       // undefined. Frontend must call POST /projects/select first.
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
-        headers: { cookie: 'hh.session_token=no-project-session' },
+        headers: wsHeaders({ cookie: 'hh.session_token=no-project-session' }),
       })
       const { code } = await waitForClose(ws)
       expect(code).toBe(4002)
@@ -234,7 +253,7 @@ if (!IS_ISOLATED) {
       // membership was revoked. The defense-in-depth membership check at
       // upgrade time catches this and closes 4003.
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
-        headers: { cookie: 'hh.session_token=revoked-membership' },
+        headers: wsHeaders({ cookie: 'hh.session_token=revoked-membership' }),
       })
       const { code } = await waitForClose(ws)
       expect(code).toBe(4003)
@@ -245,7 +264,7 @@ if (!IS_ISOLATED) {
       // session field is the source of truth. The connection still opens
       // with the session's projectId.
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream?projectIds=2,3,4'), {
-        headers: { cookie: 'hh.session_token=valid-session' },
+        headers: wsHeaders({ cookie: 'hh.session_token=valid-session' }),
       })
       const msg = await waitForMessage(ws)
       expect(msg['type']).toBe('connected')
@@ -259,7 +278,7 @@ if (!IS_ISOLATED) {
       // the existing missing-auth path closes 4001 so the frontend's
       // auth-refresh flow takes over.
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
-        headers: { cookie: 'hh.session_token=hang-auth' },
+        headers: wsHeaders({ cookie: 'hh.session_token=hang-auth' }),
       })
       const { code } = await waitForClose(ws)
       expect(code).toBe(4001)
@@ -271,7 +290,7 @@ if (!IS_ISOLATED) {
       // in the retry-budget path so a transient outage recovers without
       // looking like an authorization failure.
       const ws = new WebSocket(wsUrl('/api/v1/dashboard/events/stream'), {
-        headers: { cookie: 'hh.session_token=hang-membership' },
+        headers: wsHeaders({ cookie: 'hh.session_token=hang-membership' }),
       })
       const { code } = await waitForClose(ws)
       expect(code).toBe(4500)

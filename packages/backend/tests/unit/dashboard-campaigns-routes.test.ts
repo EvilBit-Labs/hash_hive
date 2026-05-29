@@ -330,8 +330,17 @@ if (!IS_ISOLATED) {
 
   const DASH_CAMPAIGNS = '/api/v1/dashboard/campaigns'
 
+  // Origin + Host satisfy the CSRF same-origin guard mounted on the
+  // dashboard surface (PR review S-H4 follow-up). The fixture uses
+  // matching values; tests intentionally exercising a cross-origin
+  // attempt would override these.
   function makeHeaders() {
-    return { cookie: ADMIN_COOKIE, 'x-project-id': '1' }
+    return {
+      cookie: ADMIN_COOKIE,
+      'x-project-id': '1',
+      origin: 'http://lab.local',
+      host: 'lab.local',
+    }
   }
 
   describe('Dashboard campaigns list: query params', () => {

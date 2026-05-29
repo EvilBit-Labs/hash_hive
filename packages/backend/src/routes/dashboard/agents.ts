@@ -99,7 +99,17 @@ dashboardAgentRoutes.patch(
   async (c) => {
     const { id: agentId } = c.req.valid('param')
     const data = c.req.valid('json')
-    const agent = await updateAgent(agentId, data)
+    const { projectId } = c.get('currentUser')
+    if (projectId === null) {
+      return c.json(notFoundEnvelope, 404)
+    }
+    // Atomic UPDATE ... WHERE projectId enforces project scope inside
+    // the write itself, closing the read-then-write TOCTOU window the
+    // earlier getAgentById-then-updateAgent pattern left open. A null
+    // return collapses "wrong project" and "no such row" into the
+    // same 404, matching the sibling GET handler and avoiding the
+    // cross-project existence leak.
+    const agent = await updateAgent(agentId, data, projectId)
     if (!agent) {
       return c.json(notFoundEnvelope, 404)
     }
@@ -142,7 +152,7 @@ dashboardAgentRoutes.get(
     if (!agent || agent.projectId !== projectId) {
       return c.json(notFoundEnvelope, 404)
     }
-    const tasks = await listTasksByAgent(agentId)
+    const tasks = await listTasksByAgent(agentId, projectId as number)
     return c.json({ tasks })
   }
 )

@@ -32,7 +32,7 @@ function formatCurrentTask(
 }
 
 export function AgentsPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [statusFilter, setStatusFilter] = useState<AgentFilter>('all')
   const { data, isLoading } = useAgents(
     statusFilter === 'all' ? undefined : { status: statusFilter }

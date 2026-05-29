@@ -35,7 +35,7 @@ const createFormSchema = createAttackTemplateRequestSchema.extend({
 type TemplateFormData = z.infer<typeof createFormSchema>
 
 export function AttackTemplatesPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { data, isLoading } = useAttackTemplates()
   const createTemplate = useCreateAttackTemplate()
   const deleteTemplate = useDeleteAttackTemplate()
