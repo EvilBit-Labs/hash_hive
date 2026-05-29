@@ -81,9 +81,7 @@ Two API surfaces on the same Hono instance, backed by the same service and data 
 ### Agent API (`/api/v1/agent/*`)
 
 - Pre-shared token authenticated REST API for Go-based hashcat agents
-- Defined by two OpenAPI spec files (both must be updated for new endpoints):
-  - `openapi/agent-api.yaml` -- simplified OpenAPI 3.0.3, inline schemas
-  - `packages/openapi/agent-api.yaml` -- detailed OpenAPI 3.1.0, `$ref`-based
+- Defined by a single OpenAPI spec: `packages/openapi/agent-api.yaml` (OpenAPI 3.1.0, `$ref`-based). A historical 3.0.3 inline copy at `openapi/agent-api.yaml` was removed in the Phase C tech-debt clearance -- a single source of truth eliminates the dual-spec drift risk on the "must never break" surface.
 - Supports batch operations: bulk inserts for hash submissions via Drizzle or raw `Bun.SQL`
 - Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/:id/report`
 
