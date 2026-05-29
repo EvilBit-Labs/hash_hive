@@ -10,7 +10,7 @@ HashHive is a distributed password cracking orchestration platform designed for 
 
 ## Supported Versions
 
-HashHive is currently in active development as a greenfield MERN stack implementation. Security updates will be applied to the following versions:
+HashHive is currently in active development as a TypeScript monorepo (Bun + Hono backend, React 19 + Vite frontend, PostgreSQL + Drizzle, Redis + BullMQ, BetterAuth). Security updates will be applied to the following versions:
 
 | Version | Status | Support |
 | ------- | ------ | ------- |
@@ -39,16 +39,26 @@ The security model assumes:
 
 ### Authentication & Authorization
 
-- **Web UI**: Session-based authentication with HttpOnly cookies
-- **Agent API**: Pre-shared token authentication with API version headers
-- **Project-scoped access**: Role-based permissions (admin, power-user, user)
+HashHive exposes three distinct API surfaces, each with its own auth and error envelope:
+
+- **Dashboard API** (`/api/v1/dashboard/*`): BetterAuth-managed sessions with `SameSite=Strict` HttpOnly cookies. Used by the React frontend.
+- **Agent API** (`/api/v1/agent/*`): Pre-shared Bearer tokens issued per agent. Used by hashcat worker agents on the trusted LAN.
+- **Control API** (`/api/v1/control/*`): Per-user API keys (format `cst_*`, bcrypt-hashed at rest). Used by CLI tooling, automation, and CI.
+
+Two layers of RBAC:
+
+- **Global capability tier** (`users.roles`): `admin` / `operator` / `analyst`. Answers "what can this account do at all".
+- **Per-project membership role** (`project_users.roles`): `admin` / `contributor` / `viewer`. Answers "what can this account do within this project".
+
+The Dashboard API reads project scope from the server-managed `session.projectId` (set via `POST /api/v1/dashboard/projects/select`). The Control API reads it from the per-request `X-Project-Id` header.
 
 ### Data Protection
 
-- Passwords are hashed using bcrypt with appropriate work factors
-- Sensitive configuration values should be stored in environment variables
-- Session tokens and JWT secrets must be cryptographically secure
-- Object storage credentials should follow least-privilege principles
+- Passwords are hashed using bcrypt (via `Bun.password`) at cost 12, managed by BetterAuth.
+- Control API keys are stored as bcrypt hashes; raw keys are returned exactly once at issue time.
+- Sensitive configuration values must be stored in environment variables (`BETTER_AUTH_SECRET`, `DATABASE_URL`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`, etc.); see `.env.example`.
+- `BETTER_AUTH_SECRET` must be at least 32 bytes of cryptographically secure random material. Generate with `openssl rand -base64 32`.
+- Object storage (SeaweedFS in air-gapped lab deployments, AWS S3 in hosted) credentials should follow least-privilege principles.
 
 ## Reporting a Vulnerability
 
@@ -116,8 +126,8 @@ When deploying HashHive, follow these security guidelines:
 ### Configuration
 
 - Never commit `.env` files or secrets to version control
-- Rotate JWT secrets and API tokens periodically
-- Set appropriate session timeouts and token expiration
+- Rotate `BETTER_AUTH_SECRET`, agent pre-shared tokens, and Control API keys periodically
+- Set appropriate session timeouts (BetterAuth `expiresIn` / `updateAge` in `packages/backend/src/lib/auth.ts`)
 - Enable audit logging for sensitive operations
 - Configure rate limiting on API endpoints
 
@@ -146,6 +156,7 @@ As a part-time development project designed for LAN-only deployment, HashHive ha
 - Security updates may be delayed due to part-time maintenance
 - No formal security audit or penetration testing has been conducted
 - Authentication assumes trusted network perimeter
+- **Agent `auth_token` is currently stored plaintext** in `agents.auth_token`. Database backups and any read primitive against the agents table expose live bearer tokens that grant `/api/v1/agent/*` access. Mitigation is tracked; until it ships, treat database backups as containing live credentials and restrict access accordingly.
 
 **Deployment Warning**: HashHive is designed exclusively for private LAN environments. Do not expose HashHive to the internet. Users deploying HashHive should:
 
@@ -160,13 +171,14 @@ As a part-time development project designed for LAN-only deployment, HashHive ha
 
 HashHive relies on several security-critical dependencies:
 
-- **bcrypt**: Password hashing
-- **jsonwebtoken**: JWT token generation and validation
-- **express-session** / **cookie-parser**: Session management
-- **helmet**: HTTP security headers
-- **zod**: Input validation and sanitization
+- **BetterAuth**: Session management, sign-in/sign-out flows, password hashing orchestration
+- **Bun.password (bcrypt)**: Password and Control API key hashing
+- **Hono**: HTTP framework; security headers applied via `packages/backend/src/middleware/security-headers.ts`
+- **Drizzle ORM**: Parameterized queries (SQL injection defense)
+- **Zod**: Schema-based input validation at all API boundaries
+- **`middleware/csrf.ts`**: Same-origin gate on dashboard unsafe-method requests (defense-in-depth alongside `SameSite=Strict` cookies)
 
-Keep these dependencies updated and monitor security advisories for the Node.js ecosystem.
+Keep these dependencies updated and monitor security advisories for the Bun/Node.js ecosystem.
 
 ## Community Security Contributions
 
@@ -179,4 +191,4 @@ Given the part-time maintenance model, community contributions to security are e
 
 ## Questions?
 
-For general security questions or guidance on secure deployment practices, please open a discussion in the GitHub Discussions tab. Response times may vary based on maintainer availability. For urgent production security concerns, consider engaging professional security consultants familiar with MERN stack applications.
+For general security questions or guidance on secure deployment practices, please open a discussion in the GitHub Discussions tab. Response times may vary based on maintainer availability. For urgent production security concerns, consider engaging professional security consultants familiar with the project's stack (BetterAuth, Hono, Drizzle, Bun) and the air-gapped lab deployment model.
