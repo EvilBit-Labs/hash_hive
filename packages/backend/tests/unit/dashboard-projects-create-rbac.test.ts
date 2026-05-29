@@ -7,7 +7,7 @@
  * self-elevation path from operator/analyst to admin-tier project RBAC
  * primitives.
  */
-import { describe, expect, it, mock } from 'bun:test'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
 const ADMIN_COOKIE = 'hh.session_token=admin-session'
 const OPERATOR_COOKIE = 'hh.session_token=operator-session'
@@ -72,16 +72,23 @@ mock.module('../../src/services/auth.js', () => ({
   setUserLastProjectId: async () => undefined,
 }))
 
-const mockCreateProject = mock(
-  async (input: { name: string; slug: string; createdBy: number }) => ({
-    id: 99,
-    name: input.name,
-    slug: input.slug,
-    createdBy: input.createdBy,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  })
-)
+// Default impl captured up-front so the beforeEach reset can re-apply
+// it. Bun's mockReset() removes any per-test implementation overrides
+// (mockResolvedValueOnce etc.) AND the default implementation, so we
+// have to put the default back on every test.
+const defaultCreateProjectImpl = async (input: {
+  name: string
+  slug: string
+  createdBy: number
+}) => ({
+  id: 99,
+  name: input.name,
+  slug: input.slug,
+  createdBy: input.createdBy,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+})
+const mockCreateProject = mock(defaultCreateProjectImpl)
 
 mock.module('../../src/services/projects.js', () => ({
   addUserToProject: mock(async () => undefined),
@@ -125,10 +132,20 @@ import { app } from '../../src/index.js'
 const PROJECTS = '/api/v1/dashboard/projects'
 
 describe('POST /projects: requires global admin role (S-H3)', () => {
+  beforeEach(() => {
+    mockCreateProject.mockReset()
+    mockCreateProject.mockImplementation(defaultCreateProjectImpl)
+  })
+
   const body = JSON.stringify({ name: 'Bravo', slug: 'bravo' })
+  // Origin + Host satisfy the CSRF same-origin guard (PR review S-H4
+  // follow-up). Cookie-bearing unsafe-method dashboard requests now
+  // require the strict Origin check; same-origin values pass.
   const headersFor = (cookie: string) => ({
     cookie,
     'content-type': 'application/json',
+    origin: 'http://lab.local',
+    host: 'lab.local',
   })
 
   it('returns 201 for global admin', async () => {

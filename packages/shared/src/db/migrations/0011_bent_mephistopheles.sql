@@ -1,20 +1,22 @@
 -- P-H3 performance indexes (comprehensive-review).
 --
--- Online safety: these are CREATE INDEX (NOT CONCURRENTLY) because
+-- Online safety: these are plain CREATE INDEX (NOT CONCURRENTLY).
 -- Drizzle's migrator runs each statement inside a transaction and
--- CONCURRENTLY cannot run in a tx. For low-traffic / air-gapped lab
--- deployments (the project's primary target) this is fine: the tables
--- are small and the locks are brief.
+-- CONCURRENTLY cannot run in a tx, so the two are mutually exclusive
+-- in this codebase's migration runner. For low-traffic / air-gapped
+-- lab deployments (the project's primary target) the brief locks
+-- the plain form takes are immaterial: tables are small, locks
+-- last milliseconds.
 --
--- For high-traffic deployments with millions of rows, operators should
--- apply these manually with CONCURRENTLY before running `just db-migrate`:
---   CREATE INDEX CONCURRENTLY IF NOT EXISTS agents_last_seen_at_idx
---     ON agents USING btree (last_seen_at);
---   ... (one CONCURRENTLY for each)
--- Drizzle's migrator will then no-op the matching CREATE INDEX below
--- (Postgres errors loudly if the index already exists, so use
--- IF NOT EXISTS hand-applies and accept the schema_migrations row
--- created when the Drizzle CREATE no-ops).
+-- For high-traffic deployments with millions of rows, do NOT
+-- pre-create same-named indexes before running this migration --
+-- plain CREATE INDEX fails with "relation already exists" rather
+-- than silently no-op'ing. If you need zero-downtime index builds,
+-- bypass this migration entirely for those indexes: apply the
+-- CONCURRENTLY equivalents directly on the database, then mark
+-- migration 0011 as applied in the Drizzle migrations table without
+-- running it (so the schema_migrations row exists and 0012+ can
+-- proceed normally). Coordinate this with whoever owns deploy.
 
 -- Heartbeat-monitor sweep filters by lastSeenAt to detect stale agents.
 CREATE INDEX "agents_last_seen_at_idx" ON "agents" USING btree ("last_seen_at");--> statement-breakpoint

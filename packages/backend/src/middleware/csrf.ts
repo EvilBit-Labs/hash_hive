@@ -38,20 +38,39 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const DEV_TRUSTED_ORIGINS = ['http://localhost:3000']
 
-function isSameOriginRequest(req: { header: (k: string) => string | undefined }): boolean {
+interface RequestHeaders {
+  header: (k: string) => string | undefined
+}
+
+/**
+ * Two-mode same-origin check.
+ *
+ * - `{ strict: false }` (default): both `Origin` and `Referer` absent
+ *   passes. This is the right call for HTTP form posts where strict
+ *   referrer-policy or older browsers may strip both, and where the
+ *   SameSite=Strict session cookie is the primary CSRF defense -- a
+ *   cross-origin browser request would not carry the cookie anyway,
+ *   and a tool like curl that omits both headers also omits the
+ *   cookie.
+ * - `{ strict: true }`: both headers absent FAILS. Used for the
+ *   WebSocket upgrade (`requireSameOriginForWS`) where the WS spec
+ *   mandates browsers send `Origin` on the handshake. A missing
+ *   Origin from a browser is anomalous; a tool that opens a raw WS
+ *   connection without Origin is exactly what we want to reject.
+ */
+function isSameOriginRequest(req: RequestHeaders, opts: { strict: boolean }): boolean {
   const origin = req.header('origin')
   const referer = req.header('referer')
   const host = req.header('host')
 
-  // No Origin and no Referer -- almost certainly not a browser form post;
-  // could be a same-origin fetch with strict referrer-policy. Allow it
-  // and rely on the SameSite=Strict cookie as the primary defense.
-  // Browsers issuing cross-origin state-changing fetches will populate
-  // Origin per Fetch spec.
-  if (!origin && !referer) return true
+  if (!origin && !referer) {
+    return !opts.strict
+  }
 
   const sourceUrl = origin ?? referer
-  if (!sourceUrl) return true
+  if (!sourceUrl) {
+    return !opts.strict
+  }
 
   let sourceHost: string
   try {
@@ -81,12 +100,49 @@ export function requireSameOrigin() {
     if (SAFE_METHODS.has(c.req.method)) {
       return next()
     }
-    if (!isSameOriginRequest(c.req)) {
+    // CSRF only matters when an attacker can attach the session cookie
+    // via a cross-site request. Cookie-bearing requests get the strict
+    // check (missing Origin AND Referer -> reject) -- a browser will
+    // always set Origin on POST per the Fetch spec, so a cookie-bearing
+    // request with neither header is anomalous and exactly the
+    // SameSite-policy-drift case this middleware is meant to catch.
+    // Cookieless requests skip the gate: BetterAuth will return 401
+    // downstream, and there's nothing for CSRF to protect since the
+    // attacker has nothing to leverage.
+    const strict = !!c.req.header('cookie')
+    if (!isSameOriginRequest(c.req, { strict })) {
       return c.json(
         {
           error: {
             code: 'CSRF_ORIGIN_MISMATCH',
             message: 'Request origin does not match server origin',
+          },
+        },
+        403
+      )
+    }
+    return next()
+  })
+}
+
+/**
+ * Strict same-origin guard for the WebSocket upgrade. The WS spec
+ * requires browsers to send `Origin` on the upgrade handshake, so
+ * unlike the HTTP variant we treat missing-Origin as a rejection
+ * signal rather than allowing it. Mounted on /api/v1/dashboard/events
+ * because the cookie-authenticated event stream was excluded from
+ * `requireSameOrigin()` -- pre-fix, cross-origin WS upgrades from a
+ * stripped-cookie browser would have only been blocked indirectly
+ * via the subsequent BetterAuth session lookup failing.
+ */
+export function requireSameOriginForWS() {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    if (!isSameOriginRequest(c.req, { strict: true })) {
+      return c.json(
+        {
+          error: {
+            code: 'CSRF_ORIGIN_MISMATCH',
+            message: 'WebSocket upgrade origin does not match server origin',
           },
         },
         403

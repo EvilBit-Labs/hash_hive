@@ -8,7 +8,7 @@ import type { AppEnv } from './types.js'
 import { env } from './config/env.js'
 import { logger } from './config/logger.js'
 import { auth } from './lib/auth.js'
-import { requireSameOrigin } from './middleware/csrf.js'
+import { requireSameOrigin, requireSameOriginForWS } from './middleware/csrf.js'
 import { requestId } from './middleware/request-id.js'
 import { requestLogger } from './middleware/request-logger.js'
 import { securityHeaders } from './middleware/security-headers.js'
@@ -92,9 +92,15 @@ app.on(['POST', 'GET'], '/api/auth/*', async (c) => {
 // Origin/Referer doesn't match the request Host, covering historical
 // browsers and future SameSite-policy regressions.
 //
-// Applied to all /api/v1/dashboard/* routes EXCEPT /events (WebSocket
-// upgrade; the Origin check there belongs to the upgrade handshake)
-// and /health (unauthenticated; LB probes don't carry Origin).
+// /events gets requireSameOriginForWS() instead -- the WebSocket
+// upgrade is a GET (SAFE method by HTTP semantics) but opens a long-
+// lived cookie-authenticated stream of project-scoped data, so the
+// origin check must run pre-upgrade. The WS variant is strict
+// (missing Origin -> reject) since the WS spec requires browsers to
+// send Origin on the handshake.
+//
+// /health is unauthenticated (LB probes don't carry Origin) and is
+// not gated.
 app.use('/api/v1/dashboard/auth/*', requireSameOrigin())
 app.use('/api/v1/dashboard/projects/*', requireSameOrigin())
 app.use('/api/v1/dashboard/agents/*', requireSameOrigin())
@@ -106,6 +112,7 @@ app.use('/api/v1/dashboard/tasks/*', requireSameOrigin())
 app.use('/api/v1/dashboard/stats/*', requireSameOrigin())
 app.use('/api/v1/dashboard/results/*', requireSameOrigin())
 app.use('/api/v1/dashboard/crackers/*', requireSameOrigin())
+app.use('/api/v1/dashboard/events/*', requireSameOriginForWS())
 
 app.route('/api/v1/dashboard/auth', authRoutes)
 app.route('/api/v1/dashboard/projects', projectRoutes)

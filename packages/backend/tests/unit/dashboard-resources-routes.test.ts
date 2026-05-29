@@ -221,8 +221,18 @@ if (!IS_ISOLATED) {
 
   const HASH_LISTS_URL = '/api/v1/dashboard/resources/hash-lists'
 
+  // Origin + Host satisfy the CSRF same-origin guard mounted on the
+  // dashboard surface (PR review S-H4 follow-up). Same-origin values
+  // satisfy the strict cookie-present branch; tests intentionally
+  // exercising cross-origin would override.
   function makeHeaders(extra: Record<string, string> = {}) {
-    return { cookie: ADMIN_COOKIE, 'x-project-id': '1', ...extra }
+    return {
+      cookie: ADMIN_COOKIE,
+      'x-project-id': '1',
+      origin: 'http://lab.local',
+      host: 'lab.local',
+      ...extra,
+    }
   }
 
   // Helper to build a multipart form body with deterministic boundary.

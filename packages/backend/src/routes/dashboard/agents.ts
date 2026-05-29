@@ -100,17 +100,16 @@ dashboardAgentRoutes.patch(
     const { id: agentId } = c.req.valid('param')
     const data = c.req.valid('json')
     const { projectId } = c.get('currentUser')
-    // Verify the target agent belongs to the caller's active project before
-    // mutating. requireMembershipRole proves the caller is a project admin/
-    // contributor for *their* session scope, but does NOT cross-check the
-    // path-param agent ID. Returning 404 (not 403) on a cross-project hit
-    // matches the sibling GET handler and avoids leaking that the agent
-    // exists in a project the caller can't see.
-    const existing = await getAgentById(agentId)
-    if (!existing || existing.projectId !== projectId) {
+    if (projectId === null) {
       return c.json(notFoundEnvelope, 404)
     }
-    const agent = await updateAgent(agentId, data)
+    // Atomic UPDATE ... WHERE projectId enforces project scope inside
+    // the write itself, closing the read-then-write TOCTOU window the
+    // earlier getAgentById-then-updateAgent pattern left open. A null
+    // return collapses "wrong project" and "no such row" into the
+    // same 404, matching the sibling GET handler and avoiding the
+    // cross-project existence leak.
+    const agent = await updateAgent(agentId, data, projectId)
     if (!agent) {
       return c.json(notFoundEnvelope, 404)
     }

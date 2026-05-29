@@ -105,24 +105,30 @@ const mockGetAgentById = mock(async (id: number) => {
   return null
 })
 
-const mockUpdateAgent = mock(async (id: number, patch: { name?: string; status?: string }) => {
-  if (id === 100) {
-    return {
-      id: 100,
-      name: patch.name ?? 'Rig Alpha',
-      status: patch.status ?? 'online',
-      lastSeenAt: new Date(),
-      projectId: 1,
-      capabilities: null,
-      hardwareProfile: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      authToken: 'tok',
-      crackerVersion: null,
+const mockUpdateAgent = mock(
+  async (id: number, patch: { name?: string; status?: string }, projectId: number) => {
+    // Honors the atomic UPDATE WHERE projectId contract: id=100 lives
+    // in project 1, id=200 lives in project 999 (foreign). A mismatch
+    // collapses to null exactly the way the real query would after the
+    // 0 rows-affected.
+    if (id === 100 && projectId === 1) {
+      return {
+        id: 100,
+        name: patch.name ?? 'Rig Alpha',
+        status: patch.status ?? 'online',
+        lastSeenAt: new Date(),
+        projectId: 1,
+        capabilities: null,
+        hardwareProfile: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        authToken: 'tok',
+        crackerVersion: null,
+      }
     }
+    return null
   }
-  return null
-})
+)
 
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
@@ -186,7 +192,12 @@ const DASH_AGENTS = '/api/v1/dashboard/agents'
 describe('Dashboard agents routes: project isolation', () => {
   it('GET /:id/tasks returns 404 when agent belongs to a different project', async () => {
     const res = await app.request(`${DASH_AGENTS}/200/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error?: { code?: string } }
@@ -195,7 +206,12 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 200 for an agent in the active project', async () => {
     const res = await app.request(`${DASH_AGENTS}/100/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { tasks: unknown[] }
@@ -205,7 +221,12 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 400 for a non-numeric id', async () => {
     const res = await app.request(`${DASH_AGENTS}/not-a-number/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error?: { code?: string } }
@@ -214,7 +235,12 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 404 when the agent does not exist', async () => {
     const res = await app.request(`${DASH_AGENTS}/9999/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(404)
   })
@@ -230,21 +256,38 @@ describe('Dashboard agents routes: project isolation', () => {
   it('PATCH /:id returns 404 when target agent belongs to a different project', async () => {
     const res = await app.request(`${DASH_AGENTS}/200`, {
       method: 'PATCH',
-      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({ status: 'offline' }),
     })
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error?: { code?: string } }
     expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
-    // Critically, updateAgent should NOT have been called for the foreign agent.
-    const calls = mockUpdateAgent.mock.calls.filter(([id]) => id === 200)
-    expect(calls.length).toBe(0)
+    // Post-F3 the cross-project guard is the atomic UPDATE WHERE
+    // projectId inside the service; the route calls updateAgent with
+    // the session's projectId and the SQL returns 0 rows for any
+    // cross-project agent. So updateAgent SHOULD have been called
+    // (with projectId=1), and the mock returns null because 200 lives
+    // in project 999.
+    const crossProjectCalls = mockUpdateAgent.mock.calls.filter(
+      ([id, , projectId]) => id === 200 && projectId === 1
+    )
+    expect(crossProjectCalls.length).toBe(1)
   })
 
   it('PATCH /:id returns 200 for an agent in the active project', async () => {
     const res = await app.request(`${DASH_AGENTS}/100`, {
       method: 'PATCH',
-      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({ name: 'Renamed Rig' }),
     })
     expect(res.status).toBe(200)
@@ -255,7 +298,12 @@ describe('Dashboard agents routes: project isolation', () => {
   it('PATCH /:id returns 404 when the agent does not exist', async () => {
     const res = await app.request(`${DASH_AGENTS}/9999`, {
       method: 'PATCH',
-      headers: { cookie: ADMIN_COOKIE, 'content-type': 'application/json' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({ status: 'offline' }),
     })
     expect(res.status).toBe(404)

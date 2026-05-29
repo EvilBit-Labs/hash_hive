@@ -41,7 +41,15 @@ const baseUser: CurrentUser = {
 
 beforeEach(() => {
   mockMembership = null
-  findProjectMembershipMock.mockClear()
+  // mockReset() clears history AND removes any per-test implementation
+  // overrides (mockResolvedValueOnce etc.) -- mockClear() preserves the
+  // overrides and would leak them into subsequent tests. Bun's mockReset
+  // ALSO removes the default implementation, so we re-establish it here
+  // pointing at the mutable `mockMembership` binding. This is the
+  // recommended pattern per the bun:test docs:
+  // https://bun.com/docs/test/mocks
+  findProjectMembershipMock.mockReset()
+  findProjectMembershipMock.mockImplementation(async () => mockMembership)
 })
 
 describe('requireMembershipRole', () => {

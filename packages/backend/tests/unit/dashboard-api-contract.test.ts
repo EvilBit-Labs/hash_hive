@@ -241,6 +241,8 @@ describe('Dashboard API: POST /hashes/guess-type', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({ hashValue: '5d41402abc4b2a76b9719d911017c592' }),
     })
@@ -263,6 +265,8 @@ describe('Dashboard API: POST /hashes/guess-type', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({}),
     })
@@ -293,6 +297,8 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({}),
     })
@@ -305,6 +311,8 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({ projectId: 'abc' }),
     })
@@ -317,6 +325,8 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({ projectId: 1, extra: 'nope' }),
     })
@@ -330,6 +340,8 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({ projectId: 42 }),
     })
@@ -347,6 +359,9 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        host: 'lab.local',
+        // Intentionally evil Origin -- this case exercises the CSRF
+        // rejection on a cookie-bearing cross-origin POST.
         origin: 'https://evil.example.com',
       },
       body: JSON.stringify({ projectId: 42 }),
@@ -381,6 +396,8 @@ describe('Dashboard API: POST /projects/select', () => {
       headers: {
         'Content-Type': 'application/json',
         cookie: 'hh.session_token=valid-session',
+        origin: 'http://lab.local',
+        host: 'lab.local',
       },
       body: JSON.stringify({ projectId: 42 }),
     })
