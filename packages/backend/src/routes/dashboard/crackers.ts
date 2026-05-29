@@ -17,6 +17,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireRole } from '../../middleware/rbac.js'
 import {
@@ -64,34 +65,25 @@ crackerRoutes.get('/', requireRole('admin'), async (c) => {
     return c.json({ crackerBinaries: items })
   } catch (err) {
     logger.error({ err }, 'Failed to list cracker binaries')
-    return c.json(
-      { error: { code: 'CRACKER_LIST_FAILED', message: 'Failed to list cracker binaries' } },
-      500
-    )
+    return dashboardError(c, 500, 'CRACKER_LIST_FAILED', 'Failed to list cracker binaries')
   }
 })
 
 crackerRoutes.get('/:id', requireRole('admin'), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isFinite(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
   }
 
   try {
     const item = await getCrackerBinaryById(id)
     if (!item) {
-      return c.json(
-        { error: { code: 'CRACKER_NOT_FOUND', message: 'Cracker binary not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'CRACKER_NOT_FOUND', 'Cracker binary not found')
     }
     return c.json({ crackerBinary: item })
   } catch (err) {
     logger.error({ err, crackerBinaryId: id }, 'Failed to fetch cracker binary')
-    return c.json(
-      { error: { code: 'CRACKER_GET_FAILED', message: 'Failed to fetch cracker binary' } },
-      500
-    )
+    return dashboardError(c, 500, 'CRACKER_GET_FAILED', 'Failed to fetch cracker binary')
   }
 })
 
@@ -135,10 +127,7 @@ crackerRoutes.post(
         )
       }
       logger.error({ err }, 'Failed to create cracker binary')
-      return c.json(
-        { error: { code: 'CRACKER_CREATE_FAILED', message: 'Failed to create cracker binary' } },
-        500
-      )
+      return dashboardError(c, 500, 'CRACKER_CREATE_FAILED', 'Failed to create cracker binary')
     }
   }
 )
@@ -152,24 +141,18 @@ crackerRoutes.patch(
   async (c) => {
     const id = Number(c.req.param('id'))
     if (!Number.isFinite(id) || id <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
     }
     const data = c.req.valid('json')
     try {
       const item = await updateCrackerBinary(id, data)
       if (!item) {
-        return c.json(
-          { error: { code: 'CRACKER_NOT_FOUND', message: 'Cracker binary not found' } },
-          404
-        )
+        return dashboardError(c, 404, 'CRACKER_NOT_FOUND', 'Cracker binary not found')
       }
       return c.json({ crackerBinary: item })
     } catch (err) {
       logger.error({ err, crackerBinaryId: id }, 'Failed to update cracker binary')
-      return c.json(
-        { error: { code: 'CRACKER_UPDATE_FAILED', message: 'Failed to update cracker binary' } },
-        500
-      )
+      return dashboardError(c, 500, 'CRACKER_UPDATE_FAILED', 'Failed to update cracker binary')
     }
   }
 )
@@ -177,15 +160,12 @@ crackerRoutes.patch(
 crackerRoutes.delete('/:id', requireRole('admin'), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isFinite(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
   }
   try {
     const outcome = await deleteCrackerBinary(id)
     if (outcome === 'not_found') {
-      return c.json(
-        { error: { code: 'CRACKER_NOT_FOUND', message: 'Cracker binary not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'CRACKER_NOT_FOUND', 'Cracker binary not found')
     }
     if (outcome === 'storage_failed') {
       // Don't 200 — the row still exists and the admin needs to retry.
@@ -203,10 +183,7 @@ crackerRoutes.delete('/:id', requireRole('admin'), async (c) => {
     return c.json({ acknowledged: true })
   } catch (err) {
     logger.error({ err, crackerBinaryId: id }, 'Failed to delete cracker binary')
-    return c.json(
-      { error: { code: 'CRACKER_DELETE_FAILED', message: 'Failed to delete cracker binary' } },
-      500
-    )
+    return dashboardError(c, 500, 'CRACKER_DELETE_FAILED', 'Failed to delete cracker binary')
   }
 })
 
@@ -215,7 +192,7 @@ crackerRoutes.delete('/:id', requireRole('admin'), async (c) => {
 crackerRoutes.post('/:id/upload', requireRole('admin'), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isFinite(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
   }
 
   // Refuse direct uploads above the cap before we materialize the body.
@@ -240,16 +217,13 @@ crackerRoutes.post('/:id/upload', requireRole('admin'), async (c) => {
   try {
     const item = await getCrackerBinaryById(id)
     if (!item) {
-      return c.json(
-        { error: { code: 'CRACKER_NOT_FOUND', message: 'Cracker binary not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'CRACKER_NOT_FOUND', 'Cracker binary not found')
     }
 
     const body = await c.req.parseBody()
     const file = body['file']
     if (!(file instanceof File)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
     }
 
     // Authoritative cap on the actual file payload (Content-Length may
@@ -271,10 +245,7 @@ crackerRoutes.post('/:id/upload', requireRole('admin'), async (c) => {
     return c.json(result)
   } catch (err) {
     logger.error({ err, crackerBinaryId: id }, 'Failed direct upload')
-    return c.json(
-      { error: { code: 'CRACKER_UPLOAD_FAILED', message: 'Failed to upload cracker binary' } },
-      500
-    )
+    return dashboardError(c, 500, 'CRACKER_UPLOAD_FAILED', 'Failed to upload cracker binary')
   }
 })
 
@@ -305,10 +276,7 @@ crackerRoutes.post(
       return c.json(result)
     } catch (err) {
       logger.error({ err }, 'Failed to initiate cracker chunked upload')
-      return c.json(
-        { error: { code: 'UPLOAD_INIT_FAILED', message: 'Failed to initiate upload' } },
-        500
-      )
+      return dashboardError(c, 500, 'UPLOAD_INIT_FAILED', 'Failed to initiate upload')
     }
   }
 )
@@ -354,7 +322,7 @@ crackerRoutes.put('/upload/:uploadId/part/:partNumber', requireRole('admin'), as
   const body = await c.req.arrayBuffer()
   const chunk = new Uint8Array(body)
   if (chunk.byteLength === 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is empty' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body is empty')
   }
 
   try {
@@ -362,10 +330,10 @@ crackerRoutes.put('/upload/:uploadId/part/:partNumber', requireRole('admin'), as
     return c.json(result)
   } catch (err) {
     if (err instanceof CrackerUploadIdMismatchError) {
-      return c.json({ error: { code: 'UPLOAD_SESSION_MISMATCH', message: err.message } }, 409)
+      return dashboardError(c, 409, 'UPLOAD_SESSION_MISMATCH', err.message)
     }
     logger.error({ err, uploadId, partNumber }, 'Failed to upload cracker part')
-    return c.json({ error: { code: 'UPLOAD_PART_FAILED', message: 'Failed to upload part' } }, 500)
+    return dashboardError(c, 500, 'UPLOAD_PART_FAILED', 'Failed to upload part')
   }
 })
 
@@ -416,13 +384,10 @@ crackerRoutes.post(
       return c.json(result)
     } catch (err) {
       if (err instanceof CrackerUploadIdMismatchError) {
-        return c.json({ error: { code: 'UPLOAD_SESSION_MISMATCH', message: err.message } }, 409)
+        return dashboardError(c, 409, 'UPLOAD_SESSION_MISMATCH', err.message)
       }
       logger.error({ err, uploadId }, 'Failed to complete cracker chunked upload')
-      return c.json(
-        { error: { code: 'UPLOAD_COMPLETE_FAILED', message: 'Failed to complete upload' } },
-        500
-      )
+      return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')
     }
   }
 )
@@ -446,13 +411,10 @@ crackerRoutes.delete('/upload/:uploadId', requireRole('admin'), async (c) => {
     return c.json({ acknowledged: true })
   } catch (err) {
     if (err instanceof CrackerUploadIdMismatchError) {
-      return c.json({ error: { code: 'UPLOAD_SESSION_MISMATCH', message: err.message } }, 409)
+      return dashboardError(c, 409, 'UPLOAD_SESSION_MISMATCH', err.message)
     }
     logger.error({ err, uploadId, crackerBinaryId }, 'Failed to abort cracker chunked upload')
-    return c.json(
-      { error: { code: 'UPLOAD_ABORT_FAILED', message: 'Failed to abort upload' } },
-      500
-    )
+    return dashboardError(c, 500, 'UPLOAD_ABORT_FAILED', 'Failed to abort upload')
   }
 })
 

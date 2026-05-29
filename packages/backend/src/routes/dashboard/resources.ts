@@ -12,6 +12,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import { guessHashType } from '../../services/hash-analysis.js'
@@ -174,7 +175,7 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
     const hashTypeIdRaw = body['hashTypeId']
 
     if (!(file instanceof File)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
     }
     // Align with createHashListRequestSchema (1-255 chars) so the multipart
     // and JSON paths accept the same name lengths.
@@ -210,10 +211,7 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
       ...(hashTypeId !== undefined ? { hashTypeId } : {}),
     })
     if (!created) {
-      return c.json(
-        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to create hash list' } },
-        503
-      )
+      return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to create hash list')
     }
 
     // Upload — rollback DB row on failure so the caller sees a clean error
@@ -241,20 +239,17 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
         )
       }
       logger.error({ hashListId: created.id, err }, 'Hash list upload failed')
-      return c.json(
-        { error: { code: 'STORAGE_UNAVAILABLE', message: 'Failed to upload file' } },
-        503
-      )
+      return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to upload file')
     }
 
     // Enqueue parsing. If the queue is down we leave the row in `uploaded`
     // status (the user can retry via POST /:id/import) and surface a 503.
     const importResult = await importHashList(created.id, projectId)
     if (!importResult) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
     if ('error' in importResult) {
-      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: importResult.error } }, 503)
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', importResult.error)
     }
 
     // Re-read so the response carries `status=processing` and the fresh fileRef.
@@ -265,7 +260,7 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
   // ─── Legacy JSON create-empty path ─────────────────────────────────
   const parsed = createHashListRequestSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid JSON body' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid JSON body')
   }
   const hashList = await createHashList({ ...parsed.data, projectId })
   return c.json({ hashList }, 201)
@@ -278,7 +273,7 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   const hl = await getHashListById(hashListId, projectId)
 
   if (!hl) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
   const liveStats = await getHashListStats(hashListId)
@@ -312,21 +307,18 @@ resourceRoutes.delete(
 
     const id = Number(c.req.param('id'))
     if (!Number.isInteger(id) || id <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid hash list id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid hash list id')
     }
 
     try {
       const deleted = await deleteHashList(id, projectId)
       if (!deleted) {
-        return c.json(
-          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } },
-          404
-        )
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
       }
       return c.body(null, 204)
     } catch (err) {
       if (err instanceof ResourceInUseError) {
-        return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+        return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
       }
       throw err
     }
@@ -343,7 +335,7 @@ resourceRoutes.post(
     const hashList = await getHashListById(id, projectId)
 
     if (!hashList) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
 
     const sizeGuardResponse = enforceMultipartSizeLimit(c)
@@ -353,7 +345,7 @@ resourceRoutes.post(
     const file = body['file']
 
     if (!(file instanceof File)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'file field is required' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
     }
 
     try {
@@ -387,17 +379,17 @@ resourceRoutes.post(
     // Verify hash list belongs to project before importing
     const hl = await getHashListById(id, projectId)
     if (!hl) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
 
     const result = await importHashList(id, projectId)
 
     if (!result) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
 
     if ('error' in result) {
-      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503)
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
     }
 
     return c.json(result)
@@ -425,7 +417,7 @@ resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) =>
   const result = await getHashItems(hashListId, projectId, { status, search: q, limit, offset })
 
   if (!result) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
   return c.json(result)
@@ -438,15 +430,12 @@ resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c)
   const hashList = await getHashListById(id, projectId)
 
   if (!hashList) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
   const fileRef = hashList.fileRef as { bucket?: string; key?: string; name?: string } | null
   if (!fileRef?.bucket || !fileRef?.key) {
-    return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'Hash list has no uploaded file' } },
-      400
-    )
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Hash list has no uploaded file')
   }
 
   const url = await getResourcePresignedUrl({
@@ -509,10 +498,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     const item = await getResourceById(table, id, projectId)
 
     if (!item) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
     }
 
     return c.json({ item })
@@ -527,10 +513,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       const item = await getResourceById(table, id, projectId)
 
       if (!item) {
-        return c.json(
-          { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
-          404
-        )
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
       }
 
       const sizeGuardResponse = enforceMultipartSizeLimit(c)
@@ -540,10 +523,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       const file = body['file']
 
       if (!(file instanceof File)) {
-        return c.json(
-          { error: { code: 'VALIDATION_ERROR', message: 'file field is required' } },
-          400
-        )
+        return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
       }
 
       try {
@@ -573,20 +553,17 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       const { projectId } = c.get('scopedUser')!
       const id = Number(c.req.param('id'))
       if (!Number.isInteger(id) || id <= 0) {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: `Invalid ${prefix} id` } }, 400)
+        return dashboardError(c, 400, 'VALIDATION_ERROR', `Invalid ${prefix} id`)
       }
       try {
         const deleted = await deleteResource(table, id, projectId, prefix)
         if (!deleted) {
-          return c.json(
-            { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
-            404
-          )
+          return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
         }
         return c.body(null, 204)
       } catch (err) {
         if (err instanceof ResourceInUseError) {
-          return c.json({ error: { code: 'RESOURCE_IN_USE', message: err.message } }, 409)
+          return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
         }
         throw err
       }
@@ -599,10 +576,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     const item = await getResourceById(table, id, projectId)
 
     if (!item) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: `${prefix} item not found` } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
     }
 
     const fileRef = (item as Record<string, unknown>)['fileRef'] as {
@@ -611,10 +585,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       name?: string
     } | null
     if (!fileRef?.bucket || !fileRef?.key) {
-      return c.json(
-        { error: { code: 'VALIDATION_ERROR', message: `${prefix} item has no uploaded file` } },
-        400
-      )
+      return dashboardError(c, 400, 'VALIDATION_ERROR', `${prefix} item has no uploaded file`)
     }
 
     const url = await getResourcePresignedUrl({
@@ -655,10 +626,7 @@ resourceRoutes.post(
       return c.json(result, 201)
     } catch (err) {
       logger.error({ err }, 'Failed to initiate chunked upload')
-      return c.json(
-        { error: { code: 'UPLOAD_INIT_FAILED', message: 'Failed to initiate upload' } },
-        500
-      )
+      return dashboardError(c, 500, 'UPLOAD_INIT_FAILED', 'Failed to initiate upload')
     }
   }
 )
@@ -689,7 +657,7 @@ resourceRoutes.put(
     const chunk = new Uint8Array(body)
 
     if (chunk.byteLength === 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is empty' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body is empty')
     }
 
     const { projectId } = c.get('scopedUser')!
@@ -706,10 +674,7 @@ resourceRoutes.put(
       return c.json(result)
     } catch (err) {
       logger.error({ err, uploadId, partNumber }, 'Failed to upload part')
-      return c.json(
-        { error: { code: 'UPLOAD_PART_FAILED', message: 'Failed to upload part' } },
-        500
-      )
+      return dashboardError(c, 500, 'UPLOAD_PART_FAILED', 'Failed to upload part')
     }
   }
 )
@@ -747,10 +712,7 @@ resourceRoutes.post(
       return c.json(result)
     } catch (err) {
       logger.error({ err, uploadId }, 'Failed to complete chunked upload')
-      return c.json(
-        { error: { code: 'UPLOAD_COMPLETE_FAILED', message: 'Failed to complete upload' } },
-        500
-      )
+      return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')
     }
   }
 )
@@ -761,7 +723,7 @@ resourceRoutes.delete(
   async (c) => {
     const uploadId = c.req.param('uploadId')
     if (!uploadId) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
     }
     const parsed = uploadStatusQuerySchema.safeParse({
       resourceId: c.req.query('resourceId'),
@@ -793,7 +755,7 @@ resourceRoutes.get(
   async (c) => {
     const uploadId = c.req.param('uploadId')
     if (!uploadId) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'uploadId is required' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
     }
     const parsed = uploadStatusQuerySchema.safeParse({
       resourceId: c.req.query('resourceId'),
@@ -816,7 +778,7 @@ resourceRoutes.get(
 
     const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
     if (!result) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Upload not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
     }
 
     return c.json({ uploadId, ...result })

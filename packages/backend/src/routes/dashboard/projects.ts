@@ -8,6 +8,7 @@ import type { AppEnv } from '../../types.js'
 import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import {
   requireParamMembershipRole,
@@ -150,10 +151,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
       },
       'projects/select: cross-origin request rejected'
     )
-    return c.json(
-      { error: { code: 'CSRF_ORIGIN_MISMATCH', message: 'Cross-origin request rejected' } },
-      403
-    )
+    return dashboardError(c, 403, 'CSRF_ORIGIN_MISMATCH', 'Cross-origin request rejected')
   }
 
   const { projectId } = c.req.valid('json')
@@ -183,10 +181,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
       { userId, projectId, requestId },
       'projects/select: membership exists but project row missing (FK invariant broken)'
     )
-    return c.json(
-      { error: { code: 'INTERNAL_ERROR', message: 'Project row missing for membership' } },
-      500
-    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Project row missing for membership')
   }
 
   // updateSession writes additionalFields.projectId on the active
@@ -202,10 +197,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     })
   } catch (err) {
     logger.error({ err, userId, projectId, requestId }, 'projects/select: updateSession failed')
-    return c.json(
-      { error: { code: 'INTERNAL_ERROR', message: 'Failed to update session project' } },
-      500
-    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to update session project')
   }
 
   // Persist the user's "remember last project" preference so the next
@@ -225,10 +217,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
       { err, userId, projectId, requestId },
       'projects/select: setUserLastProjectIdIfMember failed (session was updated but preference write failed)'
     )
-    return c.json(
-      { error: { code: 'INTERNAL_ERROR', message: 'Failed to persist last project preference' } },
-      500
-    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to persist last project preference')
   }
   if (preferenceRowsUpdated === 0) {
     // Membership was revoked between the original findProjectMembership
@@ -289,7 +278,7 @@ projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
   const project = await getProjectById(projectId)
 
   if (!project) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
   }
 
   return c.json({ project })
@@ -306,7 +295,7 @@ projectRoutes.patch(
     const project = await updateProject(projectId, data)
 
     if (!project) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
     }
 
     return c.json({ project })
@@ -345,7 +334,7 @@ projectRoutes.patch(
     const membership = await updateMemberRoles(projectId, userId, roles)
 
     if (!membership) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
     }
 
     return c.json({ membership })
@@ -362,7 +351,7 @@ projectRoutes.delete(
     const removed = await removeUserFromProject(projectId, userId)
 
     if (!removed) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
     }
 
     return c.json({ success: true })

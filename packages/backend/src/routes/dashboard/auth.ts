@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import {
   getUserApiKeyMetadata,
@@ -34,17 +35,14 @@ authRouter.get('/me', requireSession, async (c) => {
   try {
     const result = await getUserWithProjects(userId)
     if (!result) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'User not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'User not found')
     }
     // Coerce undefined → null explicitly so the field is always present
     // in the response per meResponseSchema's `nullable()` contract.
     return c.json({ ...result, selectedProjectId: projectId ?? null })
   } catch (err) {
     logger.error({ err, userId, op: 'getUserWithProjects' }, 'GET /me lookup failed')
-    return c.json(
-      { error: { code: 'INTERNAL_ERROR', message: 'Failed to read user profile' } },
-      500
-    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to read user profile')
   }
 })
 
@@ -66,10 +64,7 @@ authRouter.post('/me/api-key', requireSession, async (c) => {
     return c.json({ token, metadata })
   } catch (err) {
     logger.error({ err, userId, op: 'issueUserApiKey' }, 'API key issue failed')
-    return c.json(
-      { error: { code: 'API_KEY_ISSUE_FAILED', message: 'Failed to issue API key' } },
-      500
-    )
+    return dashboardError(c, 500, 'API_KEY_ISSUE_FAILED', 'Failed to issue API key')
   }
 })
 
@@ -82,10 +77,7 @@ authRouter.get('/me/api-key', requireSession, async (c) => {
     return c.json(metadata)
   } catch (err) {
     logger.error({ err, userId, op: 'getUserApiKeyMetadata' }, 'API key metadata read failed')
-    return c.json(
-      { error: { code: 'API_KEY_READ_FAILED', message: 'Failed to read API key metadata' } },
-      500
-    )
+    return dashboardError(c, 500, 'API_KEY_READ_FAILED', 'Failed to read API key metadata')
   }
 })
 
@@ -96,10 +88,7 @@ authRouter.delete('/me/api-key', requireSession, async (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     logger.error({ err, userId, op: 'revokeUserApiKey' }, 'API key revoke failed')
-    return c.json(
-      { error: { code: 'API_KEY_REVOKE_FAILED', message: 'Failed to revoke API key' } },
-      500
-    )
+    return dashboardError(c, 500, 'API_KEY_REVOKE_FAILED', 'Failed to revoke API key')
   }
 })
 

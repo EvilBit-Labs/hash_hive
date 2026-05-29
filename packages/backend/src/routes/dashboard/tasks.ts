@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 
 import type { AppEnv } from '../../types.js'
 
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 import { getTaskById, listTasks } from '../../services/tasks.js'
@@ -43,7 +44,7 @@ taskRoutes.get('/:id', requireProjectAccess(), async (c) => {
   const task = await getTaskById(id, projectId)
 
   if (!task) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Task not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Task not found')
   }
 
   return c.json({ task })

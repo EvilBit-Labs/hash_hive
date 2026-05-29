@@ -159,7 +159,7 @@ async function checkParamProjectMembership(
 
   const projectId = Number(c.req.param('projectId'))
   if (!projectId || Number.isNaN(projectId)) {
-    throw httpError(400, 'VALIDATION_FAILED', 'Project ID is required for this operation')
+    throw httpError(400, 'VALIDATION_ERROR', 'Project ID is required for this operation')
   }
 
   // P-C1: same per-request cache as checkMembership. The cache is keyed

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
@@ -161,7 +162,7 @@ campaignRoutes.post(
     }
 
     if (result.kind === 'dag_invalid') {
-      return c.json({ error: { code: 'DAG_INVALID', message: result.error } }, 400)
+      return dashboardError(c, 400, 'DAG_INVALID', result.error)
     }
 
     if (result.kind === 'resource_missing') {
@@ -183,14 +184,14 @@ campaignRoutes.post(
 campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
   const { projectId } = c.get('currentUser')
   const campaign = await getCampaignById(id)
 
   if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
   const [campaignAttacks, taskStats, activeAgents] = await Promise.all([
@@ -210,14 +211,14 @@ campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
 campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
   const { userId, projectId } = c.get('currentUser')
   const existing = await getCampaignById(id)
 
   if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
   let result: Awaited<ReturnType<typeof deleteCampaign>>
@@ -243,7 +244,7 @@ campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), asy
 
   switch (result.kind) {
     case 'not_found':
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     case 'not_draft':
       return c.json(
         {
@@ -280,13 +281,13 @@ const putCampaignSchema = z.object({
 const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<AppEnv>) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
   const { projectId } = c.get('currentUser')
   const existing = await getCampaignById(id)
   if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
   // Parse and validate the body inside the handler. Wrapping c.req.json()
@@ -298,10 +299,7 @@ const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<App
   try {
     body = await c.req.json()
   } catch {
-    return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'Request body must be valid JSON' } },
-      400
-    )
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body must be valid JSON')
   }
   const schema = method === 'PUT' ? putCampaignSchema : patchCampaignSchema
   const parsed = schema.safeParse(body)
@@ -323,7 +321,7 @@ const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<App
 
   switch (result.kind) {
     case 'not_found':
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     case 'not_draft':
       return c.json(
         {
@@ -371,7 +369,7 @@ campaignRoutes.post(
   async (c) => {
     const id = Number(c.req.param('id'))
     if (!Number.isInteger(id) || id <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
     }
 
     // transitionCampaign fetches by id alone; without this guard a
@@ -380,7 +378,7 @@ campaignRoutes.post(
     const { projectId } = c.get('currentUser')
     const existing = await getCampaignById(id)
     if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
     const { action } = c.req.valid('json')
@@ -408,29 +406,29 @@ function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
   if ('error' in result) {
     const code = 'code' in result ? result.code : undefined
     if (code === 'QUEUE_UNAVAILABLE') {
-      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503)
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
     }
     if (code === 'RESOURCE_VALIDATION_FAILED') {
       // Resource lookup itself failed (DB blip). Surface as 503 so
       // clients can retry rather than treating it as a permanent error.
-      return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: result.error } }, 503)
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
     }
     if (code === 'RESOURCE_MISSING') {
       // Precondition failed (referenced resource doesn't exist or
       // crosses project boundary). 409 Conflict captures this better
       // than 400 — the request was well-formed, the state isn't.
-      return c.json({ error: { code: 'RESOURCE_MISSING', message: result.error } }, 409)
+      return dashboardError(c, 409, 'RESOURCE_MISSING', result.error)
     }
     if (code === 'STALE_STATE') {
       // Optimistic-concurrency loss: another writer transitioned this
       // campaign between our read and write. 409 signals the client
       // should re-fetch and retry against the current state.
-      return c.json({ error: { code: 'STALE_STATE', message: result.error } }, 409)
+      return dashboardError(c, 409, 'STALE_STATE', result.error)
     }
     if (code === 'TASK_GENERATION_FAILED') {
-      return c.json({ error: { code: 'TASK_GENERATION_FAILED', message: result.error } }, 500)
+      return dashboardError(c, 500, 'TASK_GENERATION_FAILED', result.error)
     }
-    return c.json({ error: { code: 'INVALID_TRANSITION', message: result.error } }, 400)
+    return dashboardError(c, 400, 'INVALID_TRANSITION', result.error)
   }
   return c.json({ campaign: result.campaign })
 }
@@ -498,13 +496,13 @@ const lifecycleAliasHandler =
   (action: keyof typeof lifecycleAliasStatus) => async (c: Context<AppEnv>) => {
     const id = Number(c.req.param('id'))
     if (!Number.isInteger(id) || id <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
     }
 
     const { projectId } = c.get('currentUser')
     const existing = await getCampaignById(id)
     if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
     const result = await transitionCampaign(id, lifecycleAliasStatus[action])
@@ -544,7 +542,7 @@ campaignRoutes.get('/:id/validate', requireProjectAccess(), async (c) => {
   const campaign = await getCampaignById(id)
 
   if (!campaign) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
   const result = await validateCampaignDAG(id)
@@ -575,7 +573,7 @@ campaignRoutes.post(
   async (c) => {
     const campaignId = Number(c.req.param('id'))
     if (!Number.isInteger(campaignId) || campaignId <= 0) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
     }
 
     // Project-scope guard: requireMembershipRole only validates that the caller
@@ -586,7 +584,7 @@ campaignRoutes.post(
     const { projectId } = c.get('currentUser')
     const campaign = await getCampaignById(campaignId)
     if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
     const data = c.req.valid('json')
@@ -639,10 +637,7 @@ campaignRoutes.post(
       ]
       const dagResult = validateProposedDAG(proposed)
       if (!dagResult.valid) {
-        return c.json(
-          { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
-          400
-        )
+        return dashboardError(c, 400, 'DAG_INVALID', dagResult.error ?? 'Invalid DAG')
       }
     }
 
@@ -661,7 +656,7 @@ campaignRoutes.get('/:id/attacks', requireProjectAccess(), async (c) => {
   const campaign = await getCampaignById(campaignId)
 
   if (!campaign) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
   const campaignAttacks = await listAttacks(campaignId)
@@ -691,7 +686,7 @@ campaignRoutes.patch(
       !Number.isInteger(attackId) ||
       attackId <= 0
     ) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid id' } }, 400)
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
     }
 
     // Project-scope guard: load the parent campaign unconditionally
@@ -703,13 +698,13 @@ campaignRoutes.patch(
     const { projectId } = c.get('currentUser')
     const parentCampaign = await getCampaignById(campaignId)
     if (!parentCampaign || (projectId !== undefined && parentCampaign.projectId !== projectId)) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
     // Verify attack belongs to the specified campaign
     const existing = await getAttackById(attackId)
     if (!existing || existing.campaignId !== campaignId) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
     }
 
     const data = c.req.valid('json')
@@ -752,17 +747,14 @@ campaignRoutes.patch(
       }))
       const dagResult = validateProposedDAG(proposed)
       if (!dagResult.valid) {
-        return c.json(
-          { error: { code: 'DAG_INVALID', message: dagResult.error ?? 'Invalid DAG' } },
-          400
-        )
+        return dashboardError(c, 400, 'DAG_INVALID', dagResult.error ?? 'Invalid DAG')
       }
     }
 
     const attack = await updateAttack(attackId, data)
 
     if (!attack) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
     }
 
     return c.json({ attack })
@@ -785,10 +777,7 @@ campaignRoutes.delete(
       !Number.isInteger(attackId) ||
       attackId <= 0
     ) {
-      return c.json(
-        { error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign or attack id' } },
-        400
-      )
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign or attack id')
     }
     const { projectId } = c.get('currentUser')
 
@@ -799,19 +788,19 @@ campaignRoutes.delete(
     // project B could delete project B's attack.
     const parent = await getCampaignById(campaignId)
     if (!parent || (projectId !== null && parent.projectId !== projectId)) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
     // Verify attack belongs to the specified campaign
     const existing = await getAttackById(attackId)
     if (!existing || existing.campaignId !== campaignId) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
     }
 
     const attack = await deleteAttack(attackId)
 
     if (!attack) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
     }
 
     return c.json({ deleted: true })
