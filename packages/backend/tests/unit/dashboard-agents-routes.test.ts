@@ -130,11 +130,22 @@ const mockUpdateAgent = mock(
   }
 )
 
+const mockRotateAgentToken = mock(async (agentId: number, projectId: number) => {
+  // Mirrors the real service: same-project rotation succeeds and
+  // returns the raw token once; cross-project hands back null so the
+  // route maps to 404.
+  if (agentId === 100 && projectId === 1) {
+    return { token: 'agt_100_test-rotated-token' }
+  }
+  return null
+})
+
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
   getAgentErrors: mock(async () => []),
   getBenchmarksForAgent: mock(async () => []),
   listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
+  rotateAgentToken: mockRotateAgentToken,
   updateAgent: mockUpdateAgent,
 }))
 
@@ -307,5 +318,57 @@ describe('Dashboard agents routes: project isolation', () => {
       body: JSON.stringify({ status: 'offline' }),
     })
     expect(res.status).toBe(404)
+  })
+})
+
+// S-H2: POST /agents/:id/rotate-token contract.
+describe('Dashboard agents routes: token rotation', () => {
+  it('POST /:id/rotate-token returns the raw token exactly once for an admin', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { token?: string }
+    expect(body.token).toBe('agt_100_test-rotated-token')
+  })
+
+  it('POST /:id/rotate-token sets Cache-Control: no-store on the response', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('POST /:id/rotate-token returns 404 for a cross-project agent', async () => {
+    const res = await app.request(`${DASH_AGENTS}/200/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /:id/rotate-token returns 401 without a session cookie', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.status).toBe(401)
   })
 })

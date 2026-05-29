@@ -162,7 +162,27 @@ export const agents = pgTable(
     operatingSystemId: integer('operating_system_id').references(() => operatingSystems.id, {
       onDelete: 'set null',
     }),
-    authToken: varchar('auth_token', { length: 255 }).notNull().unique(),
+    /**
+     * Legacy plaintext bearer token. Nullable since S-H2 introduced
+     * bcrypt-format tokens; new agents get NULL here and a hash in
+     * `authTokenHash`. Existing agents keep their UUID until rotated.
+     * Drop-column happens in a follow-up release once all agents have
+     * rotated (see docs/operations/agent-token-rotation.md).
+     */
+    authToken: varchar('auth_token', { length: 255 }),
+    /**
+     * S-H2: bcrypt hash of the agent's bearer token. Populated by
+     * `rotateAgentToken`; the raw token is delivered to the operator
+     * exactly once and never persisted.
+     */
+    authTokenHash: varchar('auth_token_hash', { length: 255 }),
+    /**
+     * S-H2: format discriminator for `authToken` / `authTokenHash`.
+     * `'plaintext'` for legacy UUID rows; `'bcrypt'` after rotation.
+     * The auth middleware branches on this to choose the right verify
+     * path so a partial rotation never locks an agent out.
+     */
+    authTokenFormat: varchar('auth_token_format', { length: 16 }).notNull().default('plaintext'),
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
@@ -185,7 +205,13 @@ export const agents = pgTable(
   (table) => [
     index('agents_project_id_idx').on(table.projectId),
     index('agents_status_idx').on(table.status),
+    // S-H2: keep the auth_token index for legacy plaintext lookups
+    // during the rotation window. After DROP COLUMN this goes away too.
     index('agents_auth_token_idx').on(table.authToken),
+    // Composite index speeds the bcrypt-format path: lookup by id, then
+    // verify the hash. Without this, the planner does a seq scan on
+    // tiny tables once we add the format filter.
+    index('agents_auth_token_format_idx').on(table.authTokenFormat),
     // Heartbeat-monitor sweep filters by lastSeenAt to detect stale
     // agents. Without this index it does a seq scan once per sweep
     // interval (default 30s) -- linear in the agent count.

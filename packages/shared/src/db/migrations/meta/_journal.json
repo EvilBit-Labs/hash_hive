@@ -99,6 +99,13 @@
       "when": 1780094907621,
       "tag": "0013_known_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780096824326,
+      "tag": "0014_salty_tarantula",
+      "breakpoints": true
     }
   ]
 }

@@ -1580,6 +1580,60 @@ paths:
                         size: { type: integer }
         '400': { $ref: '#/components/responses/ValidationFailed' }
 
+  /agents/{id}/rotate-token:
+    post:
+      operationId: rotateAgentToken
+      summary: Rotate an agent's bearer token (S-H2)
+      description: |
+        Generates a fresh bcrypt-format `agt_<agentId>_<random>` token
+        for the named agent, persists only the bcrypt hash on
+        `agents.auth_token_hash`, and clears the legacy plaintext
+        `agents.auth_token` column atomically. Returns the raw token
+        exactly once with `Cache-Control: no-store`. The raw token is
+        never persisted and there is no "show me again" endpoint by
+        design.
+
+        Admin-only: requires `project admin` membership on the agent's
+        project. Cross-project agents 404 — the rotation is bounded by
+        the UPDATE's `WHERE id = ? AND project_id = ?`.
+
+        See `docs/operations/agent-token-rotation.md` for the operator
+        runbook.
+      tags: [Agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Raw token. Shown exactly once.
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token:
+                    type: string
+                    description: 'Raw `agt_<agentId>_<random>` token.'
+        '401': { $ref: '#/components/responses/AuthRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Agent not found in the active project.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      error:
+                        properties:
+                          code: { type: string, enum: [RESOURCE_NOT_FOUND] }
+
 components:
   securitySchemes:
     SessionCookie:

@@ -11,6 +11,7 @@ import {
   getAgentErrors,
   getBenchmarksForAgent,
   listAgents,
+  rotateAgentToken,
   updateAgent,
 } from '../../services/agents.js'
 import { listTasksByAgent } from '../../services/tasks.js'
@@ -171,6 +172,26 @@ dashboardAgentRoutes.get(
     }
     const benchmarks = await getBenchmarksForAgent(agentId)
     return c.json({ benchmarks })
+  }
+)
+
+// S-H2: rotate an agent's bearer token. Admin-only. The raw token is
+// returned in the response exactly once with Cache-Control: no-store so
+// browser history, proxies, and the operator's tabs don't retain it.
+dashboardAgentRoutes.post(
+  '/:id/rotate-token',
+  requireMembershipRole('admin'),
+  zValidator('param', agentIdParamSchema),
+  async (c) => {
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('scopedUser')!
+
+    const result = await rotateAgentToken(agentId, projectId)
+    if (!result) {
+      return c.json(notFoundEnvelope, 404)
+    }
+    c.header('Cache-Control', 'no-store')
+    return c.json({ token: result.token })
   }
 )
 

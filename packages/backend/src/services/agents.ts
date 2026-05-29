@@ -488,6 +488,43 @@ export async function updateAgent(
  */
 export type DbClient = Pick<typeof db, 'insert' | 'select' | 'update' | 'delete'>
 
+/**
+ * S-H2: rotate an agent's bearer token to a bcrypt-format `agt_*` token.
+ * Returns the raw token exactly once for the operator to deliver to the
+ * agent out-of-band; the bcrypt hash is the only thing persisted.
+ *
+ * The UPDATE is atomic and project-scoped: the row is only rotated when
+ * `(id, project_id)` match, so a cross-project caller (already caught
+ * by the route guards but defended again here) cannot rotate a token
+ * they don't own. The plaintext `auth_token` column is cleared in the
+ * same statement so a partial rotation never leaves both a usable
+ * legacy token AND a usable bcrypt token in place.
+ *
+ * Returns `null` when the agent is not found in that project; callers
+ * map that to 404.
+ */
+export async function rotateAgentToken(
+  agentId: number,
+  projectId: number
+): Promise<{ token: string } | null> {
+  const { generateAgentToken } = await import('../lib/agent-token.js')
+  const { token, hash } = await generateAgentToken(agentId)
+
+  const [updated] = await db
+    .update(agents)
+    .set({
+      authToken: null,
+      authTokenHash: hash,
+      authTokenFormat: 'bcrypt',
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+    .returning({ id: agents.id })
+
+  if (!updated) return null
+  return { token }
+}
+
 export async function logAgentError(
   data: {
     agentId: number
