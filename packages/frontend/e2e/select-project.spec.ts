@@ -3,7 +3,15 @@ import { expect, test } from '@playwright/test'
 const TEST_EMAIL = 'test@hashhive.local'
 const TEST_PASSWORD = 'TestPassword123!'
 
-test.describe('Multi-project select flow (issue #160)', () => {
+// `serial` is load-bearing here: both tests sign in as `test@hashhive.local`,
+// and the sign-out test picks "Test Project" -- which writes
+// `users.last_project_id`. On a subsequent sign-in by the same user, the
+// BetterAuth `session.create.before` hook rehydrates `session.projectId`
+// from that column, so the multi-project test would land on `/` instead of
+// `/select-project` and time out. CI's `workers: 1` already serializes
+// inside this file; this annotation enforces the same order under local
+// multi-worker runs (`fullyParallel: true`).
+test.describe.serial('Multi-project select flow (issue #160)', () => {
   test('multi-project login routes through selector and POSTs /projects/select', async ({
     page,
   }) => {
