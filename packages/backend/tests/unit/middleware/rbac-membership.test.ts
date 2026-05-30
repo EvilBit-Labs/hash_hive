@@ -127,3 +127,49 @@ describe('per-request membership cache (P-C1)', () => {
     expect(findProjectMembershipMock.mock.calls.length).toBe(2)
   })
 })
+
+// CQ-H3 regression: scopedUser is populated after the middleware runs.
+describe('scopedUser context variable (CQ-H3)', () => {
+  it('populates scopedUser with non-null projectId after requireProjectAccess', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['admin'] }
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('currentUser', baseUser)
+      await next()
+    })
+    app.use('*', requireProjectAccess())
+    app.get('/x', (c) => {
+      const su = c.get('scopedUser')
+      return c.json({ scopedUser: su })
+    })
+
+    const res = await app.request('/x')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      scopedUser: { userId: number; projectId: number; roles: string[] }
+    }
+    expect(body.scopedUser.userId).toBe(1)
+    expect(body.scopedUser.projectId).toBe(1)
+    expect(body.scopedUser.roles).toEqual(['admin'])
+  })
+
+  it('populates scopedUser after requireMembershipRole as well', async () => {
+    mockMembership = { id: 1, userId: 1, projectId: 1, roles: ['contributor'] }
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('currentUser', baseUser)
+      await next()
+    })
+    app.use('*', requireMembershipRole('admin', 'contributor'))
+    app.get('/x', (c) => {
+      const su = c.get('scopedUser')
+      return c.json({ projectId: su?.projectId, roles: su?.roles })
+    })
+
+    const res = await app.request('/x')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { projectId: number; roles: string[] }
+    expect(body.projectId).toBe(1)
+    expect(body.roles).toEqual(['contributor'])
+  })
+})

@@ -32,5 +32,18 @@ export type AppEnv = {
       userId: number
       roles: string[]
     }
+    // Project-scoped user context. Set by checkMembership /
+    // checkParamProjectMembership AFTER the membership check
+    // succeeds, so handlers can read `c.get('scopedUser').projectId`
+    // as a non-null `number` directly -- no per-route `if (!projectId)`
+    // guard. The non-null projectId is the contract this variant adds
+    // over `currentUser`. Roles are the per-project membership roles
+    // (admin|contributor|viewer), not the global capability tier in
+    // `currentUser.roles`.
+    scopedUser?: {
+      userId: number
+      projectId: number
+      roles: string[]
+    }
   }
 }

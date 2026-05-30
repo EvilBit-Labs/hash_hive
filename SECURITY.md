@@ -156,7 +156,7 @@ As a part-time development project designed for LAN-only deployment, HashHive ha
 - Security updates may be delayed due to part-time maintenance
 - No formal security audit or penetration testing has been conducted
 - Authentication assumes trusted network perimeter
-- **Agent `auth_token` is currently stored plaintext** in `agents.auth_token`. Database backups and any read primitive against the agents table expose live bearer tokens that grant `/api/v1/agent/*` access. Mitigation is tracked; until it ships, treat database backups as containing live credentials and restrict access accordingly.
+- **Agent bearer-token storage is in a rotation window**. New agents are issued bcrypt-hashed `agt_*` tokens stored in `agents.auth_token_hash` (the raw token never reaches the database). Legacy agents that predate S-H2 still have plaintext UUIDs in `agents.auth_token` and continue to authenticate via that column until rotated. Until every row has been rotated to the bcrypt format, database backups still contain live legacy credentials for any un-rotated agent. Operators should rotate per the runbook at `docs/operations/agent-token-rotation.md` and then schedule the DROP-COLUMN follow-up release.
 
 **Deployment Warning**: HashHive is designed exclusively for private LAN environments. Do not expose HashHive to the internet. Users deploying HashHive should:
 

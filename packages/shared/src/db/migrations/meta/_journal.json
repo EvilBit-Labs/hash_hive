@@ -92,6 +92,20 @@
       "when": 1780015972677,
       "tag": "0012_illegal_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780094907621,
+      "tag": "0013_known_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780099711313,
+      "tag": "0014_silky_multiple_man",
+      "breakpoints": true
     }
   ]
 }

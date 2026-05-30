@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
@@ -11,6 +12,7 @@ import {
   getAgentErrors,
   getBenchmarksForAgent,
   listAgents,
+  rotateAgentToken,
   updateAgent,
 } from '../../services/agents.js'
 import { listTasksByAgent } from '../../services/tasks.js'
@@ -50,8 +52,6 @@ const errorsQuerySchema = z.object({
 const validationErrorEnvelope = {
   error: { code: 'VALIDATION_ERROR', message: 'Invalid agent ID' },
 }
-const notFoundEnvelope = { error: { code: 'RESOURCE_NOT_FOUND', message: 'Agent not found' } }
-
 // GET /agents — list agents with optional filtering
 dashboardAgentRoutes.get(
   '/',
@@ -77,7 +77,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     return c.json({ agent })
   }
@@ -99,10 +99,8 @@ dashboardAgentRoutes.patch(
   async (c) => {
     const { id: agentId } = c.req.valid('param')
     const data = c.req.valid('json')
-    const { projectId } = c.get('currentUser')
-    if (projectId === null) {
-      return c.json(notFoundEnvelope, 404)
-    }
+    // requireMembershipRole sets scopedUser (CQ-H3).
+    const { projectId } = c.get('scopedUser')!
     // Atomic UPDATE ... WHERE projectId enforces project scope inside
     // the write itself, closing the read-then-write TOCTOU window the
     // earlier getAgentById-then-updateAgent pattern left open. A null
@@ -111,7 +109,7 @@ dashboardAgentRoutes.patch(
     // cross-project existence leak.
     const agent = await updateAgent(agentId, data, projectId)
     if (!agent) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     return c.json({ agent })
   }
@@ -130,7 +128,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const { limit, offset } = c.req.valid('query')
     const errors = await getAgentErrors(agentId, { limit, offset })
@@ -150,7 +148,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const tasks = await listTasksByAgent(agentId, projectId as number)
     return c.json({ tasks })
@@ -169,10 +167,30 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const benchmarks = await getBenchmarksForAgent(agentId)
     return c.json({ benchmarks })
+  }
+)
+
+// S-H2: rotate an agent's bearer token. Admin-only. The raw token is
+// returned in the response exactly once with Cache-Control: no-store so
+// browser history, proxies, and the operator's tabs don't retain it.
+dashboardAgentRoutes.post(
+  '/:id/rotate-token',
+  requireMembershipRole('admin'),
+  zValidator('param', agentIdParamSchema),
+  async (c) => {
+    const { id: agentId } = c.req.valid('param')
+    const { projectId } = c.get('scopedUser')!
+
+    const result = await rotateAgentToken(agentId, projectId)
+    if (!result) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
+    }
+    c.header('Cache-Control', 'no-store')
+    return c.json({ token: result.token })
   }
 )
 

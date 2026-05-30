@@ -8,6 +8,7 @@ import type { AppEnv } from '../types.js'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { parseAgentToken, verifyAgentTokenHash } from '../lib/agent-token.js'
 import { auth } from '../lib/auth.js'
 
 function authError(message: string): HTTPException {
@@ -163,16 +164,60 @@ function createAgentTokenMiddleware(opts: { allowErroredAgent: boolean }) {
 
     const token = authHeader.slice(7)
 
-    const [agent] = await db
-      .select({
-        id: agents.id,
-        projectId: agents.projectId,
-        status: agents.status,
-        capabilities: agents.capabilities,
-      })
-      .from(agents)
-      .where(eq(agents.authToken, token))
-      .limit(1)
+    // S-H2: branch on token shape. Bcrypt-format tokens carry an `agt_`
+    // prefix and a numeric agentId hint; legacy plaintext tokens are
+    // raw UUIDs. The hint is not a secret — trust still flows from the
+    // bcrypt verify (or the timing-safe plaintext compare).
+    const parsed = parseAgentToken(token)
+    let agent:
+      | {
+          id: number
+          projectId: number
+          status: string
+          capabilities: unknown
+        }
+      | undefined
+
+    if (parsed) {
+      const [row] = await db
+        .select({
+          id: agents.id,
+          projectId: agents.projectId,
+          status: agents.status,
+          capabilities: agents.capabilities,
+          authTokenHash: agents.authTokenHash,
+          authTokenFormat: agents.authTokenFormat,
+        })
+        .from(agents)
+        .where(eq(agents.id, parsed.agentId))
+        .limit(1)
+      if (row && row.authTokenFormat === 'bcrypt' && row.authTokenHash) {
+        const ok = await verifyAgentTokenHash(token, row.authTokenHash)
+        if (ok) {
+          agent = {
+            id: row.id,
+            projectId: row.projectId,
+            status: row.status,
+            capabilities: row.capabilities,
+          }
+        }
+      }
+    } else {
+      // Legacy plaintext path: equality lookup on the `auth_token`
+      // column. Stays until the operator runbook says all agents have
+      // rotated and the DROP COLUMN release ships.
+      const [row] = await db
+        .select({
+          id: agents.id,
+          projectId: agents.projectId,
+          status: agents.status,
+          capabilities: agents.capabilities,
+        })
+        .from(agents)
+        .where(eq(agents.authToken, token))
+        .limit(1)
+      agent = row
+    }
 
     if (!agent) {
       throw authError('Invalid or expired agent token')

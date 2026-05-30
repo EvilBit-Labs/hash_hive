@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -53,7 +54,7 @@ export const projects = pgTable('projects', {
   description: text('description'),
   slug: varchar('slug', { length: 255 }).notNull().unique(),
   settings: jsonb('settings').default({}),
-  createdBy: integer('created_by').references(() => users.id),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -64,10 +65,10 @@ export const projectUsers = pgTable(
     id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
-      .references(() => users.id),
+      .references(() => users.id, { onDelete: 'cascade' }),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     roles: text('roles').array().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -158,9 +159,31 @@ export const agents = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
-    operatingSystemId: integer('operating_system_id').references(() => operatingSystems.id),
-    authToken: varchar('auth_token', { length: 255 }).notNull().unique(),
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    operatingSystemId: integer('operating_system_id').references(() => operatingSystems.id, {
+      onDelete: 'set null',
+    }),
+    /**
+     * Legacy plaintext bearer token. Nullable since S-H2 introduced
+     * bcrypt-format tokens; new agents get NULL here and a hash in
+     * `authTokenHash`. Existing agents keep their UUID until rotated.
+     * Drop-column happens in a follow-up release once all agents have
+     * rotated (see docs/operations/agent-token-rotation.md).
+     */
+    authToken: varchar('auth_token', { length: 255 }),
+    /**
+     * S-H2: bcrypt hash of the agent's bearer token. Populated by
+     * `rotateAgentToken`; the raw token is delivered to the operator
+     * exactly once and never persisted.
+     */
+    authTokenHash: varchar('auth_token_hash', { length: 255 }),
+    /**
+     * S-H2: format discriminator for `authToken` / `authTokenHash`.
+     * `'plaintext'` for legacy UUID rows; `'bcrypt'` after rotation.
+     * The auth middleware branches on this to choose the right verify
+     * path so a partial rotation never locks an agent out.
+     */
+    authTokenFormat: varchar('auth_token_format', { length: 16 }).notNull().default('plaintext'),
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
@@ -183,11 +206,25 @@ export const agents = pgTable(
   (table) => [
     index('agents_project_id_idx').on(table.projectId),
     index('agents_status_idx').on(table.status),
-    index('agents_auth_token_idx').on(table.authToken),
+    // S-H2: legacy plaintext path looks up by `auth_token` directly;
+    // partial uniqueness here preserves the pre-S-H2 invariant
+    // (`agents.auth_token` was UNIQUE NOT NULL) for the rows that still
+    // use that path. Bcrypt-format rows have `auth_token = NULL` so
+    // they are excluded from the unique constraint, leaving the column
+    // free to hold many NULLs without conflict. The plain
+    // `agents_auth_token_idx` is gone -- this partial unique covers
+    // both the lookup and the uniqueness invariant in one index.
+    uniqueIndex('agents_auth_token_plaintext_unique')
+      .on(table.authToken)
+      .where(sql`${table.authTokenFormat} = 'plaintext' AND ${table.authToken} IS NOT NULL`),
     // Heartbeat-monitor sweep filters by lastSeenAt to detect stale
     // agents. Without this index it does a seq scan once per sweep
     // interval (default 30s) -- linear in the agent count.
     index('agents_last_seen_at_idx').on(table.lastSeenAt),
+    // S-H2: enforce the format discriminator vocabulary at the DB
+    // level so a future bad migration or direct UPDATE can't land
+    // 'pbkdf2' or 'plain' (typo) and silently break auth routing.
+    check('agents_auth_token_format_chk', sql`${table.authTokenFormat} IN ('plaintext', 'bcrypt')`),
   ]
 )
 
@@ -197,7 +234,7 @@ export const agentErrors = pgTable(
     id: serial('id').primaryKey(),
     agentId: integer('agent_id')
       .notNull()
-      .references(() => agents.id),
+      .references(() => agents.id, { onDelete: 'cascade' }),
     severity: varchar('severity', { length: 20 }).notNull().default('error'),
     message: text('message').notNull(),
     context: jsonb('context').default({}),
@@ -226,7 +263,7 @@ export const agentBenchmarks = pgTable(
     id: serial('id').primaryKey(),
     agentId: integer('agent_id')
       .notNull()
-      .references(() => agents.id),
+      .references(() => agents.id, { onDelete: 'cascade' }),
     hashcatMode: integer('hashcat_mode').notNull(),
     hashType: varchar('hash_type', { length: 255 }).notNull(),
     speedHs: bigint('speed_hs', { mode: 'number' }).notNull(),
@@ -255,9 +292,9 @@ export const hashLists = pgTable(
     id: serial('id').primaryKey(),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
-    hashTypeId: integer('hash_type_id').references(() => hashTypes.id),
+    hashTypeId: integer('hash_type_id').references(() => hashTypes.id, { onDelete: 'set null' }),
     source: varchar('source', { length: 50 }).notNull().default('upload'),
     fileRef: jsonb('file_ref').default({}),
     statistics: jsonb('statistics').default({}),
@@ -277,14 +314,14 @@ export const hashItems = pgTable(
     id: serial('id').primaryKey(),
     hashListId: integer('hash_list_id')
       .notNull()
-      .references(() => hashLists.id),
+      .references(() => hashLists.id, { onDelete: 'cascade' }),
     hashValue: varchar('hash_value', { length: 1024 }).notNull(),
     plaintext: text('plaintext'),
     crackedAt: timestamp('cracked_at', { withTimezone: true }),
-    campaignId: integer('campaign_id').references(() => campaigns.id),
-    attackId: integer('attack_id').references(() => attacks.id),
-    taskId: integer('task_id').references(() => tasks.id),
-    agentId: integer('agent_id').references(() => agents.id),
+    campaignId: integer('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+    attackId: integer('attack_id').references(() => attacks.id, { onDelete: 'set null' }),
+    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     metadata: jsonb('metadata').default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -301,7 +338,7 @@ export const wordLists = pgTable('word_lists', {
   id: serial('id').primaryKey(),
   projectId: integer('project_id')
     .notNull()
-    .references(() => projects.id),
+    .references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
@@ -315,7 +352,7 @@ export const ruleLists = pgTable('rule_lists', {
   id: serial('id').primaryKey(),
   projectId: integer('project_id')
     .notNull()
-    .references(() => projects.id),
+    .references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
@@ -329,7 +366,7 @@ export const maskLists = pgTable('mask_lists', {
   id: serial('id').primaryKey(),
   projectId: integer('project_id')
     .notNull()
-    .references(() => projects.id),
+    .references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 255 }).notNull(),
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
@@ -347,17 +384,17 @@ export const attackTemplates = pgTable(
     id: serial('id').primaryKey(),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
     mode: integer('mode').notNull(),
-    hashTypeId: integer('hash_type_id').references(() => hashTypes.id),
-    wordlistId: integer('wordlist_id').references(() => wordLists.id),
-    rulelistId: integer('rulelist_id').references(() => ruleLists.id),
-    masklistId: integer('masklist_id').references(() => maskLists.id),
+    hashTypeId: integer('hash_type_id').references(() => hashTypes.id, { onDelete: 'set null' }),
+    wordlistId: integer('wordlist_id').references(() => wordLists.id, { onDelete: 'set null' }),
+    rulelistId: integer('rulelist_id').references(() => ruleLists.id, { onDelete: 'set null' }),
+    masklistId: integer('masklist_id').references(() => maskLists.id, { onDelete: 'set null' }),
     advancedConfiguration: jsonb('advanced_configuration').default({}),
     tags: text('tags').array().notNull().default([]),
-    createdBy: integer('created_by').references(() => users.id),
+    createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -375,17 +412,17 @@ export const campaigns = pgTable(
     id: serial('id').primaryKey(),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
     hashListId: integer('hash_list_id')
       .notNull()
-      .references(() => hashLists.id),
+      .references(() => hashLists.id, { onDelete: 'restrict' }),
     status: varchar('status', { length: 20 }).notNull().default('draft'),
     priority: integer('priority').notNull().default(5),
     progress: jsonb('progress').default({}),
     metadata: jsonb('metadata').default({}),
-    createdBy: integer('created_by').references(() => users.id),
+    createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -400,15 +437,15 @@ export const attacks = pgTable(
     id: serial('id').primaryKey(),
     campaignId: integer('campaign_id')
       .notNull()
-      .references(() => campaigns.id),
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
     projectId: integer('project_id')
       .notNull()
-      .references(() => projects.id),
+      .references(() => projects.id, { onDelete: 'cascade' }),
     mode: integer('mode').notNull(),
-    hashTypeId: integer('hash_type_id').references(() => hashTypes.id),
-    wordlistId: integer('wordlist_id').references(() => wordLists.id),
-    rulelistId: integer('rulelist_id').references(() => ruleLists.id),
-    masklistId: integer('masklist_id').references(() => maskLists.id),
+    hashTypeId: integer('hash_type_id').references(() => hashTypes.id, { onDelete: 'set null' }),
+    wordlistId: integer('wordlist_id').references(() => wordLists.id, { onDelete: 'set null' }),
+    rulelistId: integer('rulelist_id').references(() => ruleLists.id, { onDelete: 'set null' }),
+    masklistId: integer('masklist_id').references(() => maskLists.id, { onDelete: 'set null' }),
     advancedConfiguration: jsonb('advanced_configuration').default({}),
     keyspace: varchar('keyspace', { length: 255 }),
     status: varchar('status', { length: 20 }).notNull().default('pending'),
@@ -425,11 +462,11 @@ export const tasks = pgTable(
     id: serial('id').primaryKey(),
     attackId: integer('attack_id')
       .notNull()
-      .references(() => attacks.id),
+      .references(() => attacks.id, { onDelete: 'cascade' }),
     campaignId: integer('campaign_id')
       .notNull()
-      .references(() => campaigns.id),
-    agentId: integer('agent_id').references(() => agents.id),
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     status: varchar('status', { length: 20 }).notNull().default('pending'),
     workRange: jsonb('work_range').default({}),
     progress: jsonb('progress').default({}),

@@ -61,10 +61,14 @@ export function requireRole(...allowedRoles: UserRole[]) {
  * (the existing tests pass a minimal { get } shape) while still
  * carrying set() when the real Hono Context is in play.
  */
+type ScopedUser = { userId: number; projectId: number; roles: string[] }
+type CachedMembership = { projectId: number; userId: number; roles: string[] }
+
 type MembershipCtx = {
   get: ((key: 'currentUser') => { userId: number; projectId: number | null } | undefined) &
-    ((key: 'membership') => { projectId: number; userId: number; roles: string[] } | undefined)
-  set?: (key: 'membership', value: { projectId: number; userId: number; roles: string[] }) => void
+    ((key: 'membership') => CachedMembership | undefined)
+  set?: ((key: 'membership', value: CachedMembership) => void) &
+    ((key: 'scopedUser', value: ScopedUser) => void)
 }
 
 async function checkMembership(c: MembershipCtx) {
@@ -89,6 +93,11 @@ async function checkMembership(c: MembershipCtx) {
   // handlers re-call findProjectMembership for their own enforcement.
   const cached = c.get('membership')
   if (cached && cached.userId === user.userId && cached.projectId === projectId) {
+    // Refresh scopedUser too -- a cached membership from a prior guard
+    // means scopedUser is already populated, but the explicit set keeps
+    // the two values in lockstep even when the cache predates the
+    // scopedUser variable's introduction.
+    c.set?.('scopedUser', { userId: user.userId, projectId, roles: cached.roles })
     return cached
   }
 
@@ -98,6 +107,10 @@ async function checkMembership(c: MembershipCtx) {
   }
 
   c.set?.('membership', { ...membership, userId: user.userId })
+  // CQ-H3: populate scopedUser so handlers can read projectId as a
+  // non-null number directly via c.get('scopedUser') and skip the
+  // per-route `if (!projectId)` guard.
+  c.set?.('scopedUser', { userId: user.userId, projectId, roles: membership.roles })
   return membership
 }
 
@@ -146,7 +159,7 @@ async function checkParamProjectMembership(
 
   const projectId = Number(c.req.param('projectId'))
   if (!projectId || Number.isNaN(projectId)) {
-    throw httpError(400, 'VALIDATION_FAILED', 'Project ID is required for this operation')
+    throw httpError(400, 'VALIDATION_ERROR', 'Project ID is required for this operation')
   }
 
   // P-C1: same per-request cache as checkMembership. The cache is keyed
@@ -154,6 +167,7 @@ async function checkParamProjectMembership(
   // membership entry when the param differs.
   const cached = c.get('membership')
   if (cached && cached.userId === user.userId && cached.projectId === projectId) {
+    c.set?.('scopedUser', { userId: user.userId, projectId, roles: cached.roles })
     return cached
   }
 
@@ -163,6 +177,9 @@ async function checkParamProjectMembership(
   }
 
   c.set?.('membership', { ...membership, userId: user.userId })
+  // CQ-H3: same scopedUser contract as checkMembership above. The
+  // projectId comes from the URL param here, not the session.
+  c.set?.('scopedUser', { userId: user.userId, projectId, roles: membership.roles })
   return membership
 }
 
