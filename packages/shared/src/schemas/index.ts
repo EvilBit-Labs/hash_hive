@@ -686,84 +686,34 @@ export const assignedTaskSchema = z.object({
 })
 
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
+//
+// `campaignStatusSchema`, `campaignTaskStatsSchema`,
+// `dashboardStatsSchema`, the `TASK_DB_TO_BUCKET` helper, and the
+// related task-bucket types live in `./dashboard.ts` so this file
+// stays under the per-file budget. Imported + re-exported here so
+// other packages continue to import them from `@hashhive/shared`
+// unchanged and the local consumer below (`campaignDetailPayloadSchema`)
+// can reference `campaignTaskStatsSchema` directly.
 
-/**
- * Bucketed task statuses surfaced on the campaign detail page. The
- * five operator-facing buckets coalesce the data-model statuses:
- * `assigned` and `running` both count as `running`; `exhausted` counts
- * as `completed`. Unknown future statuses count only toward `total`.
- */
-export const campaignTaskStatsSchema = z.object({
-  total: z.number().int().nonnegative(),
-  pending: z.number().int().nonnegative(),
-  running: z.number().int().nonnegative(),
-  completed: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
-})
+import {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+} from './dashboard.js'
 
-/**
- * Canonical campaign status values matching the persisted `campaigns.status`
- * column and the `CampaignStatus` lifecycle transition table in
- * `services/campaigns.ts`. Use this wherever the full campaign status
- * vocabulary is validated.
- */
-export const campaignStatusSchema = z.enum(['draft', 'running', 'paused', 'completed', 'cancelled'])
-
-/**
- * Project-scoped dashboard stat aggregates returned by
- * `GET /api/v1/dashboard/stats` (issue #161). Each non-`total` field is a
- * non-negative integer count of resources in that bucket within the caller's
- * selected project.
- *
- * Bucketing:
- *  - `agents` exposes every value in `agentStatusSchema` (online, offline,
- *    busy, error, benchmarked). `total` sums all five so the previous bug
- *    where `busy` and `benchmarked` agents silently disappeared from the
- *    count is closed.
- *  - `campaigns` exposes every value in `campaignStatusSchema`.
- *  - `tasks` reuses `campaignTaskStatsSchema`: the DB statuses `assigned`
- *    and `running` both count as `running`; `exhausted` counts as
- *    `completed` (same mapping `getCampaignTaskStats` already uses).
- *  - `cracked` is the count of hash items with a non-null `crackedAt`
- *    across the project's hash lists.
- *
- * Inner objects use `.strict()` so an unknown DB status literal would fail
- * `parse()` in the contract test rather than slip through silently. The
- * live route does NOT call `.parse()` on its own response — it relies on
- * the inferred-type annotation for compile-time enforcement and on the
- * contract test for CI-time enforcement (see the read-endpoint contract
- * at `docs/solutions/conventions/dashboard-read-endpoint-contract.md`).
- */
-export const dashboardStatsSchema = z
-  .object({
-    agents: z
-      .object({
-        total: z.number().int().nonnegative(),
-        online: z.number().int().nonnegative(),
-        offline: z.number().int().nonnegative(),
-        busy: z.number().int().nonnegative(),
-        error: z.number().int().nonnegative(),
-        benchmarked: z.number().int().nonnegative(),
-      })
-      .strict(),
-    campaigns: z
-      .object({
-        total: z.number().int().nonnegative(),
-        draft: z.number().int().nonnegative(),
-        running: z.number().int().nonnegative(),
-        paused: z.number().int().nonnegative(),
-        completed: z.number().int().nonnegative(),
-        cancelled: z.number().int().nonnegative(),
-      })
-      .strict(),
-    tasks: campaignTaskStatsSchema,
-    cracked: z
-      .object({
-        total: z.number().int().nonnegative(),
-      })
-      .strict(),
-  })
-  .strict()
+export {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+}
 
 /**
  * An agent currently assigned to an active task on a campaign. `progress`

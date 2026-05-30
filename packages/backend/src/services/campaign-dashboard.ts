@@ -14,6 +14,9 @@ import {
   type CampaignActiveAgent,
   type CampaignTaskStats,
   campaigns,
+  TASK_DB_TO_BUCKET,
+  type TaskBucket,
+  type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
@@ -26,17 +29,12 @@ import { emitCampaignStatus } from './events.js'
 
 /**
  * Aggregate task counts for a campaign, bucketed into the operator-facing
- * states. The data model emits more nuanced statuses (`assigned`,
- * `exhausted`); those are folded into the closest operator bucket:
- *
- * | DB status            | UI bucket  |
- * | -------------------- | ---------- |
- * | pending              | pending    |
- * | assigned, running    | running    |
- * | completed, exhausted | completed  |
- * | failed, cancelled    | failed     |
- *
- * Unknown future statuses count toward `total` only.
+ * states defined by `TASK_DB_TO_BUCKET` in `@hashhive/shared`. The data
+ * model carries more nuanced statuses (`assigned`, `exhausted`,
+ * `cancelled`); the shared constant folds them into the four operator
+ * buckets (`pending | running | completed | failed`). Unknown future
+ * statuses count toward `total` only — extend `TASK_DB_TO_BUCKET` to add
+ * one to a bucket.
  */
 export async function getCampaignTaskStats(campaignId: number): Promise<CampaignTaskStats> {
   const rows = await db
@@ -48,45 +46,25 @@ export async function getCampaignTaskStats(campaignId: number): Promise<Campaign
     .where(eq(tasks.campaignId, campaignId))
     .groupBy(tasks.status)
 
-  const stats: CampaignTaskStats = {
-    total: 0,
+  const buckets: Record<TaskBucket, number> = {
     pending: 0,
     running: 0,
     completed: 0,
     failed: 0,
   }
+  let total = 0
 
   for (const row of rows) {
     const n = Number(row.n ?? 0)
-    stats.total += n
-    switch (row.status) {
-      case 'pending':
-        stats.pending += n
-        break
-      case 'assigned':
-      case 'running':
-        stats.running += n
-        break
-      case 'completed':
-      case 'exhausted':
-        stats.completed += n
-        break
-      case 'failed':
-      case 'cancelled':
-        // Cancelled tasks count toward `failed` so ETA's
-        // `remaining = total - completed - failed` math stays correct.
-        // Operators see cancelled tasks as "not coming back" in the
-        // same way failed tasks are.
-        stats.failed += n
-        break
-      default:
-        // Unknown statuses count only toward `total`; add explicit
-        // folding here when the schema grows.
-        break
+    total += n
+    const bucket = TASK_DB_TO_BUCKET[row.status as TaskDbStatus]
+    if (bucket !== undefined) {
+      buckets[bucket] += n
     }
+    // Unknown statuses count only toward `total` (handled above).
   }
 
-  return stats
+  return { total, ...buckets }
 }
 
 // ─── Active agents ──────────────────────────────────────────────────

@@ -133,24 +133,32 @@ mock.module('../../src/services/auth.js', () => ({
 
 type StatusRow = { status: string; count: number }
 type CountOnlyRow = { count: number }
+type Predicate = { queryChunks?: unknown[] } & Record<string, unknown>
 
 const queryRows: {
   agents: StatusRow[]
   campaigns: StatusRow[]
   tasks: StatusRow[]
   cracked: CountOnlyRow[]
-  whereSpies: {
-    agents: number
-    campaigns: number
-    tasks: number
-    cracked: number
+  whereCalls: {
+    agents: Predicate[]
+    campaigns: Predicate[]
+    tasks: Predicate[]
+    cracked: Predicate[]
+  }
+  innerJoinCalls: {
+    agents: Array<{ table: unknown; predicate: Predicate }>
+    campaigns: Array<{ table: unknown; predicate: Predicate }>
+    tasks: Array<{ table: unknown; predicate: Predicate }>
+    cracked: Array<{ table: unknown; predicate: Predicate }>
   }
 } = {
   agents: [],
   campaigns: [],
   tasks: [],
   cracked: [],
-  whereSpies: { agents: 0, campaigns: 0, tasks: 0, cracked: 0 },
+  whereCalls: { agents: [], campaigns: [], tasks: [], cracked: [] },
+  innerJoinCalls: { agents: [], campaigns: [], tasks: [], cracked: [] },
 }
 
 beforeEach(() => {
@@ -158,8 +166,55 @@ beforeEach(() => {
   queryRows.campaigns = []
   queryRows.tasks = []
   queryRows.cracked = []
-  queryRows.whereSpies = { agents: 0, campaigns: 0, tasks: 0, cracked: 0 }
+  queryRows.whereCalls = { agents: [], campaigns: [], tasks: [], cracked: [] }
+  queryRows.innerJoinCalls = { agents: [], campaigns: [], tasks: [], cracked: [] }
 })
+
+/**
+ * Walk a Drizzle SQL predicate and collect every captured `Param`
+ * value. The predicate is a tree of `queryChunks` containing column
+ * refs, string literals, params, and nested SQL objects (from `and`,
+ * `or`, etc.). Returns the values in left-to-right order.
+ */
+function paramValuesOf(predicate: Predicate): unknown[] {
+  const out: unknown[] = []
+  function walk(chunk: unknown): void {
+    if (chunk === null || chunk === undefined) return
+    if (typeof chunk !== 'object') return
+    const c = chunk as Record<string, unknown>
+    if ('value' in c && c['encoder']) {
+      // Drizzle `Param` chunk shape.
+      out.push(c['value'])
+      return
+    }
+    if (Array.isArray(c['queryChunks'])) {
+      for (const inner of c['queryChunks']) walk(inner)
+    }
+  }
+  walk(predicate)
+  return out
+}
+
+/**
+ * Returns true when the predicate's `queryChunks` reference the given
+ * column object by identity. Drizzle's `eq(col, value)` puts the
+ * column object itself into `queryChunks` so `===` is the right test.
+ */
+function referencesColumn(predicate: Predicate, column: unknown): boolean {
+  function walk(chunk: unknown): boolean {
+    if (chunk === null || chunk === undefined) return false
+    if (chunk === column) return true
+    if (typeof chunk !== 'object') return false
+    const c = chunk as Record<string, unknown>
+    if (Array.isArray(c['queryChunks'])) {
+      for (const inner of c['queryChunks']) {
+        if (walk(inner)) return true
+      }
+    }
+    return false
+  }
+  return walk(predicate)
+}
 
 function discriminate(table: unknown): 'agents' | 'campaigns' | 'tasks' | 'cracked' | 'unknown' {
   if (table === agents) return 'agents'
@@ -186,26 +241,26 @@ mock.module('../../src/db/index.js', () => ({
         // directly when the chain ends at `.where(...)`; `.where()` and
         // `.groupBy()` continue the chain when present.
         function makeChain(): {
-          where: () => ReturnType<typeof makeChain>
+          where: (predicate: Predicate) => ReturnType<typeof makeChain>
           groupBy: () => Promise<unknown[]>
-          innerJoin: () => ReturnType<typeof makeChain>
+          innerJoin: (table: unknown, predicate: Predicate) => ReturnType<typeof makeChain>
           then: (
             onFulfilled: (value: unknown[]) => unknown,
             onRejected?: (reason: unknown) => unknown
           ) => Promise<unknown>
         } {
           const chain = {
-            where() {
-              if (target === 'agents') queryRows.whereSpies.agents++
-              else if (target === 'campaigns') queryRows.whereSpies.campaigns++
-              else if (target === 'tasks') queryRows.whereSpies.tasks++
-              else if (target === 'cracked') queryRows.whereSpies.cracked++
+            where(predicate: Predicate) {
+              if (target !== 'unknown') queryRows.whereCalls[target].push(predicate)
               return chain
             },
             groupBy() {
               return Promise.resolve(rowsFor(target))
             },
-            innerJoin() {
+            innerJoin(joinTable: unknown, predicate: Predicate) {
+              if (target !== 'unknown') {
+                queryRows.innerJoinCalls[target].push({ table: joinTable, predicate })
+              }
               return chain
             },
             // The Drizzle query builder is intentionally PromiseLike at
@@ -290,18 +345,49 @@ describe('Dashboard stats route — auth and membership gates', () => {
 })
 
 describe('Dashboard stats route — project-scoped query construction', () => {
-  it('issues a where(...) clause on each of the four aggregate queries', async () => {
-    const res = await app.request(STATS_URL, {
-      headers: commonHeaders(ADMIN_COOKIE),
-    })
+  it('agents query: where(...) references agents.projectId === session.projectId', async () => {
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
     expect(res.status).toBe(200)
-    // Each aggregate query must call .where(...) so it filters by
-    // session.projectId; if a future refactor drops the filter on any
-    // query, this spy reads 0 for that table and fails loudly.
-    expect(queryRows.whereSpies.agents).toBe(1)
-    expect(queryRows.whereSpies.campaigns).toBe(1)
-    expect(queryRows.whereSpies.tasks).toBe(1)
-    expect(queryRows.whereSpies.cracked).toBe(1)
+    expect(queryRows.whereCalls.agents.length).toBe(1)
+    const predicate = queryRows.whereCalls.agents[0]!
+    expect(referencesColumn(predicate, agents.projectId)).toBe(true)
+    expect(paramValuesOf(predicate)).toEqual([1])
+  })
+
+  it('campaigns query: where(...) references campaigns.projectId === session.projectId', async () => {
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.whereCalls.campaigns.length).toBe(1)
+    const predicate = queryRows.whereCalls.campaigns[0]!
+    expect(referencesColumn(predicate, campaigns.projectId)).toBe(true)
+    expect(paramValuesOf(predicate)).toEqual([1])
+  })
+
+  it('tasks query: joins through campaigns and filters where campaigns.projectId === session.projectId', async () => {
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.innerJoinCalls.tasks.length).toBe(1)
+    expect(queryRows.innerJoinCalls.tasks[0]!.table).toBe(campaigns)
+    expect(queryRows.whereCalls.tasks.length).toBe(1)
+    const wherePredicate = queryRows.whereCalls.tasks[0]!
+    expect(referencesColumn(wherePredicate, campaigns.projectId)).toBe(true)
+    expect(paramValuesOf(wherePredicate)).toEqual([1])
+  })
+
+  it('cracked query: innerJoin(campaigns, ...) predicate references campaigns.projectId === session.projectId; where(...) checks crackedAt', async () => {
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.innerJoinCalls.cracked.length).toBe(1)
+    const join = queryRows.innerJoinCalls.cracked[0]!
+    expect(join.table).toBe(campaigns)
+    // The cracked query puts the projectId filter inside the join's ON
+    // clause (combined with hashItems.campaignId = campaigns.id) via
+    // `and(...)`. Recurse to find the projectId column and param.
+    expect(referencesColumn(join.predicate, campaigns.projectId)).toBe(true)
+    expect(paramValuesOf(join.predicate)).toContain(1)
+    // The terminal .where(...) filters on hashItems.crackedAt IS NOT NULL.
+    expect(queryRows.whereCalls.cracked.length).toBe(1)
+    expect(referencesColumn(queryRows.whereCalls.cracked[0]!, hashItems.crackedAt)).toBe(true)
   })
 })
 

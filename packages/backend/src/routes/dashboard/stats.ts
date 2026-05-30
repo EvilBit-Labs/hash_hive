@@ -1,4 +1,13 @@
-import { agents, campaigns, type DashboardStats, hashItems, tasks } from '@hashhive/shared'
+import {
+  agents,
+  campaigns,
+  type DashboardStats,
+  hashItems,
+  TASK_DB_TO_BUCKET,
+  type TaskBucket,
+  type TaskDbStatus,
+  tasks,
+} from '@hashhive/shared'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 
@@ -86,18 +95,24 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
       .where(isNotNull(hashItems.crackedAt)),
   ])
 
-  // Bucket task DB statuses into the operator-facing counts that
-  // `campaignTaskStatsSchema` defines: `assigned` and `running` both count
-  // as `running`; `exhausted` counts as `completed`; `cancelled` counts
-  // as `failed` (operators see cancelled tasks as "not coming back" the
-  // same way failed tasks are, and ETA math relies on
-  // `remaining = total - completed - failed`). Unknown future statuses
-  // count only toward `total`. Same mapping as `getCampaignTaskStats` in
-  // `services/campaign-dashboard.ts`.
-  const taskPending = countFor(taskStats, 'pending')
-  const taskRunning = countFor(taskStats, 'running') + countFor(taskStats, 'assigned')
-  const taskCompleted = countFor(taskStats, 'completed') + countFor(taskStats, 'exhausted')
-  const taskFailed = countFor(taskStats, 'failed') + countFor(taskStats, 'cancelled')
+  // Bucket task DB statuses into the operator-facing buckets defined by
+  // `TASK_DB_TO_BUCKET` in `@hashhive/shared`. Same mapping
+  // `getCampaignTaskStats` in `services/campaign-dashboard.ts` consumes —
+  // centralizing here means a future DB-status rename touches the shared
+  // constant once instead of every consumer.
+  const taskBuckets: Record<TaskBucket, number> = {
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+  }
+  for (const row of taskStats) {
+    const bucket = TASK_DB_TO_BUCKET[row.status as TaskDbStatus]
+    if (bucket !== undefined) {
+      taskBuckets[bucket] += Number(row.count)
+    }
+    // Unknown DB statuses still contribute to `total` via `sumRows` below.
+  }
 
   // Build the response from the shared schema's known literals; the
   // `DashboardStats` annotation makes a missing field a compile error.
@@ -123,10 +138,10 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
     },
     tasks: {
       total: sumRows(taskStats),
-      pending: taskPending,
-      running: taskRunning,
-      completed: taskCompleted,
-      failed: taskFailed,
+      pending: taskBuckets.pending,
+      running: taskBuckets.running,
+      completed: taskBuckets.completed,
+      failed: taskBuckets.failed,
     },
     cracked: {
       total: Number(crackedStats[0]?.count ?? 0),

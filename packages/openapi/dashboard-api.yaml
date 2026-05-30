@@ -1898,9 +1898,11 @@ components:
           description: |
             Operator-facing task buckets. DB statuses `assigned` and
             `running` both count as `running`; `exhausted` counts as
-            `completed`. Mirrors `campaignTaskStatsSchema` in
-            `@hashhive/shared`.
+            `completed`; `cancelled` counts as `failed`. The full
+            mapping lives in `TASK_DB_TO_BUCKET` in `@hashhive/shared`.
+            Mirrors `campaignTaskStatsSchema`.
           required: [total, pending, running, completed, failed]
+          additionalProperties: false
           properties:
             total: { type: integer, minimum: 0 }
             pending: { type: integer, minimum: 0 }

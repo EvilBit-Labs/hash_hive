@@ -2,6 +2,7 @@ import {
   attacks,
   type CampaignSortField,
   type CampaignSortOrder,
+  type CampaignStatus,
   campaigns,
   tasks,
 } from '@hashhive/shared'
@@ -481,9 +482,13 @@ export async function updateCampaign(
 // `campaign-progress.ts`. Splitting kept this file under the project's
 // 800-line guideline without changing the public import surface.
 
-type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'cancelled'
-
-const VALID_TRANSITIONS: Record<string, CampaignStatus[]> = {
+// `CampaignStatus` is the canonical lifecycle vocabulary exported from
+// `@hashhive/shared` (`campaignStatusSchema`). The transition table
+// is keyed by the same vocabulary so adding a new status to the shared
+// enum forces this table to be updated in the same change (the
+// `Record<CampaignStatus, ...>` typing turns a missing key into a
+// compile error).
+const VALID_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
   draft: ['running', 'cancelled'],
   running: ['paused', 'completed', 'cancelled', 'draft'],
   // paused → completed is permitted so the auto-complete gate can fire
@@ -502,7 +507,11 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     return { error: 'Campaign not found' }
   }
 
-  const allowed = VALID_TRANSITIONS[campaign.status] ?? []
+  // `campaign.status` is typed `string` from the DB row but the
+  // transition table is keyed by `CampaignStatus`. Cast at the lookup
+  // boundary — an unknown DB literal falls through to `[]` via `??`,
+  // producing the canonical "cannot transition" error path.
+  const allowed = VALID_TRANSITIONS[campaign.status as CampaignStatus] ?? []
   if (!allowed.includes(targetStatus)) {
     return {
       error: `Cannot transition from '${campaign.status}' to '${targetStatus}'`,
