@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
@@ -51,8 +52,6 @@ const errorsQuerySchema = z.object({
 const validationErrorEnvelope = {
   error: { code: 'VALIDATION_ERROR', message: 'Invalid agent ID' },
 }
-const notFoundEnvelope = { error: { code: 'RESOURCE_NOT_FOUND', message: 'Agent not found' } }
-
 // GET /agents — list agents with optional filtering
 dashboardAgentRoutes.get(
   '/',
@@ -78,7 +77,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     return c.json({ agent })
   }
@@ -110,7 +109,7 @@ dashboardAgentRoutes.patch(
     // cross-project existence leak.
     const agent = await updateAgent(agentId, data, projectId)
     if (!agent) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     return c.json({ agent })
   }
@@ -129,7 +128,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const { limit, offset } = c.req.valid('query')
     const errors = await getAgentErrors(agentId, { limit, offset })
@@ -149,7 +148,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const tasks = await listTasksByAgent(agentId, projectId as number)
     return c.json({ tasks })
@@ -168,7 +167,7 @@ dashboardAgentRoutes.get(
     const { projectId } = c.get('currentUser')
     const agent = await getAgentById(agentId)
     if (!agent || agent.projectId !== projectId) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     const benchmarks = await getBenchmarksForAgent(agentId)
     return c.json({ benchmarks })
@@ -188,7 +187,7 @@ dashboardAgentRoutes.post(
 
     const result = await rotateAgentToken(agentId, projectId)
     if (!result) {
-      return c.json(notFoundEnvelope, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
     c.header('Cache-Control', 'no-store')
     return c.json({ token: result.token })

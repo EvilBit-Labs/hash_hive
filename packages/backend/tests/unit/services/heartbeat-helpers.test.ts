@@ -31,8 +31,11 @@ type EmitMock = ReturnType<typeof mock>
 
 beforeEach(() => {
   __resetWarnedEmptyCapsForTesting()
-  ;(emitAgentError as unknown as EmitMock).mockClear()
-  ;(emitAgentStatus as unknown as EmitMock).mockClear()
+  // Reset (not clear) so queued `mockImplementationOnce` values from a
+  // prior test cannot leak into the next — `mockClear()` only clears
+  // call history, leaving queued one-shot impls intact.
+  ;(emitAgentError as unknown as EmitMock).mockReset()
+  ;(emitAgentStatus as unknown as EmitMock).mockReset()
 })
 
 describe('verifyTaskOwnership', () => {

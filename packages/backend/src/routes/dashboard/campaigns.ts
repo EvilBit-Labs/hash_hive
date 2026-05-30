@@ -78,11 +78,11 @@ campaignRoutes.get(
     )
   }),
   async (c) => {
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const { status, priority, sort, order, limit, offset } = c.req.valid('query')
 
     const result = await listCampaigns({
-      projectId: projectId ?? undefined,
+      projectId,
       status,
       priority,
       sort,
@@ -187,10 +187,10 @@ campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
     return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
-  const { projectId } = c.get('currentUser')
+  const { projectId } = c.get('scopedUser')!
   const campaign = await getCampaignById(id)
 
-  if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
+  if (!campaign || campaign.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
@@ -214,10 +214,10 @@ campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), asy
     return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
-  const { userId, projectId } = c.get('currentUser')
+  const { userId, projectId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
 
-  if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+  if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
@@ -284,9 +284,9 @@ const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<App
     return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
   }
 
-  const { projectId } = c.get('currentUser')
+  const { projectId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
-  if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+  if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
@@ -375,9 +375,9 @@ campaignRoutes.post(
     // transitionCampaign fetches by id alone; without this guard a
     // contributor in project A could transition a campaign in project
     // B by guessing the id. Mirrors the per-alias handler check.
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const existing = await getCampaignById(id)
-    if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+    if (!existing || existing.projectId !== projectId) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
@@ -499,9 +499,9 @@ const lifecycleAliasHandler =
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
     }
 
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const existing = await getCampaignById(id)
-    if (!existing || (projectId !== undefined && existing.projectId !== projectId)) {
+    if (!existing || existing.projectId !== projectId) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
@@ -541,7 +541,14 @@ campaignRoutes.get('/:id/validate', requireProjectAccess(), async (c) => {
   const id = Number(c.req.param('id'))
   const campaign = await getCampaignById(id)
 
-  if (!campaign) {
+  // Cross-project enforcement: requireProjectAccess only proves the
+  // caller belongs to *their* active project, not that this campaign
+  // belongs to it. Without the projectId compare a member of project A
+  // could probe DAG validity (and infer existence/state) of a
+  // campaign in project B. 404 on cross-project to avoid leaking
+  // existence.
+  const { projectId } = c.get('scopedUser')!
+  if (!campaign || campaign.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
@@ -581,9 +588,9 @@ campaignRoutes.post(
     // in project A could create attacks against a campaign in project
     // B by guessing the campaign id. 404 on cross-project to avoid
     // leaking existence.
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const campaign = await getCampaignById(campaignId)
-    if (!campaign || (projectId !== undefined && campaign.projectId !== projectId)) {
+    if (!campaign || campaign.projectId !== projectId) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
@@ -655,7 +662,12 @@ campaignRoutes.get('/:id/attacks', requireProjectAccess(), async (c) => {
   const campaignId = Number(c.req.param('id'))
   const campaign = await getCampaignById(campaignId)
 
-  if (!campaign) {
+  // Cross-project enforcement: same reasoning as the /:id/validate
+  // route above -- without the projectId compare, any project member
+  // could enumerate attacks for a campaign in a different project by
+  // guessing the id. 404 to avoid leaking existence.
+  const { projectId } = c.get('scopedUser')!
+  if (!campaign || campaign.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
@@ -695,9 +707,9 @@ campaignRoutes.patch(
     // contributor in project A could mutate attacks in project B by
     // guessing {campaignId, attackId} pairs. The attack-belongs-to-
     // campaign check below is necessary but not sufficient.
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const parentCampaign = await getCampaignById(campaignId)
-    if (!parentCampaign || (projectId !== undefined && parentCampaign.projectId !== projectId)) {
+    if (!parentCampaign || parentCampaign.projectId !== projectId) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
@@ -779,7 +791,7 @@ campaignRoutes.delete(
     ) {
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign or attack id')
     }
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
 
     // Verify the campaign exists AND belongs to the caller's current
     // project scope. requireMembershipRole only proves the caller is a

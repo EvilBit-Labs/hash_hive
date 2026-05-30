@@ -26,7 +26,7 @@ The raw token is never written to disk by HashHive. It is the operator's respons
 
 The rotation endpoint is:
 
-```
+```http
 POST /api/v1/dashboard/agents/:id/rotate-token
 ```
 

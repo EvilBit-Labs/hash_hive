@@ -1,5 +1,5 @@
 {
-  "id": "eadbd4b3-a372-40f5-bdbf-c1e71eb768aa",
+  "id": "66b557dd-35d2-476c-a9fb-f928cb6da081",
   "prevId": "bb947db8-2aa9-4c5b-b3a9-2f1444b2361f",
   "version": "7",
   "dialect": "postgresql",
@@ -344,8 +344,8 @@
           "method": "btree",
           "with": {}
         },
-        "agents_auth_token_idx": {
-          "name": "agents_auth_token_idx",
+        "agents_auth_token_plaintext_unique": {
+          "name": "agents_auth_token_plaintext_unique",
           "columns": [
             {
               "expression": "auth_token",
@@ -354,22 +354,8 @@
               "nulls": "last"
             }
           ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agents_auth_token_format_idx": {
-          "name": "agents_auth_token_format_idx",
-          "columns": [
-            {
-              "expression": "auth_token_format",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
+          "isUnique": true,
+          "where": "\"agents\".\"auth_token_format\" = 'plaintext' AND \"agents\".\"auth_token\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -421,7 +407,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "agents_auth_token_format_chk": {
+          "name": "agents_auth_token_format_chk",
+          "value": "\"agents\".\"auth_token_format\" IN ('plaintext', 'bcrypt')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.attack_templates": {

@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -205,17 +206,25 @@ export const agents = pgTable(
   (table) => [
     index('agents_project_id_idx').on(table.projectId),
     index('agents_status_idx').on(table.status),
-    // S-H2: keep the auth_token index for legacy plaintext lookups
-    // during the rotation window. After DROP COLUMN this goes away too.
-    index('agents_auth_token_idx').on(table.authToken),
-    // Composite index speeds the bcrypt-format path: lookup by id, then
-    // verify the hash. Without this, the planner does a seq scan on
-    // tiny tables once we add the format filter.
-    index('agents_auth_token_format_idx').on(table.authTokenFormat),
+    // S-H2: legacy plaintext path looks up by `auth_token` directly;
+    // partial uniqueness here preserves the pre-S-H2 invariant
+    // (`agents.auth_token` was UNIQUE NOT NULL) for the rows that still
+    // use that path. Bcrypt-format rows have `auth_token = NULL` so
+    // they are excluded from the unique constraint, leaving the column
+    // free to hold many NULLs without conflict. The plain
+    // `agents_auth_token_idx` is gone -- this partial unique covers
+    // both the lookup and the uniqueness invariant in one index.
+    uniqueIndex('agents_auth_token_plaintext_unique')
+      .on(table.authToken)
+      .where(sql`${table.authTokenFormat} = 'plaintext' AND ${table.authToken} IS NOT NULL`),
     // Heartbeat-monitor sweep filters by lastSeenAt to detect stale
     // agents. Without this index it does a seq scan once per sweep
     // interval (default 30s) -- linear in the agent count.
     index('agents_last_seen_at_idx').on(table.lastSeenAt),
+    // S-H2: enforce the format discriminator vocabulary at the DB
+    // level so a future bad migration or direct UPDATE can't land
+    // 'pbkdf2' or 'plain' (typo) and silently break auth routing.
+    check('agents_auth_token_format_chk', sql`${table.authTokenFormat} IN ('plaintext', 'bcrypt')`),
   ]
 )
 
