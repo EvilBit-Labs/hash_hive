@@ -1,10 +1,10 @@
 /**
- * Task retry & failure handling (CQ-H1 split).
+ * Task retry & failure handling.
  *
  * Pulled from `services/tasks.ts` to bring the parent service under the
- * 800-line budget. The retry/failure concerns -- single-task failure
- * with retry budget, the stale-task sweep with its rebalance + terminal-
- * fail branches -- form a cohesive ~400-line block; isolating them here
+ * per-file size budget. The retry/failure concerns -- single-task
+ * failure with retry budget, the stale-task sweep with its rebalance +
+ * terminal-fail branches -- form a cohesive block; isolating them here
  * makes the retry policy navigable without scrolling past generation
  * and assignment logic.
  *
@@ -176,6 +176,17 @@ type StaleTaskRow = {
 }
 
 /**
+ * Idempotency guard for per-task UPDATEs in the sweep. When the stale
+ * row carries an agentId, require the row still belongs to that agent
+ * (a concurrent sweep that already reassigned it makes our UPDATE a
+ * no-op). When the row has no agentId (legacy migrated rows),
+ * `sql\`TRUE\`` lets the status + id predicates carry the guard alone.
+ */
+function agentIdGuard(staleTask: StaleTaskRow) {
+  return staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
+}
+
+/**
  * Permanently fail a stale task and notify listeners. Three branches in
  * `reassignStaleTasks` reach a terminal state with the same row shape
  * (`failed` + reason + completedAt + updatedAt); centralising the body
@@ -205,7 +216,7 @@ async function terminalFailStaleTask(
       and(
         eq(tasks.id, staleTask.taskId),
         sql`${tasks.status} IN ('assigned', 'running')`,
-        staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
+        agentIdGuard(staleTask)
       )
     )
     .returning({ id: tasks.id })
@@ -351,7 +362,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
             and(
               eq(tasks.id, staleTask.taskId),
               sql`${tasks.status} IN ('assigned', 'running')`,
-              staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
+              agentIdGuard(staleTask)
             )
           )
           .returning({ id: tasks.id })
@@ -389,7 +400,7 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           and(
             eq(tasks.id, staleTask.taskId),
             sql`${tasks.status} IN ('assigned', 'running')`,
-            staleTask.agentId === null ? sql`TRUE` : eq(tasks.agentId, staleTask.agentId)
+            agentIdGuard(staleTask)
           )
         )
         .returning({ id: tasks.id })

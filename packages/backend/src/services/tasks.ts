@@ -24,9 +24,6 @@ import { jsonSafeBigint } from './tasks/_internals.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
 
-// Below this threshold, workRange fields can be stored as JS Number safely
-// without losing precision (Number.MAX_SAFE_INTEGER = 2^53 - 1).
-
 /**
  * Derives required capabilities from an attack's configuration.
  * Used when generating tasks so agents can be matched by capability.
@@ -735,12 +732,16 @@ export async function listTasks(filters: {
   }
 }
 
-// ─── Re-exports from ./tasks/* submodules (CQ-H1 split) ───────────
+// ─── Re-exports from ./tasks/* submodules ────────────────────────────
 //
-// The retry/failure machinery (handleTaskFailure, reassignStaleTasks,
-// MAX_RETRIES) lives in its own file so the parent service stays under
-// the 800-line budget. Re-exporting here keeps caller import paths
-// stable (services/tasks.js continues to surface the same symbols).
+// Several concerns live in their own files so this parent stays under
+// the per-file size budget. Re-exporting here is the contract — every
+// caller (including the lazy `await import('../tasks.js')` in
+// `services/agents/heartbeat.ts`, the seven `mock.module(...)` test
+// registrations against this path, and the workers + route handlers)
+// resolves through `services/tasks.js` exactly as it did before the
+// split. Keep this list complete; a missing symbol degrades the lazy
+// import silently.
 export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
 export { getZapsForTask } from './tasks/zaps.js'
 export {

@@ -1,10 +1,10 @@
 /**
- * Cracked-hash "zap" lookup for an agent's task (CQ-H1 split).
+ * Cracked-hash "zap" lookup for an agent's task.
  *
  * Pulled from `services/tasks.ts` to bring the parent service under the
- * 800-line budget. Owns the single endpoint agents call to fetch hashes
- * that have already been cracked by any campaign sharing the same hash
- * list, so they can skip work they would otherwise duplicate.
+ * per-file size budget. Owns the single endpoint agents call to fetch
+ * hashes that have already been cracked by any campaign sharing the
+ * same hash list, so they can skip work they would otherwise duplicate.
  *
  * Re-exported from `services/tasks.ts` so the agent route
  * (`routes/agent/index.ts -> getZapsForTask`) sees no change in its
@@ -16,9 +16,10 @@ import { and, eq, gt, isNotNull } from 'drizzle-orm'
 import { db } from '../../db/index.js'
 
 /**
- * Returns cracked hash values for a given task, scoped to the agent's project.
- * Used by agents to retrieve "zaps" — hashes cracked by any campaign sharing
- * the same hash list, so agents can skip already-cracked hashes.
+ * Returns "zaps" — hashes already cracked by any campaign sharing this
+ * task's hash list — so the calling agent can skip them. Project-scoped
+ * via the campaigns join so a leaked task id from another project
+ * resolves to "task not found", not a cross-project read.
  */
 export async function getZapsForTask(
   taskId: number,

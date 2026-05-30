@@ -1,10 +1,10 @@
 /**
- * Per-agent task listing + projection (CQ-H1 split).
+ * Per-agent task listing + projection.
  *
  * Pulled from `services/tasks.ts` to bring the parent service under the
- * 800-line budget. Owns the SQL join that fetches an agent's active
- * tasks for the dashboard detail view and the pure row-to-wire-shape
- * projection that's reused by tests.
+ * per-file size budget. Owns the SQL join that fetches an agent's
+ * active tasks for the dashboard detail view and the pure
+ * row-to-wire-shape projection that's reused by tests.
  *
  * Re-exported from `services/tasks.ts` so the dashboard agent route
  * (`routes/dashboard/agents.ts -> listTasksByAgent`) and the projection
