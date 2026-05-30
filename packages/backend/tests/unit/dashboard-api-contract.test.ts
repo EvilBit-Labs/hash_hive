@@ -465,4 +465,25 @@ describe('Dashboard OpenAPI ↔ code contract (issue #159 U7)', () => {
     expect(dashboardYaml).toMatch(/^\s+AuthRequired:/m)
     expect(dashboardYaml).toMatch(/^\s+Forbidden:/m)
   })
+
+  // ─── /stats — issue #161 ────────────────────────────────────────────
+  it('documents the /stats path with DashboardStats schema', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/stats:/m)
+    expect(dashboardYaml).toMatch(/^\s+DashboardStats:/m)
+  })
+
+  it('declares the Stats tag the /stats path uses', () => {
+    expect(dashboardYaml).toMatch(/^\s+- name: Stats$/m)
+  })
+
+  it('routes /stats through the cookie security scheme', () => {
+    // The /stats block declares its own `security:` because the
+    // top-level spec doesn't carry a global security default. The
+    // string match keeps this test parser-free.
+    const statsBlock = dashboardYaml.slice(
+      dashboardYaml.indexOf('  /stats:'),
+      dashboardYaml.indexOf('  /projects:')
+    )
+    expect(statsBlock).toContain('SessionCookie: []')
+  })
 })
