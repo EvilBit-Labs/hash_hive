@@ -742,11 +742,11 @@ export async function listTasks(filters: {
 // resolves through `services/tasks.js` exactly as it did before the
 // split. Keep this list complete; a missing symbol degrades the lazy
 // import silently.
-export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
-export { getZapsForTask } from './tasks/zaps.js'
 export {
   AGENT_TASK_ACTIVE_STATUSES,
   type AgentTaskActiveStatus,
   listTasksByAgent,
   projectAgentTaskRows,
 } from './tasks/agent-projection.js'
+export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
+export { getZapsForTask } from './tasks/zaps.js'
