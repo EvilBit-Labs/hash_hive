@@ -3,7 +3,17 @@ import { expect, test } from '@playwright/test'
 const TEST_EMAIL = 'test@hashhive.local'
 const TEST_PASSWORD = 'TestPassword123!'
 
-test.describe('Multi-project select flow (issue #160)', () => {
+// `serial` is the in-file half of the state-isolation answer: both tests
+// sign in as `test@hashhive.local`, and the sign-out test picks "Test
+// Project" -- which writes `users.last_project_id`. On a subsequent
+// sign-in by the same user, the BetterAuth `session.create.before` hook
+// rehydrates `session.projectId` from that column, so the multi-project
+// test would land on `/` instead of `/select-project` and time out.
+// `serial` enforces order within this file; the playwright.config.ts
+// `workers: 1` setting handles the cross-file half (smoke.spec.ts also
+// mutates `last_project_id` via the same selector flow). Both halves are
+// load-bearing until each spec has its own seeded user.
+test.describe.serial('Multi-project select flow (issue #160)', () => {
   test('multi-project login routes through selector and POSTs /projects/select', async ({
     page,
   }) => {
