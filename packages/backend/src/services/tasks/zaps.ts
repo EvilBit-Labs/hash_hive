@@ -16,6 +16,15 @@ import { and, eq, gt, isNotNull } from 'drizzle-orm'
 import { db } from '../../db/index.js'
 
 /**
+ * Hard ceiling on the number of zap rows returned per request.
+ * Caller-supplied limits above this are clamped down; below 1 are
+ * clamped up. This is the *only* bound between an agent's polling
+ * query and the SQL planner, so a malformed or hostile agent can't
+ * force a large in-memory read.
+ */
+const MAX_ZAPS_LIMIT = 10_000
+
+/**
  * Returns "zaps" — hashes already cracked by any campaign sharing this
  * task's hash list — so the calling agent can skip them. Project-scoped
  * via the campaigns join so a leaked task id from another project
@@ -27,7 +36,12 @@ export async function getZapsForTask(
   projectId: number,
   opts: { since?: Date | undefined; limit?: number | undefined } = {}
 ): Promise<{ zaps: string[]; hasMore: boolean } | { error: string }> {
-  const fetchLimit = opts.limit ?? 10_000
+  // Clamp caller-supplied limit so an agent can't force an unbounded
+  // in-memory read (the route is on a hot polling path; an agent
+  // requesting `limit=10_000_000` would pull millions of rows + map
+  // them, blocking the event loop). The default is also the ceiling.
+  const requestedLimit = opts.limit ?? MAX_ZAPS_LIMIT
+  const fetchLimit = Math.min(Math.max(requestedLimit, 1), MAX_ZAPS_LIMIT)
 
   // Single JOIN: tasks -> campaigns to get hashListId + verify ownership + project scope
   const [taskRow] = await db
@@ -57,12 +71,18 @@ export async function getZapsForTask(
     conditions.push(gt(hashItems.crackedAt, opts.since))
   }
 
-  // Fetch limit+1 to detect hasMore
+  // Fetch limit+1 to detect hasMore. Ordering uses `(crackedAt, id)`
+  // so rows that share a `crackedAt` timestamp resolve to the same
+  // order across calls; without the `id` tiebreaker the planner picks
+  // physical-storage order, which is non-deterministic. Resilient
+  // pagination across tied timestamps still needs a composite cursor
+  // on the wire (`since` is a single Date today) -- tracked in #182,
+  // which has to ship with a coordinated agent-client + OpenAPI update.
   const rows = await db
     .select({ hashValue: hashItems.hashValue })
     .from(hashItems)
     .where(and(...conditions))
-    .orderBy(hashItems.crackedAt)
+    .orderBy(hashItems.crackedAt, hashItems.id)
     .limit(fetchLimit + 1)
 
   const hasMore = rows.length > fetchLimit

@@ -45,6 +45,16 @@ export function projectAgentTaskRows(
     if (v instanceof Date) return v.toISOString()
     return v
   }
+  // Defend the AgentTaskSummary contract -- `progress` is a `z.record(...)`
+  // in @hashhive/shared, so anything that's not a plain object (legacy
+  // rows, numeric/string sentinels from an older agent, accidental
+  // arrays from a future schema regression) must collapse to `{}`
+  // rather than ride a bare cast through to consumers. The previous
+  // `(row.progress as ...) ?? {}` only filtered `null`/`undefined`.
+  const narrowProgress = (raw: unknown): Record<string, unknown> => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    return raw as Record<string, unknown>
+  }
   return rows.map((row) => ({
     id: row.id,
     campaignId: row.campaignId,
@@ -52,7 +62,7 @@ export function projectAgentTaskRows(
     attackId: row.attackId,
     attackMode: row.attackMode,
     status: row.status,
-    progress: (row.progress as Record<string, unknown> | null) ?? {},
+    progress: narrowProgress(row.progress),
     startedAt: iso(row.startedAt),
     assignedAt: iso(row.assignedAt),
   }))
