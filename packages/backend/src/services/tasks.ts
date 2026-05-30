@@ -1,4 +1,4 @@
-import type { AgentTaskSummary, AssignedTask } from '@hashhive/shared'
+import type { AssignedTask } from '@hashhive/shared'
 
 import {
   agentBenchmarks,
@@ -11,7 +11,7 @@ import {
   tasks,
   wordLists,
 } from '@hashhive/shared'
-import { and, desc, eq, gt, inArray, isNotNull, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, isNotNull, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -792,88 +792,6 @@ export async function getZapsForTask(
   return { zaps, hasMore }
 }
 
-// ─── Per-Agent Task Listing ─────────────────────────────────────────
-
-export const AGENT_TASK_ACTIVE_STATUSES = ['pending', 'assigned', 'running'] as const
-export type AgentTaskActiveStatus = (typeof AGENT_TASK_ACTIVE_STATUSES)[number]
-
-/**
- * Test-only: convert a raw join-row shape (same fields the SQL selects)
- * into the wire-shape AgentTaskSummary[]. Exported so the projection
- * logic — Date→ISO conversion, progress fallback, status preservation —
- * can be unit-tested without a database.
- */
-export function projectAgentTaskRows(
-  rows: ReadonlyArray<{
-    id: number
-    campaignId: number
-    campaignName: string
-    attackId: number
-    attackMode: number
-    status: string
-    progress: unknown
-    startedAt: Date | string | null
-    assignedAt: Date | string | null
-  }>
-): AgentTaskSummary[] {
-  const iso = (v: Date | string | null): string | null => {
-    if (v === null) return null
-    if (v instanceof Date) return v.toISOString()
-    return v
-  }
-  return rows.map((row) => ({
-    id: row.id,
-    campaignId: row.campaignId,
-    campaignName: row.campaignName,
-    attackId: row.attackId,
-    attackMode: row.attackMode,
-    status: row.status,
-    progress: (row.progress as Record<string, unknown> | null) ?? {},
-    startedAt: iso(row.startedAt),
-    assignedAt: iso(row.assignedAt),
-  }))
-}
-
-/**
- * Returns active tasks assigned to an agent (pending, assigned, running),
- * joined with campaign and attack names for display in the agent detail UI.
- *
- * Project scope is enforced at the service boundary via the campaigns
- * INNER JOIN. The caller is still expected to verify the agent itself
- * belongs to the project (404 vs leaking "this agent exists elsewhere"),
- * but the projectId predicate here is defense-in-depth.
- */
-export async function listTasksByAgent(
-  agentId: number,
-  projectId: number
-): Promise<AgentTaskSummary[]> {
-  const rows = await db
-    .select({
-      id: tasks.id,
-      campaignId: campaigns.id,
-      campaignName: campaigns.name,
-      attackId: attacks.id,
-      attackMode: attacks.mode,
-      status: tasks.status,
-      progress: tasks.progress,
-      startedAt: tasks.startedAt,
-      assignedAt: tasks.assignedAt,
-    })
-    .from(tasks)
-    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
-    .innerJoin(attacks, eq(tasks.attackId, attacks.id))
-    .where(
-      and(
-        eq(tasks.agentId, agentId),
-        eq(campaigns.projectId, projectId),
-        inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])
-      )
-    )
-    .orderBy(desc(tasks.startedAt), desc(tasks.assignedAt))
-
-  return projectAgentTaskRows(rows)
-}
-
 // ─── Re-exports from ./tasks/* submodules (CQ-H1 split) ───────────
 //
 // The retry/failure machinery (handleTaskFailure, reassignStaleTasks,
@@ -881,3 +799,9 @@ export async function listTasksByAgent(
 // the 800-line budget. Re-exporting here keeps caller import paths
 // stable (services/tasks.js continues to surface the same symbols).
 export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
+export {
+  AGENT_TASK_ACTIVE_STATUSES,
+  type AgentTaskActiveStatus,
+  listTasksByAgent,
+  projectAgentTaskRows,
+} from './tasks/agent-projection.js'
