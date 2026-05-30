@@ -11,7 +11,7 @@ import {
   tasks,
   wordLists,
 } from '@hashhive/shared'
-import { and, desc, eq, gt, isNotNull, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -735,63 +735,6 @@ export async function listTasks(filters: {
   }
 }
 
-// ─── Zap Endpoint (cracked hashes for a task) ───────────────────────
-
-/**
- * Returns cracked hash values for a given task, scoped to the agent's project.
- * Used by agents to retrieve "zaps" — hashes cracked by any campaign sharing
- * the same hash list, so agents can skip already-cracked hashes.
- */
-export async function getZapsForTask(
-  taskId: number,
-  agentId: number,
-  projectId: number,
-  opts: { since?: Date | undefined; limit?: number | undefined } = {}
-): Promise<{ zaps: string[]; hasMore: boolean } | { error: string }> {
-  const fetchLimit = opts.limit ?? 10_000
-
-  // Single JOIN: tasks -> campaigns to get hashListId + verify ownership + project scope
-  const [taskRow] = await db
-    .select({
-      taskId: tasks.id,
-      hashListId: campaigns.hashListId,
-    })
-    .from(tasks)
-    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
-    .where(
-      and(eq(tasks.id, taskId), eq(tasks.agentId, agentId), eq(campaigns.projectId, projectId))
-    )
-    .limit(1)
-
-  if (!taskRow) {
-    return { error: 'Task not found or not assigned to this agent' }
-  }
-
-  if (!taskRow.hashListId) {
-    return { zaps: [], hasMore: false }
-  }
-
-  // Build conditions for cracked hash items
-  const conditions = [eq(hashItems.hashListId, taskRow.hashListId), isNotNull(hashItems.crackedAt)]
-
-  if (opts.since) {
-    conditions.push(gt(hashItems.crackedAt, opts.since))
-  }
-
-  // Fetch limit+1 to detect hasMore
-  const rows = await db
-    .select({ hashValue: hashItems.hashValue })
-    .from(hashItems)
-    .where(and(...conditions))
-    .orderBy(hashItems.crackedAt)
-    .limit(fetchLimit + 1)
-
-  const hasMore = rows.length > fetchLimit
-  const zaps = (hasMore ? rows.slice(0, fetchLimit) : rows).map((r) => r.hashValue)
-
-  return { zaps, hasMore }
-}
-
 // ─── Re-exports from ./tasks/* submodules (CQ-H1 split) ───────────
 //
 // The retry/failure machinery (handleTaskFailure, reassignStaleTasks,
@@ -799,6 +742,7 @@ export async function getZapsForTask(
 // the 800-line budget. Re-exporting here keeps caller import paths
 // stable (services/tasks.js continues to surface the same symbols).
 export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
+export { getZapsForTask } from './tasks/zaps.js'
 export {
   AGENT_TASK_ACTIVE_STATUSES,
   type AgentTaskActiveStatus,
