@@ -266,17 +266,16 @@ describe('Dashboard stats route — auth and membership gates', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns 400 when session has no projectId', async () => {
+  it('returns 400 with PROJECT_NOT_SELECTED when session has no projectId', async () => {
     const res = await app.request(STATS_URL, {
       headers: commonHeaders(NO_PROJECT_COOKIE),
     })
-    // requireProjectAccess() returns 400 when scope is missing entirely.
-    expect([400, 403]).toContain(res.status)
+    expect(res.status).toBe(400)
     const body = (await res.json()) as { error?: { code?: string } }
-    expect(body.error?.code).toBeDefined()
+    expect(body.error?.code).toBe('PROJECT_NOT_SELECTED')
   })
 
-  it('returns 403 when authenticated global admin is not a member of session.projectId', async () => {
+  it('returns 403 with AUTHZ_PROJECT_ACCESS_DENIED when global admin is not a member of session.projectId', async () => {
     // Pins the membership-vs-global-role gate: requireProjectAccess()
     // must reject a global admin who lacks project membership. A future
     // change that stacks requireRole('admin') would otherwise create a
@@ -285,6 +284,8 @@ describe('Dashboard stats route — auth and membership gates', () => {
       headers: commonHeaders(ADMIN_NO_MEMBERSHIP_COOKIE),
     })
     expect(res.status).toBe(403)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('AUTHZ_PROJECT_ACCESS_DENIED')
   })
 })
 
@@ -380,7 +381,7 @@ describe('Dashboard stats route — response shape', () => {
     })
   })
 
-  it('buckets task DB statuses into operator-facing fields (assigned → running, exhausted → completed)', async () => {
+  it('buckets task DB statuses into operator-facing fields (assigned → running, exhausted → completed, cancelled → failed)', async () => {
     queryRows.tasks = [
       { status: 'pending', count: 1 },
       { status: 'assigned', count: 2 },
@@ -388,6 +389,7 @@ describe('Dashboard stats route — response shape', () => {
       { status: 'completed', count: 4 },
       { status: 'exhausted', count: 5 },
       { status: 'failed', count: 6 },
+      { status: 'cancelled', count: 7 },
     ]
     const res = await app.request(STATS_URL, {
       headers: commonHeaders(ADMIN_COOKIE),
@@ -395,11 +397,11 @@ describe('Dashboard stats route — response shape', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as unknown
     const parsed = dashboardStatsSchema.parse(body)
-    expect(parsed.tasks.total).toBe(21)
+    expect(parsed.tasks.total).toBe(28)
     expect(parsed.tasks.pending).toBe(1)
     expect(parsed.tasks.running).toBe(5) // assigned + running
     expect(parsed.tasks.completed).toBe(9) // completed + exhausted
-    expect(parsed.tasks.failed).toBe(6)
+    expect(parsed.tasks.failed).toBe(13) // failed + cancelled
   })
 
   it('passes unknown task DB statuses into total only', async () => {

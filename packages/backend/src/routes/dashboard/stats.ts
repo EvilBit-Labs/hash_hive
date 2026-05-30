@@ -88,13 +88,16 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
 
   // Bucket task DB statuses into the operator-facing counts that
   // `campaignTaskStatsSchema` defines: `assigned` and `running` both count
-  // as `running`; `exhausted` counts as `completed`. Unknown future
-  // statuses count only toward `total`. Same mapping as
-  // `getCampaignTaskStats` in `services/campaign-dashboard.ts`.
+  // as `running`; `exhausted` counts as `completed`; `cancelled` counts
+  // as `failed` (operators see cancelled tasks as "not coming back" the
+  // same way failed tasks are, and ETA math relies on
+  // `remaining = total - completed - failed`). Unknown future statuses
+  // count only toward `total`. Same mapping as `getCampaignTaskStats` in
+  // `services/campaign-dashboard.ts`.
   const taskPending = countFor(taskStats, 'pending')
   const taskRunning = countFor(taskStats, 'running') + countFor(taskStats, 'assigned')
   const taskCompleted = countFor(taskStats, 'completed') + countFor(taskStats, 'exhausted')
-  const taskFailed = countFor(taskStats, 'failed')
+  const taskFailed = countFor(taskStats, 'failed') + countFor(taskStats, 'cancelled')
 
   // Build the response from the shared schema's known literals; the
   // `DashboardStats` annotation makes a missing field a compile error.

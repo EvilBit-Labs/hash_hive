@@ -312,23 +312,9 @@ paths:
                     properties:
                       error:
                         properties:
-                          code: { type: string, enum: [PROJECT_CONTEXT_REQUIRED] }
+                          code: { type: string, enum: [PROJECT_NOT_SELECTED] }
         '401': { $ref: '#/components/responses/AuthRequired' }
-        '403':
-          description: |
-            Authenticated user is not a member of `session.projectId`.
-            Returned instead of `404` so the endpoint does not aid
-            project enumeration.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ErrorEnvelope'
-                  - type: object
-                    properties:
-                      error:
-                        properties:
-                          code: { type: string, enum: [FORBIDDEN] }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /projects:
     get:
