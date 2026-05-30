@@ -24,11 +24,11 @@ function buildHealth(overrides: Partial<SystemHealth> = {}): SystemHealth {
   return {
     status: 'healthy',
     timestamp: '2026-05-06T12:00:00.000Z',
-    version: '1.1.0',
+    version: '2.0.0',
     components: {
       database: { status: 'healthy', durationMs: 4 },
       redis: { status: 'healthy', durationMs: 2 },
-      minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+      object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
       queues: {
         status: 'healthy',
         durationMs: 12,
@@ -79,7 +79,7 @@ describe('SystemHealthCard', () => {
               durationMs: 4,
             },
             redis: { status: 'healthy', durationMs: 2 },
-            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
             queues: { status: 'healthy', durationMs: 12 },
           },
         }),
@@ -102,7 +102,7 @@ describe('SystemHealthCard', () => {
           components: {
             database: { status: 'healthy', durationMs: 4 },
             redis: { status: 'unhealthy', message: 'connection refused', durationMs: 2 },
-            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
             queues: { status: 'healthy', durationMs: 12 },
           },
         }),
@@ -146,7 +146,7 @@ describe('SystemHealthCard', () => {
               durationMs: 2,
               detail: { latencyMs: 800 },
             },
-            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
             queues: {
               status: 'healthy',
               durationMs: 12,
@@ -177,10 +177,10 @@ describe('SystemHealthCard', () => {
       .find((b) => b.getAttribute('aria-label')?.startsWith('Redis status:'))
     expect(redisRow?.getAttribute('aria-label')).toContain('degraded')
 
-    const minioRow = screen
+    const objectStoreRow = screen
       .getAllByRole('button')
       .find((b) => b.getAttribute('aria-label')?.startsWith('Object Storage status:'))
-    expect(minioRow?.getAttribute('aria-label')).toContain('healthy')
+    expect(objectStoreRow?.getAttribute('aria-label')).toContain('healthy')
 
     // Per-component messages render adjacent to their row.
     expect(screen.getByText('pool exhausted')).toBeDefined()
@@ -195,7 +195,7 @@ describe('SystemHealthCard', () => {
           components: {
             database: { status: 'healthy', durationMs: 4 },
             redis: { status: 'healthy', durationMs: 2 },
-            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
             queues: {
               status: 'healthy',
               durationMs: 12,
@@ -257,7 +257,7 @@ describe('SystemHealthCard', () => {
           components: {
             database: { status: 'healthy', durationMs: 4 },
             redis: { status: 'healthy', durationMs: 2 },
-            minio: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
+            object_store: { status: 'healthy', durationMs: 8, detail: { bucket: 'hashhive' } },
             queues: {
               status: 'healthy',
               durationMs: 12,

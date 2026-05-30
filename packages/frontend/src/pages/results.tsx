@@ -9,7 +9,7 @@ import { useResults, useResultsExportUrl } from '../hooks/use-results'
 import { useUiStore } from '../stores/ui'
 
 export function ResultsPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
   const limit = 50

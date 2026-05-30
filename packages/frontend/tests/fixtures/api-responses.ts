@@ -43,7 +43,7 @@ interface MockMeResponseOptions {
   user?: Partial<MockUser>
   projectCount?: number
   projects?: MockProject[]
-  selectedProjectId?: number
+  selectedProjectId?: number | null
 }
 
 export function mockMeResponse(options: MockMeResponseOptions = {}) {
@@ -56,6 +56,12 @@ export function mockMeResponse(options: MockMeResponseOptions = {}) {
       slug: `project-${i + 1}`,
       roles: ['admin'],
     }))
+
+  // Always include selectedProjectId so the response shape matches the
+  // post-#159 MeResponse contract from @hashhive/shared. Default to
+  // null (multi-project pre-selector); callers can override.
+  const selectedProjectId =
+    options.selectedProjectId === undefined ? null : options.selectedProjectId
 
   return {
     user: {
@@ -70,9 +76,7 @@ export function mockMeResponse(options: MockMeResponseOptions = {}) {
       ...options.user,
     },
     projects,
-    ...(options.selectedProjectId !== undefined
-      ? { selectedProjectId: options.selectedProjectId }
-      : {}),
+    selectedProjectId,
   }
 }
 

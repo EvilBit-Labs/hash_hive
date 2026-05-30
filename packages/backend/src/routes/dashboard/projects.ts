@@ -1,11 +1,21 @@
+import { selectProjectRequestSchema } from '@hashhive/shared'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { env } from '../../config/env.js'
+import { logger } from '../../config/logger.js'
+import { auth } from '../../lib/auth.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireParamProjectAccess, requireParamProjectRole } from '../../middleware/rbac.js'
+import {
+  requireParamMembershipRole,
+  requireParamProjectAccess,
+  requireRole,
+} from '../../middleware/rbac.js'
+import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
   createProject,
@@ -56,11 +66,210 @@ projectRoutes.get('/', async (c) => {
 })
 
 // POST /projects — create a new project
-projectRoutes.post('/', zValidator('json', createProjectSchema), async (c) => {
+//
+// Gated behind the global `admin` capability tier (users.roles). Without
+// this gate, any authenticated user (operator/analyst) could create a
+// project and was auto-granted project-admin on it -- a self-elevation
+// path that gave non-admin accounts admin-tier project RBAC primitives
+// (add/remove members, change roles, delete project). createProject
+// auto-grants admin to the creator by design; only platform admins
+// should hold that hammer.
+projectRoutes.post(
+  '/',
+  requireRole('admin'),
+  zValidator('json', createProjectSchema),
+  async (c) => {
+    const { userId } = c.get('currentUser')
+    const data = c.req.valid('json')
+    const project = await createProject({ ...data, createdBy: userId })
+    return c.json({ project }, 201)
+  }
+)
+
+// POST /projects/select — set the server-managed projectId on the
+// BetterAuth session after validating membership. Used by the
+// dashboard WebSocket upgrade (events/stream) to scope broadcasts
+// without trusting a client-supplied query param, and by the planned
+// multi-project selector UI (#160). Returns the selected project.
+//
+// CSRF defense-in-depth: this is a cookie-authenticated, state-changing
+// endpoint. BetterAuth's session cookie is SameSite=Lax by default and
+// CORS is locked down to known origins, but we add a same-origin
+// Origin/Referer check here as belt-and-suspenders. Rejects requests
+// whose Origin (or Referer when Origin is absent) doesn't match the
+// request's own Host header. Production air-gapped deployments serve
+// frontend and backend behind the same reverse proxy, so same-origin is
+// the correct invariant. Dev allows http://localhost:3000 explicitly.
+function isSameOriginRequest(c: {
+  req: { raw: Request; header: (k: string) => string | undefined }
+}): boolean {
+  const origin = c.req.header('origin')
+  const referer = c.req.header('referer')
+  const host = c.req.header('host')
+
+  // No Origin and no Referer → almost certainly not a browser form post;
+  // could be a same-origin fetch with strict referrer-policy. Allow it
+  // and rely on the SameSite cookie + CORS preflight as the primary
+  // defense. Browsers issuing cross-origin state-changing fetches will
+  // populate Origin per Fetch spec.
+  if (!origin && !referer) return true
+
+  const sourceUrl = origin ?? referer
+  if (!sourceUrl) return true
+
+  try {
+    const sourceHost = new URL(sourceUrl).host
+    // Dev exception: localhost:3000 frontend → localhost:4000 backend.
+    // Env-gated so the escape hatch can never ship to production --
+    // air-gapped deployments serve frontend and backend behind one
+    // reverse proxy and same-origin is the only legitimate path.
+    if (
+      env.NODE_ENV !== 'production' &&
+      sourceHost === 'localhost:3000' &&
+      host?.startsWith('localhost')
+    ) {
+      return true
+    }
+    return sourceHost === host
+  } catch {
+    return false
+  }
+}
+
+projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), async (c) => {
   const { userId } = c.get('currentUser')
-  const data = c.req.valid('json')
-  const project = await createProject({ ...data, createdBy: userId })
-  return c.json({ project }, 201)
+  const requestId = c.get('requestId')
+
+  if (!isSameOriginRequest(c)) {
+    logger.warn(
+      {
+        userId,
+        requestId,
+        origin: c.req.header('origin'),
+        referer: c.req.header('referer'),
+        host: c.req.header('host'),
+      },
+      'projects/select: cross-origin request rejected'
+    )
+    return dashboardError(c, 403, 'CSRF_ORIGIN_MISMATCH', 'Cross-origin request rejected')
+  }
+
+  const { projectId } = c.req.valid('json')
+
+  const membership = await findProjectMembership(userId, projectId)
+  if (!membership) {
+    return c.json(
+      {
+        error: {
+          code: 'AUTHZ_PROJECT_ACCESS_DENIED',
+          message: 'User is not a member of this project',
+        },
+      },
+      403
+    )
+  }
+
+  // The project row is guaranteed to exist here: projectUsers.projectId
+  // FKs to projects.id (NO ACTION on delete), so a successful membership
+  // lookup proves the project. Fetch it for the response payload only.
+  const project = await getProjectById(projectId)
+  if (!project) {
+    // Defensive: if the membership row exists without the project,
+    // the FK invariant is broken. Surface a 500 rather than letting
+    // updateSession proceed against a missing project reference.
+    logger.error(
+      { userId, projectId, requestId },
+      'projects/select: membership exists but project row missing (FK invariant broken)'
+    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Project row missing for membership')
+  }
+
+  // updateSession writes additionalFields.projectId on the active
+  // session row. Read by /events/stream on next WS upgrade. Wrap in
+  // try/catch so an underlying BetterAuth or FK failure surfaces as
+  // the dashboard envelope rather than a raw 500 with the driver
+  // error string. The error is captured + logged so operators can
+  // distinguish "session expired mid-call" from a real driver fault.
+  try {
+    await auth.api.updateSession({
+      headers: c.req.raw.headers,
+      body: { projectId },
+    })
+  } catch (err) {
+    logger.error({ err, userId, projectId, requestId }, 'projects/select: updateSession failed')
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to update session project')
+  }
+
+  // Persist the user's "remember last project" preference so the next
+  // sign-in rehydrates session.projectId via the session.create.before
+  // hook without forcing the user to re-pick. The conditional write is
+  // gated on membership at the SQL level (atomic against a concurrent
+  // removeUserFromProject) -- if the user lost membership between the
+  // initial check and now, the UPDATE affects 0 rows and we clear the
+  // session scope to match. Treated as part of the contract, not
+  // best-effort: a thrown error surfaces as 500 so the caller knows
+  // to retry.
+  let preferenceRowsUpdated: number
+  try {
+    preferenceRowsUpdated = await setUserLastProjectIdIfMember(userId, projectId)
+  } catch (err) {
+    logger.error(
+      { err, userId, projectId, requestId },
+      'projects/select: setUserLastProjectIdIfMember failed (session was updated but preference write failed)'
+    )
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to persist last project preference')
+  }
+  if (preferenceRowsUpdated === 0) {
+    // Membership was revoked between the original findProjectMembership
+    // check and this guarded write. The session was updated above to
+    // point at a project the user no longer belongs to; roll it back
+    // so the next request sees session.projectId=null and the dashboard
+    // routes to the selector.
+    logger.warn(
+      { userId, projectId, requestId },
+      'projects/select: membership revoked mid-request; rolling back session.projectId'
+    )
+    try {
+      await auth.api.updateSession({
+        headers: c.req.raw.headers,
+        body: { projectId: null },
+      })
+    } catch (err) {
+      // Rollback failed -- the session is now in an inconsistent state
+      // (scope still points at the forbidden project, but the user no
+      // longer has membership). 403 would be misleading (it implies
+      // the client can retry / re-select) but the session itself is
+      // poisoned and the client cannot recover without re-auth.
+      // Escalate to 500 with a distinct code so operators see this as
+      // a server-side incident and the client knows to surface a
+      // session-expired UX. The user's next dashboard request will
+      // either redirect via the 401 path on session expiry, or hit
+      // 403 PROJECT_NOT_SELECTED / AUTHZ_PROJECT_ACCESS_DENIED on the
+      // stale-scope route -- both of which the frontend already
+      // handles as "back to selector / login".
+      logger.error(
+        { err, userId, requestId },
+        'projects/select: rollback updateSession({ projectId: null }) failed; session scope is inconsistent'
+      )
+      return c.json(
+        {
+          error: {
+            code: 'AUTHZ_SESSION_ROLLBACK_FAILED',
+            message: 'Membership revoked mid-request and session rollback failed; re-authenticate.',
+          },
+        },
+        500
+      )
+    }
+    return c.json(
+      {
+        error: { code: 'AUTHZ_PROJECT_ACCESS_DENIED', message: 'Membership revoked mid-request' },
+      },
+      403
+    )
+  }
+
+  return c.json({ project })
 })
 
 // GET /projects/:projectId — get project details
@@ -69,7 +278,7 @@ projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
   const project = await getProjectById(projectId)
 
   if (!project) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
   }
 
   return c.json({ project })
@@ -78,7 +287,7 @@ projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
 // PATCH /projects/:projectId — update project (admin only)
 projectRoutes.patch(
   '/:projectId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateProjectSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -86,7 +295,7 @@ projectRoutes.patch(
     const project = await updateProject(projectId, data)
 
     if (!project) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Project not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
     }
 
     return c.json({ project })
@@ -103,7 +312,7 @@ projectRoutes.get('/:projectId/members', requireParamProjectAccess(), async (c) 
 // POST /projects/:projectId/members — add a member (admin only)
 projectRoutes.post(
   '/:projectId/members',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', addMemberSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -116,7 +325,7 @@ projectRoutes.post(
 // PATCH /projects/:projectId/members/:userId — update roles (admin only)
 projectRoutes.patch(
   '/:projectId/members/:userId',
-  requireParamProjectRole('admin'),
+  requireParamMembershipRole('admin'),
   zValidator('json', updateRolesSchema),
   async (c) => {
     const projectId = Number(c.req.param('projectId'))
@@ -125,7 +334,7 @@ projectRoutes.patch(
     const membership = await updateMemberRoles(projectId, userId, roles)
 
     if (!membership) {
-      return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
     }
 
     return c.json({ membership })
@@ -133,16 +342,20 @@ projectRoutes.patch(
 )
 
 // DELETE /projects/:projectId/members/:userId — remove a member (admin only)
-projectRoutes.delete('/:projectId/members/:userId', requireParamProjectRole('admin'), async (c) => {
-  const projectId = Number(c.req.param('projectId'))
-  const userId = Number(c.req.param('userId'))
-  const removed = await removeUserFromProject(projectId, userId)
+projectRoutes.delete(
+  '/:projectId/members/:userId',
+  requireParamMembershipRole('admin'),
+  async (c) => {
+    const projectId = Number(c.req.param('projectId'))
+    const userId = Number(c.req.param('userId'))
+    const removed = await removeUserFromProject(projectId, userId)
 
-  if (!removed) {
-    return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Membership not found' } }, 404)
+    if (!removed) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
+    }
+
+    return c.json({ success: true })
   }
-
-  return c.json({ success: true })
-})
+)
 
 export { projectRoutes }

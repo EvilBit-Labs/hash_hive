@@ -3,11 +3,12 @@ import { Outlet } from 'react-router'
 
 import logoSvg from '../../assets/logo.svg'
 import { useUiStore } from '../../stores/ui'
+import { ConnectionIndicator } from './connection-indicator'
 import { EventsProvider } from './events-provider'
 import { MobileSidebar, Sidebar } from './sidebar'
 
 export function AppLayout() {
-  const { setMobileSidebar } = useUiStore()
+  const setMobileSidebar = useUiStore((s) => s.setMobileSidebar)
 
   return (
     <EventsProvider>
@@ -28,6 +29,9 @@ export function AppLayout() {
             </button>
             <img src={logoSvg} alt="" className="h-6 w-6" />
             <span className="text-foreground text-sm font-semibold tracking-tight">HashHive</span>
+            <div className="ml-auto">
+              <ConnectionIndicator />
+            </div>
           </header>
 
           <main className="flex-1 overflow-auto px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6">

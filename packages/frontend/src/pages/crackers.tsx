@@ -149,14 +149,23 @@ function CrackersAdminView() {
           </TableHead>
           <TableBody>
             {binaries.map((binary) => {
-              const fileRef = binary.fileRef as { size?: number } | null
+              // fileRef is jsonb; narrow at use rather than asserting a shape
+              // so the no-unsafe-type-assertion lint stays satisfied.
+              const fileRefValue = binary.fileRef
+              const fileSize =
+                fileRefValue !== null &&
+                typeof fileRefValue === 'object' &&
+                'size' in fileRefValue &&
+                typeof fileRefValue.size === 'number'
+                  ? fileRefValue.size
+                  : undefined
               return (
                 <TableRow key={binary.id}>
                   <Td>{binary.engine}</Td>
                   <Td>{binary.version}</Td>
                   <Td>{binary.platform}</Td>
                   <Td>{binary.isActive ? 'Active' : 'Inactive'}</Td>
-                  <Td>{formatFileSize(fileRef?.size)}</Td>
+                  <Td>{formatFileSize(fileSize)}</Td>
                   <Td>{formatDate(binary.createdAt)}</Td>
                   <Td>
                     <div className="flex gap-1.5">

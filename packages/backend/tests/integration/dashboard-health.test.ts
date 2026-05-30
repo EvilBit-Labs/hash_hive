@@ -7,7 +7,7 @@
  *     when authenticated
  *
  * Mocks BetterAuth and storage so the test does not depend on real
- * Postgres / Redis / MinIO availability.
+ * Postgres / Redis / object-store availability.
  */
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
@@ -106,14 +106,18 @@ describe('GET /api/v1/dashboard/health', () => {
     // Top-level envelope
     expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status)
     expect(typeof body.timestamp).toBe('string')
-    expect(body.version).toBe('1.1.0')
+    expect(body.version).toBe('2.0.0')
 
     // All four components present. Bracket notation per
     // `noPropertyAccessFromIndexSignature` (Record<string, …>).
     expect(body.components['database']).toBeDefined()
     expect(body.components['redis']).toBeDefined()
-    expect(body.components['minio']).toBeDefined()
+    expect(body.components['object_store']).toBeDefined()
     expect(body.components['queues']).toBeDefined()
+    // Regression guard for issue #156 AC 4.3: the legacy `minio` key
+    // must not reappear on the rich envelope. Symmetric with the
+    // legacy /health absence assertion in tests/unit/health.test.ts.
+    expect(body.components['minio']).toBeUndefined()
 
     // Per-component status uses the new three-tier enum
     for (const c of Object.values(body.components)) {
@@ -130,8 +134,8 @@ describe('GET /api/v1/dashboard/health', () => {
     const body = (await res.json()) as {
       components: Record<string, { detail?: Record<string, unknown> }>
     }
-    // MinIO probe is mocked to connected, so detail should include the bucket name
-    expect(body.components['minio']?.detail?.['bucket']).toBe('hashhive-test')
+    // Object-store probe is mocked to connected, so detail should include the bucket name
+    expect(body.components['object_store']?.detail?.['bucket']).toBe('hashhive-test')
   })
 
   // PR review I-1: the dashboard surface intentionally exposes the rich
@@ -166,10 +170,10 @@ describe('GET /api/v1/dashboard/health', () => {
 
     // The contract under test: every non-healthy component carries a
     // `message` (required by the ComponentHealth discriminated union).
-    // `detail` is optional per probe — redis omits it, queues+minio
+    // `detail` is optional per probe — redis omits it, queues+object_store
     // include it — so we only assert message presence on the
     // first-non-healthy. Detail is asserted on the queues path (which
-    // always carries `{ queues: {} }`) and the minio path (which always
+    // always carries `{ queues: {} }`) and the object_store path (which always
     // carries `{ bucket }`) below.
     const nonHealthy = Object.values(body.components).find((c) => c.status !== 'healthy')
     expect(nonHealthy).toBeDefined()
@@ -186,9 +190,9 @@ describe('GET /api/v1/dashboard/health', () => {
     if (queues && queues.status !== 'healthy') {
       expect(queues.detail).toBeDefined()
     }
-    // minio probe is stubbed, so its detail.bucket is reliably present
+    // object_store probe is stubbed, so its detail.bucket is reliably present
     // — proves the dashboard surface keeps the field that the public
     // envelope is allowed to strip.
-    expect(body.components['minio']?.detail?.['bucket']).toBe('hashhive-test')
+    expect(body.components['object_store']?.detail?.['bucket']).toBe('hashhive-test')
   })
 })

@@ -199,6 +199,75 @@ export const hashCandidateSchema = z.object({
   confidence: z.number().min(0).max(1),
 })
 
+// ─── Resource Management API wire shapes ────────────────────────────
+// Promoted from inline route definitions per AGENTS.md (wire shapes
+// live in @hashhive/shared as z.infer from Zod schemas). Used by both
+// backend route handlers (zValidator + handler bodies) and frontend
+// hooks (TanStack Query type narrowing).
+
+/**
+ * Shape of the JSONB written to `hash_lists.statistics` by the
+ * hash-list parser worker (and merged with live counts by the dashboard
+ * GET /hash-lists/:id route).
+ */
+export const hashListStatisticsSchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  crackedCount: z.number().int().nonnegative(),
+  crackRate: z.number().min(0).max(1),
+  lastUpdated: z.string().datetime().optional(),
+})
+
+/**
+ * Legacy JSON body for `POST /api/v1/dashboard/resources/hash-lists`
+ * (create-empty path). Multipart one-shot uploads are validated inline
+ * in the route because Hono's zValidator binds per content-type.
+ */
+export const createHashListRequestSchema = z.object({
+  name: z.string().min(1).max(255),
+  hashTypeId: z.number().int().positive().optional(),
+  source: z.string().max(50).optional(),
+})
+
+/**
+ * Request body for `POST /api/v1/dashboard/resources/detect-hash-type`.
+ * Capped at 100 hashes per call to bound CPU on the synchronous regex
+ * matcher in `hash-analysis.ts`.
+ */
+export const detectHashTypeRequestSchema = z.object({
+  hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
+})
+
+/**
+ * Response from `POST /api/v1/dashboard/resources/detect-hash-type`.
+ * One entry per input hash; candidates ordered by confidence DESC.
+ */
+export const detectHashTypeResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      hashValue: z.string(),
+      candidates: z.array(hashCandidateSchema),
+    })
+  ),
+})
+
+/**
+ * Payload shape of `resource_update` events emitted by the hash-list
+ * parser worker. Discriminated on `action` so subscribers can switch on
+ * the terminal-state branch.
+ */
+export const resourceUpdateEventDataSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('hash_list_ready'),
+    hashListId: z.number().int().positive(),
+    statistics: hashListStatisticsSchema,
+  }),
+  z.object({
+    action: z.literal('hash_list_failed'),
+    hashListId: z.number().int().positive(),
+    error: z.string(),
+  }),
+])
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
@@ -435,6 +504,56 @@ export const agentHeartbeatSchema = z.object({
   currentTask: agentHeartbeatCurrentTaskSchema.optional(),
   error: agentHeartbeatErrorSchema.optional(),
 })
+
+/**
+ * Heartbeat response payload. `acknowledged` is always `true` on a 200
+ * response (the server accepts the heartbeat). `hasHighPriorityTasks` is
+ * set to `true` when pending high-priority tasks exist for the agent's
+ * project and capabilities, inviting the agent to request a task
+ * immediately rather than waiting for the next assignment poll. The
+ * field is **omitted** (not `false`) when no high-priority work is
+ * available — agents must treat absence as "no priority signal" rather
+ * than receive an explicit negative.
+ *
+ * This is the shared wire contract; the OpenAPI spec at
+ * `packages/openapi/agent-api.yaml` mirrors this shape, and the contract
+ * test in `tests/unit/agent-api-contract.test.ts` parses real route
+ * responses through this schema to prove the route ↔ shared ↔ OpenAPI
+ * triple stays in sync. `.strict()` matches the OpenAPI default of
+ * closed objects — extra fields fail parse rather than slip through.
+ */
+export const agentHeartbeatResponseSchema = z
+  .object({
+    acknowledged: z.literal(true),
+    // Literal `true` (not `boolean`) so the schema mirrors the OpenAPI
+    // `enum: [true]` constraint. The schema enforces that *if* the field
+    // is present its value is `true`; the omit-when-false **policy**
+    // itself lives in the route's conditional spread at
+    // `routes/agent/index.ts:103-106`. A future regression that builds
+    // the body as `{ hasHighPriorityTasks: someBool }` fails to type-check
+    // against the inferred `true | undefined`.
+    hasHighPriorityTasks: z.literal(true).optional(),
+  })
+  .strict()
+
+// ─── System Health API ─────────────────────────────────────────────
+
+/**
+ * Wire identifiers for the four health components surfaced on
+ * `/api/v1/control/health`, `/api/v1/dashboard/health`, and the legacy
+ * public `/health` envelope. Renamed in issue #156 (HEALTH_VERSION 2.0.0):
+ * the prior `'minio'` placeholder was dropped in favor of the neutral
+ * `'object_store'` so the wire shape stays vendor-agnostic across
+ * SeaweedFS and any future hosted AWS S3 deploy.
+ *
+ * Single source of truth — backend `services/health.ts`, frontend
+ * `hooks/use-system-health.ts`, and the OpenAPI control spec all
+ * consume this schema (per AGENTS.md "Wire shapes live in @hashhive/shared").
+ */
+export const componentNameSchema = z.enum(['database', 'redis', 'object_store', 'queues'])
+
+/** Three-tier component status used on the rich SystemHealth envelope. */
+export const componentStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy'])
 
 // ─── Cracker Check-Update API ───────────────────────────────────────
 
@@ -678,4 +797,100 @@ export const campaignDetailPayloadSchema = z.object({
   attacks: z.array(campaignAttackRowSchema),
   taskStats: campaignTaskStatsSchema,
   activeAgents: z.array(campaignActiveAgentSchema),
+})
+
+// ─── Realtime / WebSocket connection ────────────────────────────────
+
+/**
+ * The connection-status state machine surfaced by `useEvents` and
+ * consumed by the layout-level connection indicator. The six states are
+ * the only values the hook will ever emit; consumers can safely switch
+ * exhaustively on them.
+ */
+export const connectionStatusSchema = z.enum([
+  'connecting',
+  'open',
+  'authenticating',
+  'reconnecting',
+  'fallback',
+  'error',
+])
+
+/**
+ * Request body for `POST /api/v1/dashboard/projects/select`. Sets the
+ * server-managed `projectId` on the BetterAuth session after validating
+ * project membership.
+ */
+export const selectProjectRequestSchema = z
+  .object({
+    projectId: z.number().int().positive(),
+  })
+  .strict()
+
+// ─── Session User / Global RBAC ─────────────────────────────────────
+
+/**
+ * Global capability tier for the dashboard API. Stored on `users.roles`
+ * and surfaced on `session.user.roles` via BetterAuth. Distinct from
+ * `project_users.roles` (per-project membership: admin|contributor|viewer)
+ * which gates "what can this account do *within this project*".
+ *
+ * - `admin`    full access incl. user/project/cracker-binary admin
+ * - `operator` campaigns + resources (incl. run/stop/delete)
+ * - `analyst`  create + view; no destructive ops
+ */
+export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
+
+/**
+ * Wire-shape contract for the active session as exposed to the
+ * frontend. `selectedProjectId` is the server-managed scope, sourced
+ * from `session.session.projectId` -- never trust a client-supplied
+ * header for project scope on the dashboard surface.
+ *
+ * NOTE: this is NOT the same shape as `meResponseSchema.user` (which
+ * uses `id`/`name`/`status` and does not carry `selectedProjectId` --
+ * the top-level `meResponseSchema.selectedProjectId` carries it
+ * instead). `sessionUserSchema` is reserved for future session-payload
+ * contracts (e.g. a Control-API `/users/me` enriched with scope).
+ *
+ * Also NOT the same shape as the backend internal
+ * `AppEnv['Variables']['currentUser']`, which stores the same scope
+ * under the internal field name `projectId` (no `selected` prefix).
+ * Cross-boundary code consumes `SessionUser` (Zod-validated); internal
+ * backend code reads `currentUser.projectId`.
+ */
+export const sessionUserSchema = z.object({
+  userId: z.number().int().positive(),
+  email: z.email(),
+  roles: z.array(userRoleSchema).min(1),
+  selectedProjectId: z.number().int().positive().nullable(),
+})
+
+/**
+ * Response body for `GET /api/v1/dashboard/auth/me`. `selectedProjectId`
+ * is added by issue #159 so the frontend can decide "land on dashboard
+ * vs project selector" in a single round-trip without waiting for the
+ * WebSocket subscription to hydrate `useUiStore.selectedProjectId`.
+ */
+export const meResponseSchema = z.object({
+  user: z.object({
+    id: z.number().int().positive(),
+    email: z.email(),
+    name: z.string(),
+    status: z.string(),
+    roles: z.array(userRoleSchema).min(1),
+  }),
+  projects: z.array(
+    z.object({
+      id: z.number().int().positive(),
+      name: z.string(),
+      slug: z.string(),
+      // Per-project membership roles -- distinct vocabulary from
+      // userRoleSchema (global tier). Kept as z.string() so the
+      // shared schema is not coupled to today's three-value enum if
+      // per-project roles evolve independently.
+      roles: z.array(z.string()).min(1),
+    })
+  ),
+  selectedProjectId: z.number().int().positive().nullable(),
 })

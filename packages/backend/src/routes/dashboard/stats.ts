@@ -14,10 +14,9 @@ statsRoutes.use('*', requireSession)
 
 // GET /stats — project-scoped dashboard statistics
 statsRoutes.get('/', requireProjectAccess(), async (c) => {
-  const { projectId } = c.get('currentUser')
-  if (!projectId) {
-    return c.json({ error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } }, 400)
-  }
+  // requireProjectAccess sets scopedUser; non-null assertion encodes
+  // the middleware contract (CQ-H3).
+  const { projectId } = c.get('scopedUser')!
 
   const [agentStats, campaignStats, taskStats, crackedStats] = await Promise.all([
     // Agent counts by status

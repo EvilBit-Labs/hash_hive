@@ -13,8 +13,9 @@ import { z } from 'zod'
 import type { AppEnv } from '../../types.js'
 
 import { db } from '../../db/index.js'
+import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireRole } from '../../middleware/rbac.js'
+import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
   createAttackTemplate,
   DuplicateAttackTemplateNameError,
@@ -131,15 +132,8 @@ attackTemplateRoutes.get(
   requireProjectAccess(),
   zValidator('query', listTemplatesQuerySchema),
   async (c) => {
-    const { projectId } = c.get('currentUser')
+    const { projectId } = c.get('scopedUser')!
     const { limit, offset } = c.req.valid('query')
-
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
 
     const result = await listAttackTemplates({ projectId, limit, offset })
     return c.json(result)
@@ -148,17 +142,11 @@ attackTemplateRoutes.get(
 
 attackTemplateRoutes.post(
   '/',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', createAttackTemplateRequestSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { userId, projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { userId, projectId } = c.get('scopedUser')!
 
     const refError = await validateTemplateReferences(data, projectId)
     if (refError) {
@@ -170,7 +158,7 @@ attackTemplateRoutes.post(
       return c.json({ template }, 201)
     } catch (error) {
       if (error instanceof DuplicateAttackTemplateNameError) {
-        return c.json({ error: { code: 'DUPLICATE_NAME', message: error.message } }, 409)
+        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
       }
       throw error
     }
@@ -186,18 +174,12 @@ attackTemplateRoutes.get(
     const template = await getAttackTemplateById(id)
 
     if (!template) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const { projectId } = c.get('currentUser')
     if (template.projectId !== projectId) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     return c.json({ template })
@@ -206,7 +188,7 @@ attackTemplateRoutes.get(
 
 attackTemplateRoutes.patch(
   '/:id',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('param', templateIdParamSchema),
   zValidator('json', updateTemplateSchema),
   async (c) => {
@@ -214,18 +196,12 @@ attackTemplateRoutes.patch(
     const template = await getAttackTemplateById(id)
 
     if (!template) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const { projectId } = c.get('currentUser')
     if (template.projectId !== projectId) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const data = c.req.valid('json')
@@ -239,16 +215,13 @@ attackTemplateRoutes.patch(
       const updated = await updateAttackTemplate(id, data)
 
       if (!updated) {
-        return c.json(
-          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-          404
-        )
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
       }
 
       return c.json({ template: updated })
     } catch (error) {
       if (error instanceof DuplicateAttackTemplateNameError) {
-        return c.json({ error: { code: 'DUPLICATE_NAME', message: error.message } }, 409)
+        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
       }
       throw error
     }
@@ -257,25 +230,19 @@ attackTemplateRoutes.patch(
 
 attackTemplateRoutes.delete(
   '/:id',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('param', templateIdParamSchema),
   async (c) => {
     const { id } = c.req.valid('param')
     const template = await getAttackTemplateById(id)
 
     if (!template) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const { projectId } = c.get('currentUser')
     if (template.projectId !== projectId) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     await deleteAttackTemplate(id)
@@ -287,17 +254,11 @@ attackTemplateRoutes.delete(
 
 attackTemplateRoutes.post(
   '/import',
-  requireRole('admin', 'contributor'),
+  requireMembershipRole('admin', 'contributor'),
   zValidator('json', importTemplateSchema),
   async (c) => {
     const data = c.req.valid('json')
-    const { userId, projectId } = c.get('currentUser')
-    if (!projectId) {
-      return c.json(
-        { error: { code: 'PROJECT_NOT_SELECTED', message: 'No project selected' } },
-        400
-      )
-    }
+    const { userId, projectId } = c.get('scopedUser')!
 
     const refError = await validateTemplateReferences(data, projectId)
     if (refError) {
@@ -309,7 +270,7 @@ attackTemplateRoutes.post(
       return c.json({ template }, 201)
     } catch (error) {
       if (error instanceof DuplicateAttackTemplateNameError) {
-        return c.json({ error: { code: 'DUPLICATE_NAME', message: error.message } }, 409)
+        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
       }
       throw error
     }
@@ -327,18 +288,12 @@ attackTemplateRoutes.post(
     const template = await getAttackTemplateById(id)
 
     if (!template) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const { projectId } = c.get('currentUser')
     if (template.projectId !== projectId) {
-      return c.json(
-        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Attack template not found' } },
-        404
-      )
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
     const attack = extractAttackPayload(template)

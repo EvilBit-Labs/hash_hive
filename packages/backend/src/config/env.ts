@@ -11,6 +11,16 @@ const envSchema = z.object({
 
   // PostgreSQL
   DATABASE_URL: z.string().url(),
+  // Connection pool sizing. Default 50 covers request handlers,
+  // BullMQ workers (which currently share this pool), and the
+  // health/heartbeat sweeps. Pre-#159 baseline of 20 saturated under
+  // ~50 concurrent dashboard users + hash-list parser streaming.
+  // Operators with heavier loads can bump via env.
+  DATABASE_POOL_MAX: z.coerce.number().int().min(5).max(500).default(50),
+  // Idle connections returned to the pool after this many seconds.
+  // postgres.js default is 0 (no idle), but a non-zero idle keeps
+  // warm connections around for burst traffic.
+  DATABASE_IDLE_TIMEOUT: z.coerce.number().int().min(0).default(30),
 
   // Redis
   REDIS_URL: z.string().url(),

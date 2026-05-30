@@ -125,7 +125,7 @@ describe('GET /api/v1/control/health', () => {
         components: Record<string, { status: string; durationMs: number }>
       }
       expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status)
-      expect(body.version).toBe('1.1.0')
+      expect(body.version).toBe('2.0.0')
       expect(typeof body.timestamp).toBe('string')
       // All four components present — same shape as the dashboard surface,
       // unlike the public /health envelope. Bracket notation per
@@ -133,8 +133,12 @@ describe('GET /api/v1/control/health', () => {
       // it).
       expect(body.components['database']).toBeDefined()
       expect(body.components['redis']).toBeDefined()
-      expect(body.components['minio']).toBeDefined()
+      expect(body.components['object_store']).toBeDefined()
       expect(body.components['queues']).toBeDefined()
+      // Regression guard for issue #156 AC 4.3: the legacy `minio` key
+      // must not reappear on the rich envelope. Symmetric with the
+      // legacy /health absence assertion in tests/unit/health.test.ts.
+      expect(body.components['minio']).toBeUndefined()
       // Per-component status uses the three-tier enum
       for (const c of Object.values(body.components)) {
         expect(['healthy', 'degraded', 'unhealthy']).toContain(c.status)

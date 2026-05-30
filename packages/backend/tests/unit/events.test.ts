@@ -141,7 +141,7 @@ describe('broadcastSystemEvent', () => {
     const id = trackedRegister(closedWs, [1])
     const before = getClientCount()
 
-    broadcastSystemEvent('system_health', { component: 'minio', status: 'unhealthy' })
+    broadcastSystemEvent('system_health', { component: 'object_store', status: 'unhealthy' })
 
     expect(closedWs.sent).toHaveLength(0)
     expect(getClientCount()).toBe(before - 1)

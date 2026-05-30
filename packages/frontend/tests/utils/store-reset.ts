@@ -13,13 +13,24 @@ export function resetAuthStore() {
 }
 
 /**
- * Reset the UI store to its default state.
+ * Reset the UI store to its default state and clear persisted preferences.
+ *
+ * The store uses zustand/middleware `persist` under the key
+ * `hashhive.ui.v1`. Without clearing localStorage between tests, a
+ * test that writes `rememberLastProject = true` would leak into
+ * subsequent tests' initial state.
  */
 export function resetUiStore() {
   useUiStore.setState({
     selectedProjectId: null,
     sidebarOpen: true,
+    mobileSidebarOpen: false,
+    rememberLastProject: false,
+    lastProjectId: null,
   })
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.removeItem('hashhive.ui.v1')
+  }
 }
 
 /**

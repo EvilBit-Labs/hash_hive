@@ -64,6 +64,48 @@
       "when": 1779426146854,
       "tag": "0008_gifted_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779750344592,
+      "tag": "0009_dapper_blazing_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779776707534,
+      "tag": "0010_salty_blazing_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780012185978,
+      "tag": "0011_bent_mephistopheles",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1780015972677,
+      "tag": "0012_illegal_brood",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780094907621,
+      "tag": "0013_known_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780099711313,
+      "tag": "0014_silky_multiple_man",
+      "breakpoints": true
     }
   ]
 }

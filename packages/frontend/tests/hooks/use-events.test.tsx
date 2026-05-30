@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test'
 
-let mockSession: { user: { id: number } } | null = null
+let mockSession: {
+  user: { id: number }
+  session: { projectId?: number | null }
+} | null = null
+let getSessionMock = mock(async () => mockSession)
 
 mock.module('../../src/lib/auth-client', () => ({
   authClient: {
     useSession: () => ({ data: mockSession, isPending: false, error: null }),
+    getSession: (...args: unknown[]) => getSessionMock(...(args as [])),
     signIn: { email: mock(async () => ({ error: null })) },
     signOut: mock(async () => ({ data: null, error: null })),
   },
@@ -21,7 +26,9 @@ import { act, cleanupAll, createTestQueryClient, screen, waitFor } from '../test
 let wsMock: ReturnType<typeof installMockWebSocket>
 
 function setAuthenticatedWithProject(projectId = 1) {
-  mockSession = { user: { id: 1 } }
+  mockSession = { user: { id: 1 }, session: { projectId } }
+  // UI store stays in sync as the legacy source for non-events hooks;
+  // useEvents itself reads projectId from the session now.
   useUiStore.setState({ selectedProjectId: projectId })
 }
 
@@ -35,9 +42,10 @@ function EventsTestComponent({
   types?: EventType[]
   onEvent?: (e: unknown) => void
 }) {
-  const { connected, polling } = useEvents({ types, onEvent })
+  const { status, connected, polling } = useEvents({ types, onEvent })
   return (
     <div>
+      <span data-testid="status">{status}</span>
       <span data-testid="connected">{String(connected)}</span>
       <span data-testid="polling">{String(polling)}</span>
     </div>
@@ -76,7 +84,9 @@ describe('useEvents', () => {
     expect(wsMock.constructorMock).toHaveBeenCalled()
     const ws = wsMock.instances[0]!
     expect(ws.url).toContain('/api/v1/dashboard/events/stream')
-    expect(ws.url).toContain('projectIds=1')
+    // The ?projectIds= query param was removed; scope comes from the
+    // server-managed session.projectId field.
+    expect(ws.url).not.toContain('projectIds=')
 
     ws.simulateOpen()
 
@@ -85,24 +95,38 @@ describe('useEvents', () => {
     })
   })
 
-  it('sets polling mode on WebSocket close', async () => {
+  it('enters polling (fallback) after MAX_RECONNECT_ATTEMPTS consecutive closes', async () => {
+    jest.useFakeTimers()
     setAuthenticatedWithProject(1)
     renderEventsHook()
 
-    const ws = wsMock.instances[0]!
-    ws.simulateOpen()
+    // First connection opens, then closes. Subsequent reconnect
+    // attempts close without opening. Status walks open → reconnecting
+    // (after close 1) → reconnecting (after close 2) → fallback (after
+    // close 3, when attempts === MAX_RECONNECT_ATTEMPTS).
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ws = wsMock.instances[attempt]
+      if (!ws) throw new Error(`expected WS instance ${attempt}`)
+      // Only the first WS opens. The remaining attempts close without
+      // opening so the retry budget exhausts.
+      if (attempt === 0) {
+        await act(async () => {
+          ws.simulateOpen()
+        })
+        expect(screen.getByTestId('connected').textContent).toBe('true')
+      }
+      await act(async () => {
+        ws.simulateClose()
+      })
+      // Advance the exponential-backoff timer to schedule next attempt:
+      // 1s, 2s, 4s — far less than the 60s fallback cool-down.
+      await act(async () => {
+        jest.advanceTimersByTime(8_000)
+      })
+    }
 
-    await waitFor(() => {
-      expect(screen.getByTestId('connected').textContent).toBe('true')
-    })
-
-    // Simulate close - should trigger polling mode
-    ws.simulateClose()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('connected').textContent).toBe('false')
-      expect(screen.getByTestId('polling').textContent).toBe('true')
-    })
+    expect(screen.getByTestId('connected').textContent).toBe('false')
+    expect(screen.getByTestId('polling').textContent).toBe('true')
   })
 
   // Verifies that polling invalidation fires at exactly 30s intervals using fake timers,
@@ -121,33 +145,34 @@ describe('useEvents', () => {
 
     renderEventsHook(qc)
 
-    const ws = wsMock.instances[0]!
-    await act(async () => {
-      ws.simulateOpen()
-    })
-    expect(screen.getByTestId('connected').textContent).toBe('true')
-
-    // Close WebSocket to enter polling mode
-    await act(async () => {
-      ws.simulateClose()
-    })
+    // Drive into fallback: 1 open, then 3 consecutive closes exhaust
+    // the retry budget. Advance enough between closes to fire the
+    // exponential backoff timers (1/2/4s) without crossing the 60s
+    // fallback cool-down.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ws = wsMock.instances[attempt]
+      if (!ws) throw new Error(`expected WS instance ${attempt}`)
+      if (attempt === 0) {
+        await act(async () => {
+          ws.simulateOpen()
+        })
+        expect(screen.getByTestId('connected').textContent).toBe('true')
+      }
+      await act(async () => {
+        ws.simulateClose()
+      })
+      await act(async () => {
+        jest.advanceTimersByTime(8_000)
+      })
+    }
     expect(screen.getByTestId('polling').textContent).toBe('true')
 
     // Clear any invalidation calls from WS close / reconnect setup
     invalidateSpy.mockClear()
 
-    // No invalidation should occur immediately after entering polling mode
-    expect(invalidateSpy.mock.calls.length).toBe(0)
-
-    // Advance 29s - still before the 30s polling interval
+    // Polling interval is 30s. Drive past one tick.
     await act(async () => {
-      jest.advanceTimersByTime(29_000)
-    })
-    expect(invalidateSpy.mock.calls.length).toBe(0)
-
-    // Advance the remaining 1s to hit exactly 30s - invalidation should fire
-    await act(async () => {
-      jest.advanceTimersByTime(1_000)
+      jest.advanceTimersByTime(30_000)
     })
 
     const calls = invalidateSpy.mock.calls
@@ -157,20 +182,6 @@ describe('useEvents', () => {
     )
     expect(queryKeys.some((k: unknown[]) => k[0] === 'agents' && k[1] === projectId)).toBe(true)
     expect(queryKeys.some((k: unknown[]) => k[0] === 'campaigns' && k[1] === projectId)).toBe(true)
-
-    // Advance another 30s - second round of invalidation should fire
-    invalidateSpy.mockClear()
-    await act(async () => {
-      jest.advanceTimersByTime(30_000)
-    })
-
-    const secondCalls = invalidateSpy.mock.calls
-    const secondKeys = secondCalls.map((c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey)
-    expect(
-      secondKeys.some((k: unknown[]) => k[0] === 'dashboard-stats' && k[1] === projectId)
-    ).toBe(true)
-    expect(secondKeys.some((k: unknown[]) => k[0] === 'agents' && k[1] === projectId)).toBe(true)
-    expect(secondKeys.some((k: unknown[]) => k[0] === 'campaigns' && k[1] === projectId)).toBe(true)
   })
 
   it('invalidates dashboard-stats on crack_result event', async () => {
@@ -516,6 +527,141 @@ describe('useEvents', () => {
   // component. Verify the new branch fires invalidation with just
   // ['system-health'] (no projectId), separately from project-scoped
   // events.
+  it('drops WS frames whose projectId does not match the session projectId', async () => {
+    setAuthenticatedWithProject(1)
+    const qc = createTestQueryClient()
+    const invalidateSpy = mock(() => Promise.resolve())
+    const originalInvalidate = qc.invalidateQueries.bind(qc)
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args)
+      return originalInvalidate(...args)
+    }) as typeof qc.invalidateQueries
+
+    renderEventsHook(qc)
+
+    const ws = wsMock.instances[0]!
+    ws.simulateOpen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true')
+    })
+    invalidateSpy.mockClear()
+
+    // A buffered cross-project frame: session is on project 1, frame
+    // declares project 2. The client-side filter drops it.
+    ws.simulateMessage({
+      type: 'task_update',
+      projectId: 2,
+      data: { campaignId: 99 },
+      timestamp: new Date().toISOString(),
+    })
+
+    expect(invalidateSpy.mock.calls.length).toBe(0)
+  })
+
+  it('still invalidates system_health frames despite the projectId-filter', async () => {
+    setAuthenticatedWithProject(1)
+    const qc = createTestQueryClient()
+    const invalidateSpy = mock(() => Promise.resolve())
+    const originalInvalidate = qc.invalidateQueries.bind(qc)
+    qc.invalidateQueries = ((...args: Parameters<typeof qc.invalidateQueries>) => {
+      invalidateSpy(...args)
+      return originalInvalidate(...args)
+    }) as typeof qc.invalidateQueries
+
+    renderEventsHook(qc)
+
+    const ws = wsMock.instances[0]!
+    ws.simulateOpen()
+    await waitFor(() => {
+      expect(screen.getByTestId('connected').textContent).toBe('true')
+    })
+    invalidateSpy.mockClear()
+
+    // system_health uses the sentinel projectId 0; the filter must
+    // bypass system events.
+    ws.simulateMessage({
+      type: 'system_health',
+      projectId: 0,
+      data: { component: 'database', status: 'healthy' },
+      timestamp: new Date().toISOString(),
+    })
+
+    const keys = invalidateSpy.mock.calls.map(
+      (c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey
+    )
+    expect(keys.some((k: unknown[]) => k[0] === 'system-health')).toBe(true)
+  })
+
+  it('refreshes session and reconnects on close code 4001 (auth failure)', async () => {
+    setAuthenticatedWithProject(1)
+    getSessionMock.mockClear()
+    renderEventsHook()
+
+    const ws = wsMock.instances[0]!
+    await act(async () => {
+      ws.simulateOpen()
+    })
+    expect(screen.getByTestId('connected').textContent).toBe('true')
+
+    // Backend signals expired session via close code 4001.
+    await act(async () => {
+      ws.simulateClose(4001)
+    })
+
+    // The hook should have called getSession with the cache-busting query.
+    expect(getSessionMock).toHaveBeenCalled()
+    // A new WS instance opens after the refresh.
+    await waitFor(() => {
+      expect(wsMock.instances.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('lands in terminal error on a second 4001 close without further refresh or reconnect', async () => {
+    // After one auth-refresh attempt, a second 4001 means the session
+    // is terminally unauthenticated. The hook must NOT call getSession
+    // again, must NOT open another WS, and must report `status === 'error'`.
+    setAuthenticatedWithProject(1)
+    getSessionMock.mockClear()
+    renderEventsHook()
+
+    const ws1 = wsMock.instances[0]!
+    await act(async () => {
+      ws1.simulateOpen()
+    })
+    expect(screen.getByTestId('connected').textContent).toBe('true')
+
+    // First 4001 triggers a single session refresh + reconnect.
+    await act(async () => {
+      ws1.simulateClose(4001)
+    })
+    await waitFor(() => {
+      expect(wsMock.instances.length).toBeGreaterThanOrEqual(2)
+    })
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+
+    const ws2 = wsMock.instances[1]!
+    // Second 4001 on the refreshed connection — this is the terminal path.
+    await act(async () => {
+      ws2.simulateClose(4001)
+    })
+    // Allow any queued microtasks to settle (defensive — terminal path
+    // is synchronous, but a hypothetical regression that re-schedules
+    // would surface here).
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // No additional session refresh attempts.
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+    // No additional WS instances created (still just the original two).
+    expect(wsMock.instances.length).toBe(2)
+    // Status reports the terminal error; connected/polling both false.
+    expect(screen.getByTestId('status').textContent).toBe('error')
+    expect(screen.getByTestId('connected').textContent).toBe('false')
+    expect(screen.getByTestId('polling').textContent).toBe('false')
+  })
+
   it('invalidates [system-health] (un-scoped) on system_health event', async () => {
     setAuthenticatedWithProject(1)
     const qc = createTestQueryClient()

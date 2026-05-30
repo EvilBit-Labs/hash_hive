@@ -2,6 +2,12 @@
 
 HashHive is a distributed password-cracking platform that orchestrates [hashcat](https://hashcat.net/) across multiple agents on a private LAN. It's a 2026 TypeScript reimplementation of [CipherSwarm](https://github.com/unclesp1d3r/CipherSwarm), built for air-gapped lab environments.
 
+## Operator Console
+
+![Operator console: login, project selection, dashboard, logout](docs/feature_demo/operator-console-login.gif)
+
+Multi-project sign-in flow: login → project selector (with "remember this project on next sign-in") → dashboard → sidebar sign-out. Captured via the e2e harness in `packages/frontend/e2e/demo-capture.spec.ts`.
+
 ## Stack
 
 | Layer | Tech |
@@ -119,7 +125,7 @@ The two non-negotiable gates: run `just check` after every change task and `just
 HashHive exposes three distinct API surfaces, each with its own auth, error envelope, and pagination shape:
 
 - **Agent API** (`/api/v1/agent/*`) — pre-shared Bearer token, used by hashcat worker agents. Spec: [`packages/openapi/agent-api.yaml`](./packages/openapi/agent-api.yaml). Never break this surface.
-- **Dashboard API** (`/api/v1/dashboard/*`) — BetterAuth cookie session, used by the React frontend. `page` / `pageSize` pagination, `{ error: { code, message } }` envelope.
+- **Dashboard API** (`/api/v1/dashboard/*`) — BetterAuth cookie session, used by the React frontend. `limit` / `offset` pagination, `{ error: { code, message } }` envelope.
 - **Control API** (`/api/v1/control/*`) — per-user API keys (format `cst_*`), used by CLI tooling / automation / CI / the planned TUI. RFC 9457 problem-details errors, `offset` / `limit` pagination. Spec: [`packages/openapi/control-api.yaml`](./packages/openapi/control-api.yaml).
 
 Users issue and rotate Control API keys from the dashboard Account page (`/account`).

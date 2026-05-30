@@ -5,7 +5,10 @@ import type {
   agentHardwareProfileSchema,
   agentHeartbeatCurrentTaskSchema,
   agentHeartbeatErrorSchema,
+  agentHeartbeatResponseSchema,
   agentHeartbeatSchema,
+  componentNameSchema,
+  componentStatusSchema,
   agentStatusSchema,
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
@@ -19,14 +22,19 @@ import type {
   campaignSortFieldSchema,
   campaignSortOrderSchema,
   campaignTaskStatsSchema,
+  connectionStatusSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
   createCrackerBinaryRequestSchema,
+  createHashListRequestSchema,
+  detectHashTypeRequestSchema,
+  detectHashTypeResponseSchema,
   engineDescriptorSchema,
   hashCandidateSchema,
+  hashListStatisticsSchema,
   inlineAttackRequestSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
@@ -48,7 +56,9 @@ import type {
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
   loginRequestSchema,
+  meResponseSchema,
   requiredCapabilitiesSchema,
+  resourceUpdateEventDataSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
@@ -61,14 +71,17 @@ import type {
   selectHashTypeSchema,
   selectMaskListSchema,
   selectOperatingSystemSchema,
+  selectProjectRequestSchema,
   selectProjectSchema,
   selectProjectUserSchema,
   selectRuleListSchema,
   selectTaskSchema,
   selectUserSchema,
   selectWordListSchema,
+  sessionUserSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
+  userRoleSchema,
   workRangeSchema,
 } from '../schemas/index.js'
 
@@ -214,9 +227,19 @@ export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>
 export type HashCandidate = z.infer<typeof hashCandidateSchema>
+
+// ─── Resource Management API wire types ─────────────────────────────
+export type HashListStatistics = z.infer<typeof hashListStatisticsSchema>
+export type CreateHashListRequest = z.infer<typeof createHashListRequestSchema>
+export type DetectHashTypeRequest = z.infer<typeof detectHashTypeRequestSchema>
+export type DetectHashTypeResponse = z.infer<typeof detectHashTypeResponseSchema>
+export type ResourceUpdateEventData = z.infer<typeof resourceUpdateEventDataSchema>
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>
+export type AgentHeartbeatResponse = z.infer<typeof agentHeartbeatResponseSchema>
+export type ComponentName = z.infer<typeof componentNameSchema>
+export type ComponentStatus = z.infer<typeof componentStatusSchema>
 export type AgentHardwareProfile = z.infer<typeof agentHardwareProfileSchema>
 export type BenchmarkSubmission = z.infer<typeof benchmarkSubmissionSchema>
 export type CreateAttackTemplateRequest = z.infer<typeof createAttackTemplateRequestSchema>
@@ -258,4 +281,51 @@ export interface IssueApiKeyResponse {
 
 export type AgentWorstSeverity = z.infer<typeof agentWorstSeveritySchema>
 export type AgentCurrentTask = z.infer<typeof agentCurrentTaskSchema>
+
+// ─── Realtime / WebSocket connection ────────────────────────────────
+
+/**
+ * Frontend WebSocket connection state machine emitted by `useEvents`
+ * and consumed by the layout-level connection indicator.
+ */
+export type ConnectionStatus = z.infer<typeof connectionStatusSchema>
+
+/**
+ * Request body for `POST /api/v1/dashboard/projects/select`.
+ */
+export type SelectProjectRequest = z.infer<typeof selectProjectRequestSchema>
 export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>
+
+// ─── Session User / Global RBAC ─────────────────────────────────────
+
+/**
+ * Global capability tier. See `userRoleSchema` for the meaning of each
+ * value. Distinct from per-project membership roles on `projectUsers`.
+ */
+export type UserRole = z.infer<typeof userRoleSchema>
+
+/**
+ * Wire-shape contract for the active session — `userId`, `email`,
+ * `roles`, and `selectedProjectId`. `selectedProjectId` mirrors the
+ * server-managed BetterAuth `session.session.projectId`.
+ *
+ * NOTE: this is NOT the same shape as `meResponseSchema.user`, which
+ * uses `id`/`name`/`status` and excludes `selectedProjectId` (the
+ * top-level `meResponseSchema.selectedProjectId` carries it instead).
+ * `SessionUser` is the canonical session-state contract; `MeResponse.user`
+ * is the user-profile slice returned on `/auth/me`.
+ *
+ * Also NOT the same shape as backend `AppEnv['Variables']['currentUser']`,
+ * which stores the same scope under the internal field name `projectId`
+ * (no `selected` prefix) and is populated by `requireSession` /
+ * `requireApiKey`. Cross-boundary code consumes `SessionUser`
+ * (Zod-validated); internal backend code reads `currentUser.projectId`.
+ */
+export type SessionUser = z.infer<typeof sessionUserSchema>
+
+/**
+ * Response body for `GET /api/v1/dashboard/auth/me`. Consumed by
+ * `packages/frontend/src/stores/auth.ts` to hydrate the auth + UI
+ * stores in a single round-trip.
+ */
+export type MeResponse = z.infer<typeof meResponseSchema>

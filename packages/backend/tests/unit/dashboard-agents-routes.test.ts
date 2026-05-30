@@ -25,12 +25,18 @@ mock.module('../../src/lib/auth.js', () => ({
               name: 'Admin',
               emailVerified: true,
               image: null,
+              // Global capability tier (users.roles) -- read by the
+              // new global requireRole guard from issue #159 U5.
+              roles: ['admin'],
             },
             session: {
               id: 'sess',
               userId: '1',
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
+              // Server-managed scope -- after issue #159 U4 the
+              // dashboard ignores X-Project-Id and reads this instead.
+              projectId: 1,
             },
           }
         }
@@ -55,6 +61,10 @@ mock.module('../../src/services/auth.js', () => ({
     if (userId === 1) return { projectId: 1, roles: ['admin'] }
     return null
   },
+  // Issue #159 U3 / U6: preference helpers.
+  getUserLastProjectId: async () => null,
+  setUserLastProjectIdIfMember: async () => 1,
+  setUserLastProjectId: async () => undefined,
 }))
 
 // ─── Mock the Agents Service Layer ───────────────────────────────────
@@ -95,12 +105,48 @@ const mockGetAgentById = mock(async (id: number) => {
   return null
 })
 
+const mockUpdateAgent = mock(
+  async (id: number, patch: { name?: string; status?: string }, projectId: number) => {
+    // Honors the atomic UPDATE WHERE projectId contract: id=100 lives
+    // in project 1, id=200 lives in project 999 (foreign). A mismatch
+    // collapses to null exactly the way the real query would after the
+    // 0 rows-affected.
+    if (id === 100 && projectId === 1) {
+      return {
+        id: 100,
+        name: patch.name ?? 'Rig Alpha',
+        status: patch.status ?? 'online',
+        lastSeenAt: new Date(),
+        projectId: 1,
+        capabilities: null,
+        hardwareProfile: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        authToken: 'tok',
+        crackerVersion: null,
+      }
+    }
+    return null
+  }
+)
+
+const mockRotateAgentToken = mock(async (agentId: number, projectId: number) => {
+  // Mirrors the real service: same-project rotation succeeds and
+  // returns the raw token once; cross-project hands back null so the
+  // route maps to 404.
+  if (agentId === 100 && projectId === 1) {
+    return { token: 'agt_100_test-rotated-token' }
+  }
+  return null
+})
+
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
   getAgentErrors: mock(async () => []),
   getBenchmarksForAgent: mock(async () => []),
   listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
-  updateAgent: mock(async () => null),
+  rotateAgentToken: mockRotateAgentToken,
+  updateAgent: mockUpdateAgent,
 }))
 
 mock.module('../../src/services/tasks.js', () => ({
@@ -157,7 +203,12 @@ const DASH_AGENTS = '/api/v1/dashboard/agents'
 describe('Dashboard agents routes: project isolation', () => {
   it('GET /:id/tasks returns 404 when agent belongs to a different project', async () => {
     const res = await app.request(`${DASH_AGENTS}/200/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error?: { code?: string } }
@@ -166,7 +217,12 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 200 for an agent in the active project', async () => {
     const res = await app.request(`${DASH_AGENTS}/100/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { tasks: unknown[] }
@@ -176,7 +232,12 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 400 for a non-numeric id', async () => {
     const res = await app.request(`${DASH_AGENTS}/not-a-number/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error?: { code?: string } }
@@ -185,13 +246,129 @@ describe('Dashboard agents routes: project isolation', () => {
 
   it('GET /:id/tasks returns 404 when the agent does not exist', async () => {
     const res = await app.request(`${DASH_AGENTS}/9999/tasks`, {
-      headers: { cookie: ADMIN_COOKIE, 'x-project-id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'x-project-id': '1',
+      },
     })
     expect(res.status).toBe(404)
   })
 
   it('GET /:id/tasks returns 401 without a session cookie', async () => {
     const res = await app.request(`${DASH_AGENTS}/100/tasks`)
+    expect(res.status).toBe(401)
+  })
+
+  // Regression: S-C1 (cross-project horizontal privilege escalation).
+  // Pre-fix, PATCH /:id had no projectId check; a contributor in any project
+  // could rename or force-offline any agent system-wide.
+  it('PATCH /:id returns 404 when target agent belongs to a different project', async () => {
+    const res = await app.request(`${DASH_AGENTS}/200`, {
+      method: 'PATCH',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'offline' }),
+    })
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
+    // Post-F3 the cross-project guard is the atomic UPDATE WHERE
+    // projectId inside the service; the route calls updateAgent with
+    // the session's projectId and the SQL returns 0 rows for any
+    // cross-project agent. So updateAgent SHOULD have been called
+    // (with projectId=1), and the mock returns null because 200 lives
+    // in project 999.
+    const crossProjectCalls = mockUpdateAgent.mock.calls.filter(
+      ([id, , projectId]) => id === 200 && projectId === 1
+    )
+    expect(crossProjectCalls.length).toBe(1)
+  })
+
+  it('PATCH /:id returns 200 for an agent in the active project', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100`, {
+      method: 'PATCH',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'Renamed Rig' }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { agent?: { name?: string } }
+    expect(body.agent?.name).toBe('Renamed Rig')
+  })
+
+  it('PATCH /:id returns 404 when the agent does not exist', async () => {
+    const res = await app.request(`${DASH_AGENTS}/9999`, {
+      method: 'PATCH',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'offline' }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+// S-H2: POST /agents/:id/rotate-token contract.
+describe('Dashboard agents routes: token rotation', () => {
+  it('POST /:id/rotate-token returns the raw token exactly once for an admin', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { token?: string }
+    expect(body.token).toBe('agt_100_test-rotated-token')
+  })
+
+  it('POST /:id/rotate-token sets Cache-Control: no-store on the response', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('POST /:id/rotate-token returns 404 for a cross-project agent', async () => {
+    const res = await app.request(`${DASH_AGENTS}/200/rotate-token`, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /:id/rotate-token returns 401 without a session cookie', async () => {
+    const res = await app.request(`${DASH_AGENTS}/100/rotate-token`, {
+      method: 'POST',
+      headers: {
+        origin: 'http://lab.local',
+        host: 'lab.local',
+      },
+    })
     expect(res.status).toBe(401)
   })
 })

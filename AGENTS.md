@@ -22,7 +22,7 @@ This file provides AI coding assistants with project context. All substantive do
 HashHive exposes three distinct API surfaces, each with its own auth, error envelope, and pagination shape:
 
 - **Agent API** (`/api/v1/agent/*`) -- pre-shared Bearer token, used by hashcat worker agents. Spec: `packages/openapi/agent-api.yaml`. Never break this surface.
-- **Dashboard API** (`/api/v1/dashboard/*`) -- BetterAuth cookie session, used by the React frontend. `page`/`pageSize` pagination, `{ error: { code, message } }` envelope.
+- **Dashboard API** (`/api/v1/dashboard/*`) -- BetterAuth cookie session, used by the React frontend. `limit`/`offset` pagination, `{ error: { code, message } }` envelope.
 - **Control API** (`/api/v1/control/*`) -- per-user API keys (format `cst_*`, bcrypt-hashed in `users.api_key_hash`), used by CLI tooling, automation, CI, and the planned TUI. RFC 9457 problem-details errors, `offset`/`limit` pagination. Spec: `packages/openapi/control-api.yaml`.
 
 Users issue and rotate Control API keys from the dashboard Account page (`/account`).

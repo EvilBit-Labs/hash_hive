@@ -1,5 +1,4 @@
 import { ConnectionIndicator } from '../components/features/connection-indicator'
-import { useEventsConnection } from '../components/features/events-provider'
 import { StatCard } from '../components/features/stat-card'
 import { SystemHealthCard } from '../components/features/system-health-card'
 import { EmptyState } from '../components/ui/empty-state'
@@ -8,11 +7,8 @@ import { useDashboardStats } from '../hooks/use-dashboard'
 import { useUiStore } from '../stores/ui'
 
 export function DashboardPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { data: stats, isLoading } = useDashboardStats()
-
-  // The shared WS subscription lives in <EventsProvider> at the layout root.
-  const { connected } = useEventsConnection()
 
   if (!selectedProjectId) {
     return (
@@ -27,7 +23,7 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <PageHeader>Dashboard</PageHeader>
-        <ConnectionIndicator connected={connected} />
+        <ConnectionIndicator />
       </div>
 
       <div aria-live="polite" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">

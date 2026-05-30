@@ -39,12 +39,20 @@ mock.module('../../src/lib/auth.js', () => ({
               name: isAdmin ? 'Admin' : 'Viewer',
               emailVerified: true,
               image: null,
+              // Global capability tier (users.roles). Crackers are
+              // cluster-wide resources gated by global requireRole, so
+              // the session must surface roles -- per-project
+              // membership alone isn't enough.
+              roles: isAdmin ? ['admin'] : ['analyst'],
             },
             session: {
               id: 'sess',
               userId: isAdmin ? '1' : '2',
               token: 'tok',
               expiresAt: new Date(Date.now() + 3600000),
+              // session.projectId is null in this suite; crackers
+              // endpoints use the global tier guard, not project scope.
+              projectId: null,
             },
           }
         }
@@ -73,6 +81,10 @@ mock.module('../../src/services/auth.js', () => ({
     if (userId === 2) return { projectId: 1, roles: ['viewer'] }
     return null
   },
+  // Issue #159 U3 / U6: preference helpers.
+  getUserLastProjectId: async () => null,
+  setUserLastProjectIdIfMember: async () => 1,
+  setUserLastProjectId: async () => undefined,
 }))
 
 // ─── Mock the Cracker Service Layer ──────────────────────────────────
@@ -241,7 +253,13 @@ describe('Dashboard cracker routes: validation', () => {
   it('POST / rejects unknown engine via zod enum', async () => {
     const res = await app.request(DASH_CRACKERS, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
       body: JSON.stringify({ engine: 'cain', version: '6.2.6', platform: 'linux-x64' }),
     })
     expect(res.status).toBe(400)
@@ -250,7 +268,13 @@ describe('Dashboard cracker routes: validation', () => {
   it('POST / rejects unknown platform via zod enum', async () => {
     const res = await app.request(DASH_CRACKERS, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
       body: JSON.stringify({ engine: 'hashcat', version: '6.2.6', platform: 'aix-ppc' }),
     })
     expect(res.status).toBe(400)
@@ -258,7 +282,12 @@ describe('Dashboard cracker routes: validation', () => {
 
   it('GET /:id rejects non-numeric id', async () => {
     const res = await app.request(`${DASH_CRACKERS}/notanumber`, {
-      headers: { cookie: ADMIN_COOKIE, 'X-Project-Id': '1' },
+      headers: {
+        cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
+        'X-Project-Id': '1',
+      },
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error: { code: string } }
@@ -274,6 +303,8 @@ describe('Dashboard cracker routes: direct upload size cap', () => {
       method: 'POST',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-length': String(200 * 1024 * 1024), // 200 MB > 100 MB cap
         'content-type': 'multipart/form-data; boundary=----test',
@@ -294,6 +325,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
       method: 'PUT',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-type': 'application/octet-stream',
       },
@@ -309,6 +342,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
         method: 'PUT',
         headers: {
           cookie: ADMIN_COOKIE,
+          origin: 'http://lab.local',
+          host: 'lab.local',
           'X-Project-Id': '1',
           'content-type': 'application/octet-stream',
         },
@@ -323,6 +358,8 @@ describe('Dashboard cracker routes: chunked upload partNumber', () => {
       method: 'PUT',
       headers: {
         cookie: ADMIN_COOKIE,
+        origin: 'http://lab.local',
+        host: 'lab.local',
         'X-Project-Id': '1',
         'content-type': 'application/octet-stream',
       },

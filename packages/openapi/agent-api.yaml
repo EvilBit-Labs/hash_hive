@@ -62,9 +62,17 @@ paths:
               $ref: '#/components/schemas/Heartbeat'
       responses:
         '200':
-          $ref: '#/components/responses/Acknowledged'
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/next:
     post:
@@ -87,6 +95,8 @@ paths:
                       - type: 'null'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/{taskId}/report:
     post:
@@ -110,8 +120,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /tasks/{taskId}/zaps:
     get:
@@ -153,6 +167,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ZapResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
         '404':
@@ -161,6 +177,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /benchmark:
     post:
@@ -178,8 +196,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /errors:
     post:
@@ -197,8 +219,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Acknowledged'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /cracker/check-update:
     post:
@@ -230,6 +256,68 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/AuthError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /resources/{type}/{id}/download-url:
+    get:
+      operationId: getResourceDownloadUrl
+      summary: Presigned download URL for a resource bound to this agent's project
+      description: |
+        Returns a short-lived presigned URL the agent uses to fetch a
+        resource (hash list, wordlist, rule list, mask list) from object
+        storage. The resource must belong to a project the agent is a
+        member of; cross-project lookups return 404. The URL is a
+        standard S3 `GetObject` presigned URL — it is reusable until it
+        expires per the `expiresIn` field (currently 6 hours), not
+        single-use. Failures during URL generation return the Agent
+        envelope at HTTP 500 with code `RESOURCE_URL_ERROR`.
+      tags: [Resources]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: type
+          in: path
+          required: true
+          description: |
+            Resource kind. Must be one of the documented values
+            recognized by `getAgentDownloadUrl`'s table map; unknown
+            values return 404.
+          schema:
+            type: string
+            enum: [hash-lists, wordlists, rulelists, masklists]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresIn]
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                  expiresIn:
+                    type: integer
+                    description: Seconds until the URL expires.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '404':
+          description: Resource not found or has no file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
 components:
   securitySchemes:
@@ -347,6 +435,26 @@ components:
                 serialized — payloads larger than that are rejected with
                 400. Do not include secrets (tokens, passwords) —
                 operators with project access can read this field.
+
+    HeartbeatResponse:
+      type: object
+      required: [acknowledged]
+      properties:
+        acknowledged:
+          type: boolean
+          enum: [true]
+          description: Always `true` on a 200 response. The server accepted the heartbeat.
+        hasHighPriorityTasks:
+          type: boolean
+          enum: [true]
+          description: |
+            Set to `true` when pending high-priority tasks exist for the
+            agent's project and capabilities. **Omitted (not `false`)** when
+            no high-priority work is available — agents must treat absence
+            as "no priority signal" rather than receive an explicit
+            negative. When present, the agent may request a task
+            immediately via `POST /tasks/next` instead of waiting for the
+            next assignment poll.
 
     EngineDescriptor:
       type: object
@@ -707,6 +815,22 @@ components:
 
     ValidationError:
       description: Request body or query parameters failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ServerError:
+      description: |
+        Server-side processing failed. Each route returns its own coarse
+        error code on the catch-all failure path so agents can switch on
+        `error.code` and treat known codes specifically. Known codes:
+        `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`,
+        `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`,
+        `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`. The response shape
+        is the Agent envelope (`{ error: { code, message } }`) — no
+        `timestamp` or `requestId` fields. Distinct from the dashboard
+        envelope returned by other API surfaces on internal errors.
       content:
         application/json:
           schema:

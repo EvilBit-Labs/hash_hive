@@ -48,12 +48,15 @@ if (!IS_ISOLATED) {
                 name: 'Admin',
                 emailVerified: true,
                 image: null,
+                roles: ['admin'],
               },
               session: {
                 id: 'sess',
                 userId: '1',
                 token: 'tok',
                 expiresAt: new Date(Date.now() + 3600000),
+                // Server-managed scope (issue #159 U4).
+                projectId: 1,
               },
             }
           }
@@ -76,6 +79,11 @@ if (!IS_ISOLATED) {
       if (userId === 1) return { projectId: 1, roles: ['admin'] }
       return null
     },
+    // Issue #159 U3 / U6: stub the preference helpers so projects.ts
+    // and lib/auth.ts module imports resolve without errors.
+    getUserLastProjectId: async () => null,
+    setUserLastProjectIdIfMember: async () => 1,
+    setUserLastProjectId: async () => undefined,
     issueUserApiKey: mock(async () => ({ apiKey: 'cst_test', metadata: null })),
     revokeUserApiKey: mock(async () => undefined),
     getUserApiKeyMetadata: mock(async () => null),
@@ -322,8 +330,17 @@ if (!IS_ISOLATED) {
 
   const DASH_CAMPAIGNS = '/api/v1/dashboard/campaigns'
 
+  // Origin + Host satisfy the CSRF same-origin guard mounted on the
+  // dashboard surface (PR review S-H4 follow-up). The fixture uses
+  // matching values; tests intentionally exercising a cross-origin
+  // attempt would override these.
   function makeHeaders() {
-    return { cookie: ADMIN_COOKIE, 'x-project-id': '1' }
+    return {
+      cookie: ADMIN_COOKIE,
+      'x-project-id': '1',
+      origin: 'http://lab.local',
+      host: 'lab.local',
+    }
   }
 
   describe('Dashboard campaigns list: query params', () => {

@@ -11,9 +11,12 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef } from 'react'
 import { Link, useLocation } from 'react-router'
+import { useShallow } from 'zustand/shallow'
 
 import logoSvg from '../../assets/logo.svg'
+import { useLogout } from '../../hooks/use-logout'
 import { usePermissions } from '../../hooks/use-permissions'
+import { useSelectProject } from '../../hooks/use-select-project'
 import { authClient } from '../../lib/auth-client'
 import { Permission, type PermissionKey } from '../../lib/permissions'
 import { cn } from '../../lib/utils'
@@ -21,7 +24,6 @@ import { useAuthStore } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { Select } from '../ui/select'
 import { ConnectionIndicator } from './connection-indicator'
-import { useEventsConnection } from './events-provider'
 
 const ICON_CLASS = 'h-4 w-4'
 
@@ -76,11 +78,12 @@ const navItems: readonly NavItem[] = [
 /** Shared sidebar content used by both desktop and mobile variants. */
 function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { pathname } = useLocation()
-  const { projects, clearAuth } = useAuthStore()
+  const projects = useAuthStore((s) => s.projects)
   const { data: session } = authClient.useSession()
-  const { selectedProjectId, setSelectedProject } = useUiStore()
-  const { connected } = useEventsConnection()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { can } = usePermissions()
+  const selectProject = useSelectProject()
+  const logout = useLogout()
 
   const visibleNavItems = useMemo(
     () => navItems.filter((item) => !item.permission || can(item.permission)),
@@ -88,8 +91,18 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
   )
 
   const handleProjectChange = (value: string) => {
-    const projectId = value ? Number(value) : null
-    setSelectedProject(projectId)
+    // Gate re-entry while a switch is in flight. Overlapping mutations
+    // can resolve out of order; if a slower earlier POST settles after
+    // a later one, onSuccess would write the stale projectId back into
+    // the UI store and invalidate queries for the wrong scope.
+    if (selectProject.isPending) return
+    // The "All Projects" option (`''`) is a no-op: the server requires
+    // a concrete projectId on the session, so we can't clear scope from
+    // the sidebar.
+    if (!value) return
+    const projectId = Number(value)
+    if (!Number.isFinite(projectId)) return
+    selectProject.mutate(projectId)
   }
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))
@@ -109,6 +122,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
             aria-label="Select project"
             className="px-2.5 py-1.5 text-xs"
             value={selectedProjectId ?? ''}
+            disabled={selectProject.isPending}
             onChange={(e) => handleProjectChange(e.target.value)}
           >
             <option value="">All Projects</option>
@@ -148,7 +162,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
 
       {/* Footer */}
       <div className="border-surface-0/50 space-y-2 border-t px-3 py-3">
-        <ConnectionIndicator connected={connected} />
+        <ConnectionIndicator />
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground max-w-[130px] truncate text-xs">
             {session?.user.email}
@@ -156,9 +170,8 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
           <button
             type="button"
             className="text-muted-foreground hover:text-foreground text-xs transition-colors"
-            onClick={async () => {
-              await authClient.signOut()
-              clearAuth()
+            onClick={() => {
+              void logout()
             }}
           >
             Sign out
@@ -171,7 +184,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
 
 /** Desktop sidebar - hidden below md breakpoint. */
 export function Sidebar() {
-  const { sidebarOpen } = useUiStore()
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen)
 
   if (!sidebarOpen) return null
 
@@ -184,7 +197,12 @@ export function Sidebar() {
 
 /** Mobile sidebar - slides in as an overlay drawer below md. */
 export function MobileSidebar() {
-  const { mobileSidebarOpen, setMobileSidebar } = useUiStore()
+  const { mobileSidebarOpen, setMobileSidebar } = useUiStore(
+    useShallow((s) => ({
+      mobileSidebarOpen: s.mobileSidebarOpen,
+      setMobileSidebar: s.setMobileSidebar,
+    }))
+  )
   const { pathname } = useLocation()
   const prevPathname = useRef(pathname)
 

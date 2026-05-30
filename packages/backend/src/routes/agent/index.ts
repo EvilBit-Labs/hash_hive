@@ -1,3 +1,5 @@
+import type { AgentHeartbeatResponse } from '@hashhive/shared'
+
 import {
   agentHeartbeatSchema,
   benchmarkSubmissionSchema,
@@ -97,11 +99,29 @@ agentRoutes.post(
   async (c) => {
     const { agentId } = c.get('agent')
     const data = c.req.valid('json')
-    const result = await processHeartbeat(agentId, data)
-    return c.json({
-      acknowledged: true,
-      ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
-    })
+    try {
+      const result = await processHeartbeat(agentId, data)
+      const body: AgentHeartbeatResponse = {
+        acknowledged: true,
+        ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
+      }
+      return c.json(body)
+    } catch (err: unknown) {
+      // Heartbeat is the agent's hot-path liveness primitive. Without
+      // this try/catch the throw would fall through to the global
+      // `app.onError` and return the dashboard envelope
+      // (`{ error: { code: 'INTERNAL_SERVER_ERROR', timestamp, requestId } }`),
+      // which violates the Agent API's `{ error: { code, message } }`
+      // contract documented in AGENTS.md.
+      logger.error(
+        { err, agentId, status: data.status, hasError: Boolean(data.error) },
+        'Heartbeat processing failed'
+      )
+      return c.json(
+        { error: { code: 'HEARTBEAT_ERROR', message: 'Failed to process heartbeat' } },
+        500
+      )
+    }
   }
 )
 
@@ -109,8 +129,16 @@ agentRoutes.post(
 
 agentRoutes.post('/tasks/next', async (c) => {
   const { agentId } = c.get('agent')
-  const task = await assignNextTask(agentId)
-  return c.json({ task })
+  try {
+    const task = await assignNextTask(agentId)
+    return c.json({ task })
+  } catch (err: unknown) {
+    logger.error({ err, agentId }, 'Task assignment failed')
+    return c.json(
+      { error: { code: 'TASK_ASSIGN_ERROR', message: 'Failed to assign next task' } },
+      500
+    )
+  }
 })
 
 // ─── POST /tasks/:id/report — report task progress ─────────────────
@@ -163,39 +191,47 @@ agentRoutes.post(
 
     const data = c.req.valid('json')
 
-    // Log any errors reported by the agent
-    if (data.errors && data.errors.length > 0) {
-      for (const errorMessage of data.errors) {
-        await logAgentError({
-          agentId,
-          severity: 'error',
-          message: errorMessage,
+    try {
+      // Log any errors reported by the agent
+      if (data.errors && data.errors.length > 0) {
+        for (const errorMessage of data.errors) {
+          await logAgentError({
+            agentId,
+            severity: 'error',
+            message: errorMessage,
+            taskId,
+          })
+        }
+      }
+
+      // Handle failure with retry logic
+      if (data.status === 'failed') {
+        const failResult = await handleTaskFailure(
           taskId,
-        })
+          agentId,
+          data.errors?.[0] ?? 'Unknown failure'
+        )
+        if ('error' in failResult) {
+          return c.json({ error: { code: 'TASK_ERROR', message: failResult.error } }, 400)
+        }
+        return c.json({ acknowledged: true, retried: failResult.retried ?? false })
       }
-    }
 
-    // Handle failure with retry logic
-    if (data.status === 'failed') {
-      const failResult = await handleTaskFailure(
-        taskId,
-        agentId,
-        data.errors?.[0] ?? 'Unknown failure'
+      // Update task progress and insert cracked results
+      const result = await updateTaskProgress(taskId, agentId, data)
+
+      if ('error' in result) {
+        return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400)
+      }
+
+      return c.json({ acknowledged: true })
+    } catch (err: unknown) {
+      logger.error({ err, agentId, taskId, status: data.status }, 'Task report processing failed')
+      return c.json(
+        { error: { code: 'TASK_REPORT_ERROR', message: 'Failed to process task report' } },
+        500
       )
-      if ('error' in failResult) {
-        return c.json({ error: { code: 'TASK_ERROR', message: failResult.error } }, 400)
-      }
-      return c.json({ acknowledged: true, retried: failResult.retried ?? false })
     }
-
-    // Update task progress and insert cracked results
-    const result = await updateTaskProgress(taskId, agentId, data)
-
-    if ('error' in result) {
-      return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400)
-    }
-
-    return c.json({ acknowledged: true })
   }
 )
 
@@ -221,13 +257,21 @@ agentRoutes.get(
     }
 
     const { since, limit } = c.req.valid('query')
-    const result = await getZapsForTask(taskId, agentId, projectId, { since, limit })
+    try {
+      const result = await getZapsForTask(taskId, agentId, projectId, { since, limit })
 
-    if ('error' in result) {
-      return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
+      if ('error' in result) {
+        return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
+      }
+
+      return c.json(result)
+    } catch (err: unknown) {
+      logger.error({ err, agentId, taskId }, 'Task zap lookup failed')
+      return c.json(
+        { error: { code: 'TASK_ZAP_ERROR', message: 'Failed to retrieve cracked hashes' } },
+        500
+      )
     }
-
-    return c.json(result)
   }
 )
 
@@ -259,8 +303,16 @@ agentRoutes.post(
   async (c) => {
     const { agentId } = c.get('agent')
     const data = c.req.valid('json')
-    await logAgentError({ ...data, agentId })
-    return c.json({ acknowledged: true })
+    try {
+      await logAgentError({ ...data, agentId })
+      return c.json({ acknowledged: true })
+    } catch (err: unknown) {
+      logger.error({ err, agentId, severity: data.severity }, 'Agent error log ingestion failed')
+      return c.json(
+        { error: { code: 'ERROR_INGEST_ERROR', message: 'Failed to record agent error' } },
+        500
+      )
+    }
   }
 )
 
@@ -288,7 +340,7 @@ agentRoutes.post(
 // ─── GET /resources/:type/:id/download-url — presigned download ─────
 
 agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
-  const { projectId } = c.get('agent')
+  const { agentId, projectId } = c.get('agent')
   const resourceType = c.req.param('type')
   const resourceId = Number(c.req.param('id'))
 
@@ -299,16 +351,29 @@ agentRoutes.get('/resources/:type/:id/download-url', async (c) => {
     )
   }
 
-  const result = await getAgentDownloadUrl(resourceType, resourceId, projectId)
+  try {
+    const result = await getAgentDownloadUrl(resourceType, resourceId, projectId)
 
-  if (!result) {
+    if (!result) {
+      return c.json(
+        { error: { code: 'RESOURCE_NOT_FOUND', message: 'Resource not found or has no file' } },
+        404
+      )
+    }
+
+    return c.json(result)
+  } catch (err: unknown) {
+    logger.error(
+      { err, agentId, resourceType, resourceId },
+      'Resource download URL generation failed'
+    )
     return c.json(
-      { error: { code: 'RESOURCE_NOT_FOUND', message: 'Resource not found or has no file' } },
-      404
+      {
+        error: { code: 'RESOURCE_URL_ERROR', message: 'Failed to generate resource download URL' },
+      },
+      500
     )
   }
-
-  return c.json(result)
 })
 
 // ─── POST /cracker/check-update — agent cracker auto-update ─────────
@@ -326,6 +391,7 @@ agentRoutes.post(
   '/cracker/check-update',
   zValidator('json', crackerCheckUpdateRequestSchema, agentValidationHook),
   async (c) => {
+    const { agentId } = c.get('agent')
     const data = c.req.valid('json')
     const engine = normalizeEngineName(data.engine)
     // Trim version + platform so an agent sending `'6.2.7 '` (trailing
@@ -348,31 +414,39 @@ agentRoutes.post(
       return c.json({ updateAvailable: false, engine })
     }
 
-    const latest = await getLatestCracker({ engine, platform })
+    try {
+      const latest = await getLatestCracker({ engine, platform })
 
-    if (!latest || compareCrackerVersions(latest.version, version) <= 0) {
-      return c.json({ updateAvailable: false, engine })
-    }
+      if (!latest || compareCrackerVersions(latest.version, version) <= 0) {
+        return c.json({ updateAvailable: false, engine })
+      }
 
-    const downloadInfo = await getCrackerDownloadUrl(latest.id)
-    if (!downloadInfo) {
-      // Latest record exists but lacks an uploaded file — treat as no update
-      // available rather than failing the agent's poll. Logged at warn so
-      // an admin can find rows that were created but never uploaded.
-      logger.warn(
-        { crackerBinaryId: latest.id, engine, platform: data.platform },
-        'Latest cracker binary has no completed file; agent will not see this version'
+      const downloadInfo = await getCrackerDownloadUrl(latest.id)
+      if (!downloadInfo) {
+        // Latest record exists but lacks an uploaded file — treat as no update
+        // available rather than failing the agent's poll. Logged at warn so
+        // an admin can find rows that were created but never uploaded.
+        logger.warn(
+          { crackerBinaryId: latest.id, engine, platform: data.platform },
+          'Latest cracker binary has no completed file; agent will not see this version'
+        )
+        return c.json({ updateAvailable: false, engine })
+      }
+
+      return c.json({
+        updateAvailable: true,
+        engine,
+        latestVersion: latest.version,
+        downloadUrl: downloadInfo.url,
+        expiresIn: downloadInfo.expiresIn,
+      })
+    } catch (err: unknown) {
+      logger.error({ err, agentId, engine, platform }, 'Cracker update check failed')
+      return c.json(
+        { error: { code: 'CRACKER_UPDATE_ERROR', message: 'Failed to check for cracker update' } },
+        500
       )
-      return c.json({ updateAvailable: false, engine })
     }
-
-    return c.json({
-      updateAvailable: true,
-      engine,
-      latestVersion: latest.version,
-      downloadUrl: downloadInfo.url,
-      expiresIn: downloadInfo.expiresIn,
-    })
   }
 )
 

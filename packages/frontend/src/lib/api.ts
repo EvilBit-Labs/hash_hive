@@ -1,5 +1,3 @@
-import { useUiStore } from '../stores/ui'
-
 const API_BASE = '/api/v1'
 const DEFAULT_TIMEOUT_MS = 30_000
 
@@ -14,11 +12,6 @@ class ApiError extends Error {
   }
 }
 
-function getProjectHeaders(): Record<string, string> {
-  const projectId = useUiStore.getState().selectedProjectId
-  return projectId ? { 'X-Project-Id': String(projectId) } : {}
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Compose the caller's signal with a 30s timeout so no request can hang
   // forever on a slow backend. The sequential attack-creation loop in the
@@ -31,9 +24,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // Normalize headers via Headers() so callers passing HeadersInit as a
     // string[][] or Headers instance merge into a flat object rather than
     // landing as numeric indices from an array spread.
+    //
+    // Pre-#159 this also injected X-Project-Id from useUiStore.
+    // The dashboard backend now derives scope exclusively from the
+    // server-managed BetterAuth session (issue #159 U4), so the
+    // header is dead weight on dashboard requests.
     const mergedHeaders = new Headers({
       'Content-Type': 'application/json',
-      ...getProjectHeaders(),
     })
     if (init?.headers) {
       new Headers(init.headers).forEach((value, key) => {

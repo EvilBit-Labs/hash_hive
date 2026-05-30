@@ -73,12 +73,13 @@ controlAgentRoutes.patch(
       const { projectId } = await requireProjectRole(c, 'admin')
       const id = parseIdParam(c.req.param('id'))
 
-      const agent = await getAgentById(id)
-      if (!agent || agent.projectId !== projectId) {
+      // Atomic UPDATE ... WHERE projectId closes the TOCTOU window
+      // the earlier read-then-write pattern left open. null collapses
+      // "wrong project" and "no such row" into the same 404.
+      const updated = await updateAgent(id, c.req.valid('json'), projectId)
+      if (!updated) {
         return problemResponse(c, 404, 'not_found', 'agent not found')
       }
-
-      const updated = await updateAgent(id, c.req.valid('json'))
       return c.json(updated)
     } catch (err) {
       return controlErrorResponse(c, err)

@@ -54,12 +54,14 @@ mock.module('../../src/lib/auth.js', () => ({
                 name: 'Admin',
                 emailVerified: true,
                 image: null,
+                roles: ['admin'],
               },
               session: {
                 id: 's',
                 userId: String(mockUser.id),
                 token: 't',
                 expiresAt: new Date(Date.now() + 3600000),
+                projectId: null,
               },
             }
           : null,

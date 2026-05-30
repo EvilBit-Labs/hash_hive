@@ -79,7 +79,7 @@ function stepIndicatorStyle(index: number, currentStep: number): string {
 
 export function CampaignCreatePage() {
   const { can } = usePermissions()
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const wizard = useCampaignWizard()
   const navigate = useNavigate()
   const createCampaign = useCreateCampaign()

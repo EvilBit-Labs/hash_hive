@@ -767,5 +767,160 @@ if (!IS_ISOLATED) {
       })
       expect(warnCallsForAgent).toHaveLength(1)
     })
+
+    it('post-commit emitAgentStatus throw is swallowed so a successful tx returns 200', async () => {
+      // Arrange — force emitAgentStatus to throw on the post-commit
+      // broadcast. The DB transaction has already committed by the time
+      // the post-commit emit block in processHeartbeat runs, so the
+      // failure must be logged and absorbed rather than propagated to
+      // the route's HEARTBEAT_ERROR catch — otherwise the route would
+      // return 500 to an agent whose state was actually persisted,
+      // misleading operators and breaking the wire signal's contract
+      // that HEARTBEAT_ERROR means the transaction itself failed.
+      emitAgentStatusMock.mockImplementationOnce(() => {
+        throw new Error('SSE bus dropped the connection')
+      })
+
+      const token = agentToken(TEST_AGENT_TOKEN)
+
+      // Act — vanilla online heartbeat, no error payload, default state.
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      })
+
+      // Assert — the route returns 200 (DB state was committed), and
+      // the post-commit failure was logged at error level for ops.
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
+      // DB UPDATE landed before the throw, so the captured update is present.
+      expect(state.capturedAgentUpdates.some((u) => u.status === 'online')).toBe(true)
+      // The post-commit hardening logs at error level with the
+      // structured `err` + `agentId` + `projectId` context. Filter
+      // structurally rather than on the message-prefix so a future
+      // log-message refactor does not silently break this assertion.
+      const postCommitErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined
+        return arg?.['agentId'] === 1 && arg?.['projectId'] === 7 && arg?.['err'] !== undefined
+      })
+      expect(postCommitErrorLogs).toHaveLength(1)
+    })
+
+    it('post-commit emitAgentError throw is swallowed when heartbeat carries an error payload', async () => {
+      // Arrange — pin the emitAgentError branch of the same try/catch.
+      // The previous test covers emitAgentStatus; this one covers the
+      // sibling branch reached only when `data.error` is present.
+      emitAgentErrorMock.mockImplementationOnce(() => {
+        throw new Error('SSE bus dropped the connection')
+      })
+
+      const token = agentToken(TEST_AGENT_TOKEN)
+
+      // Act — heartbeat with a warning error payload triggers
+      // emitAgentError on the post-commit path.
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: 'online',
+          error: { severity: 'warning', message: 'temperature spike' },
+        }),
+      })
+
+      // Assert — 200 + DB state committed + post-commit error logged.
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
+      expect(state.capturedErrors).toHaveLength(1)
+      expect(state.capturedAgentUpdates.some((u) => u.status === 'online')).toBe(true)
+      const postCommitErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined
+        return arg?.['agentId'] === 1 && arg?.['projectId'] === 7 && arg?.['err'] !== undefined
+      })
+      expect(postCommitErrorLogs).toHaveLength(1)
+    })
+
+    it('post-commit logStatusTransition throw is swallowed across a real transition', async () => {
+      // Arrange — the logger.info call inside logStatusTransition is the
+      // third call site protected by the post-commit try/catch. Force
+      // logger.info to throw the first time it is invoked with the
+      // 'Agent status transition' message. The agent starts in 'busy'
+      // and the heartbeat moves it to 'online' — a real (not no-op)
+      // transition that hits logStatusTransition.
+      state.agent = { id: 1, projectId: 7, status: 'busy', capabilities: {} }
+      // Persistent (not Once) so the request-middleware's earlier info
+      // logs flow through; only the audit-log call throws.
+      loggerMock.info.mockImplementation((_arg: unknown, msg?: string) => {
+        if (msg === 'Agent status transition') {
+          throw new Error('log sink unavailable')
+        }
+      })
+
+      const token = agentToken(TEST_AGENT_TOKEN)
+
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      })
+
+      // Assert — the route returns 200 even though the audit log throw
+      // was triggered inside the post-commit try/catch.
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
+      expect(state.capturedAgentUpdates.some((u) => u.status === 'online')).toBe(true)
+      const postCommitErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined
+        return arg?.['agentId'] === 1 && arg?.['projectId'] === 7 && arg?.['err'] !== undefined
+      })
+      expect(postCommitErrorLogs).toHaveLength(1)
+    })
+
+    it('recovery heartbeat (prior status=error) × post-commit throw still returns 200', async () => {
+      // Arrange — agent in status='error' posts a clean heartbeat to
+      // come back online. The transition fires logStatusTransition AND
+      // emitAgentStatus on the post-commit path; if either throws, the
+      // hardening must still let the DB commit stand on the wire so
+      // the agent can actually recover.
+      state.agent = { id: 1, projectId: 7, status: 'error', capabilities: {} }
+      emitAgentStatusMock.mockImplementationOnce(() => {
+        throw new Error('SSE bus dropped the connection')
+      })
+
+      const token = agentToken(TEST_AGENT_TOKEN)
+
+      const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'online' }),
+      })
+
+      // Assert — recovery succeeds at the DB layer despite the SSE
+      // failure. Future heartbeats heal SSE on the next tick.
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Record<string, unknown>
+      expect(body['acknowledged']).toBe(true)
+      expect(state.capturedAgentUpdates.some((u) => u.status === 'online')).toBe(true)
+      const postCommitErrorLogs = loggerMock.error.mock.calls.filter((call) => {
+        const arg = call[0] as Record<string, unknown> | undefined
+        return arg?.['agentId'] === 1 && arg?.['projectId'] === 7 && arg?.['err'] !== undefined
+      })
+      expect(postCommitErrorLogs).toHaveLength(1)
+    })
   })
 }

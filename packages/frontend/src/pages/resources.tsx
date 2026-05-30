@@ -32,7 +32,7 @@ const TABS: readonly { id: Tab; label: string }[] = [
 ] as const
 
 export function ResourcesPage() {
-  const { selectedProjectId } = useUiStore()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [activeTab, setActiveTab] = useState<Tab>('hash-lists')
 
   if (!selectedProjectId) {

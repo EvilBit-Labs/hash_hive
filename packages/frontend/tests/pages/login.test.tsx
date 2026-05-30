@@ -125,6 +125,118 @@ describe('LoginPage', () => {
     expect(useUiStore.getState().selectedProjectId).toBe(1)
   })
 
+  it('auto-selects rememberLastProject id when server has not pre-selected', async () => {
+    const meResponse = mockMeResponse({ projectCount: 3, selectedProjectId: null })
+    signInResult = { error: null }
+    fetchMock = mockFetch({
+      '/dashboard/auth/me': { status: 200, body: meResponse },
+      '/dashboard/projects/select': { POST: { status: 200, body: {} } },
+    })
+    useUiStore.setState({ rememberLastProject: true, lastProjectId: 2 })
+
+    renderWithRouter(
+      [
+        { path: '/login', element: <LoginPage /> },
+        { path: '/select-project', element: <div>Select Project Page</div> },
+        { path: '/', element: <div>Dashboard Home</div> },
+      ],
+      { initialRoute: '/login' }
+    )
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'admin@hashhive.local' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'password123' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Dashboard Home')).toBeDefined()
+    })
+
+    expect(useUiStore.getState().selectedProjectId).toBe(2)
+    const selectCall = fetchMock.mock.calls.find((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
+      return url.includes('/dashboard/projects/select')
+    })
+    expect(selectCall).toBeDefined()
+  })
+
+  it('does not auto-select when rememberLastProject id is no longer in membership', async () => {
+    const meResponse = mockMeResponse({ projectCount: 2, selectedProjectId: null })
+    signInResult = { error: null }
+    fetchMock = mockFetch({
+      '/dashboard/auth/me': { status: 200, body: meResponse },
+      '/dashboard/projects/select': { POST: { status: 200, body: {} } },
+    })
+    // Stored id 99 is not in the 2-project membership list (ids 1, 2)
+    useUiStore.setState({ rememberLastProject: true, lastProjectId: 99 })
+
+    renderWithRouter(
+      [
+        { path: '/login', element: <LoginPage /> },
+        { path: '/select-project', element: <div>Select Project Page</div> },
+        { path: '/', element: <div>Dashboard Home</div> },
+      ],
+      { initialRoute: '/login' }
+    )
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'admin@hashhive.local' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'password123' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Select Project Page')).toBeDefined()
+    })
+
+    // No POST /projects/select should have been issued
+    const selectCall = fetchMock.mock.calls.find((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
+      return url.includes('/dashboard/projects/select')
+    })
+    expect(selectCall).toBeUndefined()
+  })
+
+  it('falls through to selector when auto-select rejects with 403', async () => {
+    const meResponse = mockMeResponse({ projectCount: 2, selectedProjectId: null })
+    signInResult = { error: null }
+    fetchMock = mockFetch({
+      '/dashboard/auth/me': { status: 200, body: meResponse },
+      '/dashboard/projects/select': {
+        POST: { status: 403, body: { error: { code: 'RBAC_FORBIDDEN', message: 'forbidden' } } },
+      },
+    })
+    useUiStore.setState({ rememberLastProject: true, lastProjectId: 1 })
+
+    renderWithRouter(
+      [
+        { path: '/login', element: <LoginPage /> },
+        { path: '/select-project', element: <div>Select Project Page</div> },
+        { path: '/', element: <div>Dashboard Home</div> },
+      ],
+      { initialRoute: '/login' }
+    )
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'admin@hashhive.local' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'password123' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Select Project Page')).toBeDefined()
+    })
+
+    expect(useUiStore.getState().selectedProjectId).toBeNull()
+  })
+
   it('already authenticated user redirects to /', () => {
     fetchMock = mockFetch()
     mockSession = { user: { id: 1 } }

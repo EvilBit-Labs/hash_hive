@@ -101,7 +101,7 @@ Only create service modules when route handlers become complex:
 
 - **Purpose**: Batch operations for Go-based hashcat agents
 - **Authentication**: Pre-shared tokens (sent on every request, no JWT exchange)
-- **Contract**: Defined by OpenAPI specification in `openapi/agent-api.yaml`
+- **Contract**: Defined by OpenAPI specification in `packages/openapi/agent-api.yaml`
 - **Key endpoints**:
   - `POST /agent/sessions` - Agent authentication
   - `POST /agent/heartbeat` - Status updates

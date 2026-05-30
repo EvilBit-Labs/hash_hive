@@ -87,7 +87,7 @@ turbo run lint --no-cache        # Lint without cache
 
 ## API Specifications
 
-- **Agent API**: Defined in `openapi/agent-api.yaml` (single source of truth for Go-based agents)
+- **Agent API**: Defined in `packages/openapi/agent-api.yaml` (single source of truth for Go-based agents)
   - Batch operations for hash submissions
   - Token-based authentication
   - Endpoints: `/api/v1/agent/*`
