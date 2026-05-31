@@ -5,16 +5,15 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { OpenAPIHono } from '@hono/zod-openapi'
-import { zValidator } from '@hono/zod-validator'
-import { z } from 'zod'
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
+import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
+import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
 import {
   abortChunkedUpload,
@@ -118,24 +117,88 @@ const uploadStatusQuerySchema = z.object({
   resourceType: z.enum(RESOURCE_TYPES),
 })
 
+// ─── OpenAPI helpers ────────────────────────────────────────────────
+
+// Generic passthrough schema for response shapes that don't have a
+// corresponding shared Zod schema yet. The U4 diff script surfaces
+// these as gaps later — for now they keep the spec parseable without
+// inventing precise types that may drift from the service layer.
+const passthroughObject = (name: string) => z.object({}).passthrough().openapi(name)
+
+const idParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+})
+
+const uploadIdParamSchema = z.object({
+  uploadId: z.string().min(1),
+})
+
+const uploadPartParamSchema = z.object({
+  uploadId: z.string().min(1),
+  partNumber: z.coerce.number().int().positive(),
+})
+
+const tags: string[] = ['Dashboard/Resources']
+const security = [{ SessionCookie: [] }]
+
 const resourceRoutes = new OpenAPIHono<AppEnv>()
 
 resourceRoutes.use('*', requireSession)
 
 // ─── Hash Types ──────────────────────────────────────────────────────
 
-resourceRoutes.get('/hash-types', async (c) => {
+const listHashTypesRoute = createRoute({
+  method: 'get',
+  path: '/hash-types',
+  tags,
+  summary: 'List supported hashcat hash type definitions',
+  security,
+  responses: {
+    200: {
+      description: 'Hash type list',
+      content: {
+        'application/json': {
+          schema: z.object({ hashTypes: z.array(z.unknown()) }),
+        },
+      },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  },
+})
+
+resourceRoutes.openapi(listHashTypesRoute, async (c) => {
   const hashTypes = await listHashTypes()
-  return c.json({ hashTypes })
+  return c.json({ hashTypes }, 200)
 })
 
 // ─── Hash Lists ─────────────────────────────────────────────────────
 
-resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
+const listHashListsRoute = createRoute({
+  method: 'get',
+  path: '/hash-lists',
+  tags,
+  summary: 'List hash lists in the active project',
+  security,
+  middleware: [requireProjectAccess()] as const,
+  responses: {
+    200: {
+      description: 'Hash list collection',
+      content: {
+        'application/json': {
+          schema: z.object({ hashLists: z.array(z.unknown()) }),
+        },
+      },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  },
+})
+
+resourceRoutes.openapi(listHashListsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const hashLists = await listHashLists(projectId)
-  return c.json({ hashLists })
+  return c.json({ hashLists }, 200)
 })
 
 // createHashListRequestSchema is imported from @hashhive/shared.
@@ -146,7 +209,63 @@ resourceRoutes.get('/hash-lists', requireProjectAccess(), async (c) => {
 // (still in use by the CLI and older frontend code paths).
 // We cannot apply zValidator at registration because the validator binds
 // per content-type; instead we dispatch inside the handler.
-resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor'), async (c) => {
+const createHashListRoute = createRoute({
+  method: 'post',
+  path: '/hash-lists',
+  tags,
+  summary: 'Create a hash list (JSON empty-create or multipart one-shot upload)',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: createHashListRequestSchema },
+        'multipart/form-data': {
+          schema: z.object({
+            file: z.unknown(),
+            name: z.string().min(1).max(255),
+            hashTypeId: z.string().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Hash list created (legacy JSON path)',
+      content: {
+        'application/json': {
+          schema: z.object({ hashList: z.unknown() }),
+        },
+      },
+    },
+    202: {
+      description: 'Hash list created and queued for processing (multipart path)',
+      content: {
+        'application/json': {
+          schema: z.object({ hashList: z.unknown() }),
+        },
+      },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    411: {
+      description: 'Length Required (chunked transfer-encoding rejected)',
+      content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
+    },
+    413: {
+      description: 'Payload Too Large',
+      content: { 'application/json': { schema: passthroughObject('PayloadTooLargeError') } },
+    },
+    503: {
+      description: 'Storage or queue unavailable',
+      content: { 'application/json': { schema: passthroughObject('ServiceUnavailableError') } },
+    },
+  },
+})
+
+resourceRoutes.openapi(createHashListRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const contentType = c.req.header('content-type') ?? ''
@@ -266,7 +385,30 @@ resourceRoutes.post('/hash-lists', requireMembershipRole('admin', 'contributor')
   return c.json({ hashList }, 201)
 })
 
-resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
+const getHashListRoute = createRoute({
+  method: 'get',
+  path: '/hash-lists/{id}',
+  tags,
+  summary: 'Get a hash list with live statistics',
+  security,
+  middleware: [requireProjectAccess()] as const,
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Hash list',
+      content: {
+        'application/json': {
+          schema: z.object({ hashList: z.unknown() }),
+        },
+      },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(getHashListRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const hashListId = Number(c.req.param('id'))
@@ -288,115 +430,216 @@ resourceRoutes.get('/hash-lists/:id', requireProjectAccess(), async (c) => {
   const lastUpdated =
     typeof persistedStats['lastUpdated'] === 'string' ? persistedStats['lastUpdated'] : undefined
 
-  return c.json({
-    hashList: {
-      ...hl,
-      statistics: {
-        ...liveStats,
-        ...(lastUpdated ? { lastUpdated } : {}),
+  return c.json(
+    {
+      hashList: {
+        ...hl,
+        statistics: {
+          ...liveStats,
+          ...(lastUpdated ? { lastUpdated } : {}),
+        },
       },
     },
-  })
+    200
+  )
 })
 
-resourceRoutes.delete(
-  '/hash-lists/:id',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const { projectId } = c.get('scopedUser')!
+const deleteHashListRoute = createRoute({
+  method: 'delete',
+  path: '/hash-lists/{id}',
+  tags,
+  summary: 'Delete a hash list',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: { params: idParamSchema },
+  responses: {
+    204: { description: 'Hash list deleted' },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Resource in use and cannot be deleted',
+      content: { 'application/json': { schema: passthroughObject('ResourceInUseError') } },
+    },
+  },
+})
 
-    const id = Number(c.req.param('id'))
-    if (!Number.isInteger(id) || id <= 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid hash list id')
-    }
+resourceRoutes.openapi(deleteHashListRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
 
-    try {
-      const deleted = await deleteHashList(id, projectId)
-      if (!deleted) {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
-      }
-      return c.body(null, 204)
-    } catch (err) {
-      if (err instanceof ResourceInUseError) {
-        return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
-      }
-      throw err
-    }
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid hash list id')
   }
-)
 
-resourceRoutes.post(
-  '/hash-lists/:id/upload',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const { projectId } = c.get('scopedUser')!
-
-    const id = Number(c.req.param('id'))
-    const hashList = await getHashListById(id, projectId)
-
-    if (!hashList) {
+  try {
+    const deleted = await deleteHashList(id, projectId)
+    if (!deleted) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
-
-    const sizeGuardResponse = enforceMultipartSizeLimit(c)
-    if (sizeGuardResponse) return sizeGuardResponse
-
-    const body = await c.req.parseBody()
-    const file = body['file']
-
-    if (!(file instanceof File)) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
+    return c.body(null, 204)
+  } catch (err) {
+    if (err instanceof ResourceInUseError) {
+      return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
     }
+    throw err
+  }
+})
 
-    try {
-      const result = await uploadHashListFile(id, projectId, file)
-      return c.json(result)
-    } catch (err) {
-      if (err instanceof UploadTooLargeError) {
-        return c.json(
-          {
-            error: {
-              code: 'PAYLOAD_TOO_LARGE',
-              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-            },
+const uploadHashListRoute = createRoute({
+  method: 'post',
+  path: '/hash-lists/{id}/upload',
+  tags,
+  summary: 'Upload the hashes file for an existing hash list',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: idParamSchema,
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: z.object({ file: z.unknown() }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Upload accepted',
+      content: { 'application/json': { schema: passthroughObject('HashListUploadResult') } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    411: {
+      description: 'Length Required (chunked transfer-encoding rejected)',
+      content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
+    },
+    413: {
+      description: 'Payload Too Large',
+      content: { 'application/json': { schema: passthroughObject('PayloadTooLargeError') } },
+    },
+  },
+})
+
+resourceRoutes.openapi(uploadHashListRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
+
+  const id = Number(c.req.param('id'))
+  const hashList = await getHashListById(id, projectId)
+
+  if (!hashList) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+  }
+
+  const sizeGuardResponse = enforceMultipartSizeLimit(c)
+  if (sizeGuardResponse) return sizeGuardResponse
+
+  const body = await c.req.parseBody()
+  const file = body['file']
+
+  if (!(file instanceof File)) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
+  }
+
+  try {
+    const result = await uploadHashListFile(id, projectId, file)
+    return c.json(result, 200)
+  } catch (err) {
+    if (err instanceof UploadTooLargeError) {
+      return c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
           },
-          413
-        )
-      }
-      throw err
+        },
+        413
+      )
     }
+    throw err
   }
-)
+})
 
-resourceRoutes.post(
-  '/hash-lists/:id/import',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const { projectId } = c.get('scopedUser')!
+const importHashListRoute = createRoute({
+  method: 'post',
+  path: '/hash-lists/{id}/import',
+  tags,
+  summary: 'Enqueue the import worker for an uploaded hash list',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Import queued',
+      content: { 'application/json': { schema: passthroughObject('HashListImportResult') } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    503: {
+      description: 'Import queue unavailable',
+      content: { 'application/json': { schema: passthroughObject('ServiceUnavailableError') } },
+    },
+  },
+})
 
-    const id = Number(c.req.param('id'))
+resourceRoutes.openapi(importHashListRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
 
-    // Verify hash list belongs to project before importing
-    const hl = await getHashListById(id, projectId)
-    if (!hl) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
-    }
+  const id = Number(c.req.param('id'))
 
-    const result = await importHashList(id, projectId)
-
-    if (!result) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
-    }
-
-    if ('error' in result) {
-      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
-    }
-
-    return c.json(result)
+  // Verify hash list belongs to project before importing
+  const hl = await getHashListById(id, projectId)
+  if (!hl) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
-)
 
-resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) => {
+  const result = await importHashList(id, projectId)
+
+  if (!result) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+  }
+
+  if ('error' in result) {
+    return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
+  }
+
+  return c.json(result, 200)
+})
+
+const hashItemsQuerySchema = z.object({
+  status: z.enum(['all', 'cracked', 'uncracked']).optional(),
+  q: z.string().max(256).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+})
+
+const listHashItemsRoute = createRoute({
+  method: 'get',
+  path: '/hash-lists/{id}/items',
+  tags,
+  summary: 'List individual hash items for a hash list',
+  security,
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    params: idParamSchema,
+    query: hashItemsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Hash items page',
+      content: { 'application/json': { schema: passthroughObject('HashItemsPage') } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(listHashItemsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const hashListId = Number(c.req.param('id'))
@@ -420,10 +663,34 @@ resourceRoutes.get('/hash-lists/:id/items', requireProjectAccess(), async (c) =>
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
-  return c.json(result)
+  return c.json(result, 200)
 })
 
-resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c) => {
+const downloadHashListRoute = createRoute({
+  method: 'get',
+  path: '/hash-lists/{id}/download',
+  tags,
+  summary: 'Get a presigned download URL for a hash list file',
+  security,
+  middleware: [requireProjectAccess()] as const,
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Presigned URL',
+      content: {
+        'application/json': {
+          schema: z.object({ url: z.string() }),
+        },
+      },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(downloadHashListRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const id = Number(c.req.param('id'))
@@ -443,28 +710,54 @@ resourceRoutes.get('/hash-lists/:id/download', requireProjectAccess(), async (c)
     key: fileRef.key,
     ...(fileRef.name ? { name: fileRef.name } : {}),
   })
-  return c.json({ url })
+  return c.json({ url }, 200)
 })
 
 // ─── Hash Type Detection ─────────────────────────────────────────────
 
 // detectHashTypeRequestSchema is imported from @hashhive/shared.
 
-resourceRoutes.post(
-  '/detect-hash-type',
-  requireSession,
-  zValidator('json', detectHashTypeRequestSchema),
-  async (c) => {
-    const { hashes } = c.req.valid('json')
+const detectHashTypeRoute = createRoute({
+  method: 'post',
+  path: '/detect-hash-type',
+  tags,
+  summary: 'Heuristically guess hashcat hash types for a batch of values',
+  security,
+  // requireSession is already mounted at router level via `use('*')`;
+  // the original route added it a second time, which was a no-op.
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: detectHashTypeRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Hash type detection results',
+      content: {
+        'application/json': {
+          schema: z.object({
+            results: z.array(z.unknown()),
+          }),
+        },
+      },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  },
+})
 
-    const results = hashes.map((hashValue) => ({
-      hashValue,
-      candidates: guessHashType(hashValue),
-    }))
+resourceRoutes.openapi(detectHashTypeRoute, async (c) => {
+  const { hashes } = c.req.valid('json')
 
-    return c.json({ results })
-  }
-)
+  const results = hashes.map((hashValue) => ({
+    hashValue,
+    candidates: guessHashType(hashValue),
+  }))
+
+  return c.json({ results }, 200)
+})
 
 // ─── Generic resource routes factory ────────────────────────────────
 
@@ -473,26 +766,82 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
     name: z.string().min(1).max(255),
   })
 
-  resourceRoutes.get(`/${prefix}`, requireProjectAccess(), async (c) => {
+  const listResourceRoute = createRoute({
+    method: 'get',
+    path: `/${prefix}`,
+    tags,
+    summary: `List ${prefix} for the active project`,
+    security,
+    middleware: [requireProjectAccess()] as const,
+    responses: {
+      200: {
+        description: `${prefix} collection`,
+        content: { 'application/json': { schema: passthroughObject(`${prefix}ListResponse`) } },
+      },
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    },
+  })
+
+  resourceRoutes.openapi(listResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
 
     const items = await listResources(table, projectId)
-    return c.json({ [prefix]: items })
+    return c.json({ [prefix]: items }, 200)
   })
 
-  resourceRoutes.post(
-    `/${prefix}`,
-    requireMembershipRole('admin', 'contributor'),
-    zValidator('json', createSchema),
-    async (c) => {
-      const data = c.req.valid('json')
-      const { projectId } = c.get('scopedUser')!
-      const item = await createResource(table, { ...data, projectId })
-      return c.json({ item }, 201)
-    }
-  )
+  const createResourceRoute = createRoute({
+    method: 'post',
+    path: `/${prefix}`,
+    tags,
+    summary: `Create a ${prefix} entry`,
+    security,
+    middleware: [requireMembershipRole('admin', 'contributor')] as const,
+    request: {
+      body: {
+        content: {
+          'application/json': { schema: createSchema },
+        },
+      },
+    },
+    responses: {
+      201: {
+        description: 'Created',
+        content: { 'application/json': { schema: z.object({ item: z.unknown() }) } },
+      },
+      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    },
+  })
 
-  resourceRoutes.get(`/${prefix}/:id`, requireProjectAccess(), async (c) => {
+  resourceRoutes.openapi(createResourceRoute, async (c) => {
+    const data = c.req.valid('json')
+    const { projectId } = c.get('scopedUser')!
+    const item = await createResource(table, { ...data, projectId })
+    return c.json({ item }, 201)
+  })
+
+  const getResourceRoute = createRoute({
+    method: 'get',
+    path: `/${prefix}/{id}`,
+    tags,
+    summary: `Get a ${prefix} entry by id`,
+    security,
+    middleware: [requireProjectAccess()] as const,
+    request: { params: idParamSchema },
+    responses: {
+      200: {
+        description: 'Resource',
+        content: { 'application/json': { schema: z.object({ item: z.unknown() }) } },
+      },
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    },
+  })
+
+  resourceRoutes.openapi(getResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
     const id = Number(c.req.param('id'))
     const item = await getResourceById(table, id, projectId)
@@ -501,76 +850,148 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
     }
 
-    return c.json({ item })
+    return c.json({ item }, 200)
   })
 
-  resourceRoutes.post(
-    `/${prefix}/:id/upload`,
-    requireMembershipRole('admin', 'contributor'),
-    async (c) => {
-      const { projectId } = c.get('scopedUser')!
-      const id = Number(c.req.param('id'))
-      const item = await getResourceById(table, id, projectId)
+  const uploadResourceRoute = createRoute({
+    method: 'post',
+    path: `/${prefix}/{id}/upload`,
+    tags,
+    summary: `Upload the file payload for a ${prefix} entry`,
+    security,
+    middleware: [requireMembershipRole('admin', 'contributor')] as const,
+    request: {
+      params: idParamSchema,
+      body: {
+        content: {
+          'multipart/form-data': {
+            schema: z.object({ file: z.unknown() }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Upload accepted',
+        content: {
+          'application/json': { schema: passthroughObject(`${prefix}UploadResult`) },
+        },
+      },
+      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      411: {
+        description: 'Length Required (chunked transfer-encoding rejected)',
+        content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
+      },
+      413: {
+        description: 'Payload Too Large',
+        content: { 'application/json': { schema: passthroughObject('PayloadTooLargeError') } },
+      },
+    },
+  })
 
-      if (!item) {
+  resourceRoutes.openapi(uploadResourceRoute, async (c) => {
+    const { projectId } = c.get('scopedUser')!
+    const id = Number(c.req.param('id'))
+    const item = await getResourceById(table, id, projectId)
+
+    if (!item) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
+    }
+
+    const sizeGuardResponse = enforceMultipartSizeLimit(c)
+    if (sizeGuardResponse) return sizeGuardResponse
+
+    const body = await c.req.parseBody()
+    const file = body['file']
+
+    if (!(file instanceof File)) {
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
+    }
+
+    try {
+      const result = await uploadResourceFile(table, id, projectId, prefix, file)
+      return c.json(result, 200)
+    } catch (err) {
+      if (err instanceof UploadTooLargeError) {
+        return c.json(
+          {
+            error: {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
+            },
+          },
+          413
+        )
+      }
+      throw err
+    }
+  })
+
+  const deleteResourceRoute = createRoute({
+    method: 'delete',
+    path: `/${prefix}/{id}`,
+    tags,
+    summary: `Delete a ${prefix} entry`,
+    security,
+    middleware: [requireMembershipRole('admin', 'contributor')] as const,
+    request: { params: idParamSchema },
+    responses: {
+      204: { description: 'Deleted' },
+      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      409: {
+        description: 'Resource in use',
+        content: { 'application/json': { schema: passthroughObject('ResourceInUseError') } },
+      },
+    },
+  })
+
+  resourceRoutes.openapi(deleteResourceRoute, async (c) => {
+    const { projectId } = c.get('scopedUser')!
+    const id = Number(c.req.param('id'))
+    if (!Number.isInteger(id) || id <= 0) {
+      return dashboardError(c, 400, 'VALIDATION_ERROR', `Invalid ${prefix} id`)
+    }
+    try {
+      const deleted = await deleteResource(table, id, projectId, prefix)
+      if (!deleted) {
         return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
       }
-
-      const sizeGuardResponse = enforceMultipartSizeLimit(c)
-      if (sizeGuardResponse) return sizeGuardResponse
-
-      const body = await c.req.parseBody()
-      const file = body['file']
-
-      if (!(file instanceof File)) {
-        return dashboardError(c, 400, 'VALIDATION_ERROR', 'file field is required')
+      return c.body(null, 204)
+    } catch (err) {
+      if (err instanceof ResourceInUseError) {
+        return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
       }
-
-      try {
-        const result = await uploadResourceFile(table, id, projectId, prefix, file)
-        return c.json(result)
-      } catch (err) {
-        if (err instanceof UploadTooLargeError) {
-          return c.json(
-            {
-              error: {
-                code: 'PAYLOAD_TOO_LARGE',
-                message: `File size (${err.size} bytes) exceeds the direct-upload limit (${err.limit} bytes). Use the chunked upload endpoint (POST /api/v1/dashboard/resources/upload/initiate) for larger files.`,
-              },
-            },
-            413
-          )
-        }
-        throw err
-      }
+      throw err
     }
-  )
+  })
 
-  resourceRoutes.delete(
-    `/${prefix}/:id`,
-    requireMembershipRole('admin', 'contributor'),
-    async (c) => {
-      const { projectId } = c.get('scopedUser')!
-      const id = Number(c.req.param('id'))
-      if (!Number.isInteger(id) || id <= 0) {
-        return dashboardError(c, 400, 'VALIDATION_ERROR', `Invalid ${prefix} id`)
-      }
-      try {
-        const deleted = await deleteResource(table, id, projectId, prefix)
-        if (!deleted) {
-          return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
-        }
-        return c.body(null, 204)
-      } catch (err) {
-        if (err instanceof ResourceInUseError) {
-          return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
-        }
-        throw err
-      }
-    }
-  )
+  const downloadResourceRoute = createRoute({
+    method: 'get',
+    path: `/${prefix}/{id}/download`,
+    tags,
+    summary: `Get a presigned download URL for a ${prefix} entry`,
+    security,
+    middleware: [requireProjectAccess()] as const,
+    request: { params: idParamSchema },
+    responses: {
+      200: {
+        description: 'Presigned URL',
+        content: { 'application/json': { schema: z.object({ url: z.string() }) } },
+      },
+      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    },
+  })
 
-  resourceRoutes.get(`/${prefix}/:id/download`, requireProjectAccess(), async (c) => {
+  resourceRoutes.openapi(downloadResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
     const id = Number(c.req.param('id'))
     const item = await getResourceById(table, id, projectId)
@@ -593,7 +1014,7 @@ function createResourceRoutes(prefix: string, table: ResourceTable) {
       key: fileRef.key,
       ...(fileRef.name ? { name: fileRef.name } : {}),
     })
-    return c.json({ url })
+    return c.json({ url }, 200)
   })
 }
 
@@ -613,71 +1034,127 @@ const initiateUploadSchema = z.object({
   contentType: z.string().optional(),
 })
 
-resourceRoutes.post(
-  '/upload/initiate',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', initiateUploadSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { projectId } = c.get('scopedUser')!
+const initiateUploadRoute = createRoute({
+  method: 'post',
+  path: '/upload/initiate',
+  tags,
+  summary: 'Initiate an S3 multipart chunked upload session',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: initiateUploadSchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Upload session initiated',
+      content: { 'application/json': { schema: passthroughObject('UploadInitiateResult') } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: {
+      description: 'Upload initiation failed',
+      content: { 'application/json': { schema: passthroughObject('UploadInitFailedError') } },
+    },
+  },
+})
 
-    try {
-      const result = await initiateChunkedUpload({ ...data, projectId })
-      return c.json(result, 201)
-    } catch (err) {
-      logger.error({ err }, 'Failed to initiate chunked upload')
-      return dashboardError(c, 500, 'UPLOAD_INIT_FAILED', 'Failed to initiate upload')
-    }
+resourceRoutes.openapi(initiateUploadRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { projectId } = c.get('scopedUser')!
+
+  try {
+    const result = await initiateChunkedUpload({ ...data, projectId })
+    return c.json(result, 201)
+  } catch (err) {
+    logger.error({ err }, 'Failed to initiate chunked upload')
+    return dashboardError(c, 500, 'UPLOAD_INIT_FAILED', 'Failed to initiate upload')
   }
-)
+})
 
-resourceRoutes.put(
-  '/upload/:uploadId/part/:partNumber',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const uploadId = c.req.param('uploadId')
-    const partNumber = Number(c.req.param('partNumber'))
-    const resourceId = Number(c.req.query('resourceId'))
-    const resourceType = c.req.query('resourceType')
+const uploadPartQuerySchema = z.object({
+  resourceId: z.coerce.number().int().positive(),
+  resourceType: z.enum(RESOURCE_TYPES),
+})
 
-    if (!uploadId || !partNumber || !resourceId || !resourceType) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'uploadId, partNumber, resourceId, and resourceType are required',
-          },
+const uploadPartRoute = createRoute({
+  method: 'put',
+  path: '/upload/{uploadId}/part/{partNumber}',
+  tags,
+  summary: 'Upload a single chunk part for a multipart upload session',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: uploadPartParamSchema,
+    query: uploadPartQuerySchema,
+    body: {
+      content: {
+        'application/octet-stream': { schema: z.unknown() },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Part uploaded',
+      content: { 'application/json': { schema: passthroughObject('UploadPartResult') } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: {
+      description: 'Upload part failed',
+      content: { 'application/json': { schema: passthroughObject('UploadPartFailedError') } },
+    },
+  },
+})
+
+resourceRoutes.openapi(uploadPartRoute, async (c) => {
+  const uploadId = c.req.param('uploadId')
+  const partNumber = Number(c.req.param('partNumber'))
+  const resourceId = Number(c.req.query('resourceId'))
+  const resourceType = c.req.query('resourceType')
+
+  if (!uploadId || !partNumber || !resourceId || !resourceType) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'uploadId, partNumber, resourceId, and resourceType are required',
         },
-        400
-      )
-    }
-
-    // Read the raw body as a Uint8Array — do NOT use c.req.json() or c.req.parseBody()
-    const body = await c.req.arrayBuffer()
-    const chunk = new Uint8Array(body)
-
-    if (chunk.byteLength === 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body is empty')
-    }
-
-    const { projectId } = c.get('scopedUser')!
-
-    try {
-      const result = await uploadChunkPart(
-        uploadId,
-        partNumber,
-        chunk,
-        resourceId,
-        resourceType,
-        projectId
-      )
-      return c.json(result)
-    } catch (err) {
-      logger.error({ err, uploadId, partNumber }, 'Failed to upload part')
-      return dashboardError(c, 500, 'UPLOAD_PART_FAILED', 'Failed to upload part')
-    }
+      },
+      400
+    )
   }
-)
+
+  // Read the raw body as a Uint8Array — do NOT use c.req.json() or c.req.parseBody()
+  const body = await c.req.arrayBuffer()
+  const chunk = new Uint8Array(body)
+
+  if (chunk.byteLength === 0) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body is empty')
+  }
+
+  const { projectId } = c.get('scopedUser')!
+
+  try {
+    const result = await uploadChunkPart(
+      uploadId,
+      partNumber,
+      chunk,
+      resourceId,
+      resourceType,
+      projectId
+    )
+    return c.json(result, 200)
+  } catch (err) {
+    logger.error({ err, uploadId, partNumber }, 'Failed to upload part')
+    return dashboardError(c, 500, 'UPLOAD_PART_FAILED', 'Failed to upload part')
+  }
+})
 
 const completeUploadSchema = z.object({
   parts: z
@@ -692,97 +1169,153 @@ const completeUploadSchema = z.object({
   resourceType: z.enum(['hash-lists', 'wordlists', 'rulelists', 'masklists']),
 })
 
-resourceRoutes.post(
-  '/upload/:uploadId/complete',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', completeUploadSchema),
-  async (c) => {
-    const uploadId = c.req.param('uploadId')
-    const { parts, resourceId, resourceType } = c.req.valid('json')
-    const { projectId } = c.get('scopedUser')!
+const completeUploadRoute = createRoute({
+  method: 'post',
+  path: '/upload/{uploadId}/complete',
+  tags,
+  summary: 'Complete a multipart upload session',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: uploadIdParamSchema,
+    body: {
+      content: {
+        'application/json': { schema: completeUploadSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Upload completed',
+      content: { 'application/json': { schema: passthroughObject('UploadCompleteResult') } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: {
+      description: 'Upload completion failed',
+      content: { 'application/json': { schema: passthroughObject('UploadCompleteFailedError') } },
+    },
+  },
+})
 
-    try {
-      const result = await completeChunkedUpload(
-        uploadId,
-        parts,
-        resourceId,
-        resourceType,
-        projectId
-      )
-      return c.json(result)
-    } catch (err) {
-      logger.error({ err, uploadId }, 'Failed to complete chunked upload')
-      return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')
-    }
+resourceRoutes.openapi(completeUploadRoute, async (c) => {
+  const uploadId = c.req.param('uploadId')
+  const { parts, resourceId, resourceType } = c.req.valid('json')
+  const { projectId } = c.get('scopedUser')!
+
+  try {
+    const result = await completeChunkedUpload(uploadId, parts, resourceId, resourceType, projectId)
+    return c.json(result, 200)
+  } catch (err) {
+    logger.error({ err, uploadId }, 'Failed to complete chunked upload')
+    return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')
   }
-)
+})
 
-resourceRoutes.delete(
-  '/upload/:uploadId',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const uploadId = c.req.param('uploadId')
-    if (!uploadId) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
-    }
-    const parsed = uploadStatusQuerySchema.safeParse({
-      resourceId: c.req.query('resourceId'),
-      resourceType: c.req.query('resourceType'),
-    })
-    if (!parsed.success) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: parsed.error.issues.map((i) => i.message).join('; '),
-          },
+const abortUploadRoute = createRoute({
+  method: 'delete',
+  path: '/upload/{uploadId}',
+  tags,
+  summary: 'Abort an in-progress multipart upload session',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: uploadIdParamSchema,
+    query: uploadStatusQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Abort acknowledged',
+      content: { 'application/json': { schema: z.object({ acknowledged: z.boolean() }) } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  },
+})
+
+resourceRoutes.openapi(abortUploadRoute, async (c) => {
+  const uploadId = c.req.param('uploadId')
+  if (!uploadId) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
+  }
+  const parsed = uploadStatusQuerySchema.safeParse({
+    resourceId: c.req.query('resourceId'),
+    resourceType: c.req.query('resourceType'),
+  })
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parsed.error.issues.map((i) => i.message).join('; '),
         },
-        400
-      )
-    }
-    const { resourceId, resourceType } = parsed.data
-
-    const { projectId } = c.get('scopedUser')!
-
-    await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
-    return c.json({ acknowledged: true })
+      },
+      400
+    )
   }
-)
+  const { resourceId, resourceType } = parsed.data
 
-resourceRoutes.get(
-  '/upload/:uploadId/status',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const uploadId = c.req.param('uploadId')
-    if (!uploadId) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
-    }
-    const parsed = uploadStatusQuerySchema.safeParse({
-      resourceId: c.req.query('resourceId'),
-      resourceType: c.req.query('resourceType'),
-    })
-    if (!parsed.success) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: parsed.error.issues.map((i) => i.message).join('; '),
-          },
+  const { projectId } = c.get('scopedUser')!
+
+  await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
+  return c.json({ acknowledged: true }, 200)
+})
+
+const uploadStatusRoute = createRoute({
+  method: 'get',
+  path: '/upload/{uploadId}/status',
+  tags,
+  summary: 'Get the status of an in-progress multipart upload session',
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: uploadIdParamSchema,
+    query: uploadStatusQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Upload status',
+      content: { 'application/json': { schema: passthroughObject('UploadStatusResult') } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(uploadStatusRoute, async (c) => {
+  const uploadId = c.req.param('uploadId')
+  if (!uploadId) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
+  }
+  const parsed = uploadStatusQuerySchema.safeParse({
+    resourceId: c.req.query('resourceId'),
+    resourceType: c.req.query('resourceType'),
+  })
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parsed.error.issues.map((i) => i.message).join('; '),
         },
-        400
-      )
-    }
-    const { resourceId, resourceType } = parsed.data
-
-    const { projectId } = c.get('scopedUser')!
-
-    const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
-    if (!result) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
-    }
-
-    return c.json({ uploadId, ...result })
+      },
+      400
+    )
   }
-)
+  const { resourceId, resourceType } = parsed.data
+
+  const { projectId } = c.get('scopedUser')!
+
+  const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)
+  if (!result) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
+  }
+
+  return c.json({ uploadId, ...result }, 200)
+})
 
 export { resourceRoutes }
