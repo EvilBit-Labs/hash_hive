@@ -23,10 +23,16 @@ import type { Env } from 'hono'
  * vocabulary's nearest fit is `apiKey in cookie`.
  */
 export function registerDashboardSecurity<E extends Env>(app: OpenAPIHono<E>): void {
-  app.openAPIRegistry.registerComponent('securitySchemes', 'BetterAuthSession', {
+  // Scheme name `SessionCookie` and cookie name `hh.session_token`
+  // mirror packages/openapi/dashboard-api.yaml so the runtime spec
+  // matches the hand-rolled YAML at the MVP diff gate (R5). The cookie
+  // is set by `/api/auth/sign-in/*` via BetterAuth (see
+  // packages/backend/src/lib/auth.ts); SameSite=Strict and per-route
+  // Origin/Referer checks via requireSameOrigin() form defense in depth.
+  app.openAPIRegistry.registerComponent('securitySchemes', 'SessionCookie', {
     type: 'apiKey',
     in: 'cookie',
-    name: 'better-auth.session_token',
+    name: 'hh.session_token',
     description:
       'BetterAuth cookie session set by `/api/auth/sign-in/*`. SameSite=Strict; the request must also pass the per-domain Origin/Referer check enforced by requireSameOrigin().',
   })
