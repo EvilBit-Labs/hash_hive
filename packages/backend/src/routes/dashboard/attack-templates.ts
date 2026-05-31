@@ -5,9 +5,9 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
 import { eq } from 'drizzle-orm'
-import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -27,7 +27,7 @@ import {
 } from '../../services/attack-templates.js'
 import { getResourceById } from '../../services/resources.js'
 
-const attackTemplateRoutes = new Hono<AppEnv>()
+const attackTemplateRoutes = new OpenAPIHono<AppEnv>()
 
 attackTemplateRoutes.use('*', requireSession)
 

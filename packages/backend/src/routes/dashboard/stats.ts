@@ -9,8 +9,8 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
-import { Hono } from 'hono'
 
 import type { AppEnv } from '../../types.js'
 
@@ -18,7 +18,7 @@ import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 
-const statsRoutes = new Hono<AppEnv>()
+const statsRoutes = new OpenAPIHono<AppEnv>()
 
 statsRoutes.use('*', requireSession)
 

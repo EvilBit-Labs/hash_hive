@@ -1,6 +1,6 @@
 import { selectProjectRequestSchema } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -27,7 +27,7 @@ import {
   updateProject,
 } from '../../services/projects.js'
 
-const projectRoutes = new Hono<AppEnv>()
+const projectRoutes = new OpenAPIHono<AppEnv>()
 
 // All project routes require session auth
 projectRoutes.use('*', requireSession)

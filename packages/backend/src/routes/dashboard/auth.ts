@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { OpenAPIHono } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
@@ -12,7 +12,7 @@ import {
   revokeUserApiKey,
 } from '../../services/auth.js'
 
-const authRouter = new Hono<AppEnv>()
+const authRouter = new OpenAPIHono<AppEnv>()
 
 /**
  * GET /me -- returns the authenticated user's profile, project

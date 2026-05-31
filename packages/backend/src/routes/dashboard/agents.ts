@@ -1,5 +1,5 @@
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -17,7 +17,7 @@ import {
 } from '../../services/agents.js'
 import { listTasksByAgent } from '../../services/tasks.js'
 
-const dashboardAgentRoutes = new Hono<AppEnv>()
+const dashboardAgentRoutes = new OpenAPIHono<AppEnv>()
 
 dashboardAgentRoutes.use('*', requireSession)
 

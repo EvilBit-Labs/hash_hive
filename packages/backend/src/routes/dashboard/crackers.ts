@@ -10,8 +10,8 @@ import {
   createCrackerBinaryRequestSchema,
   updateCrackerBinaryRequestSchema,
 } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -37,7 +37,7 @@ import {
   uploadCrackerFile,
 } from '../../services/crackers.js'
 
-const crackerRoutes = new Hono<AppEnv>()
+const crackerRoutes = new OpenAPIHono<AppEnv>()
 
 const S3_MAX_PART_NUMBER = 10_000 // S3 multipart part-number range is [1, 10000]
 
