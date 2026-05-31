@@ -2,28 +2,34 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 /**
  * Compatibility spike for `@hono/zod-openapi` against the repo's pinned
  * Zod v4 and Hono v4.12.x. Validates the framework features the
- * migration plan in
- * `docs/plans/2026-05-31-001-feat-openapi-auto-generation-migration-plan.md`
- * depends on, BEFORE U2-U7 commit to using them.
+ * route-as-spec migration depends on, locked in BEFORE the per-route
+ * conversions start.
  *
- * Each test below maps to a Test Scenario under "U1. Compatibility spike"
- * in the plan. If any of these break in a future library bump, the
- * migration's assumptions need re-verification.
+ * Each test asserts one library invariant: OpenAPI 3.1 round-trip,
+ * `oneOf` emission for discriminated unions, `.openapi('Name')`
+ * component registration, the `$ref` escape hatch for shared response
+ * components, per-surface security scheme round-trip, `z.literal`
+ * narrowing preservation, and sub-app registry merging. If any of these
+ * break in a future library bump, the migration's assumptions need
+ * re-verification.
  *
- * **Retention rationale.** Kept as a permanent regression smoke for the
- * compatibility assumptions U2-U7 depend on, not removed at U1 close.
- * Cost is negligible (no network, no DB, no app boot — pure schema/spec
- * assertions) and the signal value on a future `@hono/zod-openapi` or
- * Zod upgrade is high: a failure here means a migration assumption
- * (`oneOf` emission, `$ref` escape hatch, security-scheme round-trip,
- * sub-app registry merging, literal preservation) has shifted under the
- * route layer and warrants re-verification before downstream behavior
- * changes.
+ * **Retention rationale.** Kept as a permanent regression smoke against
+ * future `@hono/zod-openapi` or Zod upgrades. Cost is negligible (no
+ * network, no DB, no app boot — pure schema/spec assertions). Remove
+ * only if `@hono/zod-openapi` is itself removed from the dependency
+ * tree, or if every assumption tested here is covered by a contract
+ * test against a real route surface.
  */
 import { describe, expect, it } from 'bun:test'
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+// Mirror of the OpenAPI 3.1 document shape sufficient for the
+// assertions below. Library-exported types (`openapi3-ts/oas31`'s
+// `OpenAPIObject` is transitive via `@asteasolutions/zod-to-openapi`)
+// over-constrain the per-operation responses and force narrowing casts
+// just as wide as this local type does, so we keep the local narrowing
+// for assertion readability.
 type OpenAPIDocument = {
   openapi: string
   info: { title: string; version: string }
@@ -46,9 +52,9 @@ function generateDoc(app: OpenAPIHono): OpenAPIDocument {
       info: { title: 'Spike API', version: '1.0.0' },
     },
     // The generator option that maps discriminated unions onto `oneOf`
-    // rather than `anyOf` — required for parity with the agent surface's
-    // current hand-rolled YAML (10 `oneOf` occurrences in
-    // packages/openapi/agent-api.yaml). Locked in by plan D5.
+    // rather than `anyOf` — required for parity with the discriminated
+    // unions in the agent surface (task report variants and the agent
+    // error envelope).
     { unionPreferredType: 'oneOf' }
   ) as OpenAPIDocument
 }
@@ -74,8 +80,9 @@ describe('@hono/zod-openapi compatibility spike (U1)', () => {
 
   it('emits `oneOf` (not `anyOf`) for a Zod discriminated union when generator is configured', () => {
     // Mirrors the agent surface's task-report shape: discriminated union
-    // on a `status` literal. The plan's D5 requires `oneOf` output to
-    // match agent-api.yaml's current shape.
+    // on a `status` literal. The migration requires `oneOf` output (not
+    // `anyOf`) so the agent surface's discriminated unions surface in
+    // the spec with their existing shape.
     const successVariant = z.object({
       status: z.literal('success'),
       crackedCount: z.number().int().nonnegative(),
@@ -155,10 +162,13 @@ describe('@hono/zod-openapi compatibility spike (U1)', () => {
   })
 
   it('registers a shared response component and references it via $ref escape hatch', () => {
-    // Mirrors AuthRequired/Forbidden/ValidationFailed/ResourceNotFound
-    // pattern used across all three hand-rolled YAMLs (e.g.
-    // packages/openapi/dashboard-api.yaml lines 155, 194, 224, etc.).
-    // Plan D6 locks in this exact mechanism.
+    // Mirrors the AuthRequired / Forbidden / ValidationFailed /
+    // ResourceNotFound pattern reused across every error path on the
+    // dashboard surface. The route type expects an inline response
+    // definition, so the documented mechanism for referencing a
+    // registered shared response is a `$ref` value cast through the
+    // response config type — exercised here so a future library bump
+    // that breaks the cast surfaces at unit-test time.
     const errorSchema = z.object({
       error: z.object({
         code: z.string(),
@@ -199,9 +209,11 @@ describe('@hono/zod-openapi compatibility spike (U1)', () => {
   })
 
   it('registers security schemes per-surface and references them from createRoute', () => {
-    // Plan D8 — each of the three surfaces (dashboard cookie, control
-    // API key, agent Bearer) registers its scheme on its own
-    // OpenAPIHono registry. Verify each shape round-trips.
+    // Each of the three HashHive surfaces (dashboard cookie, control
+    // API key, agent bearer) registers its scheme on its own
+    // OpenAPIHono registry. Verify each shape round-trips through both
+    // the components.securitySchemes block and the per-route security
+    // array so a future change that breaks either path fails here.
     const app = buildEmptyApp()
     app.openAPIRegistry.registerComponent('securitySchemes', 'Cookie', {
       type: 'apiKey',
@@ -295,9 +307,10 @@ describe('@hono/zod-openapi compatibility spike (U1)', () => {
   })
 
   it('preserves z.literal narrowing in the generated request body schema', () => {
-    // Plan U1 test scenario — confirms the literal narrowing the agent
-    // surface relies on (e.g. error code unions) is preserved through
-    // spec generation.
+    // The agent surface relies on literal narrowing for its error code
+    // unions; verify the narrowing survives spec generation as either
+    // `const: <value>` or `enum: [<value>]` (OpenAPI 3.1 permits either,
+    // and the generator's choice has shifted across library versions).
     const cancelRequestSchema = z
       .object({
         action: z.literal('cancel'),
@@ -340,14 +353,15 @@ describe('@hono/zod-openapi compatibility spike (U1)', () => {
     expect(cancelSchema?.required).toContain('reason')
   })
 
-  it('merges nested sub-app routes and components into the parent spec (plan D1)', () => {
-    // Plan D1 / U2's dashboard aggregator both depend on this: mounting
-    // an OpenAPIHono child via `parent.route('/prefix', child)` exposes
+  it('merges nested sub-app routes and components into the parent spec', () => {
+    // The dashboard aggregator pattern depends on this: mounting an
+    // OpenAPIHono child via `parent.route('/prefix', child)` must expose
     // the child's routes and components on the parent's generated spec.
-    // The plan keeps the top-level `app` in `packages/backend/src/index.ts`
-    // as plain Hono precisely BECAUSE this merging happens — verify the
-    // merge actually works so the dashboard aggregator pattern in U2 is
-    // sound before any route migration commits to it.
+    // The top-level `app` in `packages/backend/src/index.ts` is plain
+    // `Hono` precisely BECAUSE this merging happens — keeping the root
+    // as plain `Hono` is what stops the agent and control surfaces from
+    // being pulled into the dashboard's spec. Verify the merge so the
+    // aggregator pattern is sound before any route migration commits.
     const widgetSchema = z
       .object({
         id: z.string(),

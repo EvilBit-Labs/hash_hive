@@ -3,32 +3,32 @@
  *
  * Each of the three HashHive API surfaces uses a distinct authentication
  * mechanism. `OpenAPIHono`'s `openAPIRegistry` is per-instance, so each
- * surface declares its own scheme on its own registry — there is no
+ * surface declares its own scheme on its own registry; there is no
  * shared registry to mutate. Routes reference these schemes via
  * `security: [{ <SchemeName>: [] }]` in their `createRoute(...)`
  * definitions.
+ *
+ * Each registrar throws on duplicate registration so a future caller
+ * that mounts two surfaces onto a shared registry fails loudly instead
+ * of silently last-writer-wins.
  */
 
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import type { Env } from 'hono'
 
 /**
- * BetterAuth cookie session — used by the dashboard surface.
+ * Dashboard cookie session.
  *
- * The cookie name matches the BetterAuth-emitted session cookie. Path
- * stays under `/api/v1/dashboard/*` and the cookie is `SameSite=Strict`
- * by configuration (see `packages/backend/src/lib/auth.ts`). The spec
- * declares the scheme as `apiKey in cookie` because BetterAuth does not
- * implement HTTP `Set-Cookie` with an OAuth bearer shape; the OpenAPI
- * vocabulary's nearest fit is `apiKey in cookie`.
+ * Cookie name `hh.session_token` must match the runtime cookie issued
+ * by BetterAuth (configured in `packages/backend/src/lib/auth.ts`);
+ * `auth.ts` is the source of truth. Path stays under
+ * `/api/v1/dashboard/*`. The cookie is `SameSite=Strict` by config and
+ * per-route Origin/Referer checks via `requireSameOrigin()` form
+ * defense in depth. The OpenAPI vocabulary's nearest fit for a server-
+ * issued cookie session is `apiKey in cookie`.
  */
 export function registerDashboardSecurity<E extends Env>(app: OpenAPIHono<E>): void {
-  // Scheme name `SessionCookie` and cookie name `hh.session_token`
-  // mirror packages/openapi/dashboard-api.yaml so the runtime spec
-  // matches the hand-rolled YAML at the MVP diff gate (R5). The cookie
-  // is set by `/api/auth/sign-in/*` via BetterAuth (see
-  // packages/backend/src/lib/auth.ts); SameSite=Strict and per-route
-  // Origin/Referer checks via requireSameOrigin() form defense in depth.
+  guardDuplicateSchemeRegistration(app, 'SessionCookie')
   app.openAPIRegistry.registerComponent('securitySchemes', 'SessionCookie', {
     type: 'apiKey',
     in: 'cookie',
@@ -39,13 +39,14 @@ export function registerDashboardSecurity<E extends Env>(app: OpenAPIHono<E>): v
 }
 
 /**
- * Control API key — used by the control surface.
+ * Control API key.
  *
  * Tokens are issued from the dashboard Account page (`cst_*` format,
- * bcrypt-hashed in `users.api_key_hash`). Sent via the
- * `Authorization: Bearer cst_...` header.
+ * bcrypt-hashed in `users.api_key_hash`). Sent via
+ * `Authorization: Bearer cst_...`.
  */
 export function registerControlSecurity<E extends Env>(app: OpenAPIHono<E>): void {
+  guardDuplicateSchemeRegistration(app, 'ControlApiKey')
   app.openAPIRegistry.registerComponent('securitySchemes', 'ControlApiKey', {
     type: 'http',
     scheme: 'bearer',
@@ -56,14 +57,15 @@ export function registerControlSecurity<E extends Env>(app: OpenAPIHono<E>): voi
 }
 
 /**
- * Agent pre-shared bearer token — used by the agent surface.
+ * Agent pre-shared bearer token.
  *
  * Each registered hashcat agent has its own token (bcrypt-hashed in
  * `agents.auth_token_hash`, with legacy plaintext support via
- * `agents.auth_token` during the rotation window). Sent via the
- * `Authorization: Bearer <token>` header.
+ * `agents.auth_token` during the rotation window). Sent via
+ * `Authorization: Bearer <token>`.
  */
 export function registerAgentSecurity<E extends Env>(app: OpenAPIHono<E>): void {
+  guardDuplicateSchemeRegistration(app, 'AgentBearer')
   app.openAPIRegistry.registerComponent('securitySchemes', 'AgentBearer', {
     type: 'http',
     scheme: 'bearer',
@@ -71,4 +73,30 @@ export function registerAgentSecurity<E extends Env>(app: OpenAPIHono<E>): void 
     description:
       'Pre-shared agent token issued at agent registration. Bcrypt-format tokens carry an `agt_` prefix and a numeric agentId hint; legacy plaintext tokens are raw UUIDs (rotation window — see GOTCHAS).',
   })
+}
+
+/**
+ * Throws when a security scheme with the given name is already
+ * registered on the passed surface's registry. The underlying
+ * `@asteasolutions/zod-to-openapi` registry silently overwrites
+ * duplicates; this guard makes that failure class loud.
+ */
+function guardDuplicateSchemeRegistration<E extends Env>(app: OpenAPIHono<E>, name: string): void {
+  const definitions = (
+    app.openAPIRegistry as unknown as {
+      definitions: Array<{
+        type: 'schema' | 'component' | 'route' | 'parameter' | 'webhook'
+        componentType?: string
+        name?: string
+      }>
+    }
+  ).definitions
+  for (const def of definitions) {
+    if (def.type === 'component' && def.componentType === 'securitySchemes' && def.name === name) {
+      throw new Error(
+        `[openapi] Duplicate security scheme registration: '${name}' is already registered on this surface. ` +
+          'Two surfaces (dashboard / control / agent) must not share an OpenAPIHono registry.'
+      )
+    }
+  }
 }

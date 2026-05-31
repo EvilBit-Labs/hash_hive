@@ -6,17 +6,28 @@
  * (resolved to `/api/v1/dashboard/openapi.json` after mounting in
  * `packages/backend/src/index.ts`).
  *
- * Why an aggregator: each domain router (`auth`, `projects`, `agents`,
- * …) is its own `OpenAPIHono` so routes register against the domain's
- * registry. The aggregator parent merges all twelve registries into a
- * single dashboard spec, matching the plan's D1 decision. The root
- * `app` in `packages/backend/src/index.ts` stays plain `Hono` so the
- * agent and control surfaces' independent specs are not pulled into
- * the dashboard's.
+ * Each domain router (`auth`, `projects`, `agents`, etc.) is its own
+ * `OpenAPIHono`. The aggregator parent merges all twelve registries
+ * into a single dashboard spec. The root `app` in
+ * `packages/backend/src/index.ts` stays plain `Hono` so the agent and
+ * control surfaces' independent specs are not pulled into the
+ * dashboard's spec — this is the invariant that keeps the three API
+ * surfaces' specs strictly isolated.
  *
  * The spec endpoint is registered BEFORE any auth middleware so it
- * remains anonymously fetchable (plan D2 — `/openapi.json` is metadata
- * that ships with the running app).
+ * remains anonymously fetchable. The spec is metadata that ships with
+ * the running app; gating it behind a session would break client
+ * codegen tooling and Swagger UI integrations without providing a
+ * real security boundary.
+ *
+ * **Transitional state.** The `SessionCookie` security scheme is
+ * registered against this surface's registry, but no domain route
+ * currently references it via `security: [{ SessionCookie: [] }]` in
+ * a `createRoute(...)` definition — the routes still go through the
+ * existing `router.use('*', requireSession)` middleware and use
+ * `.get/.post` rather than `.openapi(createRoute(...), handler)`.
+ * The route-by-route conversion lands in a follow-on PR. Until then,
+ * the served spec correctly shows the scheme as defined-but-unused.
  */
 
 import type { createBunWebSocket } from 'hono/bun'
@@ -59,8 +70,8 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
 
   // Spec endpoint goes on FIRST so the per-router auth middleware
   // (which each domain router applies via `router.use('*', requireSession)`)
-  // never gates it. `mountCachedSpec` adds a `GET /openapi.json` route
-  // to this aggregator directly.
+  // never gates it. The cached spec serves anonymously; client codegen
+  // and Swagger UI consumers expect that.
   mountCachedSpec(surface, '/openapi.json', {
     openapi: '3.1.0',
     info: {
