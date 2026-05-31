@@ -208,36 +208,13 @@ describe('mountCachedSpec', () => {
     expect(body.components?.securitySchemes?.['SessionCookie']).toBeDefined()
   })
 
-  it('returns identical bytes across two successive requests in production-mode test', async () => {
-    const originalEnv = process.env['NODE_ENV']
-    try {
-      process.env['NODE_ENV'] = 'production'
-      // Re-import to pick up the prod env. spec-cache.ts reads `env` at
-      // module load via `env.NODE_ENV`; in production the cache is
-      // populated eagerly at mountCachedSpec call time, so we need a
-      // fresh module evaluation. We approximate by mounting on a fresh
-      // app; the cache is per-call-site closure-captured.
-      const app = buildSurface()
-      // We can't reload the env module in-process without bun:test's
-      // module isolation, so we directly assert the closure-captured
-      // cache contract by issuing two requests and comparing bytes —
-      // even in dev mode the regeneration is deterministic for the
-      // same registered surface.
-      mountCachedSpec(app, '/openapi.json', {
-        openapi: '3.1.0',
-        info: { title: 'Stable', version: '1' },
-      })
-      const res1 = await app.request('/openapi.json')
-      const res2 = await app.request('/openapi.json')
-      const body1 = await res1.text()
-      const body2 = await res2.text()
-      expect(body1).toBe(body2)
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env['NODE_ENV']
-      } else {
-        process.env['NODE_ENV'] = originalEnv
-      }
-    }
-  })
+  // Production-mode cache invariants (eager generation at mount,
+  // identical bytes across requests, generator called exactly once)
+  // live in tests/unit/openapi-spec-cache-prod.test.ts and run under
+  // an isolated bun-test invocation with --preload ./tests/preload-prod.ts.
+  // `src/config/env.ts` snapshots NODE_ENV at module load, so mutating
+  // process.env inside a test that has already imported spec-cache.ts
+  // (via this file's static imports) does not switch the prod branch.
+  // The isolated file uses the repo's *_TEST_ISOLATED=1 pattern to
+  // guarantee preload-prod.ts runs before any project import.
 })
