@@ -7,14 +7,14 @@
  * card. No project scoping — health is system-wide.
  */
 
-import { Hono } from 'hono'
+import { OpenAPIHono } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
 import { requireSession } from '../../middleware/auth.js'
 import { getSystemHealth } from '../../services/health.js'
 
-const healthRoutes = new Hono<AppEnv>()
+const healthRoutes = new OpenAPIHono<AppEnv>()
 
 healthRoutes.use('*', requireSession)
 

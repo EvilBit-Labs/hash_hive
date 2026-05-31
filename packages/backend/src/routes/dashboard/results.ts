@@ -1,7 +1,7 @@
 import { attacks, campaigns, hashItems, hashLists } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
 import { and, desc, eq, isNotNull, sql } from 'drizzle-orm'
-import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -11,7 +11,7 @@ import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 import { escapeLike } from '../../services/resources.js'
 
-const resultsRoutes = new Hono<AppEnv>()
+const resultsRoutes = new OpenAPIHono<AppEnv>()
 
 resultsRoutes.use('*', requireSession)
 

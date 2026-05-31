@@ -1,6 +1,6 @@
 import type { createBunWebSocket } from 'hono/bun'
 
-import { Hono } from 'hono'
+import { OpenAPIHono } from '@hono/zod-openapi'
 
 import type { EventType } from '../../services/events.js'
 import type { AppEnv } from '../../types.js'
@@ -96,7 +96,7 @@ const KNOWN_EVENT_TYPES_FOR_QUERY: ReadonlySet<EventType> = new Set<EventType>([
 ])
 
 export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
-  const eventRoutes = new Hono<AppEnv>()
+  const eventRoutes = new OpenAPIHono<AppEnv>()
 
   // ─── GET /stream -- WebSocket upgrade for real-time events ───────────
 

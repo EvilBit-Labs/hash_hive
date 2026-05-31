@@ -16,25 +16,13 @@ import { getQueueManager, setQueueManager } from './queue/context.js'
 import { QueueManager } from './queue/manager.js'
 import { agentRoutes } from './routes/agent/index.js'
 import { controlRoutes } from './routes/control/index.js'
-import { dashboardAgentRoutes } from './routes/dashboard/agents.js'
-import { attackTemplateRoutes } from './routes/dashboard/attack-templates.js'
-import { authRoutes } from './routes/dashboard/auth.js'
-import { campaignRoutes } from './routes/dashboard/campaigns.js'
-import { crackerRoutes } from './routes/dashboard/crackers.js'
-import { createEventRoutes } from './routes/dashboard/events.js'
-import { hashRoutes } from './routes/dashboard/hashes.js'
-import { healthRoutes as dashboardHealthRoutes } from './routes/dashboard/health.js'
-import { projectRoutes } from './routes/dashboard/projects.js'
-import { resourceRoutes } from './routes/dashboard/resources.js'
-import { resultsRoutes } from './routes/dashboard/results.js'
-import { statsRoutes } from './routes/dashboard/stats.js'
-import { taskRoutes } from './routes/dashboard/tasks.js'
+import { createDashboardSurface } from './routes/dashboard/index.js'
 import { getSystemHealth, legacyPublicEnvelope } from './services/health.js'
 
 const { upgradeWebSocket, websocket } = createBunWebSocket()
 
 const app = new Hono<AppEnv>()
-const eventRoutes = createEventRoutes(upgradeWebSocket)
+const dashboardSurface = createDashboardSurface(upgradeWebSocket)
 
 // ─── Global Middleware ──────────────────────────────────────────────
 
@@ -114,19 +102,7 @@ app.use('/api/v1/dashboard/results/*', requireSameOrigin())
 app.use('/api/v1/dashboard/crackers/*', requireSameOrigin())
 app.use('/api/v1/dashboard/events/*', requireSameOriginForWS())
 
-app.route('/api/v1/dashboard/auth', authRoutes)
-app.route('/api/v1/dashboard/projects', projectRoutes)
-app.route('/api/v1/dashboard/agents', dashboardAgentRoutes)
-app.route('/api/v1/dashboard/resources', resourceRoutes)
-app.route('/api/v1/dashboard/hashes', hashRoutes)
-app.route('/api/v1/dashboard/attack-templates', attackTemplateRoutes)
-app.route('/api/v1/dashboard/campaigns', campaignRoutes)
-app.route('/api/v1/dashboard/tasks', taskRoutes)
-app.route('/api/v1/dashboard/stats', statsRoutes)
-app.route('/api/v1/dashboard/results', resultsRoutes)
-app.route('/api/v1/dashboard/events', eventRoutes)
-app.route('/api/v1/dashboard/crackers', crackerRoutes)
-app.route('/api/v1/dashboard/health', dashboardHealthRoutes)
+app.route('/api/v1/dashboard', dashboardSurface)
 
 app.route('/api/v1/agent', agentRoutes)
 app.route('/api/v1/control', controlRoutes)

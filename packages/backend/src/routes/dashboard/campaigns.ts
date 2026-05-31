@@ -1,6 +1,8 @@
+import type { Context } from 'hono'
+
 import { inlineAttackRequestSchema } from '@hashhive/shared'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { zValidator } from '@hono/zod-validator'
-import { type Context, Hono } from 'hono'
 import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
@@ -29,7 +31,7 @@ import {
   validateProposedDAG,
 } from '../../services/campaigns.js'
 
-const campaignRoutes = new Hono<AppEnv>()
+const campaignRoutes = new OpenAPIHono<AppEnv>()
 
 campaignRoutes.use('*', requireSession)
 
