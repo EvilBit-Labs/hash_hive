@@ -2,6 +2,7 @@ import {
   agents,
   campaigns,
   type DashboardStats,
+  dashboardStatsSchema,
   hashItems,
   hashLists,
   TASK_DB_TO_BUCKET,
@@ -9,7 +10,7 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
-import { OpenAPIHono } from '@hono/zod-openapi'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
@@ -17,6 +18,7 @@ import type { AppEnv } from '../../types.js'
 import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
+import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
 
 const statsRoutes = new OpenAPIHono<AppEnv>()
 
@@ -45,14 +47,58 @@ function sumRows(rows: ReadonlyArray<{ count: number }>): number {
   return total
 }
 
-// GET /stats — project-scoped dashboard statistics
-statsRoutes.get('/', requireProjectAccess(), async (c) => {
-  // requireProjectAccess sets scopedUser; non-null assertion encodes
-  // the middleware contract (CQ-H3).
+// Decorate the shared schema as a named component so the generated
+// dashboard spec emits `$ref: '#/components/schemas/DashboardStats'`
+// rather than inlining the object. Matches the component name in
+// packages/openapi/dashboard-api.yaml.
+const DashboardStats = dashboardStatsSchema.openapi('DashboardStats')
+
+// Specific error envelope for the PROJECT_NOT_SELECTED 400 — the only
+// failure code this endpoint emits beyond the shared auth/rbac
+// responses below.
+const projectNotSelectedErrorSchema = z
+  .object({
+    error: z.object({
+      code: z.literal('PROJECT_NOT_SELECTED'),
+      message: z.string(),
+    }),
+  })
+  .openapi('ProjectNotSelectedError')
+
+const getStatsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Stats'],
+  summary: 'Project-scoped aggregate counts for the dashboard stat cards',
+  description:
+    'Returns four aggregate counts for the operator selected project: agents by status, campaigns by status, tasks by status, and total cracked hashes. Scope is derived exclusively from the server-managed session.session.projectId; non-members receive 403 (not 404) so the endpoint does not aid project enumeration.',
+  security: [{ SessionCookie: [] }],
+  responses: {
+    200: {
+      description: 'Project-scoped dashboard stat aggregates.',
+      content: { 'application/json': { schema: DashboardStats } },
+    },
+    400: {
+      description: 'Session has no active project context. Call POST /projects/select first.',
+      content: { 'application/json': { schema: projectNotSelectedErrorSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  },
+})
+
+// requireProjectAccess() mounts as path-scoped middleware because
+// `app.openapi(route, handler)` accepts only the route definition and
+// handler — middleware cannot be passed as additional handler args
+// the way the old `app.get('/', requireProjectAccess(), handler)` form
+// did. Path-scoped `use('/')` runs only for `GET /` on this router
+// and preserves the original gating semantics.
+statsRoutes.use('/', requireProjectAccess())
+
+statsRoutes.openapi(getStatsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
 
   const [agentStats, campaignStats, taskStats, crackedStats] = await Promise.all([
-    // Agent counts by status
     db
       .select({
         status: agents.status,
@@ -62,7 +108,6 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
       .where(eq(agents.projectId, projectId))
       .groupBy(agents.status),
 
-    // Campaign counts by status
     db
       .select({
         status: campaigns.status,
@@ -72,7 +117,6 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
       .where(eq(campaigns.projectId, projectId))
       .groupBy(campaigns.status),
 
-    // Task counts by status (join through campaigns for project scoping)
     db
       .select({
         status: tasks.status,
@@ -121,11 +165,6 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
     // Unknown DB statuses still contribute to `total` via `sumRows` below.
   }
 
-  // Build the response from the shared schema's known literals; the
-  // `DashboardStats` annotation makes a missing field a compile error.
-  // Unknown DB literals not covered by the schema contribute to `total`
-  // only — the contract test parses the response through
-  // `dashboardStatsSchema` and would surface drift at CI time.
   const body: DashboardStats = {
     agents: {
       total: sumRows(agentStats),
@@ -155,7 +194,7 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
     },
   }
 
-  return c.json(body)
+  return c.json(body, 200)
 })
 
 export { statsRoutes }

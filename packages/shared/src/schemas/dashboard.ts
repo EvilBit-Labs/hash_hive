@@ -1,3 +1,8 @@
+// Side-effect import: ensures `.openapi()` is on the zod prototype
+// before any schema below is constructed. Mirrors `schemas/index.ts`
+// — both entrypoints construct exported schemas, so both must trigger
+// the extension. The patch is idempotent.
+import '../openapi-extension.js'
 import { z } from 'zod'
 
 // ─── Campaign Lifecycle Status ──────────────────────────────────────
