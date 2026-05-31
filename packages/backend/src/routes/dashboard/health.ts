@@ -12,10 +12,14 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../../types.js'
 
 import { requireSession } from '../../middleware/auth.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { getSystemHealth } from '../../services/health.js'
 
-const healthRoutes = new OpenAPIHono<AppEnv>()
+const healthRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 healthRoutes.use('*', requireSession)
 

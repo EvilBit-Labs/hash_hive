@@ -13,7 +13,11 @@ import {
   requireParamProjectAccess,
   requireRole,
 } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
@@ -26,7 +30,7 @@ import {
   updateProject,
 } from '../../services/projects.js'
 
-const projectRoutes = new OpenAPIHono<AppEnv>()
+const projectRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 projectRoutes.use('*', requireSession)
 

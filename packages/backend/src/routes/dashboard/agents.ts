@@ -5,7 +5,11 @@ import type { AppEnv } from '../../types.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import {
   getAgentById,
   getAgentErrors,
@@ -16,7 +20,7 @@ import {
 } from '../../services/agents.js'
 import { listTasksByAgent } from '../../services/tasks.js'
 
-const dashboardAgentRoutes = new OpenAPIHono<AppEnv>()
+const dashboardAgentRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 dashboardAgentRoutes.use('*', requireSession)
 

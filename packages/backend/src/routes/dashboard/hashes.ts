@@ -3,10 +3,14 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../../types.js'
 
 import { requireSession } from '../../middleware/auth.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
 
-const hashRoutes = new OpenAPIHono<AppEnv>()
+const hashRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 hashRoutes.use('*', requireSession)
 

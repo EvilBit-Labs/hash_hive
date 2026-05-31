@@ -13,7 +13,11 @@ import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
 import {
   abortChunkedUpload,
@@ -141,7 +145,7 @@ const uploadPartParamSchema = z.object({
 const tags: string[] = ['Dashboard/Resources']
 const security = [{ SessionCookie: [] }]
 
-const resourceRoutes = new OpenAPIHono<AppEnv>()
+const resourceRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 resourceRoutes.use('*', requireSession)
 
@@ -216,20 +220,17 @@ const createHashListRoute = createRoute({
   summary: 'Create a hash list (JSON empty-create or multipart one-shot upload)',
   security,
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
-  request: {
-    body: {
-      content: {
-        'application/json': { schema: createHashListRequestSchema },
-        'multipart/form-data': {
-          schema: z.object({
-            file: z.unknown(),
-            name: z.string().min(1).max(255),
-            hashTypeId: z.string().optional(),
-          }),
-        },
-      },
-    },
-  },
+  // No body schema at route level. This endpoint dispatches by
+  // content-type inside the handler and each branch runs its own
+  // validation: the multipart branch needs an upfront content-length
+  // guard BEFORE buffering (enforceMultipartSizeLimit returns 413), and
+  // the JSON branch needs graceful malformed-body handling via
+  // `safeParse(await c.req.json().catch(() => null))` so a syntax error
+  // returns the dashboard VALIDATION_ERROR envelope rather than the
+  // framework's default parse-failure path. The spec still gets the
+  // declarative descriptions on responses; body shape lives in the
+  // handler's dispatch logic.
+  request: {},
   responses: {
     201: {
       description: 'Hash list created (legacy JSON path)',

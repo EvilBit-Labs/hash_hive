@@ -19,7 +19,8 @@
  */
 
 import type { OpenAPIHono, RouteConfig } from '@hono/zod-openapi'
-import type { Env } from 'hono'
+import type { Context, Env } from 'hono'
+import type { ZodError } from 'zod'
 
 import { z } from '@hono/zod-openapi'
 
@@ -79,6 +80,40 @@ type ResponseConfig = NonNullable<RouteConfig['responses'][string]>
 export function sharedResponse(ref: DashboardResponseRef): ResponseConfig {
   return { $ref: ref } as unknown as ResponseConfig
 }
+
+/**
+ * Default validation hook for every dashboard `OpenAPIHono` router.
+ * Maps Zod validation failures (request body, query, params, headers)
+ * to the dashboard's `{ error: { code: 'VALIDATION_ERROR', message } }`
+ * envelope so all dashboard routes keep the same wire shape on bad
+ * input. Without this, `@hono/zod-openapi`'s default produces a
+ * `{ success: false, error: ZodError }` body that breaks every
+ * dashboard-routes test asserting `error.code === 'VALIDATION_ERROR'`.
+ *
+ * Spread into the constructor:
+ *
+ *   const router = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
+ *
+ * Returns `void` on success so the hook is a no-op and createRoute's
+ * normal handler chain continues.
+ */
+export const dashboardOpenApiHonoOptions = {
+  defaultHook: <E extends Env>(
+    result: { success: true } | { success: false; error: ZodError },
+    c: Context<E>
+  ) => {
+    if (result.success) return
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: result.error.issues.map((i) => i.message).join('; '),
+        },
+      },
+      400
+    )
+  },
+} as const
 
 /**
  * Register the dashboard shared response components against the

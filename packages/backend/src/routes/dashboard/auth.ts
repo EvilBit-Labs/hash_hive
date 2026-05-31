@@ -5,7 +5,11 @@ import type { AppEnv } from '../../types.js'
 import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import {
   getUserApiKeyMetadata,
   getUserWithProjects,
@@ -13,7 +17,7 @@ import {
   revokeUserApiKey,
 } from '../../services/auth.js'
 
-const authRouter = new OpenAPIHono<AppEnv>()
+const authRouter = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 authRouter.use('*', requireSession)
 

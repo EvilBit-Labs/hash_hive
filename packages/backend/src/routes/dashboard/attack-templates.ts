@@ -14,7 +14,11 @@ import { db } from '../../db/index.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import {
   createAttackTemplate,
   deleteAttackTemplate,
@@ -26,7 +30,7 @@ import {
 } from '../../services/attack-templates.js'
 import { getResourceById } from '../../services/resources.js'
 
-const attackTemplateRoutes = new OpenAPIHono<AppEnv>()
+const attackTemplateRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 attackTemplateRoutes.use('*', requireSession)
 

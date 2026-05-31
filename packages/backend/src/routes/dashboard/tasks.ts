@@ -5,10 +5,14 @@ import type { AppEnv } from '../../types.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { getTaskById, listTasks } from '../../services/tasks.js'
 
-const taskRoutes = new OpenAPIHono<AppEnv>()
+const taskRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 taskRoutes.use('*', requireSession)
 taskRoutes.use('/', requireProjectAccess())

@@ -7,7 +7,11 @@ import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { findProjectMembership } from '../../services/auth.js'
 import { getClientCount, registerClient, unregisterClient } from '../../services/events.js'
 
@@ -104,7 +108,7 @@ const eventsStatusResponseSchema = z
   .openapi('EventsStatus')
 
 export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
-  const eventRoutes = new OpenAPIHono<AppEnv>()
+  const eventRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
   // ─── GET /stream — WebSocket upgrade for real-time events ───────────
   //

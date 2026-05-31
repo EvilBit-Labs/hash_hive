@@ -7,10 +7,14 @@ import type { AppEnv } from '../../types.js'
 import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
 
-const resultsRoutes = new OpenAPIHono<AppEnv>()
+const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 resultsRoutes.use('*', requireSession)
 resultsRoutes.use('/', requireProjectAccess())

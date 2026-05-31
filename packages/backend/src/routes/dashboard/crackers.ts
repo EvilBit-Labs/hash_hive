@@ -18,7 +18,11 @@ import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireRole } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import {
   abortCrackerChunkedUpload,
   CRACKER_DIRECT_UPLOAD_MAX_BYTES,
@@ -36,7 +40,7 @@ import {
   uploadCrackerFile,
 } from '../../services/crackers.js'
 
-const crackerRoutes = new OpenAPIHono<AppEnv>()
+const crackerRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 const S3_MAX_PART_NUMBER = 10_000 // S3 multipart part-number range is [1, 10000]
 
@@ -367,16 +371,12 @@ const directUploadRoute = createRoute({
   middleware: [requireRole('admin')] as const,
   request: {
     params: crackerIdParamSchema,
-    // multipart/form-data; the spec describes the wire content type but
-    // the handler reads the file via c.req.parseBody() rather than
-    // through a Zod-validated body schema.
-    body: {
-      content: {
-        'multipart/form-data': {
-          schema: z.object({ file: z.unknown() }),
-        },
-      },
-    },
+    // No body schema at the route layer. The handler does an upfront
+    // Content-Length check (returns 413 BEFORE parseBody buffers the
+    // payload) and then parses the multipart body itself; declaring a
+    // schema here would let createRoute short-circuit the size guard
+    // with a 400 and break the "rejects with 413 BEFORE parseBody"
+    // contract the cracker upload tests assert.
   },
   responses: {
     200: {

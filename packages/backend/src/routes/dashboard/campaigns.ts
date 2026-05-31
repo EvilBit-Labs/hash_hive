@@ -9,7 +9,11 @@ import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  dashboardOpenApiHonoOptions,
+  sharedResponse,
+} from '../../openapi/components.js'
 import {
   createAttack,
   createCampaign,
@@ -30,27 +34,14 @@ import {
   validateProposedDAG,
 } from '../../services/campaigns.js'
 
-// `defaultHook` maps every createRoute Zod validation failure to the
-// dashboard's `{ error: { code: 'VALIDATION_ERROR', message } }` envelope.
-// Without this, the library would emit its own `{ success, error }` shape
-// and break the contract every dashboard route follows. The legacy
-// `zValidator('query', ..., hook)` and the in-handler `safeParse` blocks
-// both produced this envelope; the hook centralises that behaviour now
-// that route registration is the single source.
-const campaignRoutes = new OpenAPIHono<AppEnv>({
-  defaultHook: (result, c) => {
-    if (result.success) return
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: result.error.issues.map((i) => i.message).join('; '),
-        },
-      },
-      400
-    )
-  },
-})
+// Use the shared dashboardOpenApiHonoOptions so every dashboard router
+// emits the same `{ error: { code: 'VALIDATION_ERROR', message } }`
+// envelope on createRoute Zod validation failures. The legacy
+// `zValidator('query', ..., hook)` and in-handler `safeParse` blocks
+// produced this envelope; the shared hook in
+// `packages/backend/src/openapi/components.ts` centralises it now that
+// route registration is the single source of truth across the dashboard.
+const campaignRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 campaignRoutes.use('*', requireSession)
 
