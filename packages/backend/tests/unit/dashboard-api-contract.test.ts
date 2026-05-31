@@ -1,3 +1,4 @@
+import { dashboardStatsSchema } from '@hashhive/shared'
 /**
  * Dashboard API contract tests.
  *
@@ -5,6 +6,7 @@
  * Tests middleware layer behavior without requiring a running database.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { parse as parseYaml } from 'yaml'
 
 // ─── Mock layer ─────────────────────────────────────────────────────
 //
@@ -478,13 +480,15 @@ describe('Dashboard OpenAPI ↔ code contract (issue #159 U7)', () => {
 
   it('routes /stats through the cookie security scheme', () => {
     // The /stats block declares its own `security:` because the
-    // top-level spec doesn't carry a global security default. The
-    // string match keeps this test parser-free.
-    const statsBlock = dashboardYaml.slice(
-      dashboardYaml.indexOf('  /stats:'),
-      dashboardYaml.indexOf('  /projects:')
-    )
-    expect(statsBlock).toContain('SessionCookie: []')
+    // top-level spec doesn't carry a global security default. Parse
+    // the YAML and pluck `paths./stats.get.security` directly so the
+    // assertion stays correct if the spec is reordered or a new path
+    // is inserted between /stats and /projects.
+    const parsed = parseYaml(dashboardYaml) as {
+      paths: { '/stats': { get: { security: Array<Record<string, unknown[]>> } } }
+    }
+    const security = parsed.paths['/stats'].get.security
+    expect(security).toEqual([{ SessionCookie: [] }])
   })
 })
 
@@ -494,9 +498,6 @@ describe('Dashboard OpenAPI ↔ code contract (issue #159 U7)', () => {
 // and the OpenAPI `DashboardStats` component fails the contract test.
 // The structural compare below is what enforces that — a key added on
 // either side without the other fails this test by name.
-
-import { dashboardStatsSchema } from '@hashhive/shared'
-import { parse as parseYaml } from 'yaml'
 
 interface ZodNode {
   type: 'object' | 'enum' | 'leaf'
