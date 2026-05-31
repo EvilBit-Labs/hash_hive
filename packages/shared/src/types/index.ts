@@ -21,6 +21,7 @@ import type {
   campaignPriorityBucketSchema,
   campaignSortFieldSchema,
   campaignSortOrderSchema,
+  campaignStatusSchema,
   campaignTaskStatsSchema,
   connectionStatusSchema,
   crackerCheckUpdateRequestSchema,
@@ -30,6 +31,7 @@ import type {
   createCampaignRequestSchema,
   createCrackerBinaryRequestSchema,
   createHashListRequestSchema,
+  dashboardStatsSchema,
   detectHashTypeRequestSchema,
   detectHashTypeResponseSchema,
   engineDescriptorSchema,
@@ -151,6 +153,8 @@ export type SelectTask = z.infer<typeof selectTaskSchema>
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 
 export type CampaignTaskStats = z.infer<typeof campaignTaskStatsSchema>
+export type CampaignStatus = z.infer<typeof campaignStatusSchema>
+export type DashboardStats = z.infer<typeof dashboardStatsSchema>
 export type CampaignActiveAgent = z.infer<typeof campaignActiveAgentSchema>
 export type CampaignSortField = z.infer<typeof campaignSortFieldSchema>
 export type CampaignSortOrder = z.infer<typeof campaignSortOrderSchema>
