@@ -3,6 +3,7 @@ import type {
   AgentTaskSummary,
   AgentWorstSeverity,
   CampaignDetailPayload,
+  DashboardStats,
   SelectAgentError,
   UseCampaignsOptions,
 } from '@hashhive/shared'
@@ -26,19 +27,6 @@ export type {
   CampaignTaskStats,
   UseCampaignsOptions,
 } from '@hashhive/shared'
-
-interface DashboardStats {
-  agents: { total: number; online: number; offline: number; error: number }
-  campaigns: {
-    total: number
-    draft: number
-    running: number
-    paused: number
-    completed: number
-  }
-  tasks: { total: number; pending: number; running: number; completed: number; failed: number }
-  cracked: { total: number }
-}
 
 interface Agent {
   id: number
@@ -95,9 +83,15 @@ export function useDashboardStats() {
 
   return useQuery<DashboardStats>({
     queryKey: ['dashboard-stats', selectedProjectId],
+    // Freshness is primarily event-driven: `packages/frontend/src/lib/event-routing.ts`
+    // maps `agent_status`, `campaign_status`, `task_update`, and `crack_result`
+    // to invalidate `['dashboard-stats']`. The 60s interval is a safety-net
+    // floor for periods when the WebSocket is unavailable; lengthened from
+    // the previous 30s now that the brainstorm's freshness gap is closed
+    // by the existing routing map (see plan #161 D5 / Reframed §).
     queryFn: () => api.get<DashboardStats>('/dashboard/stats'),
     enabled: !!selectedProjectId,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   })
 }
 

@@ -1,3 +1,4 @@
+import { dashboardStatsSchema } from '@hashhive/shared'
 /**
  * Dashboard API contract tests.
  *
@@ -5,6 +6,7 @@
  * Tests middleware layer behavior without requiring a running database.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { parse as parseYaml } from 'yaml'
 
 // ─── Mock layer ─────────────────────────────────────────────────────
 //
@@ -464,5 +466,162 @@ describe('Dashboard OpenAPI ↔ code contract (issue #159 U7)', () => {
   it('defines AuthRequired and Forbidden response shells', () => {
     expect(dashboardYaml).toMatch(/^\s+AuthRequired:/m)
     expect(dashboardYaml).toMatch(/^\s+Forbidden:/m)
+  })
+
+  // ─── /stats — issue #161 ────────────────────────────────────────────
+  it('documents the /stats path with DashboardStats schema', () => {
+    expect(dashboardYaml).toMatch(/^\s+\/stats:/m)
+    expect(dashboardYaml).toMatch(/^\s+DashboardStats:/m)
+  })
+
+  it('declares the Stats tag the /stats path uses', () => {
+    expect(dashboardYaml).toMatch(/^\s+- name: Stats$/m)
+  })
+
+  it('routes /stats through the cookie security scheme', () => {
+    // The /stats block declares its own `security:` because the
+    // top-level spec doesn't carry a global security default. Parse
+    // the YAML and pluck `paths./stats.get.security` directly so the
+    // assertion stays correct if the spec is reordered or a new path
+    // is inserted between /stats and /projects.
+    const parsed = parseYaml(dashboardYaml) as {
+      paths: { '/stats': { get: { security: Array<Record<string, unknown[]>> } } }
+    }
+    const security = parsed.paths['/stats'].get.security
+    expect(security).toEqual([{ SessionCookie: [] }])
+  })
+})
+
+// ─── OpenAPI ↔ shared Zod field-parity (DashboardStats) ───────────────
+//
+// The convention doc promises that drift between `dashboardStatsSchema`
+// and the OpenAPI `DashboardStats` component fails the contract test.
+// The structural compare below is what enforces that — a key added on
+// either side without the other fails this test by name.
+
+interface ZodNode {
+  type: 'object' | 'enum' | 'leaf'
+  // Object: key set + nested shape
+  keys?: string[]
+  required?: string[]
+  additionalProperties?: boolean
+  properties?: Record<string, ZodNode>
+  // Enum: literal values
+  values?: string[]
+}
+
+interface OpenApiNode {
+  type: string
+  required?: string[]
+  additionalProperties?: boolean
+  properties?: Record<string, OpenApiNode>
+  enum?: string[]
+}
+
+function extractZodShape(schema: unknown): ZodNode {
+  const def = (schema as { _def?: { type?: string; shape?: Record<string, unknown> } })._def
+  if (def?.type === 'object' && def.shape) {
+    const properties: Record<string, ZodNode> = {}
+    const required: string[] = []
+    for (const [key, inner] of Object.entries(def.shape)) {
+      properties[key] = extractZodShape(inner)
+      // All Zod object fields are required unless explicitly `.optional()`;
+      // the dashboard schema has no optional fields, so every key is required.
+      required.push(key)
+    }
+    // `.strict()` sets catchall to a "never" schema; the simpler proxy
+    // is checking the object proto for `_def.catchall`. We expose this
+    // as additionalProperties=false for parity with OpenAPI semantics.
+    const catchall = (def as { catchall?: { _def?: { type?: string } } }).catchall
+    const additionalProperties = !(catchall?._def?.type === 'never')
+    return {
+      type: 'object',
+      keys: Object.keys(properties),
+      required,
+      additionalProperties,
+      properties,
+    }
+  }
+  return { type: 'leaf' }
+}
+
+function compareShapes(
+  path: string,
+  zod: ZodNode,
+  oa: OpenApiNode | undefined,
+  errors: string[]
+): void {
+  if (zod.type !== 'object') return
+  if (!oa) {
+    errors.push(`${path}: missing in OpenAPI`)
+    return
+  }
+  if (oa.type !== 'object') {
+    errors.push(`${path}: OpenAPI type='${oa.type}' but Zod expects object`)
+    return
+  }
+  const zKeys = (zod.keys ?? []).sort()
+  const oKeys = Object.keys(oa.properties ?? {}).sort()
+  if (zKeys.join(',') !== oKeys.join(',')) {
+    errors.push(
+      `${path}: properties mismatch (zod=[${zKeys.join(',')}] openapi=[${oKeys.join(',')}])`
+    )
+  }
+  const zRequired = (zod.required ?? []).sort()
+  const oRequired = (oa.required ?? []).slice().sort()
+  if (zRequired.join(',') !== oRequired.join(',')) {
+    errors.push(
+      `${path}: required mismatch (zod=[${zRequired.join(',')}] openapi=[${oRequired.join(',')}])`
+    )
+  }
+  const zStrict = zod.additionalProperties === false
+  const oStrict = oa.additionalProperties === false
+  if (zStrict !== oStrict) {
+    errors.push(
+      `${path}: strictness mismatch (zod additionalProperties=${!zStrict} openapi additionalProperties=${!oStrict})`
+    )
+  }
+  // Recurse into nested objects (only keys present in both — missing keys
+  // were already reported at this level).
+  for (const key of zKeys) {
+    if (oKeys.includes(key)) {
+      compareShapes(`${path}.${key}`, zod.properties![key]!, oa.properties?.[key], errors)
+    }
+  }
+}
+
+describe('Dashboard OpenAPI ↔ shared Zod field parity (issue #161)', () => {
+  const parsed = parseYaml(dashboardYaml) as {
+    components: { schemas: { DashboardStats: OpenApiNode } }
+  }
+  const oaDashboardStats = parsed.components.schemas.DashboardStats
+
+  it('top-level DashboardStats shape matches dashboardStatsSchema', () => {
+    const zShape = extractZodShape(dashboardStatsSchema)
+    const errors: string[] = []
+    compareShapes('DashboardStats', zShape, oaDashboardStats, errors)
+    expect(errors).toEqual([])
+  })
+
+  it('agents block: every literal in agentStatusSchema has a counted field', () => {
+    // Defensive: pin the specific literals that motivated D7 (the
+    // busy/benchmarked silent-drop bug). If a future refactor narrows
+    // `agentStatusSchema` and removes `busy` from the wire shape, this
+    // test fails with a clear name.
+    const expected = ['total', 'online', 'offline', 'busy', 'error', 'benchmarked'].sort()
+    const actual = Object.keys(oaDashboardStats.properties?.['agents']?.properties ?? {}).sort()
+    expect(actual).toEqual(expected)
+  })
+
+  it('campaigns block: every literal in campaignStatusSchema has a counted field', () => {
+    const expected = ['total', 'draft', 'running', 'paused', 'completed', 'cancelled'].sort()
+    const actual = Object.keys(oaDashboardStats.properties?.['campaigns']?.properties ?? {}).sort()
+    expect(actual).toEqual(expected)
+  })
+
+  it('tasks block uses operator-facing buckets (matches campaignTaskStatsSchema)', () => {
+    const expected = ['total', 'pending', 'running', 'completed', 'failed'].sort()
+    const actual = Object.keys(oaDashboardStats.properties?.['tasks']?.properties ?? {}).sort()
+    expect(actual).toEqual(expected)
   })
 })

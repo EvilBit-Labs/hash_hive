@@ -686,20 +686,34 @@ export const assignedTaskSchema = z.object({
 })
 
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
+//
+// `campaignStatusSchema`, `campaignTaskStatsSchema`,
+// `dashboardStatsSchema`, the `TASK_DB_TO_BUCKET` helper, and the
+// related task-bucket types live in `./dashboard.ts` so this file
+// stays under the per-file budget. Imported + re-exported here so
+// other packages continue to import them from `@hashhive/shared`
+// unchanged and the local consumer below (`campaignDetailPayloadSchema`)
+// can reference `campaignTaskStatsSchema` directly.
 
-/**
- * Bucketed task statuses surfaced on the campaign detail page. The
- * five operator-facing buckets coalesce the data-model statuses:
- * `assigned` and `running` both count as `running`; `exhausted` counts
- * as `completed`. Unknown future statuses count only toward `total`.
- */
-export const campaignTaskStatsSchema = z.object({
-  total: z.number().int().nonnegative(),
-  pending: z.number().int().nonnegative(),
-  running: z.number().int().nonnegative(),
-  completed: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
-})
+import {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+} from './dashboard.js'
+
+export {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+}
 
 /**
  * An agent currently assigned to an active task on a campaign. `progress`

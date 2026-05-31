@@ -1,10 +1,22 @@
 /**
  * Control API stats endpoint. Mirrors the dashboard stats payload but
  * keys off the API-key-authenticated `currentUser` and returns RFC 9457
- * problems on failure paths.
+ * problems on failure paths. Wire shape and bucketing are identical to
+ * `/api/v1/dashboard/stats`; both surfaces share `DashboardStats` from
+ * `@hashhive/shared` per the dashboard read-endpoint contract.
  */
 
-import { agents, campaigns, hashItems, tasks } from '@hashhive/shared'
+import {
+  agents,
+  campaigns,
+  type DashboardStats,
+  hashItems,
+  hashLists,
+  TASK_DB_TO_BUCKET,
+  type TaskBucket,
+  type TaskDbStatus,
+  tasks,
+} from '@hashhive/shared'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 
@@ -14,6 +26,19 @@ import { db } from '../../db/index.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
 export const controlStatsRoutes = new Hono<AppEnv>()
+
+function countFor(rows: ReadonlyArray<{ status: string; count: number }>, literal: string): number {
+  for (const row of rows) {
+    if (row.status === literal) return Number(row.count)
+  }
+  return 0
+}
+
+function sumRows(rows: ReadonlyArray<{ count: number }>): number {
+  let total = 0
+  for (const row of rows) total += Number(row.count)
+  return total
+}
 
 controlStatsRoutes.get('/', async (c) => {
   try {
@@ -36,62 +61,59 @@ controlStatsRoutes.get('/', async (c) => {
         .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
         .where(eq(campaigns.projectId, projectId))
         .groupBy(tasks.status),
+      // Cracked-hash count scoped by hash-list ownership: see the
+      // matching block in `routes/dashboard/stats.ts` for the
+      // null-campaignId / contract-intent rationale.
       db
         .select({ count: sql<number>`count(*)` })
         .from(hashItems)
-        .innerJoin(
-          campaigns,
-          and(eq(hashItems.campaignId, campaigns.id), eq(campaigns.projectId, projectId))
-        )
-        .where(isNotNull(hashItems.crackedAt)),
+        .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+        .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
     ])
 
-    const agentCounts: Record<string, number> = {}
-    let agentTotal = 0
-    for (const row of agentStats) {
-      agentCounts[row.status] = Number(row.count)
-      agentTotal += Number(row.count)
+    const taskBuckets: Record<TaskBucket, number> = {
+      pending: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
     }
-
-    const campaignCounts: Record<string, number> = {}
-    let campaignTotal = 0
-    for (const row of campaignStats) {
-      campaignCounts[row.status] = Number(row.count)
-      campaignTotal += Number(row.count)
-    }
-
-    const taskCounts: Record<string, number> = {}
-    let taskTotal = 0
     for (const row of taskStats) {
-      taskCounts[row.status] = Number(row.count)
-      taskTotal += Number(row.count)
+      const bucket = TASK_DB_TO_BUCKET[row.status as TaskDbStatus]
+      if (bucket !== undefined) {
+        taskBuckets[bucket] += Number(row.count)
+      }
     }
 
-    return c.json({
+    const body: DashboardStats = {
       agents: {
-        total: agentTotal,
-        online: agentCounts['online'] ?? 0,
-        offline: agentCounts['offline'] ?? 0,
-        error: agentCounts['error'] ?? 0,
+        total: sumRows(agentStats),
+        online: countFor(agentStats, 'online'),
+        offline: countFor(agentStats, 'offline'),
+        busy: countFor(agentStats, 'busy'),
+        error: countFor(agentStats, 'error'),
+        benchmarked: countFor(agentStats, 'benchmarked'),
       },
       campaigns: {
-        total: campaignTotal,
-        draft: campaignCounts['draft'] ?? 0,
-        running: campaignCounts['running'] ?? 0,
-        paused: campaignCounts['paused'] ?? 0,
-        completed: campaignCounts['completed'] ?? 0,
+        total: sumRows(campaignStats),
+        draft: countFor(campaignStats, 'draft'),
+        running: countFor(campaignStats, 'running'),
+        paused: countFor(campaignStats, 'paused'),
+        completed: countFor(campaignStats, 'completed'),
+        cancelled: countFor(campaignStats, 'cancelled'),
       },
       tasks: {
-        total: taskTotal,
-        pending: taskCounts['pending'] ?? 0,
-        running: taskCounts['running'] ?? 0,
-        completed: taskCounts['completed'] ?? 0,
-        failed: taskCounts['failed'] ?? 0,
+        total: sumRows(taskStats),
+        pending: taskBuckets.pending,
+        running: taskBuckets.running,
+        completed: taskBuckets.completed,
+        failed: taskBuckets.failed,
       },
       cracked: {
         total: Number(crackedStats[0]?.count ?? 0),
       },
-    })
+    }
+
+    return c.json(body)
   } catch (err) {
     return controlErrorResponse(c, err)
   }
