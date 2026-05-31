@@ -3,6 +3,7 @@ import {
   campaigns,
   type DashboardStats,
   hashItems,
+  hashLists,
   TASK_DB_TO_BUCKET,
   type TaskBucket,
   type TaskDbStatus,
@@ -82,17 +83,23 @@ statsRoutes.get('/', requireProjectAccess(), async (c) => {
       .where(eq(campaigns.projectId, projectId))
       .groupBy(tasks.status),
 
-    // Total cracked hashes (hash items with plaintext in this project's hash lists)
+    // Total cracked hashes scoped by hash-list ownership, not by
+    // campaign join. `hashItems.campaignId` is nullable (the FK uses
+    // ON DELETE SET NULL — see `packages/shared/src/db/schema.ts`), so
+    // joining through `campaigns` would silently drop cracked rows whose
+    // campaign has been deleted. `hashItems.hashListId` is NOT NULL and
+    // `hashLists.projectId` is NOT NULL, which is the contract intent
+    // documented on `dashboardStatsSchema` ("count hash items with a
+    // non-null `crackedAt` across the project's hash lists"). The
+    // `hash_items_hash_list_cracked_idx` composite index on
+    // `(hashListId, crackedAt)` is purpose-built for this access path.
     db
       .select({
         count: sql<number>`count(*)`,
       })
       .from(hashItems)
-      .innerJoin(
-        campaigns,
-        and(eq(hashItems.campaignId, campaigns.id), eq(campaigns.projectId, projectId))
-      )
-      .where(isNotNull(hashItems.crackedAt)),
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
   ])
 
   // Bucket task DB statuses into the operator-facing buckets defined by

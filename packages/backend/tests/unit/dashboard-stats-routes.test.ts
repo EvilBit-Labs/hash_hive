@@ -17,7 +17,14 @@
  * `dashboardStatsSchema.parse()` proof so OpenAPI ↔ shared ↔ wire stay
  * in sync.
  */
-import { agents, campaigns, dashboardStatsSchema, hashItems, tasks } from '@hashhive/shared'
+import {
+  agents,
+  campaigns,
+  dashboardStatsSchema,
+  hashItems,
+  hashLists,
+  tasks,
+} from '@hashhive/shared'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
@@ -374,20 +381,28 @@ describe('Dashboard stats route — project-scoped query construction', () => {
     expect(paramValuesOf(wherePredicate)).toEqual([1])
   })
 
-  it('cracked query: innerJoin(campaigns, ...) predicate references campaigns.projectId === session.projectId; where(...) checks crackedAt', async () => {
+  it('cracked query: scopes by hash-list ownership (innerJoin hashLists, where hashLists.projectId === session.projectId AND crackedAt IS NOT NULL)', async () => {
+    // The cracked query intentionally joins through `hashLists` rather
+    // than `campaigns` because `hashItems.campaignId` is nullable
+    // (ON DELETE SET NULL — see packages/shared/src/db/schema.ts). The
+    // hash-list scope matches the contract intent on
+    // `dashboardStatsSchema` ("count hash items with non-null
+    // `crackedAt` across the project's hash lists") and includes
+    // cracked rows orphaned by campaign deletion.
     const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
     expect(res.status).toBe(200)
     expect(queryRows.innerJoinCalls.cracked.length).toBe(1)
     const join = queryRows.innerJoinCalls.cracked[0]!
-    expect(join.table).toBe(campaigns)
-    // The cracked query puts the projectId filter inside the join's ON
-    // clause (combined with hashItems.campaignId = campaigns.id) via
-    // `and(...)`. Recurse to find the projectId column and param.
-    expect(referencesColumn(join.predicate, campaigns.projectId)).toBe(true)
-    expect(paramValuesOf(join.predicate)).toContain(1)
-    // The terminal .where(...) filters on hashItems.crackedAt IS NOT NULL.
+    expect(join.table).toBe(hashLists)
+    expect(referencesColumn(join.predicate, hashItems.hashListId)).toBe(true)
+    expect(referencesColumn(join.predicate, hashLists.id)).toBe(true)
+    // The terminal .where(...) filters both on hashLists.projectId and
+    // hashItems.crackedAt IS NOT NULL.
     expect(queryRows.whereCalls.cracked.length).toBe(1)
-    expect(referencesColumn(queryRows.whereCalls.cracked[0]!, hashItems.crackedAt)).toBe(true)
+    const wherePred = queryRows.whereCalls.cracked[0]!
+    expect(referencesColumn(wherePred, hashLists.projectId)).toBe(true)
+    expect(paramValuesOf(wherePred)).toContain(1)
+    expect(referencesColumn(wherePred, hashItems.crackedAt)).toBe(true)
   })
 })
 

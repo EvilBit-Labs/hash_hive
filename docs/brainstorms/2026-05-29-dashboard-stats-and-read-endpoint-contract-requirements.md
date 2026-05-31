@@ -42,7 +42,7 @@ These gaps are not unique to `/stats`. The same pattern (inline-typed hook, undo
 
 - **F1. Operator opens dashboard.** Frontend mounts `useDashboardStats()`, which fetches `GET /api/v1/dashboard/stats` keyed by `selectedProjectId`. The four stat cards render aggregate counts for the selected project.
 - **F2. Underlying state changes during the session.** An agent status flips, a campaign starts, a task completes, or a hash is cracked. The backend publishes its existing event (`agent_status_changed`, `campaign_status`, `task_update`, `hash_cracked`) AND a new `dashboard_stats_changed` event scoped to the same project. The frontend hook invalidates the `['dashboard-stats', projectId]` query key on receipt; React Query coalesces repeated invalidations into a single refetch.
-- **F3. Future engineer adds a new dashboard read endpoint.** They read `docs/solutions/dashboard-read-endpoint-contract.md` (created by this work), follow the four-pillar checklist, look at `/stats` as the worked example, and ship without re-deriving the conventions.
+- **F3. Future engineer adds a new dashboard read endpoint.** They read `docs/solutions/conventions/dashboard-read-endpoint-contract.md` (created by this work), follow the four-pillar checklist, look at `/stats` as the worked example, and ship without re-deriving the conventions.
 
 ---
 
@@ -77,7 +77,7 @@ These gaps are not unique to `/stats`. The same pattern (inline-typed hook, undo
 
 **Dashboard read-endpoint contract (the pattern section)**
 
-- R14. A short contract doc is written to `docs/solutions/dashboard-read-endpoint-contract.md` enumerating the four required artifacts (shared Zod schema, OpenAPI entry, integration test, realtime invalidation hook), naming the canonical file locations, and pointing at `/stats` as the worked example. The doc explicitly notes that existing endpoints predating this contract are tracked as opportunistic debt, not retroactive work.
+- R14. A short contract doc is written to `docs/solutions/conventions/dashboard-read-endpoint-contract.md` enumerating the four required artifacts (shared Zod schema, OpenAPI entry, integration test, realtime invalidation hook), naming the canonical file locations, and pointing at `/stats` as the worked example. The doc explicitly notes that existing endpoints predating this contract are tracked as opportunistic debt, not retroactive work.
 - R15. The contract doc names a single rule for endpoints whose response shape includes enum-keyed counts: status literals must be modeled as a Zod literal union in the schema, never as `Record<string, number>` in the route. This is the structural fix for the silent-status-drop bug class.
 
 ---
@@ -91,13 +91,13 @@ These gaps are not unique to `/stats`. The same pattern (inline-typed hook, undo
 - AE5. **Covers R8, R9.** Given a developer who edits `dashboardStatsSchema` to add a new field but forgets to update `packages/openapi/dashboard-api.yaml`, the OpenAPI ↔ shared parity contract test fails with a message naming the divergent field. CI does not merge the change.
 - AE6. **Covers R10, R11, R12.** Given an operator viewing the dashboard with the WebSocket open, when an agent in their selected project transitions from `online` to `offline`, the backend publishes both `agent_status_changed` and `dashboard_stats_changed` (in that order or in either order — clients tolerate both). The frontend invalidates `['dashboard-stats', projectId]` on receipt of the stats event, refetches `/stats`, and the agent card updates within one network round-trip. Operators in *other* projects do not receive the event.
 - AE7. **Covers R12.** Given a campaign whose 50 tasks all transition from `pending` to `running` within one second, the backend publishes 50 `task_update` events and 50 `dashboard_stats_changed` events. The frontend invalidates the stats query 50 times but issues only one refetch to `/stats` because React Query coalesces invalidations during an in-flight refetch.
-- AE8. **Covers R14, R15.** Given a future engineer adding `GET /api/v1/dashboard/agents/{id}/utilization`, they read `docs/solutions/dashboard-read-endpoint-contract.md`, copy the four-artifact checklist, find `/stats` as the worked example, and ship the new endpoint with a shared schema, OpenAPI entry, integration test, and (if applicable) realtime invalidation hook. They do not declare an inline `interface` in the consuming hook.
+- AE8. **Covers R14, R15.** Given a future engineer adding `GET /api/v1/dashboard/agents/{id}/utilization`, they read `docs/solutions/conventions/dashboard-read-endpoint-contract.md`, copy the four-artifact checklist, find `/stats` as the worked example, and ship the new endpoint with a shared schema, OpenAPI entry, integration test, and (if applicable) realtime invalidation hook. They do not declare an inline `interface` in the consuming hook.
 
 ---
 
 ## Dashboard Read-Endpoint Contract (pattern, codified)
 
-This is the substance that will be written to `docs/solutions/dashboard-read-endpoint-contract.md` per R14. Captured here so reviewers can validate it in the same artifact as the requirements.
+This is the substance that will be written to `docs/solutions/conventions/dashboard-read-endpoint-contract.md` per R14. Captured here so reviewers can validate it in the same artifact as the requirements.
 
 **Every dashboard read endpoint (`/api/v1/dashboard/*` GET) ships with all four of:**
 
@@ -118,7 +118,7 @@ This is the substance that will be written to `docs/solutions/dashboard-read-end
 
 - The stats endpoint's full DoD trail (shared schema, OpenAPI, tests, realtime invalidation).
 - The new `dashboard_stats_changed` event type plumbed through the existing events stream infrastructure.
-- The contract doc at `docs/solutions/dashboard-read-endpoint-contract.md`.
+- The contract doc at `docs/solutions/conventions/dashboard-read-endpoint-contract.md`.
 - The OpenAPI ↔ shared parity test extension covering `DashboardStats`.
 - Tightening the route's status-enum mapping per R7.
 

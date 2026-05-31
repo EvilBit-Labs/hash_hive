@@ -86,9 +86,9 @@ export function useDashboardStats() {
     // Freshness is primarily event-driven: `packages/frontend/src/lib/event-routing.ts`
     // maps `agent_status`, `campaign_status`, `task_update`, and `crack_result`
     // to invalidate `['dashboard-stats']`. The 60s interval is a safety-net
-    // floor for periods when the WebSocket is unavailable; halved from the
-    // previous 30s now that the brainstorm's freshness gap is closed by
-    // the existing routing map (see plan #161 D5 / Reframed §).
+    // floor for periods when the WebSocket is unavailable; lengthened from
+    // the previous 30s now that the brainstorm's freshness gap is closed
+    // by the existing routing map (see plan #161 D5 / Reframed §).
     queryFn: () => api.get<DashboardStats>('/dashboard/stats'),
     enabled: !!selectedProjectId,
     refetchInterval: 60_000,

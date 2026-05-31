@@ -11,6 +11,7 @@ import {
   campaigns,
   type DashboardStats,
   hashItems,
+  hashLists,
   TASK_DB_TO_BUCKET,
   type TaskBucket,
   type TaskDbStatus,
@@ -60,14 +61,14 @@ controlStatsRoutes.get('/', async (c) => {
         .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
         .where(eq(campaigns.projectId, projectId))
         .groupBy(tasks.status),
+      // Cracked-hash count scoped by hash-list ownership: see the
+      // matching block in `routes/dashboard/stats.ts` for the
+      // null-campaignId / contract-intent rationale.
       db
         .select({ count: sql<number>`count(*)` })
         .from(hashItems)
-        .innerJoin(
-          campaigns,
-          and(eq(hashItems.campaignId, campaigns.id), eq(campaigns.projectId, projectId))
-        )
-        .where(isNotNull(hashItems.crackedAt)),
+        .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+        .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
     ])
 
     const taskBuckets: Record<TaskBucket, number> = {
