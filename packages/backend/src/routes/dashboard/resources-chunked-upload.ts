@@ -171,7 +171,7 @@ const abortUploadRoute = createRoute({
   tags,
   summary: 'Abort an in-progress multipart upload session',
   description:
-    'Idempotent on the row-missing path: `abortChunkedUpload` returns silently when the resource row does not exist, so retries against an already-aborted upload return 200. No 404 is declared because the not-found case is not surfaced to the caller. The 500 path covers unexpected failures (unknown `resourceType`, database errors) — the inner S3 abort call swallows its own errors with a warn log so an S3-side failure alone does not bubble.',
+    'Idempotent: returns 200 OK even when the upload or resource row is missing or already aborted (no 404 response). A 500 is returned only on unexpected server failures.',
   security,
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
   request: {
@@ -274,9 +274,27 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
     } catch (err) {
       // Map missing-resource to the documented 404 so the route-as-spec
       // contract is reachable from the wire. Any other failure falls
-      // through to the generic 500 envelope.
+      // through to the generic 500 envelope. The 404 message is the
+      // same generic string the uploadStatus handler uses — the
+      // resourceId/resourceType come from the client's own query
+      // params so there's no information leak, but mirroring the
+      // generic wording keeps the wire response uniform regardless of
+      // which route surfaces the not-found condition. Full error
+      // context (resourceId, resourceType, projectId, uploadId) is
+      // logged server-side at debug level for operator triage.
       if (err instanceof UploadResourceNotFoundError) {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', err.message)
+        logger.debug(
+          {
+            err,
+            uploadId,
+            partNumber,
+            resourceId: err.resourceId,
+            resourceType: err.resourceType,
+            projectId,
+          },
+          'Upload part: resource not found'
+        )
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
       }
       logger.error(
         { err, uploadId, partNumber, resourceId, resourceType, projectId },
@@ -301,10 +319,20 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       )
       return c.json(result, 200)
     } catch (err) {
-      // See uploadPart handler — typed not-found maps to documented 404;
-      // generic failures fall through to 500.
+      // See uploadPart handler — typed not-found maps to documented 404
+      // with the same generic message; generic failures fall through to 500.
       if (err instanceof UploadResourceNotFoundError) {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', err.message)
+        logger.debug(
+          {
+            err,
+            uploadId,
+            resourceId: err.resourceId,
+            resourceType: err.resourceType,
+            projectId,
+          },
+          'Complete upload: resource not found'
+        )
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
       }
       logger.error({ err, uploadId }, 'Failed to complete chunked upload')
       return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')

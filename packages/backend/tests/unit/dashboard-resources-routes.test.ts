@@ -122,9 +122,12 @@ if (!IS_ISOLATED) {
 
   // Chunked-upload mocks — extracted so route-level tests can override
   // per-case (e.g., to throw UploadResourceNotFoundError and assert the
-  // handler's 404 mapping).
+  // handler's 404 mapping). Return shapes mirror the production service
+  // signatures (`uploadChunkPart → { etag }`, `completeChunkedUpload →
+  // { resourceId }`) so mock drift doesn't silently mask a real wire
+  // contract change.
   const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
-  const mockCompleteChunkedUpload = mock(async () => ({ key: 'k' }))
+  const mockCompleteChunkedUpload = mock(async () => ({ resourceId: 1 }))
 
   // Surfaces used by the broader service surface — kept inert so the
   // route module's static imports resolve without exploding.
@@ -700,7 +703,11 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(404)
       const json = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
-      expect(json.error?.message).toContain('42')
+      // Pin the generic client message — the handler does NOT echo
+      // err.message back, matching the uploadStatus 404 wording for
+      // wire-response consistency. resourceId/resourceType are logged
+      // server-side at debug level only.
+      expect(json.error?.message).toBe('Upload not found')
     })
 
     it('POST /upload/{id}/complete maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
@@ -722,7 +729,8 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(404)
       const json = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
-      expect(json.error?.message).toContain('42')
+      // Same generic-message pin as the upload-part case above.
+      expect(json.error?.message).toBe('Upload not found')
     })
   })
 } // end IS_ISOLATED

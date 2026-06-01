@@ -15,9 +15,11 @@
  * same way; this file follows that convention. The OpenAPI ↔ shared ↔
  * wire round-trip is now enforced by the runtime spec — the dashboard
  * surface registers `dashboardStatsSchema` directly via
- * `.openapi('DashboardStats')` in `routes/dashboard/stats.ts`, so any
- * drift between the Zod schema and the served `/openapi.json` is a
- * compile-time / spec-gen failure rather than a separate contract test.
+ * `.openapi('DashboardStats')` in `routes/dashboard/stats.ts`, so the
+ * served `/openapi.json` is generated from the same Zod schema this
+ * test exercises. Drift between the schema and the spec surfaces at
+ * boot/request time when the cached spec is built, not as a separate
+ * contract test.
  */
 import {
   agents,
