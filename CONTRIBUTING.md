@@ -281,7 +281,7 @@ bun install      # Fresh install
 
 - Check documentation in `docs/`
 - Review [ARCHITECTURE.md](./ARCHITECTURE.md) for system design decisions
-- Review OpenAPI specifications in `packages/openapi/`
+- Review OpenAPI specifications: the **agent** and **control** surfaces are documented in `packages/openapi/{agent,control}-api.yaml`. The **dashboard** surface is generated from `createRoute(...)` definitions in `packages/backend/src/routes/dashboard/*` and served at runtime at `/api/v1/dashboard/openapi.json` — review the route definitions directly.
 - Review authoritative specs in `.kiro/steering/`
 - Review [GOTCHAS.md](./GOTCHAS.md) before working in an unfamiliar area
 - Ask questions in pull requests
