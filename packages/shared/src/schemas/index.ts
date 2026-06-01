@@ -136,15 +136,17 @@ export const loginRequestSchema = z.object({
  * **real attack IDs**. The field is named differently to make the
  * semantic split explicit at the wire level.
  */
-export const inlineAttackRequestSchema = z.object({
-  mode: z.number().int().nonnegative(),
-  hashTypeId: z.number().int().positive().optional(),
-  wordlistId: z.number().int().positive().optional(),
-  rulelistId: z.number().int().positive().optional(),
-  masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
-  dependencyIndices: z.array(z.number().int().nonnegative()).optional(),
-})
+export const inlineAttackRequestSchema = z
+  .object({
+    mode: z.number().int().nonnegative(),
+    hashTypeId: z.number().int().positive().optional(),
+    wordlistId: z.number().int().positive().optional(),
+    rulelistId: z.number().int().positive().optional(),
+    masklistId: z.number().int().positive().optional(),
+    advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
+    dependencyIndices: z.array(z.number().int().nonnegative()).optional(),
+  })
+  .openapi('InlineAttack')
 
 export const createCampaignRequestSchema = insertCampaignSchema
   .pick({
@@ -162,16 +164,19 @@ export const createCampaignRequestSchema = insertCampaignSchema
      */
     attacks: z.array(inlineAttackRequestSchema).optional(),
   })
+  .openapi('CreateCampaignRequest')
 
-export const createAttackRequestSchema = insertAttackSchema.pick({
-  mode: true,
-  hashTypeId: true,
-  wordlistId: true,
-  rulelistId: true,
-  masklistId: true,
-  advancedConfiguration: true,
-  dependencies: true,
-})
+export const createAttackRequestSchema = insertAttackSchema
+  .pick({
+    mode: true,
+    hashTypeId: true,
+    wordlistId: true,
+    rulelistId: true,
+    masklistId: true,
+    advancedConfiguration: true,
+    dependencies: true,
+  })
+  .openapi('CreateAttackRequest')
 
 /**
  * Explicit request schema for creating attack templates.
@@ -200,12 +205,14 @@ export const instantiateAttackTemplateResponseSchema = z.object({
   advancedConfiguration: z.unknown().nullable().optional(),
 })
 
-export const hashCandidateSchema = z.object({
-  name: z.string(),
-  hashcatMode: z.number().int(),
-  category: z.string(),
-  confidence: z.number().min(0).max(1),
-})
+export const hashCandidateSchema = z
+  .object({
+    name: z.string(),
+    hashcatMode: z.number().int(),
+    category: z.string(),
+    confidence: z.number().min(0).max(1),
+  })
+  .openapi('HashCandidate')
 
 // ─── Resource Management API wire shapes ────────────────────────────
 // Promoted from inline route definitions per AGENTS.md (wire shapes
@@ -218,45 +225,53 @@ export const hashCandidateSchema = z.object({
  * hash-list parser worker (and merged with live counts by the dashboard
  * GET /hash-lists/:id route).
  */
-export const hashListStatisticsSchema = z.object({
-  totalCount: z.number().int().nonnegative(),
-  crackedCount: z.number().int().nonnegative(),
-  crackRate: z.number().min(0).max(1),
-  lastUpdated: z.string().datetime().optional(),
-})
+export const hashListStatisticsSchema = z
+  .object({
+    totalCount: z.number().int().nonnegative(),
+    crackedCount: z.number().int().nonnegative(),
+    crackRate: z.number().min(0).max(1),
+    lastUpdated: z.string().datetime().optional(),
+  })
+  .openapi('HashListStatistics')
 
 /**
  * Legacy JSON body for `POST /api/v1/dashboard/resources/hash-lists`
  * (create-empty path). Multipart one-shot uploads are validated inline
  * in the route because Hono's zValidator binds per content-type.
  */
-export const createHashListRequestSchema = z.object({
-  name: z.string().min(1).max(255),
-  hashTypeId: z.number().int().positive().optional(),
-  source: z.string().max(50).optional(),
-})
+export const createHashListRequestSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    hashTypeId: z.number().int().positive().optional(),
+    source: z.string().max(50).optional(),
+  })
+  .openapi('CreateHashListRequest')
 
 /**
  * Request body for `POST /api/v1/dashboard/resources/detect-hash-type`.
  * Capped at 100 hashes per call to bound CPU on the synchronous regex
  * matcher in `hash-analysis.ts`.
  */
-export const detectHashTypeRequestSchema = z.object({
-  hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
-})
+export const detectHashTypeRequestSchema = z
+  .object({
+    hashes: z.array(z.string().min(1).max(1024)).min(1).max(100),
+  })
+  .openapi('DetectHashTypeRequest')
 
 /**
  * Response from `POST /api/v1/dashboard/resources/detect-hash-type`.
  * One entry per input hash; candidates ordered by confidence DESC.
  */
-export const detectHashTypeResponseSchema = z.object({
-  results: z.array(
-    z.object({
-      hashValue: z.string(),
-      candidates: z.array(hashCandidateSchema),
-    })
-  ),
-})
+export const detectHashTypeResponseSchema = z
+  .object({
+    results: z.array(
+      z.object({
+        hashValue: z.string(),
+        candidates: z.array(hashCandidateSchema),
+      })
+    ),
+  })
+  .openapi('DetectHashTypeResponse')
 
 /**
  * Payload shape of `resource_update` events emitted by the hash-list
@@ -848,6 +863,7 @@ export const selectProjectRequestSchema = z
     projectId: z.number().int().positive(),
   })
   .strict()
+  .openapi('SelectProjectRequest')
 
 // ─── Session User / Global RBAC ─────────────────────────────────────
 

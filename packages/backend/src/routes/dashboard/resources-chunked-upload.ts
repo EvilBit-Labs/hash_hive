@@ -32,6 +32,7 @@ import {
   getChunkedUploadStatus,
   initiateChunkedUpload,
   uploadChunkPart,
+  UploadResourceNotFoundError,
 } from '../../services/resources.js'
 import {
   passthroughObject,
@@ -169,6 +170,8 @@ const abortUploadRoute = createRoute({
   path: '/upload/{uploadId}',
   tags,
   summary: 'Abort an in-progress multipart upload session',
+  description:
+    'Idempotent: returns 200 acknowledged even when the upload/resource row is missing or already aborted. No 404 path — `abortChunkedUpload` silently returns when the row is not found so retries are safe. The deleted YAML mistakenly documented a 404 response that the handler never produced.',
   security,
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
   request: {
@@ -183,7 +186,6 @@ const abortUploadRoute = createRoute({
     400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -266,6 +268,12 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       )
       return c.json(result, 200)
     } catch (err) {
+      // Map missing-resource to the documented 404 so the route-as-spec
+      // contract is reachable from the wire. Any other failure falls
+      // through to the generic 500 envelope.
+      if (err instanceof UploadResourceNotFoundError) {
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', err.message)
+      }
       logger.error(
         { err, uploadId, partNumber, resourceId, resourceType, projectId },
         'Failed to upload part'
@@ -289,6 +297,11 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       )
       return c.json(result, 200)
     } catch (err) {
+      // See uploadPart handler — typed not-found maps to documented 404;
+      // generic failures fall through to 500.
+      if (err instanceof UploadResourceNotFoundError) {
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', err.message)
+      }
       logger.error({ err, uploadId }, 'Failed to complete chunked upload')
       return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')
     }

@@ -69,6 +69,27 @@ export class UploadTooLargeError extends Error {
   }
 }
 
+/**
+ * Thrown by `uploadChunkPart` and `completeChunkedUpload` when the
+ * underlying resource row is missing or out-of-project-scope. Routes
+ * catch this and map to 404 `RESOURCE_NOT_FOUND` so the runtime
+ * dashboard spec's 404 declaration is reachable. Without this typed
+ * channel, the bare `throw new Error('Resource N not found')` fell
+ * through to the generic 500 `UPLOAD_PART_FAILED` / `UPLOAD_COMPLETE_FAILED`
+ * envelope and the documented 404 was unreachable from the wire — a
+ * route-as-spec contract violation.
+ */
+export class UploadResourceNotFoundError extends Error {
+  readonly resourceId: number
+  readonly resourceType: string
+  constructor(resourceId: number, resourceType: string) {
+    super(`Resource ${resourceId} (${resourceType}) not found or not in project scope`)
+    this.name = 'UploadResourceNotFoundError'
+    this.resourceId = resourceId
+    this.resourceType = resourceType
+  }
+}
+
 // ─── Hash Types ──────────────────────────────────────────────────────
 
 export async function listHashTypes() {
@@ -715,7 +736,7 @@ export async function uploadChunkPart(
     .from(table)
     .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
     .limit(1)
-  if (!row) throw new Error(`Resource ${resourceId} not found`)
+  if (!row) throw new UploadResourceNotFoundError(resourceId, resourceType)
 
   const fileRef = row.fileRef as { key?: string } | null
   if (!fileRef?.key) throw new Error('Resource has no file reference')
@@ -744,7 +765,7 @@ export async function completeChunkedUpload(
     .from(table)
     .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
     .limit(1)
-  if (!row) throw new Error(`Resource ${resourceId} not found`)
+  if (!row) throw new UploadResourceNotFoundError(resourceId, resourceType)
 
   const fileRef = row.fileRef as {
     key?: string

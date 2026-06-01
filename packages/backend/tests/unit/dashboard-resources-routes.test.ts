@@ -120,6 +120,12 @@ if (!IS_ISOLATED) {
   const mockDeleteHashList = mock(async () => true)
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
 
+  // Chunked-upload mocks — extracted so route-level tests can override
+  // per-case (e.g., to throw UploadResourceNotFoundError and assert the
+  // handler's 404 mapping).
+  const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
+  const mockCompleteChunkedUpload = mock(async () => ({ key: 'k' }))
+
   // Surfaces used by the broader service surface — kept inert so the
   // route module's static imports resolve without exploding.
   const noop = mock(async () => undefined)
@@ -142,6 +148,17 @@ if (!IS_ISOLATED) {
     constructor(message: string) {
       super(message)
       this.name = 'ResourceInUseError'
+    }
+  }
+
+  class UploadResourceNotFoundErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(`Resource ${resourceId} (${resourceType}) not found or not in project scope`)
+      this.name = 'UploadResourceNotFoundError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
     }
   }
 
@@ -175,8 +192,8 @@ if (!IS_ISOLATED) {
     escapeLike: (s: string) => s,
     // Chunked upload
     initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),
-    uploadChunkPart: mock(async () => ({ etag: 'e' })),
-    completeChunkedUpload: mock(async () => ({ key: 'k' })),
+    uploadChunkPart: mockUploadChunkPart,
+    completeChunkedUpload: mockCompleteChunkedUpload,
     abortChunkedUpload: noop,
     getChunkedUploadStatus: mock(async () => ({ parts: [] })),
     // Error classes — the route imports these as values so we must
@@ -184,6 +201,7 @@ if (!IS_ISOLATED) {
     // synthetic errors we throw from the upload mock below.
     UploadTooLargeError: UploadTooLargeErrorMock,
     ResourceInUseError: ResourceInUseErrorMock,
+    UploadResourceNotFoundError: UploadResourceNotFoundErrorMock,
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 
@@ -641,6 +659,60 @@ if (!IS_ISOLATED) {
       const json = (await res.json()) as { error?: { code?: string } }
       expect(json.error?.code).toBe('VALIDATION_ERROR')
       expect(mockCreateHashList).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('chunked-upload 404 mapping', () => {
+    // The dashboard spec documents `404 ResourceNotFound` on the
+    // `PUT /upload/{id}/part/{n}` and `POST /upload/{id}/complete`
+    // routes. The runtime contract is only correct if the handler
+    // actually translates `UploadResourceNotFoundError` from the
+    // service layer into that 404 — otherwise the documented response
+    // is unreachable and route-as-spec lies about wire behavior.
+    // These two tests pin the mapping.
+
+    const UPLOAD_PART_URL =
+      '/api/v1/dashboard/resources/upload/u-1/part/1?resourceId=42&resourceType=hash-lists'
+    const UPLOAD_COMPLETE_URL = '/api/v1/dashboard/resources/upload/u-1/complete'
+
+    it('PUT /upload/{id}/part/{n} maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockUploadChunkPart.mockReset()
+      mockUploadChunkPart.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'hash-lists')
+      })
+
+      const res = await app.request(UPLOAD_PART_URL, {
+        method: 'PUT',
+        headers: makeHeaders({ 'content-type': 'application/octet-stream' }),
+        body: new Uint8Array([1, 2, 3]),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      expect(json.error?.message).toContain('42')
+    })
+
+    it('POST /upload/{id}/complete maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'hash-lists')
+      })
+
+      const res = await app.request(UPLOAD_COMPLETE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: 'e' }],
+          resourceId: 42,
+          resourceType: 'hash-lists',
+        }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      expect(json.error?.message).toContain('42')
     })
   })
 } // end IS_ISOLATED
