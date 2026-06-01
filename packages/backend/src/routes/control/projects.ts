@@ -10,6 +10,7 @@
  * project ids the caller can't access.
  */
 
+import { selectProjectSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -19,7 +20,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { findUserProjectById, getUserProjectsPaginated } from '../../services/projects.js'
 import { controlErrorResponse } from './helpers.js'
@@ -30,7 +31,7 @@ const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
-const projectSchema = z.object({}).passthrough().openapi('ControlProject')
+const projectSchema = selectProjectSchema.openapi('ControlProject')
 const projectsPageSchema = z
   .object({
     items: z.array(projectSchema),
@@ -52,9 +53,9 @@ const listProjectsRoute = createRoute({
       description: 'Page of projects.',
       content: { 'application/json': { schema: projectsPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -86,10 +87,10 @@ const getProjectRoute = createRoute({
       description: 'Project details.',
       content: { 'application/json': { schema: projectSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

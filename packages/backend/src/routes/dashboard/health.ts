@@ -14,7 +14,7 @@ import type { AppEnv } from '../../types.js'
 import { requireSession } from '../../middleware/auth.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { getSystemHealth } from '../../services/health.js'
@@ -52,7 +52,7 @@ const getHealthRoute = createRoute({
       description: 'System health snapshot.',
       content: { 'application/json': { schema: systemHealthSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
   },
 })
 

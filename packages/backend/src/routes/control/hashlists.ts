@@ -5,6 +5,7 @@
  * existing lists.
  */
 
+import { hashListStatisticsSchema, selectHashListSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -14,7 +15,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import {
   getHashListById,
@@ -29,7 +30,7 @@ const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
-const hashListSchema = z.object({}).passthrough().openapi('ControlHashList')
+const hashListSchema = selectHashListSchema.openapi('ControlHashList')
 const hashListPageSchema = z
   .object({
     items: z.array(hashListSchema),
@@ -39,7 +40,9 @@ const hashListPageSchema = z
   })
   .openapi('ControlHashListPage')
 
-const hashListStatsSchema = z.object({}).passthrough().openapi('ControlHashListStats')
+// Shared hash-list statistics shape (totalCount, crackedCount, crackRate, lastUpdated?)
+// — same payload the dashboard hashlist endpoints emit.
+const hashListStatsSchema = hashListStatisticsSchema.openapi('ControlHashListStats')
 
 const listHashListsRoute = createRoute({
   method: 'get',
@@ -53,10 +56,10 @@ const listHashListsRoute = createRoute({
       description: 'Page of hash lists.',
       content: { 'application/json': { schema: hashListPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -86,11 +89,11 @@ const getHashListRoute = createRoute({
       description: 'Hash list details.',
       content: { 'application/json': { schema: hashListSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -118,11 +121,11 @@ const getHashListStatsRoute = createRoute({
       description: 'Hash list stats.',
       content: { 'application/json': { schema: hashListStatsSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

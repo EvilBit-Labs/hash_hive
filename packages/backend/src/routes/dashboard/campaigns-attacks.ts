@@ -22,7 +22,7 @@ import type { AppEnv } from '../../types.js'
 
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
   createAttack,
   deleteAttack,
@@ -104,10 +104,10 @@ const createAttackRoute = createRoute({
       description: 'Attack created.',
       content: { 'application/json': { schema: attackResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Referenced resources missing or cross-project.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -134,10 +134,10 @@ const listAttacksRoute = createRoute({
       description: 'Attacks belonging to the campaign.',
       content: { 'application/json': { schema: listAttacksResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -161,10 +161,10 @@ const updateAttackRoute = createRoute({
       description: 'Attack updated.',
       content: { 'application/json': { schema: attackResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Referenced resources missing or cross-project.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -191,10 +191,10 @@ const deleteAttackRoute = createRoute({
       description: 'Attack deleted.',
       content: { 'application/json': { schema: deleteAttackResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 

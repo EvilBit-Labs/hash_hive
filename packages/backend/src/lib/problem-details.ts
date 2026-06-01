@@ -8,7 +8,9 @@
  */
 
 import type { Context } from 'hono'
-import type { ZodError } from 'zod'
+import type { z, ZodError } from 'zod'
+
+import type { controlProblemDetailsSchema } from '../openapi/components.js'
 
 export type ProblemCode =
   | 'validation'
@@ -65,20 +67,22 @@ const FALLBACK_META: ProblemMeta = {
   title: 'Error',
 }
 
-export interface ProblemFieldError {
-  path: string
-  code: string
-  message: string
-}
+/**
+ * One entry per failed Zod issue surfaced under `errors[]` on a
+ * `validation` problem. `path` is dot-joined for readability
+ * (`user.email`, not `["user","email"]`).
+ */
+export type ProblemFieldError = NonNullable<ProblemBody['errors']>[number]
 
-interface ProblemBody {
-  type: string
-  title: string
-  status: number
-  detail: string
-  instance: string
-  errors?: ProblemFieldError[]
-}
+/**
+ * RFC 9457 problem body shape. Derived from the Zod schema
+ * (`controlProblemDetailsSchema` in `openapi/components.ts`) so the
+ * runtime constructor below and the OpenAPI-served schema can never
+ * drift: a field added in one place forces the other to update or
+ * fail type-check. The schema also carries the `.openapi()` metadata
+ * the spec generator emits — the two roles share a single source.
+ */
+type ProblemBody = z.infer<typeof controlProblemDetailsSchema>
 
 const PROBLEM_CONTENT_TYPE = 'application/problem+json'
 

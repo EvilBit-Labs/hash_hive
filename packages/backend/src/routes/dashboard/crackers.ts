@@ -20,7 +20,7 @@ import { requireSession } from '../../middleware/auth.js'
 import { requireRole } from '../../middleware/rbac.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import {
@@ -151,8 +151,8 @@ const uploadGenericResponseSchema = z
   .openapi('CrackerUploadGenericResponse')
 
 const adminAuthResponses = {
-  401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-  403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
 } as const
 
 // ─── List + Get ─────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ const listCrackersRoute = createRoute({
       description: 'List of cracker binaries.',
       content: { 'application/json': { schema: crackerListResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...adminAuthResponses,
   },
 })
@@ -202,8 +202,8 @@ const getCrackerRoute = createRoute({
       description: 'Cracker binary details.',
       content: { 'application/json': { schema: crackerDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...adminAuthResponses,
   },
 })
@@ -239,7 +239,7 @@ const createCrackerRoute = createRoute({
       description: 'Cracker binary created.',
       content: { 'application/json': { schema: crackerDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Composite unique violation on (engine, version, platform).',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
@@ -300,8 +300,8 @@ const updateCrackerRoute = createRoute({
       description: 'Updated cracker binary.',
       content: { 'application/json': { schema: crackerDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...adminAuthResponses,
   },
 })
@@ -334,8 +334,8 @@ const deleteCrackerRoute = createRoute({
       description: 'Cracker binary deleted.',
       content: { 'application/json': { schema: acknowledgedResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     502: {
       description: 'Storage delete failed; DB row preserved for retry.',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
@@ -394,8 +394,8 @@ const directUploadRoute = createRoute({
       description: 'Direct upload accepted.',
       content: { 'application/json': { schema: uploadGenericResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     413: {
       description: 'Payload exceeds the direct-upload cap; use chunked endpoints.',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
@@ -469,7 +469,7 @@ const initiateUploadRoute = createRoute({
       description: 'Upload session created.',
       content: { 'application/json': { schema: uploadInitiateResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...adminAuthResponses,
   },
 })
@@ -512,7 +512,7 @@ const uploadPartRoute = createRoute({
       description: 'Part uploaded.',
       content: { 'application/json': { schema: uploadGenericResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Upload session id mismatch.',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
@@ -559,7 +559,7 @@ const completeUploadRoute = createRoute({
       description: 'Upload completed and stored.',
       content: { 'application/json': { schema: uploadGenericResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Upload session id mismatch.',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
@@ -596,7 +596,7 @@ const abortUploadRoute = createRoute({
       description: 'Upload aborted.',
       content: { 'application/json': { schema: acknowledgedResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Upload session id mismatch.',
       content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },

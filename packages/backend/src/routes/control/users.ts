@@ -10,6 +10,7 @@
  */
 
 import { projectUsers, users } from '@hashhive/shared'
+import { selectUserSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { and, asc, count, eq } from 'drizzle-orm'
 
@@ -21,7 +22,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { controlErrorResponse, requireProjectRole } from './helpers.js'
 
@@ -31,7 +32,7 @@ const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
-const userSchema = z.object({}).passthrough().openapi('ControlUser')
+const userSchema = selectUserSchema.openapi('ControlUser')
 const userListPageSchema = z
   .object({
     items: z.array(userSchema),
@@ -52,9 +53,9 @@ const meRoute = createRoute({
       description: 'Caller profile.',
       content: { 'application/json': { schema: userSchema } },
     },
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -94,10 +95,10 @@ const listUsersRoute = createRoute({
       description: 'Page of project members.',
       content: { 'application/json': { schema: userListPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -145,11 +146,11 @@ const getUserRoute = createRoute({
       description: 'Project member.',
       content: { 'application/json': { schema: userSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

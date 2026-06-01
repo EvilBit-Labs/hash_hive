@@ -1,7 +1,8 @@
 /**
  * Shared OpenAPI response components for the dashboard and control
- * surfaces. (Agent surface still inlines its envelope today; that
- * lands when U6 of the OpenAPI migration runs.)
+ * surfaces. (Agent surface still inlines its envelope today; it will
+ * grow its own shared-response set when the agent error envelope is
+ * promoted out of inline route definitions.)
  *
  * **Dashboard surface.** Five named responses (`AuthRequired`,
  * `Forbidden`, `ValidationFailed`, `ResourceNotFound`, `InternalError`)
@@ -11,15 +12,16 @@
  * `NotFound`, `ValidationError`, `Conflict`, `InternalError`,
  * `ServiceUnavailable`) point at the RFC 9457 problem-details
  * envelope. Names mirror the pre-deletion `packages/openapi/control-api.yaml`
- * (removed in U5 of the OpenAPI migration) for stable client codegen
- * output across the cutover.
+ * for stable client codegen output across the route-as-spec cutover.
  *
  * **The $ref escape hatch.** `createRoute({ responses: {...} })` expects
  * inline response definitions. The library's documented mechanism to
  * reference a registered shared response is a `$ref` value cast through
- * `unknown` to satisfy the response config type. `sharedResponse(ref)`
- * centralizes that cast so the unsafe boundary lives in one place; the
- * type parameter accepts either surface's ref union.
+ * `unknown` to satisfy the response config type. The split
+ * `sharedDashboardResponse(ref)` / `sharedControlResponse(ref)`
+ * helpers centralize that cast (one per surface) so the unsafe
+ * boundary lives in one place AND cross-surface `$ref` leaks are a
+ * compile error instead of a runtime miss.
  *
  * Agent surface uses a different envelope (the agent error shape) and
  * will get its own shared-response component set when that surface is
@@ -85,12 +87,26 @@ const DASHBOARD_RESPONSE_DESCRIPTIONS: Record<DashboardResponseName, string> = {
  * Typed escape hatch for the `$ref` cast. The library's `RouteConfig`
  * response shape expects an inline definition; this wrapper centralizes
  * the `unknown` cast so call sites read
- * `responses: { 401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired) }`
+ * `responses: { 401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired) }`
  * instead of replicating `{ $ref: '...' } as any` per route.
  */
 type ResponseConfig = NonNullable<RouteConfig['responses'][string]>
 
-export function sharedResponse(ref: DashboardResponseRef | ControlResponseRef): ResponseConfig {
+/**
+ * Surface-specific `$ref` wrappers. Split (rather than a single
+ * single `sharedResponse(ref: DashboardRef | ControlRef)`) so a dashboard
+ * route can't legally reference a control-registry response (or vice
+ * versa) — the runtime guard at `guardDuplicateComponentRegistration`
+ * only catches duplicate registration, not bad referencing, so the
+ * compile-time split is the only place that cross-surface
+ * `$ref` leaks get prevented. When the agent surface migrates, add a
+ * sibling `sharedAgentResponse` rather than widening these unions.
+ */
+export function sharedDashboardResponse(ref: DashboardResponseRef): ResponseConfig {
+  return { $ref: ref } as unknown as ResponseConfig
+}
+
+export function sharedControlResponse(ref: ControlResponseRef): ResponseConfig {
   return { $ref: ref } as unknown as ResponseConfig
 }
 
@@ -231,7 +247,7 @@ export { guardDuplicateComponentRegistration as _guardDuplicateComponentRegistra
  * `instance` is set to the request path at emit time; `errors[]` is
  * present only on `validation` problems (one entry per Zod issue).
  */
-const controlProblemDetailsSchema = z
+export const controlProblemDetailsSchema = z
   .object({
     type: z.string().describe('Stable URL identifier per RFC 9457 §3.1.'),
     title: z.string().describe('Short human-readable summary.'),
@@ -256,8 +272,8 @@ const controlProblemDetailsSchema = z
 
 /**
  * Names mirror the pre-deletion `packages/openapi/control-api.yaml`
- * `components.responses` keys (removed in U5 of the OpenAPI migration)
- * so client codegen output stays stable across the cutover (plan D7).
+ * `components.responses` keys so client codegen output stays stable
+ * across the route-as-spec cutover (plan D7).
  */
 const CONTROL_RESPONSE_NAMES = [
   'AuthError',
@@ -305,18 +321,26 @@ const CONTROL_RESPONSE_DESCRIPTIONS: Record<ControlResponseName, string> = {
  * specifics.
  */
 export const controlOpenApiHonoOptions = {
+  // Return contract is `Response | undefined`. **`undefined` MUST mean
+  // "continue handler chain" — do NOT change this to `void`.** The
+  // library inspects the return value: a `Response` short-circuits with
+  // the validation envelope, anything not-a-Response (including `void`
+  // or `null`) is treated as "fall through to the handler". Future
+  // refactors that drop the early `return undefined` would silently
+  // ship a 200 response with no body on every successful validation.
+  //
+  // The `detail` text is held verbatim ('Invalid request') to match
+  // the wire envelope the pre-route-as-spec validation hook emitted.
+  // The structured
+  // `errors[]` array (via `mapZodError`) carries the actionable
+  // field-level detail; consumers should parse that, not the prose
+  // string. Drifting this detail wording is a wire-contract change.
   defaultHook: <E extends Env>(
     result: { success: true } | { success: false; error: ZodError },
     c: Context<E>
   ): Response | undefined => {
     if (result.success) return undefined
-    return problemResponse(
-      c,
-      400,
-      'validation',
-      'Request validation failed',
-      mapZodError(result.error)
-    )
+    return problemResponse(c, 400, 'validation', 'Invalid request', mapZodError(result.error))
   },
 } as const
 

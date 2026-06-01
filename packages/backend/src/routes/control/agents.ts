@@ -4,6 +4,7 @@
  * agent API and is not duplicated here.
  */
 
+import { selectAgentSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -13,7 +14,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { getAgentById, listAgents, updateAgent } from '../../services/agents.js'
 import { controlErrorResponse, requireProjectMembership, requireProjectRole } from './helpers.js'
@@ -36,7 +37,10 @@ const updateAgentSchema = z
   .strict()
   .openapi('ControlUpdateAgentRequest')
 
-const agentSchema = z.object({}).passthrough().openapi('ControlAgent')
+// Use the drizzle-zod select schema from @hashhive/shared so the
+// runtime spec and the wire shape can't drift. Service-layer returns
+// match this row shape directly.
+const agentSchema = selectAgentSchema.openapi('ControlAgent')
 const agentPageSchema = z
   .object({
     items: z.array(agentSchema),
@@ -60,10 +64,10 @@ const listAgentsRoute = createRoute({
       description: 'Page of agents.',
       content: { 'application/json': { schema: agentPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -98,11 +102,11 @@ const getAgentRoute = createRoute({
       description: 'Agent details.',
       content: { 'application/json': { schema: agentSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -139,11 +143,11 @@ const updateAgentRoute = createRoute({
       description: 'Updated agent.',
       content: { 'application/json': { schema: agentSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

@@ -16,9 +16,9 @@
  * running app anyway).
  *
  * The root `app` in `packages/backend/src/index.ts` stays plain `Hono`
- * so the three surfaces' specs stay strictly isolated (per the U2
- * plumbing invariant): an `OpenAPIHono` parent would merge children
- * into a top-level doc.
+ * so the three surfaces' specs stay strictly isolated: an
+ * `OpenAPIHono` parent would auto-merge children's specs into a
+ * top-level doc, breaking the per-surface `/openapi.json` contract.
  */
 
 import { OpenAPIHono } from '@hono/zod-openapi'
@@ -44,6 +44,13 @@ export const controlRoutes = new OpenAPIHono<AppEnv>()
 
 // Components and security schemes register against THIS instance's
 // registry; per-router registries are merged into it at mount time.
+// Both registrars throw on duplicate registration, which makes this
+// block boot-only and not re-entrant — if `registerControlSecurity`
+// succeeds and `registerControlResponseComponents` then throws, the
+// app is in a half-registered state and any subsequent call will
+// throw on the security half too. That's the intended fail-fast
+// posture (HMR reloads the module fresh in dev); production boots
+// once.
 registerControlSecurity(controlRoutes)
 registerControlResponseComponents(controlRoutes)
 

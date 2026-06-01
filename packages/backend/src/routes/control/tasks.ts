@@ -3,6 +3,7 @@
  * (assign / report) belongs to the agent API.
  */
 
+import { selectTaskSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -12,7 +13,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { getCampaignById } from '../../services/campaigns.js'
 import { getTaskById, listTasks } from '../../services/tasks.js'
@@ -38,7 +39,7 @@ const taskFilterSchema = z.object({
 
 const listTasksQuerySchema = paginationQuerySchema.merge(taskFilterSchema)
 
-const taskSchema = z.object({}).passthrough().openapi('ControlTask')
+const taskSchema = selectTaskSchema.openapi('ControlTask')
 const taskPageSchema = z
   .object({
     items: z.array(taskSchema),
@@ -60,11 +61,11 @@ const listTasksRoute = createRoute({
       description: 'Page of tasks.',
       content: { 'application/json': { schema: taskPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -105,11 +106,11 @@ const getTaskRoute = createRoute({
       description: 'Task details.',
       content: { 'application/json': { schema: taskSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -117,8 +118,12 @@ controlTaskRoutes.openapi(getTaskRoute, async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c)
     const { id } = c.req.valid('param')
-    // getTaskById enforces the projectId predicate at the service
-    // layer via INNER JOIN on campaigns.
+    // `getTaskById` filters by `projectId` inside the SQL via an
+    // INNER JOIN on `campaigns`, so the prior fetch-then-verify dance
+    // against `getCampaignById` is gone — one round trip, and a
+    // wrong-project caller gets the same null path as a non-existent
+    // task. The 404 returned below collapses both cases so existence
+    // of task ids isn't enumerable across project scopes.
     const task = await getTaskById(id, projectId)
     if (!task) return problemResponse(c, 404, 'not_found', 'task not found')
     return c.json(task, 200)

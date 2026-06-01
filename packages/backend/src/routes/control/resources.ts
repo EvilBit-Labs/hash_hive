@@ -8,7 +8,14 @@
  * implemented in this Control surface.
  */
 
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import {
+  maskLists,
+  ruleLists,
+  selectMaskListSchema,
+  selectRuleListSchema,
+  selectWordListSchema,
+  wordLists,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -18,7 +25,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import {
   getResourceById,
@@ -45,7 +52,14 @@ const kindIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
-const resourceSchema = z.object({}).passthrough().openapi('ControlResource')
+// Resource row is one of wordlist/rulelist/masklist — the three share
+// the same column set today (drizzle-zod schemas are structurally
+// equivalent) but the discriminated union keeps the spec honest about
+// the per-kind shape so future divergence (e.g., per-kind metadata
+// columns) surfaces in the runtime spec automatically.
+const resourceSchema = z
+  .union([selectWordListSchema, selectRuleListSchema, selectMaskListSchema])
+  .openapi('ControlResource')
 const resourcePageSchema = z
   .object({
     items: z.array(resourceSchema),
@@ -83,10 +97,10 @@ const listHashTypesRoute = createRoute({
       description: 'Hash types.',
       content: { 'application/json': { schema: hashTypesResponseSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -112,10 +126,10 @@ const listResourcesRoute = createRoute({
       description: 'Page of resources.',
       content: { 'application/json': { schema: resourcePageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -146,11 +160,11 @@ const getResourceRoute = createRoute({
       description: 'Resource details.',
       content: { 'application/json': { schema: resourceSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

@@ -26,7 +26,7 @@ import { db } from '../../db/index.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
@@ -74,7 +74,7 @@ const dashboardStatsSchema = z
       total: z.number().int().nonnegative(),
     }),
   })
-  .openapi('ControlDashboardStats')
+  .openapi('ControlStats')
 
 const getStatsRoute = createRoute({
   method: 'get',
@@ -88,10 +88,10 @@ const getStatsRoute = createRoute({
       description: 'Aggregate stats.',
       content: { 'application/json': { schema: dashboardStatsSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

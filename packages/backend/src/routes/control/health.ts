@@ -21,14 +21,29 @@ import type { AppEnv } from '../../types.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import { getSystemHealth } from '../../services/health.js'
 import { controlErrorResponse } from './helpers.js'
 
 export const controlHealthRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
 
-const systemHealthSchema = z.object({}).passthrough().openapi('SystemHealth')
+// Mirrors the dashboard `systemHealthSchema` shape — the underlying
+// `SystemHealth` type from `services/health.ts` carries a
+// discriminated `ComponentHealth` shape that would re-encode awkwardly
+// in OpenAPI; the typed top-level keys + permissive `components` map
+// keep the spec usable without forcing every component variant into
+// the schema. Compile-time correctness is guaranteed by
+// `getSystemHealth()`'s return type.
+const systemHealthSchema = z
+  .object({
+    status: z.string(),
+    timestamp: z.string(),
+    version: z.string(),
+    components: z.record(z.string(), z.unknown()),
+  })
+  .passthrough()
+  .openapi('ControlSystemHealth')
 
 const getHealthRoute = createRoute({
   method: 'get',
@@ -43,8 +58,8 @@ const getHealthRoute = createRoute({
       description: 'System health snapshot.',
       content: { 'application/json': { schema: systemHealthSchema } },
     },
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

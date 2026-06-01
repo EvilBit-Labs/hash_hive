@@ -20,7 +20,7 @@ import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 
@@ -87,8 +87,8 @@ const getStatsRoute = createRoute({
       description: 'Session has no active project context. Call POST /projects/select first.',
       content: { 'application/json': { schema: projectNotSelectedErrorSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
 })
 

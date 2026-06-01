@@ -13,7 +13,7 @@
  *     and shape that match the existing dashboard contract.
  *   - Duplicate component / security-scheme registration throws
  *     loudly instead of silently last-write-wins.
- *   - `sharedResponse()` round-trips to a `$ref` in the emitted spec.
+ *   - `sharedDashboardResponse()` round-trips to a `$ref` in the emitted spec.
  *   - `mountCachedSpec` caches the generated body in production mode
  *     so subsequent requests return the same bytes.
  */
@@ -25,7 +25,7 @@ import {
   _guardDuplicateComponentRegistrationForTest,
   dashboardOpenApiHonoOptions,
   registerDashboardResponseComponents,
-  sharedResponse,
+  sharedDashboardResponse,
 } from '../../src/openapi/components.js'
 import {
   registerAgentSecurity,
@@ -228,7 +228,7 @@ describe('dashboardOpenApiHonoOptions.defaultHook', () => {
   })
 })
 
-describe('sharedResponse', () => {
+describe('sharedDashboardResponse', () => {
   it('produces a $ref payload that round-trips to a $ref in the emitted spec', () => {
     const app = buildSurface()
     const route = createRoute({
@@ -240,8 +240,8 @@ describe('sharedResponse', () => {
           description: 'ok',
           content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } },
         },
-        401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-        403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+        401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+        403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
       },
     })
     app.openapi(route, (c) => c.json({ ok: true }, 200))

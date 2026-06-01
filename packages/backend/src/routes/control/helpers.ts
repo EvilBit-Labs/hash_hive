@@ -26,6 +26,14 @@ import { logger } from '../../config/logger.js'
 import { mapZodError, problemResponse } from '../../lib/problem-details.js'
 import { findProjectMembership } from '../../services/auth.js'
 
+// `parseIdParam` and `controlValidationHook` were removed in U5b:
+// per-route Zod validation moved to `createRoute({ request: ... })` +
+// `c.req.valid('param'/'query'/'json')`, and `controlOpenApiHonoOptions.defaultHook`
+// in `openapi/components.ts` covers the validation-failure envelope
+// (also returns RFC 9457 `Invalid request`). Don't reintroduce them
+// without first explaining why the route-level schema can't carry the
+// constraint.
+
 type Role = 'admin' | 'contributor' | 'viewer'
 
 /** Throwable that maps cleanly to a problem-details response. */
@@ -90,50 +98,6 @@ export async function requireProjectRole(
     throw new ControlApiError(403, 'forbidden', `Requires one of: ${roles.join(', ')}`)
   }
   return membership
-}
-
-const idParamSchema = z.object({
-  id: z.coerce.number().int().positive(),
-})
-
-/**
- * Parse the `id` URL param as a positive integer. Throws the underlying
- * ZodError on failure so `controlErrorResponse` can surface the
- * structured `errors[]` field — keeping the validation envelope
- * consistent with the rest of the Control API.
- */
-export function parseIdParam(value: string | undefined): number {
-  return idParamSchema.parse({ id: value }).id
-}
-
-/**
- * `zValidator` hook for Control API write routes. Replaces the
- * default HTTPException throw with an RFC 9457 problem-details response
- * that carries field-level `errors[]` from `mapZodError`. Pass this as
- * the third argument to `zValidator(...)` so validation failures stay
- * inside the Control envelope contract instead of falling through to
- * Hono's default 400.
- *
- * Typed permissively because `@hono/zod-validator` v0.7 emits
- * `error: $ZodError<Schema>` (zod v4 core) on failure, but `mapZodError`
- * is typed against `z.ZodError`. The two have the same `issues[]`
- * runtime shape; the cast preserves type safety at the helper boundary
- * without forcing every caller to manage the version difference.
- */
-export function controlValidationHook(
-  result: { success: boolean; error?: unknown },
-  c: Context
-): Response | undefined {
-  if (!result.success) {
-    return problemResponse(
-      c,
-      400,
-      'validation',
-      'Invalid request',
-      mapZodError(result.error as z.ZodError)
-    )
-  }
-  return undefined
 }
 
 /**

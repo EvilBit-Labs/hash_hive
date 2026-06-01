@@ -6,6 +6,7 @@
  * `contributor` or `admin`; read paths require any project member.
  */
 
+import { selectCampaignSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -16,7 +17,7 @@ import { problemResponse } from '../../lib/problem-details.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
-  sharedResponse,
+  sharedControlResponse,
 } from '../../openapi/components.js'
 import {
   createCampaign,
@@ -64,7 +65,7 @@ const transitionRequestSchema = z
   .strict()
   .openapi('ControlTransitionCampaignRequest')
 
-const campaignSchema = z.object({}).passthrough().openapi('ControlCampaign')
+const campaignSchema = selectCampaignSchema.openapi('ControlCampaign')
 const campaignPageSchema = z
   .object({
     items: z.array(campaignSchema),
@@ -77,7 +78,7 @@ const campaignPageSchema = z
 const transitionResponseSchema = z
   .object({})
   .passthrough()
-  .openapi('ControlCampaignTransitionResult')
+  .openapi('ControlCampaignTransitionResponse')
 
 // ─── GET / — list campaigns ──────────────────────────────────────────
 
@@ -93,10 +94,10 @@ const listCampaignsRoute = createRoute({
       description: 'Page of campaigns.',
       content: { 'application/json': { schema: campaignPageSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -131,11 +132,11 @@ const getCampaignRoute = createRoute({
       description: 'Campaign details.',
       content: { 'application/json': { schema: campaignSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -169,10 +170,10 @@ const createCampaignRoute = createRoute({
       description: 'Campaign created.',
       content: { 'application/json': { schema: campaignSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -211,12 +212,12 @@ const updateCampaignRoute = createRoute({
       description: 'Updated campaign.',
       content: { 'application/json': { schema: campaignSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    409: sharedResponse(CONTROL_RESPONSE_REFS.Conflict),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -270,13 +271,13 @@ const transitionCampaignRoute = createRoute({
       description: 'Campaign transitioned.',
       content: { 'application/json': { schema: transitionResponseSchema } },
     },
-    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
-    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
-    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(CONTROL_RESPONSE_REFS.NotFound),
-    409: sharedResponse(CONTROL_RESPONSE_REFS.Conflict),
-    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
-    503: sharedResponse(CONTROL_RESPONSE_REFS.ServiceUnavailable),
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+    503: sharedControlResponse(CONTROL_RESPONSE_REFS.ServiceUnavailable),
   },
 })
 
