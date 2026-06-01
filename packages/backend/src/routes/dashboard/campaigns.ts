@@ -1,9 +1,7 @@
 import type { Context } from 'hono'
 
 import { inlineAttackRequestSchema } from '@hashhive/shared'
-import { OpenAPIHono } from '@hono/zod-openapi'
-import { zValidator } from '@hono/zod-validator'
-import { z } from 'zod'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
@@ -12,26 +10,34 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
 import {
-  createAttack,
+  DASHBOARD_RESPONSE_REFS,
+  dashboardOpenApiHonoOptions,
+  sharedResponse,
+} from '../../openapi/components.js'
+import {
   createCampaign,
   createCampaignWithAttacks,
-  deleteAttack,
   deleteCampaign,
-  getAttackById,
   getCampaignById,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
   listAttacks,
   listCampaigns,
-  transitionCampaign,
-  updateAttack,
   updateCampaign,
   validateCampaignDAG,
-  validateCampaignResources,
-  validateProposedDAG,
 } from '../../services/campaigns.js'
+import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
+import { registerCampaignLifecycleRoutes } from './campaigns-lifecycle.js'
+import { attackRowSchema, campaignIdParamSchema, campaignRowSchema } from './campaigns-shared.js'
 
-const campaignRoutes = new OpenAPIHono<AppEnv>()
+// Use the shared dashboardOpenApiHonoOptions so every dashboard router
+// emits the same `{ error: { code: 'VALIDATION_ERROR', message } }`
+// envelope on createRoute Zod validation failures. The legacy
+// `zValidator('query', ..., hook)` and in-handler `safeParse` blocks
+// produced this envelope; the shared hook in
+// `packages/backend/src/openapi/components.ts` centralises it now that
+// route registration is the single source of truth across the dashboard.
+const campaignRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 campaignRoutes.use('*', requireSession)
 
@@ -64,37 +70,86 @@ const listCampaignsQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).catch(0).default(0),
 })
 
-campaignRoutes.get(
-  '/',
-  requireProjectAccess(),
-  zValidator('query', listCampaignsQuerySchema, (result, c) => {
-    if (result.success) return
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: result.error.issues.map((i) => i.message).join('; '),
-        },
-      },
-      400
-    )
-  }),
-  async (c) => {
-    const { projectId } = c.get('scopedUser')!
-    const { status, priority, sort, order, limit, offset } = c.req.valid('query')
+// `campaignIdParamSchema`, `campaignRowSchema`, `attackRowSchema`
+// live in `./campaigns-shared.ts` so the lifecycle and attack route
+// modules can reuse them without re-creating an import cycle.
 
-    const result = await listCampaigns({
-      projectId,
-      status,
-      priority,
-      sort,
-      order,
-      limit,
-      offset,
+const listCampaignsResponseSchema = z
+  .object({
+    campaigns: z.array(campaignRowSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .passthrough()
+
+const createCampaignResponseSchema = z.object({
+  campaign: campaignRowSchema,
+  attacks: z.array(attackRowSchema),
+})
+
+const campaignDetailResponseSchema = z.object({
+  campaign: campaignRowSchema,
+  attacks: z.array(attackRowSchema),
+  taskStats: z
+    .object({
+      total: z.number().int().nonnegative(),
+      pending: z.number().int().nonnegative(),
+      running: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
     })
-    return c.json(result)
-  }
-)
+    .passthrough(),
+  activeAgents: z.array(z.unknown()),
+})
+
+const deleteCampaignResponseSchema = z.object({
+  deleted: z.literal(true),
+  id: z.number().int().positive(),
+})
+
+const updateCampaignResponseSchema = z.object({
+  campaign: campaignRowSchema,
+})
+
+const validateCampaignResponseSchema = z.object({}).passthrough()
+
+const listCampaignsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Campaigns'],
+  summary: 'List campaigns in the current project scope',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    query: listCampaignsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'List of campaigns matching the supplied filters.',
+      content: { 'application/json': { schema: listCampaignsResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+  },
+})
+
+campaignRoutes.openapi(listCampaignsRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
+  const { status, priority, sort, order, limit, offset } = c.req.valid('query')
+
+  const result = await listCampaigns({
+    projectId,
+    status,
+    priority,
+    sort,
+    order,
+    limit,
+    offset,
+  })
+  return c.json(result, 200)
+})
 
 // Inline-attack payload schema is canonical in @hashhive/shared so the
 // frontend and backend stay in lockstep. The shared schema names the
@@ -109,85 +164,132 @@ const createCampaignSchema = z.object({
   attacks: z.array(inlineAttackRequestSchema).optional(),
 })
 
-campaignRoutes.post(
-  '/',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', createCampaignSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { userId, projectId } = c.get('scopedUser')!
+const createCampaignRoute = createRoute({
+  method: 'post',
+  path: '/',
+  tags: ['Campaigns'],
+  summary: 'Create a campaign, optionally with inline attacks',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: createCampaignSchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Campaign (and any inline attacks) created.',
+      content: { 'application/json': { schema: createCampaignResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    409: {
+      description: 'Inline attacks referenced a missing resource.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    503: {
+      description: 'Transactional create could not run (e.g. DB unavailable).',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
 
-    // No attacks supplied → legacy single-row insert (backward compatible).
-    if (!data.attacks || data.attacks.length === 0) {
-      const campaign = await createCampaign({
-        name: data.name,
-        description: data.description,
-        hashListId: data.hashListId,
-        priority: data.priority,
-        projectId,
-        createdBy: userId,
-      })
-      return c.json({ campaign, attacks: [] }, 201)
-    }
+campaignRoutes.openapi(createCampaignRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { userId, projectId } = c.get('scopedUser')!
 
-    // Attacks supplied → single-transaction create + resource +
-    // DAG pre-check. Wrap in try/catch so a DB blip during the
-    // pre-check or the transaction surfaces as a typed 503 instead
-    // of bubbling to onError as a generic 500. The discriminated
-    // result handles the *expected* failure modes (dag_invalid,
-    // resource_missing); this catches the *unexpected* throws.
-    let result: Awaited<ReturnType<typeof createCampaignWithAttacks>>
-    try {
-      result = await createCampaignWithAttacks({
-        name: data.name,
-        description: data.description,
-        hashListId: data.hashListId,
-        priority: data.priority,
-        projectId,
-        createdBy: userId,
-        attacks: data.attacks,
-      })
-    } catch (err) {
-      logger.error(
-        { err, route: 'POST /campaigns (with attacks)', projectId, userId },
-        'createCampaignWithAttacks threw — surfacing as service unavailable'
-      )
-      return c.json(
-        {
-          error: {
-            code: 'SERVICE_UNAVAILABLE',
-            message: 'Unable to create campaign right now',
-          },
-        },
-        503
-      )
-    }
-
-    if (result.kind === 'dag_invalid') {
-      return dashboardError(c, 400, 'DAG_INVALID', result.error)
-    }
-
-    if (result.kind === 'resource_missing') {
-      return c.json(
-        {
-          error: {
-            code: 'RESOURCE_MISSING',
-            message: `Referenced resources missing: ${result.missing.join(', ')}`,
-          },
-        },
-        409
-      )
-    }
-
-    return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
+  // No attacks supplied → legacy single-row insert (backward compatible).
+  if (!data.attacks || data.attacks.length === 0) {
+    const campaign = await createCampaign({
+      name: data.name,
+      description: data.description,
+      hashListId: data.hashListId,
+      priority: data.priority,
+      projectId,
+      createdBy: userId,
+    })
+    return c.json({ campaign, attacks: [] }, 201)
   }
-)
 
-campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) {
-    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
+  // Attacks supplied → single-transaction create + resource +
+  // DAG pre-check. Wrap in try/catch so a DB blip during the
+  // pre-check or the transaction surfaces as a typed 503 instead
+  // of bubbling to onError as a generic 500. The discriminated
+  // result handles the *expected* failure modes (dag_invalid,
+  // resource_missing); this catches the *unexpected* throws.
+  let result: Awaited<ReturnType<typeof createCampaignWithAttacks>>
+  try {
+    result = await createCampaignWithAttacks({
+      name: data.name,
+      description: data.description,
+      hashListId: data.hashListId,
+      priority: data.priority,
+      projectId,
+      createdBy: userId,
+      attacks: data.attacks,
+    })
+  } catch (err) {
+    logger.error(
+      { err, route: 'POST /campaigns (with attacks)', projectId, userId },
+      'createCampaignWithAttacks threw — surfacing as service unavailable'
+    )
+    return c.json(
+      {
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Unable to create campaign right now',
+        },
+      },
+      503
+    )
   }
+
+  if (result.kind === 'dag_invalid') {
+    return dashboardError(c, 400, 'DAG_INVALID', result.error)
+  }
+
+  if (result.kind === 'resource_missing') {
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_MISSING',
+          message: `Referenced resources missing: ${result.missing.join(', ')}`,
+        },
+      },
+      409
+    )
+  }
+
+  return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
+})
+
+const getCampaignRoute = createRoute({
+  method: 'get',
+  path: '/{id}',
+  tags: ['Campaigns'],
+  summary: 'Get a campaign with its attacks, task stats, and active agents',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    params: campaignIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Campaign detail with enriched payload.',
+      content: { 'application/json': { schema: campaignDetailResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+campaignRoutes.openapi(getCampaignRoute, async (c) => {
+  const { id } = c.req.valid('param')
 
   const { projectId } = c.get('scopedUser')!
   const campaign = await getCampaignById(id)
@@ -202,19 +304,49 @@ campaignRoutes.get('/:id', requireProjectAccess(), async (c) => {
     listActiveAgentsByCampaign(id),
   ])
 
-  return c.json({
-    campaign,
-    attacks: campaignAttacks,
-    taskStats,
-    activeAgents,
-  })
+  return c.json(
+    {
+      campaign,
+      attacks: campaignAttacks,
+      taskStats,
+      activeAgents,
+    },
+    200
+  )
 })
 
-campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), async (c) => {
-  const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) {
-    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
-  }
+const deleteCampaignRoute = createRoute({
+  method: 'delete',
+  path: '/{id}',
+  tags: ['Campaigns'],
+  summary: 'Delete a draft campaign',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: campaignIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Campaign deleted.',
+      content: { 'application/json': { schema: deleteCampaignResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Campaign is not in draft status and cannot be deleted.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    500: {
+      description: 'Delete transaction failed unexpectedly.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
+
+campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
+  const { id } = c.req.valid('param')
 
   const { userId, projectId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
@@ -258,7 +390,7 @@ campaignRoutes.delete('/:id', requireMembershipRole('admin', 'contributor'), asy
         409
       )
     case 'deleted':
-      return c.json({ deleted: true, id: result.id })
+      return c.json({ deleted: true as const, id: result.id }, 200)
   }
 })
 
@@ -280,46 +412,30 @@ const putCampaignSchema = z.object({
   priority: z.number().int().min(1).max(10),
 })
 
-const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<AppEnv>) => {
-  const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) {
-    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
+// Shared post-load update logic for PATCH and PUT — the two routes
+// expose different body schemas (PATCH is partial, PUT is required)
+// but the lookup, project-scope check, service call, and result-kind
+// branch are identical. Each route's handler validates its body via
+// its own createRoute schema and then forwards the parsed `data` here.
+const updateCampaignHandler = async (
+  c: Context<AppEnv>,
+  id: number,
+  data: {
+    name?: string | undefined
+    description?: string | null | undefined
+    priority?: number | undefined
   }
-
+) => {
   const { projectId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
   if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  // Parse and validate the body inside the handler. Wrapping c.req.json()
-  // in try/catch keeps a malformed body (invalid JSON, premature EOF) from
-  // surfacing as an unhandled 500; the safeParse below handles schema
-  // violations on syntactically valid JSON. Both failures share the
-  // dashboard's `{ error: { code, message } }` envelope.
-  let body: unknown
-  try {
-    body = await c.req.json()
-  } catch {
-    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body must be valid JSON')
-  }
-  const schema = method === 'PUT' ? putCampaignSchema : patchCampaignSchema
-  const parsed = schema.safeParse(body)
-  if (!parsed.success) {
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: parsed.error.issues.map((i) => i.message).join('; '),
-        },
-      },
-      400
-    )
-  }
   // PUT's `description` can be the literal `null` ("explicit clear");
   // updateCampaign accepts `undefined` to mean "leave alone", so we
   // pass null through unchanged and let the service write it.
-  const result = await updateCampaign(id, parsed.data)
+  const result = await updateCampaign(id, data)
 
   switch (result.kind) {
     case 'not_found':
@@ -335,212 +451,113 @@ const updateCampaignHandler = (method: 'PATCH' | 'PUT') => async (c: Context<App
         409
       )
     case 'updated':
-      return c.json({ campaign: result.campaign })
+      return c.json({ campaign: result.campaign }, 200)
   }
 }
 
-// PATCH and PUT share a handler factory but use different schemas:
-// PATCH is partial, PUT is full-replace. The handler bypasses
-// zValidator's default envelope so all error responses use the
-// dashboard's `{ error: { code, message } }` shape.
-campaignRoutes.patch(
-  '/:id',
-  requireMembershipRole('admin', 'contributor'),
-  updateCampaignHandler('PATCH')
-)
-campaignRoutes.put(
-  '/:id',
-  requireMembershipRole('admin', 'contributor'),
-  updateCampaignHandler('PUT')
-)
-
-// ─── Campaign Lifecycle ─────────────────────────────────────────────
-
-// Action enum matches the spec-named alias routes — `resume` is
-// included alongside `start` even though both map to `running`,
-// because the alias path exposes `/resume` and the parity is
-// documented in the OpenAPI spec.
-const lifecycleSchema = z.object({
-  action: z.enum(['start', 'pause', 'resume', 'stop', 'cancel']),
+// PATCH and PUT share the same update flow but expose different
+// schemas. createRoute's body schema validation goes through the
+// router's `defaultHook` for the dashboard envelope on failure.
+const patchCampaignRoute = createRoute({
+  method: 'patch',
+  path: '/{id}',
+  tags: ['Campaigns'],
+  summary: 'Partially update a draft campaign',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: campaignIdParamSchema,
+    body: {
+      content: {
+        'application/json': { schema: patchCampaignSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Campaign updated.',
+      content: { 'application/json': { schema: updateCampaignResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Campaign is not in draft status and cannot be edited.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
 })
 
-campaignRoutes.post(
-  '/:id/lifecycle',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', lifecycleSchema),
-  async (c) => {
-    const id = Number(c.req.param('id'))
-    if (!Number.isInteger(id) || id <= 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
-    }
+campaignRoutes.openapi(patchCampaignRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const data = c.req.valid('json')
+  return updateCampaignHandler(c, id, data)
+})
 
-    // transitionCampaign fetches by id alone; without this guard a
-    // contributor in project A could transition a campaign in project
-    // B by guessing the id. Mirrors the per-alias handler check.
-    const { projectId } = c.get('scopedUser')!
-    const existing = await getCampaignById(id)
-    if (!existing || existing.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-    }
-
-    const { action } = c.req.valid('json')
-
-    const statusMap = {
-      start: 'running',
-      pause: 'paused',
-      resume: 'running',
-      stop: 'draft',
-      cancel: 'cancelled',
-    } as const
-
-    const targetStatus = statusMap[action]
-    const result = await transitionCampaign(id, targetStatus)
-    return respondToTransition(c, result)
-  }
-)
-
-// Shared error mapping for transitionCampaign results. Keeps the
-// /lifecycle action-enum route and the spec-named alias routes in
-// lockstep — every recognized service-layer error code maps to the
-// same HTTP status and envelope across both surfaces.
-type TransitionResult = Awaited<ReturnType<typeof transitionCampaign>>
-function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
-  if ('error' in result) {
-    const code = 'code' in result ? result.code : undefined
-    if (code === 'QUEUE_UNAVAILABLE') {
-      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
-    }
-    if (code === 'RESOURCE_VALIDATION_FAILED') {
-      // Resource lookup itself failed (DB blip). Surface as 503 so
-      // clients can retry rather than treating it as a permanent error.
-      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', result.error)
-    }
-    if (code === 'RESOURCE_MISSING') {
-      // Precondition failed (referenced resource doesn't exist or
-      // crosses project boundary). 409 Conflict captures this better
-      // than 400 — the request was well-formed, the state isn't.
-      return dashboardError(c, 409, 'RESOURCE_MISSING', result.error)
-    }
-    if (code === 'STALE_STATE') {
-      // Optimistic-concurrency loss: another writer transitioned this
-      // campaign between our read and write. 409 signals the client
-      // should re-fetch and retry against the current state.
-      return dashboardError(c, 409, 'STALE_STATE', result.error)
-    }
-    if (code === 'TASK_GENERATION_FAILED') {
-      return dashboardError(c, 500, 'TASK_GENERATION_FAILED', result.error)
-    }
-    return dashboardError(c, 400, 'INVALID_TRANSITION', result.error)
-  }
-  return c.json({ campaign: result.campaign })
-}
-
-/**
- * Route-layer wrapper around `validateCampaignResources` that turns
- * service throws into the dashboard's `{ error: { code, message } }`
- * envelope. Returns:
- *   - `null` when validation succeeded (caller proceeds)
- *   - a 409 `RESOURCE_MISSING` Response when refs are missing
- *   - a 503 `SERVICE_UNAVAILABLE` Response when the lookup itself
- *     threw (DB blip, query error) — mirrors `transitionCampaign`'s
- *     `RESOURCE_VALIDATION_FAILED` mapping so attack-write paths
- *     have the same retryability semantics as the lifecycle path.
- */
-async function checkResourcesOrErrorResponse(
-  c: Context<AppEnv>,
-  campaign: { projectId: number; hashListId: number | null },
-  attacks: Parameters<typeof validateCampaignResources>[1],
-  logContext: { route: string; campaignId: number; projectId: number }
-): Promise<Response | null> {
-  try {
-    const result = await validateCampaignResources(campaign, attacks)
-    if (result.valid) return null
-    return c.json(
-      {
-        error: {
-          code: 'RESOURCE_MISSING',
-          message: `Referenced resources missing: ${result.missing.join(', ')}`,
-        },
+const putCampaignRoute = createRoute({
+  method: 'put',
+  path: '/{id}',
+  tags: ['Campaigns'],
+  summary: 'Replace a draft campaign in full',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: campaignIdParamSchema,
+    body: {
+      content: {
+        'application/json': { schema: putCampaignSchema },
       },
-      409
-    )
-  } catch (err) {
-    logger.error(
-      { err, ...logContext },
-      'validateCampaignResources threw — surfacing as service unavailable'
-    )
-    return c.json(
-      {
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: 'Unable to validate campaign resources right now',
-        },
-      },
-      503
-    )
-  }
-}
+    },
+  },
+  responses: {
+    200: {
+      description: 'Campaign replaced.',
+      content: { 'application/json': { schema: updateCampaignResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Campaign is not in draft status and cannot be edited.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
 
-// Spec-named lifecycle aliases. These delegate to the same
-// transitionCampaign service the action-enum /lifecycle route uses, so
-// behavior (queue check, task generation, event emission, valid-
-// transition allow-list) stays in lockstep. The pre-existing
-// /lifecycle route is kept for the frontend which still calls it.
-const lifecycleAliasStatus = {
-  start: 'running',
-  pause: 'paused',
-  resume: 'running',
-  stop: 'draft',
-  cancel: 'cancelled',
-} as const
-
-const lifecycleAliasHandler =
-  (action: keyof typeof lifecycleAliasStatus) => async (c: Context<AppEnv>) => {
-    const id = Number(c.req.param('id'))
-    if (!Number.isInteger(id) || id <= 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
-    }
-
-    const { projectId } = c.get('scopedUser')!
-    const existing = await getCampaignById(id)
-    if (!existing || existing.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-    }
-
-    const result = await transitionCampaign(id, lifecycleAliasStatus[action])
-    return respondToTransition(c, result)
-  }
-
-campaignRoutes.post(
-  '/:id/start',
-  requireMembershipRole('admin', 'contributor'),
-  lifecycleAliasHandler('start')
-)
-campaignRoutes.post(
-  '/:id/pause',
-  requireMembershipRole('admin', 'contributor'),
-  lifecycleAliasHandler('pause')
-)
-campaignRoutes.post(
-  '/:id/resume',
-  requireMembershipRole('admin', 'contributor'),
-  lifecycleAliasHandler('resume')
-)
-campaignRoutes.post(
-  '/:id/stop',
-  requireMembershipRole('admin', 'contributor'),
-  lifecycleAliasHandler('stop')
-)
-campaignRoutes.post(
-  '/:id/cancel',
-  requireMembershipRole('admin', 'contributor'),
-  lifecycleAliasHandler('cancel')
-)
+campaignRoutes.openapi(putCampaignRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const data = c.req.valid('json')
+  return updateCampaignHandler(c, id, data)
+})
 
 // ─── DAG Validation ─────────────────────────────────────────────────
 
-campaignRoutes.get('/:id/validate', requireProjectAccess(), async (c) => {
-  const id = Number(c.req.param('id'))
+const validateCampaignRoute = createRoute({
+  method: 'get',
+  path: '/{id}/validate',
+  tags: ['Campaigns'],
+  summary: 'Validate the campaign DAG without mutating state',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    params: campaignIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'DAG validation result.',
+      content: { 'application/json': { schema: validateCampaignResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+campaignRoutes.openapi(validateCampaignRoute, async (c) => {
+  const { id } = c.req.valid('param')
   const campaign = await getCampaignById(id)
 
   // Cross-project enforcement: requireProjectAccess only proves the
@@ -555,270 +572,17 @@ campaignRoutes.get('/:id/validate', requireProjectAccess(), async (c) => {
   }
 
   const result = await validateCampaignDAG(id)
-  return c.json(result)
+  return c.json(result, 200)
 })
 
-// ─── Attack Management ──────────────────────────────────────────────
+// ─── Sub-router registrations ──────────────────────────────────────
+//
+// Lifecycle and attack routes live in their own files to keep this
+// module under the 800-line cap. They register against the same
+// `campaignRoutes` router so URL paths and middleware composition
+// stay identical to the single-file form.
 
-const createAttackSchema = z.object({
-  mode: z.number().int().nonnegative(),
-  hashTypeId: z.number().int().positive().optional(),
-  wordlistId: z.number().int().positive().optional(),
-  rulelistId: z.number().int().positive().optional(),
-  masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
-  dependencies: z.array(z.number().int().positive()).optional(),
-})
-
-// Synthetic id used for pre-insert DAG validation. Attack IDs are
-// positive serials, so any negative value is guaranteed not to collide
-// with existing rows.
-const SYNTHETIC_NEW_ATTACK_ID = -1
-
-campaignRoutes.post(
-  '/:id/attacks',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', createAttackSchema),
-  async (c) => {
-    const campaignId = Number(c.req.param('id'))
-    if (!Number.isInteger(campaignId) || campaignId <= 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign id')
-    }
-
-    // Project-scope guard: requireMembershipRole only validates that the caller
-    // is a contributor *somewhere*; without this check a contributor
-    // in project A could create attacks against a campaign in project
-    // B by guessing the campaign id. 404 on cross-project to avoid
-    // leaking existence.
-    const { projectId } = c.get('scopedUser')!
-    const campaign = await getCampaignById(campaignId)
-    if (!campaign || campaign.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-    }
-
-    const data = c.req.valid('json')
-
-    // Cross-project resource pre-check at draft write time. FK
-    // constraints only enforce existence; this gate enforces project
-    // ownership so a contributor can't persist attack rows that
-    // reference resources from another project. Skipped when no
-    // nullable resource refs are supplied.
-    const hasResourceRefs =
-      data.hashTypeId != null ||
-      data.wordlistId != null ||
-      data.rulelistId != null ||
-      data.masklistId != null
-    if (hasResourceRefs) {
-      const errResp = await checkResourcesOrErrorResponse(
-        c,
-        { projectId: campaign.projectId, hashListId: null },
-        [
-          {
-            hashTypeId: data.hashTypeId,
-            wordlistId: data.wordlistId,
-            rulelistId: data.rulelistId,
-            masklistId: data.masklistId,
-          },
-        ],
-        { route: 'POST /:id/attacks', campaignId, projectId: campaign.projectId }
-      )
-      if (errResp) return errResp
-    }
-
-    // Pre-insert DAG validation: build the proposed graph (current
-    // attacks + this new attack with a synthetic id) and reject the
-    // request if it would introduce a cycle or reference a missing
-    // attack id. Skipped when no dependencies are supplied — a
-    // dependency-less attack cannot introduce a cycle, and skipping
-    // the listAttacks read keeps the hot path cheap. Mirrors the same
-    // optimization on the PATCH /:id/attacks/:attackId route.
-    if (data.dependencies && data.dependencies.length > 0) {
-      const currentAttacks = await listAttacks(campaignId)
-      const proposed = [
-        ...currentAttacks.map((a) => ({
-          id: a.id,
-          dependencies: a.dependencies as number[] | null,
-        })),
-        {
-          id: SYNTHETIC_NEW_ATTACK_ID,
-          dependencies: data.dependencies,
-        },
-      ]
-      const dagResult = validateProposedDAG(proposed)
-      if (!dagResult.valid) {
-        return dashboardError(c, 400, 'DAG_INVALID', dagResult.error ?? 'Invalid DAG')
-      }
-    }
-
-    const attack = await createAttack({
-      ...data,
-      campaignId,
-      projectId: campaign.projectId,
-    })
-
-    return c.json({ attack }, 201)
-  }
-)
-
-campaignRoutes.get('/:id/attacks', requireProjectAccess(), async (c) => {
-  const campaignId = Number(c.req.param('id'))
-  const campaign = await getCampaignById(campaignId)
-
-  // Cross-project enforcement: same reasoning as the /:id/validate
-  // route above -- without the projectId compare, any project member
-  // could enumerate attacks for a campaign in a different project by
-  // guessing the id. 404 to avoid leaking existence.
-  const { projectId } = c.get('scopedUser')!
-  if (!campaign || campaign.projectId !== projectId) {
-    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-  }
-
-  const campaignAttacks = await listAttacks(campaignId)
-  return c.json({ attacks: campaignAttacks })
-})
-
-const updateAttackSchema = z.object({
-  mode: z.number().int().nonnegative().optional(),
-  hashTypeId: z.number().int().positive().optional(),
-  wordlistId: z.number().int().positive().optional(),
-  rulelistId: z.number().int().positive().optional(),
-  masklistId: z.number().int().positive().optional(),
-  advancedConfiguration: z.record(z.string(), z.unknown()).optional(),
-  dependencies: z.array(z.number().int().positive()).optional(),
-})
-
-campaignRoutes.patch(
-  '/:id/attacks/:attackId',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', updateAttackSchema),
-  async (c) => {
-    const campaignId = Number(c.req.param('id'))
-    const attackId = Number(c.req.param('attackId'))
-    if (
-      !Number.isInteger(campaignId) ||
-      campaignId <= 0 ||
-      !Number.isInteger(attackId) ||
-      attackId <= 0
-    ) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid id')
-    }
-
-    // Project-scope guard: load the parent campaign unconditionally
-    // (not just when resource refs change) and reject when it doesn't
-    // belong to the caller's active project. Without this gate a
-    // contributor in project A could mutate attacks in project B by
-    // guessing {campaignId, attackId} pairs. The attack-belongs-to-
-    // campaign check below is necessary but not sufficient.
-    const { projectId } = c.get('scopedUser')!
-    const parentCampaign = await getCampaignById(campaignId)
-    if (!parentCampaign || parentCampaign.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-    }
-
-    // Verify attack belongs to the specified campaign
-    const existing = await getAttackById(attackId)
-    if (!existing || existing.campaignId !== campaignId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
-    }
-
-    const data = c.req.valid('json')
-
-    // Cross-project resource pre-check at draft write time. Only fires
-    // when a resource ref is actually being changed; the existing row
-    // already passed this gate when it was created. Uses the
-    // parentCampaign already loaded above for its projectId.
-    const hasResourceRefChange =
-      data.hashTypeId !== undefined ||
-      data.wordlistId !== undefined ||
-      data.rulelistId !== undefined ||
-      data.masklistId !== undefined
-    if (hasResourceRefChange) {
-      const errResp = await checkResourcesOrErrorResponse(
-        c,
-        { projectId: parentCampaign.projectId, hashListId: null },
-        [
-          {
-            hashTypeId: data.hashTypeId,
-            wordlistId: data.wordlistId,
-            rulelistId: data.rulelistId,
-            masklistId: data.masklistId,
-          },
-        ],
-        { route: 'PATCH /:id/attacks/:attackId', campaignId, projectId: parentCampaign.projectId }
-      )
-      if (errResp) return errResp
-    }
-
-    // Pre-update DAG validation: only when dependencies are being
-    // changed. Other field changes (mode, wordlist, etc.) do not affect
-    // the dependency graph, so skipping the load avoids the extra query.
-    if (data.dependencies !== undefined) {
-      const currentAttacks = await listAttacks(campaignId)
-      const proposed = currentAttacks.map((a) => ({
-        id: a.id,
-        dependencies:
-          a.id === attackId ? (data.dependencies ?? null) : (a.dependencies as number[] | null),
-      }))
-      const dagResult = validateProposedDAG(proposed)
-      if (!dagResult.valid) {
-        return dashboardError(c, 400, 'DAG_INVALID', dagResult.error ?? 'Invalid DAG')
-      }
-    }
-
-    const attack = await updateAttack(attackId, data)
-
-    if (!attack) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
-    }
-
-    return c.json({ attack })
-  }
-)
-
-campaignRoutes.delete(
-  '/:id/attacks/:attackId',
-  requireMembershipRole('admin', 'contributor'),
-  async (c) => {
-    const campaignId = Number(c.req.param('id'))
-    const attackId = Number(c.req.param('attackId'))
-    // Validate both IDs at the route boundary so NaN / negatives /
-    // floats produce the file's canonical 400 VALIDATION_ERROR
-    // envelope instead of falling through as misleading 404s from
-    // the service layer.
-    if (
-      !Number.isInteger(campaignId) ||
-      campaignId <= 0 ||
-      !Number.isInteger(attackId) ||
-      attackId <= 0
-    ) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid campaign or attack id')
-    }
-    const { projectId } = c.get('scopedUser')!
-
-    // Verify the campaign exists AND belongs to the caller's current
-    // project scope. requireMembershipRole only proves the caller is a
-    // member of the active project; without this check, a user in
-    // project A who knew a valid {campaignId, attackId} pair from
-    // project B could delete project B's attack.
-    const parent = await getCampaignById(campaignId)
-    if (!parent || (projectId !== null && parent.projectId !== projectId)) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
-    }
-
-    // Verify attack belongs to the specified campaign
-    const existing = await getAttackById(attackId)
-    if (!existing || existing.campaignId !== campaignId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
-    }
-
-    const attack = await deleteAttack(attackId)
-
-    if (!attack) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
-    }
-
-    return c.json({ deleted: true })
-  }
-)
+registerCampaignLifecycleRoutes(campaignRoutes)
+registerCampaignAttackRoutes(campaignRoutes)
 
 export { campaignRoutes }

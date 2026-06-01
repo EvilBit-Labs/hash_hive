@@ -1,12 +1,13 @@
 import type { createBunWebSocket } from 'hono/bun'
 
-import { OpenAPIHono } from '@hono/zod-openapi'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { EventType } from '../../services/events.js'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
+import { dashboardOpenApiHonoOptions } from '../../openapi/components.js'
 import { findProjectMembership } from '../../services/auth.js'
 import { getClientCount, registerClient, unregisterClient } from '../../services/events.js'
 
@@ -95,10 +96,34 @@ const KNOWN_EVENT_TYPES_FOR_QUERY: ReadonlySet<EventType> = new Set<EventType>([
   'system_health',
 ])
 
-export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
-  const eventRoutes = new OpenAPIHono<AppEnv>()
+const eventsStatusResponseSchema = z
+  .object({
+    connectedClients: z.number().int().nonnegative(),
+    timestamp: z.string(),
+  })
+  .openapi('EventsStatus')
 
-  // ─── GET /stream -- WebSocket upgrade for real-time events ───────────
+export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
+  const eventRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
+
+  // Both `/status` and `/stream` are unauthenticated at the middleware
+  // layer to preserve the pre-migration contract. `/stream` performs
+  // its own session check inside `onOpen` so it can map auth failures
+  // to WS close codes (4001 missing session, 4002 no project context)
+  // rather than the HTTP 401 a `requireSession` middleware would emit
+  // before the upgrade completes. `/status` returns only a
+  // connected-client count + timestamp and stayed anonymous in the
+  // original `.get()` form; gating it now would be a behavior change
+  // unrelated to the createRoute migration.
+
+  // ─── GET /stream — WebSocket upgrade for real-time events ───────────
+  //
+  // Stays on the plain `.get()` form because `upgradeWebSocket(...)`
+  // returns a middleware that hijacks the response into a WS upgrade —
+  // there is no JSON response shape for createRoute/openapi to declare.
+  // OpenAPI 3.1 has no native WebSocket vocabulary, so the spec emits
+  // no entry for this path; the protocol is documented in prose in the
+  // upstream YAML (carried into the route layer here via comments).
 
   eventRoutes.get(
     '/stream',
@@ -107,19 +132,6 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
 
       return {
         async onOpen(_event, ws) {
-          // Authenticate via BetterAuth session cookie (sent on WS upgrade
-          // by the browser). No bearer token, no token query param; CLI
-          // and TUI clients use the Control API (cst_* keys) per
-          // AGENTS.md, not this surface.
-          //
-          // Three outcomes:
-          //   - session resolves with a value -> proceed
-          //   - session resolves null OR getSession throws WsTimeoutError -> 4001
-          //     (frontend will refresh + retry once; a persistent outage
-          //     lands in terminal `error` instead of an indefinite hang)
-          //   - getSession throws any other error -> log + close 1011 internal
-          //     (do NOT collapse to 4001 -- a DB fault is not a missing
-          //     session and shouldn't trigger an auth-refresh recovery)
           let session: Awaited<ReturnType<typeof auth.api.getSession>>
           try {
             session = await withTimeout(
@@ -147,11 +159,6 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
             return
           }
 
-          // Read project scope from the server-managed session field.
-          // Set by the single-project auto-select hook on sign-in or by
-          // POST /api/v1/dashboard/projects/select. No client-supplied
-          // scoping is trusted; the previous ?projectIds= query param
-          // was removed.
           const sessionProjectId = Number(
             (session.session as { projectId?: number | null }).projectId
           )
@@ -160,16 +167,6 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
             return
           }
 
-          // Defense-in-depth: confirm the user is still a member of the
-          // session's project. Three outcomes mirror the session lookup
-          // above:
-          //   - resolves with a row -> proceed
-          //   - resolves null -> 4003 (revoked membership)
-          //   - throws WsTimeoutError -> 4500 (backend degraded; the
-          //     frontend's retry-budget path handles transient outages
-          //     without mistaking them for a permission decision)
-          //   - throws any other error -> log + 1011 (DB faults are
-          //     server-side problems, not authorization signals)
           let membership: Awaited<ReturnType<typeof findProjectMembership>>
           try {
             membership = await withTimeout(
@@ -195,17 +192,12 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
           }
 
           const typesParam = c.req.query('types')
-          // Filter against the runtime allowlist before storing or
-          // reflecting in the `connected` frame. Without this, arbitrary
-          // user-supplied strings reach the in-memory client registry
-          // and get echoed back to the same authenticated user.
           const eventTypes = typesParam
             ? typesParam
                 .split(',')
                 .filter((t): t is EventType => KNOWN_EVENT_TYPES_FOR_QUERY.has(t as EventType))
             : undefined
 
-          // Register this WebSocket for broadcasts on the session's project.
           const rawWs = ws.raw as { send: (data: string) => void; readyState: number }
           clientId = registerClient(rawWs, [sessionProjectId], eventTypes)
 
@@ -220,7 +212,6 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
         },
 
         onMessage(_event, ws) {
-          // Clients don't send messages in this protocol; could be used for ping/pong
           ws.send(JSON.stringify({ type: 'pong' }))
         },
 
@@ -233,14 +224,32 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
     })
   )
 
-  // ─── GET /status -- check event system health ────────────────────────
+  // ─── GET /status — connected-client count for the events surface ────
 
-  eventRoutes.get('/status', (c) => {
-    return c.json({
-      connectedClients: getClientCount(),
-      timestamp: new Date().toISOString(),
-    })
+  const statusRoute = createRoute({
+    method: 'get',
+    path: '/status',
+    tags: ['Events'],
+    summary: 'Number of connected WebSocket clients on the events surface',
+    // Anonymous: matches the pre-migration `.get('/status', ...)` contract.
+    // No `security` field → no `401` response declared.
+    responses: {
+      200: {
+        description: 'Connected-client snapshot.',
+        content: { 'application/json': { schema: eventsStatusResponseSchema } },
+      },
+    },
   })
+
+  eventRoutes.openapi(statusRoute, (c) =>
+    c.json(
+      {
+        connectedClients: getClientCount(),
+        timestamp: new Date().toISOString(),
+      },
+      200
+    )
+  )
 
   return eventRoutes
 }

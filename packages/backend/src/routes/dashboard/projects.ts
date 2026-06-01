@@ -1,7 +1,5 @@
 import { selectProjectRequestSchema } from '@hashhive/shared'
-import { OpenAPIHono } from '@hono/zod-openapi'
-import { zValidator } from '@hono/zod-validator'
-import { z } from 'zod'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
@@ -15,6 +13,11 @@ import {
   requireParamProjectAccess,
   requireRole,
 } from '../../middleware/rbac.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
 import {
   addUserToProject,
@@ -27,10 +30,11 @@ import {
   updateProject,
 } from '../../services/projects.js'
 
-const projectRoutes = new OpenAPIHono<AppEnv>()
+const projectRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
-// All project routes require session auth
 projectRoutes.use('*', requireSession)
+
+// ─── Request schemas ────────────────────────────────────────────────
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
@@ -58,48 +62,104 @@ const updateRolesSchema = z.object({
   roles: z.array(z.enum(['admin', 'contributor', 'viewer'])).min(1),
 })
 
-// GET /projects — list projects for current user
-projectRoutes.get('/', async (c) => {
-  const { userId } = c.get('currentUser')
-  const result = await getUserProjects(userId)
-  return c.json({ projects: result })
+const projectIdParamSchema = z.object({ projectId: z.coerce.number().int().positive() })
+const memberPathParamSchema = z.object({
+  projectId: z.coerce.number().int().positive(),
+  userId: z.coerce.number().int().positive(),
 })
 
-// POST /projects — create a new project
+// ─── Response shapes (passthrough; tighten in U4) ───────────────────
+
+const projectListResponseSchema = z
+  .object({ projects: z.array(z.unknown()) })
+  .passthrough()
+  .openapi('ProjectList')
+
+const projectDetailResponseSchema = z
+  .object({ project: z.unknown() })
+  .passthrough()
+  .openapi('ProjectDetail')
+
+const memberListResponseSchema = z
+  .object({ members: z.array(z.unknown()) })
+  .passthrough()
+  .openapi('ProjectMemberList')
+
+const membershipResponseSchema = z
+  .object({ membership: z.unknown() })
+  .passthrough()
+  .openapi('ProjectMembership')
+
+const successResponseSchema = z.object({ success: z.boolean() }).openapi('ProjectActionSuccess')
+
+const sharedAuthResponses = {
+  401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+} as const
+
+// ─── GET /projects — list projects for current user ─────────────────
+
+const listMyProjectsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Projects'],
+  summary: "List the active user's project memberships",
+  security: [{ SessionCookie: [] }],
+  responses: {
+    200: {
+      description: 'Projects the user is a member of.',
+      content: { 'application/json': { schema: projectListResponseSchema } },
+    },
+    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  },
+})
+
+projectRoutes.openapi(listMyProjectsRoute, async (c) => {
+  const { userId } = c.get('currentUser')
+  const result = await getUserProjects(userId)
+  return c.json({ projects: result }, 200)
+})
+
+// ─── POST /projects — create a project (global admin only) ─────────
 //
 // Gated behind the global `admin` capability tier (users.roles). Without
 // this gate, any authenticated user (operator/analyst) could create a
 // project and was auto-granted project-admin on it -- a self-elevation
-// path that gave non-admin accounts admin-tier project RBAC primitives
-// (add/remove members, change roles, delete project). createProject
-// auto-grants admin to the creator by design; only platform admins
-// should hold that hammer.
-projectRoutes.post(
-  '/',
-  requireRole('admin'),
-  zValidator('json', createProjectSchema),
-  async (c) => {
-    const { userId } = c.get('currentUser')
-    const data = c.req.valid('json')
-    const project = await createProject({ ...data, createdBy: userId })
-    return c.json({ project }, 201)
-  }
-)
+// path. createProject auto-grants admin to the creator by design; only
+// platform admins should hold that hammer.
 
-// POST /projects/select — set the server-managed projectId on the
-// BetterAuth session after validating membership. Used by the
-// dashboard WebSocket upgrade (events/stream) to scope broadcasts
-// without trusting a client-supplied query param, and by the planned
-// multi-project selector UI (#160). Returns the selected project.
+const createProjectRoute = createRoute({
+  method: 'post',
+  path: '/',
+  tags: ['Projects'],
+  summary: 'Create a project (global admin only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireRole('admin')] as const,
+  request: { body: { content: { 'application/json': { schema: createProjectSchema } } } },
+  responses: {
+    201: {
+      description: 'Project created; creator auto-granted project-admin.',
+      content: { 'application/json': { schema: projectDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    ...sharedAuthResponses,
+  },
+})
+
+projectRoutes.openapi(createProjectRoute, async (c) => {
+  const { userId } = c.get('currentUser')
+  const data = c.req.valid('json')
+  const project = await createProject({ ...data, createdBy: userId })
+  return c.json({ project }, 201)
+})
+
+// ─── POST /projects/select — set session.projectId ──────────────────
 //
 // CSRF defense-in-depth: this is a cookie-authenticated, state-changing
 // endpoint. BetterAuth's session cookie is SameSite=Lax by default and
 // CORS is locked down to known origins, but we add a same-origin
-// Origin/Referer check here as belt-and-suspenders. Rejects requests
-// whose Origin (or Referer when Origin is absent) doesn't match the
-// request's own Host header. Production air-gapped deployments serve
-// frontend and backend behind the same reverse proxy, so same-origin is
-// the correct invariant. Dev allows http://localhost:3000 explicitly.
+// Origin/Referer check here as belt-and-suspenders.
+
 function isSameOriginRequest(c: {
   req: { raw: Request; header: (k: string) => string | undefined }
 }): boolean {
@@ -107,11 +167,6 @@ function isSameOriginRequest(c: {
   const referer = c.req.header('referer')
   const host = c.req.header('host')
 
-  // No Origin and no Referer → almost certainly not a browser form post;
-  // could be a same-origin fetch with strict referrer-policy. Allow it
-  // and rely on the SameSite cookie + CORS preflight as the primary
-  // defense. Browsers issuing cross-origin state-changing fetches will
-  // populate Origin per Fetch spec.
   if (!origin && !referer) return true
 
   const sourceUrl = origin ?? referer
@@ -119,10 +174,6 @@ function isSameOriginRequest(c: {
 
   try {
     const sourceHost = new URL(sourceUrl).host
-    // Dev exception: localhost:3000 frontend → localhost:4000 backend.
-    // Env-gated so the escape hatch can never ship to production --
-    // air-gapped deployments serve frontend and backend behind one
-    // reverse proxy and same-origin is the only legitimate path.
     if (
       env.NODE_ENV !== 'production' &&
       sourceHost === 'localhost:3000' &&
@@ -136,7 +187,31 @@ function isSameOriginRequest(c: {
   }
 }
 
-projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), async (c) => {
+const selectProjectRoute = createRoute({
+  method: 'post',
+  path: '/select',
+  tags: ['Projects'],
+  summary: 'Set the active project on the session (after membership check)',
+  description:
+    "Validates the user is a member of the requested project, then writes session.projectId via BetterAuth's updateSession and persists the user's last-project preference. Returns the selected project on success. Used by the multi-project selector UI (#160) and consumed by the WebSocket upgrade in /events/stream to scope broadcasts without trusting a client-supplied query param.",
+  security: [{ SessionCookie: [] }],
+  request: { body: { content: { 'application/json': { schema: selectProjectRequestSchema } } } },
+  responses: {
+    200: {
+      description: 'Project selected; session updated.',
+      content: { 'application/json': { schema: projectDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    ...sharedAuthResponses,
+    500: {
+      description:
+        'Server-side failure (BetterAuth updateSession, FK invariant broken, rollback failed).',
+      content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
+    },
+  },
+})
+
+projectRoutes.openapi(selectProjectRoute, async (c) => {
   const { userId } = c.get('currentUser')
   const requestId = c.get('requestId')
 
@@ -174,9 +249,6 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
   // lookup proves the project. Fetch it for the response payload only.
   const project = await getProjectById(projectId)
   if (!project) {
-    // Defensive: if the membership row exists without the project,
-    // the FK invariant is broken. Surface a 500 rather than letting
-    // updateSession proceed against a missing project reference.
     logger.error(
       { userId, projectId, requestId },
       'projects/select: membership exists but project row missing (FK invariant broken)'
@@ -185,11 +257,7 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
   }
 
   // updateSession writes additionalFields.projectId on the active
-  // session row. Read by /events/stream on next WS upgrade. Wrap in
-  // try/catch so an underlying BetterAuth or FK failure surfaces as
-  // the dashboard envelope rather than a raw 500 with the driver
-  // error string. The error is captured + logged so operators can
-  // distinguish "session expired mid-call" from a real driver fault.
+  // session row. Read by /events/stream on next WS upgrade.
   try {
     await auth.api.updateSession({
       headers: c.req.raw.headers,
@@ -200,15 +268,6 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     return dashboardError(c, 500, 'INTERNAL_ERROR', 'Failed to update session project')
   }
 
-  // Persist the user's "remember last project" preference so the next
-  // sign-in rehydrates session.projectId via the session.create.before
-  // hook without forcing the user to re-pick. The conditional write is
-  // gated on membership at the SQL level (atomic against a concurrent
-  // removeUserFromProject) -- if the user lost membership between the
-  // initial check and now, the UPDATE affects 0 rows and we clear the
-  // session scope to match. Treated as part of the contract, not
-  // best-effort: a thrown error surfaces as 500 so the caller knows
-  // to retry.
   let preferenceRowsUpdated: number
   try {
     preferenceRowsUpdated = await setUserLastProjectIdIfMember(userId, projectId)
@@ -221,10 +280,8 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
   }
   if (preferenceRowsUpdated === 0) {
     // Membership was revoked between the original findProjectMembership
-    // check and this guarded write. The session was updated above to
-    // point at a project the user no longer belongs to; roll it back
-    // so the next request sees session.projectId=null and the dashboard
-    // routes to the selector.
+    // check and this guarded write. Roll the session back so it doesn't
+    // continue pointing at a project the user can no longer access.
     logger.warn(
       { userId, projectId, requestId },
       'projects/select: membership revoked mid-request; rolling back session.projectId'
@@ -235,18 +292,6 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
         body: { projectId: null },
       })
     } catch (err) {
-      // Rollback failed -- the session is now in an inconsistent state
-      // (scope still points at the forbidden project, but the user no
-      // longer has membership). 403 would be misleading (it implies
-      // the client can retry / re-select) but the session itself is
-      // poisoned and the client cannot recover without re-auth.
-      // Escalate to 500 with a distinct code so operators see this as
-      // a server-side incident and the client knows to surface a
-      // session-expired UX. The user's next dashboard request will
-      // either redirect via the 401 path on session expiry, or hit
-      // 403 PROJECT_NOT_SELECTED / AUTHZ_PROJECT_ACCESS_DENIED on the
-      // stale-scope route -- both of which the frontend already
-      // handles as "back to selector / login".
       logger.error(
         { err, userId, requestId },
         'projects/select: rollback updateSession({ projectId: null }) failed; session scope is inconsistent'
@@ -269,93 +314,189 @@ projectRoutes.post('/select', zValidator('json', selectProjectRequestSchema), as
     )
   }
 
-  return c.json({ project })
+  return c.json({ project }, 200)
 })
 
-// GET /projects/:projectId — get project details
-projectRoutes.get('/:projectId', requireParamProjectAccess(), async (c) => {
-  const projectId = Number(c.req.param('projectId'))
+// ─── /:projectId routes ────────────────────────────────────────────
+
+const getProjectRoute = createRoute({
+  method: 'get',
+  path: '/{projectId}',
+  tags: ['Projects'],
+  summary: 'Get project details (membership required)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamProjectAccess()] as const,
+  request: { params: projectIdParamSchema },
+  responses: {
+    200: {
+      description: 'Project details.',
+      content: { 'application/json': { schema: projectDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
+
+projectRoutes.openapi(getProjectRoute, async (c) => {
+  const { projectId } = c.req.valid('param')
   const project = await getProjectById(projectId)
 
   if (!project) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
   }
 
-  return c.json({ project })
+  return c.json({ project }, 200)
 })
 
-// PATCH /projects/:projectId — update project (admin only)
-projectRoutes.patch(
-  '/:projectId',
-  requireParamMembershipRole('admin'),
-  zValidator('json', updateProjectSchema),
-  async (c) => {
-    const projectId = Number(c.req.param('projectId'))
-    const data = c.req.valid('json')
-    const project = await updateProject(projectId, data)
+const updateProjectRoute = createRoute({
+  method: 'patch',
+  path: '/{projectId}',
+  tags: ['Projects'],
+  summary: 'Update project (project admin only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamMembershipRole('admin')] as const,
+  request: {
+    params: projectIdParamSchema,
+    body: { content: { 'application/json': { schema: updateProjectSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Updated project.',
+      content: { 'application/json': { schema: projectDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
 
-    if (!project) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
-    }
+projectRoutes.openapi(updateProjectRoute, async (c) => {
+  const { projectId } = c.req.valid('param')
+  const data = c.req.valid('json')
+  const project = await updateProject(projectId, data)
 
-    return c.json({ project })
+  if (!project) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
   }
-)
 
-// GET /projects/:projectId/members — list project members
-projectRoutes.get('/:projectId/members', requireParamProjectAccess(), async (c) => {
-  const projectId = Number(c.req.param('projectId'))
+  return c.json({ project }, 200)
+})
+
+const listMembersRoute = createRoute({
+  method: 'get',
+  path: '/{projectId}/members',
+  tags: ['Projects'],
+  summary: 'List members of a project (membership required)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamProjectAccess()] as const,
+  request: { params: projectIdParamSchema },
+  responses: {
+    200: {
+      description: 'Project members and their roles.',
+      content: { 'application/json': { schema: memberListResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    ...sharedAuthResponses,
+  },
+})
+
+projectRoutes.openapi(listMembersRoute, async (c) => {
+  const { projectId } = c.req.valid('param')
   const members = await getProjectMembers(projectId)
-  return c.json({ members })
+  return c.json({ members }, 200)
 })
 
-// POST /projects/:projectId/members — add a member (admin only)
-projectRoutes.post(
-  '/:projectId/members',
-  requireParamMembershipRole('admin'),
-  zValidator('json', addMemberSchema),
-  async (c) => {
-    const projectId = Number(c.req.param('projectId'))
-    const { userId, roles } = c.req.valid('json')
-    const membership = await addUserToProject(projectId, userId, roles)
-    return c.json({ membership }, 201)
+const addMemberRoute = createRoute({
+  method: 'post',
+  path: '/{projectId}/members',
+  tags: ['Projects'],
+  summary: 'Add a member to a project (project admin only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamMembershipRole('admin')] as const,
+  request: {
+    params: projectIdParamSchema,
+    body: { content: { 'application/json': { schema: addMemberSchema } } },
+  },
+  responses: {
+    201: {
+      description: 'Membership created.',
+      content: { 'application/json': { schema: membershipResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    ...sharedAuthResponses,
+  },
+})
+
+projectRoutes.openapi(addMemberRoute, async (c) => {
+  const { projectId } = c.req.valid('param')
+  const { userId, roles } = c.req.valid('json')
+  const membership = await addUserToProject(projectId, userId, roles)
+  return c.json({ membership }, 201)
+})
+
+const updateMemberRolesRoute = createRoute({
+  method: 'patch',
+  path: '/{projectId}/members/{userId}',
+  tags: ['Projects'],
+  summary: "Update a member's roles (project admin only)",
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamMembershipRole('admin')] as const,
+  request: {
+    params: memberPathParamSchema,
+    body: { content: { 'application/json': { schema: updateRolesSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Updated membership.',
+      content: { 'application/json': { schema: membershipResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
+
+projectRoutes.openapi(updateMemberRolesRoute, async (c) => {
+  const { projectId, userId } = c.req.valid('param')
+  const { roles } = c.req.valid('json')
+  const membership = await updateMemberRoles(projectId, userId, roles)
+
+  if (!membership) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
   }
-)
 
-// PATCH /projects/:projectId/members/:userId — update roles (admin only)
-projectRoutes.patch(
-  '/:projectId/members/:userId',
-  requireParamMembershipRole('admin'),
-  zValidator('json', updateRolesSchema),
-  async (c) => {
-    const projectId = Number(c.req.param('projectId'))
-    const userId = Number(c.req.param('userId'))
-    const { roles } = c.req.valid('json')
-    const membership = await updateMemberRoles(projectId, userId, roles)
+  return c.json({ membership }, 200)
+})
 
-    if (!membership) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
-    }
+const removeMemberRoute = createRoute({
+  method: 'delete',
+  path: '/{projectId}/members/{userId}',
+  tags: ['Projects'],
+  summary: 'Remove a member from a project (project admin only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireParamMembershipRole('admin')] as const,
+  request: { params: memberPathParamSchema },
+  responses: {
+    200: {
+      description: 'Membership removed.',
+      content: { 'application/json': { schema: successResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
 
-    return c.json({ membership })
+projectRoutes.openapi(removeMemberRoute, async (c) => {
+  const { projectId, userId } = c.req.valid('param')
+  const removed = await removeUserFromProject(projectId, userId)
+
+  if (!removed) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
   }
-)
 
-// DELETE /projects/:projectId/members/:userId — remove a member (admin only)
-projectRoutes.delete(
-  '/:projectId/members/:userId',
-  requireParamMembershipRole('admin'),
-  async (c) => {
-    const projectId = Number(c.req.param('projectId'))
-    const userId = Number(c.req.param('userId'))
-    const removed = await removeUserFromProject(projectId, userId)
-
-    if (!removed) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
-    }
-
-    return c.json({ success: true })
-  }
-)
+  return c.json({ success: true }, 200)
+})
 
 export { projectRoutes }

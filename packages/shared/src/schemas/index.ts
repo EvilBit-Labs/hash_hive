@@ -1,3 +1,11 @@
+// Side-effect import: extends THIS package's `z` instance with the
+// `.openapi(name, metadata?)` prototype method. Must run before any
+// `z.object(...)` construction below so all exported schemas have the
+// method available at call sites. See `openapi-extension.ts` for the
+// rationale (separate `z` instances across packages under Bun's module
+// resolution mean `@hono/zod-openapi`'s extension does not reach
+// shared schemas without this).
+import '../openapi-extension.js'
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod'
 import { z } from 'zod'
 

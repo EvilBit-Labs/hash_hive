@@ -5,21 +5,24 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { OpenAPIHono } from '@hono/zod-openapi'
-import { zValidator } from '@hono/zod-validator'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { eq } from 'drizzle-orm'
-import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
 import { db } from '../../db/index.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
+import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
+import {
+  DASHBOARD_RESPONSE_REFS,
+  sharedResponse,
+  dashboardOpenApiHonoOptions,
+} from '../../openapi/components.js'
 import {
   createAttackTemplate,
-  DuplicateAttackTemplateNameError,
   deleteAttackTemplate,
+  DuplicateAttackTemplateNameError,
   extractAttackPayload,
   getAttackTemplateById,
   listAttackTemplates,
@@ -27,7 +30,7 @@ import {
 } from '../../services/attack-templates.js'
 import { getResourceById } from '../../services/resources.js'
 
-const attackTemplateRoutes = new OpenAPIHono<AppEnv>()
+const attackTemplateRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 attackTemplateRoutes.use('*', requireSession)
 
@@ -125,180 +128,326 @@ async function validateTemplateReferences(
   return null
 }
 
+// ─── Response shapes (passthrough; tighten in U4 if YAML diff demands) ─
+
+const templateListResponseSchema = z
+  .object({ templates: z.array(z.unknown()) })
+  .passthrough()
+  .openapi('AttackTemplateList')
+
+const templateDetailResponseSchema = z
+  .object({ template: z.unknown() })
+  .passthrough()
+  .openapi('AttackTemplateDetail')
+
+const templateInstantiateResponseSchema = z
+  .object({ attack: z.unknown() })
+  .passthrough()
+  .openapi('AttackTemplateInstantiated')
+
+const templateDeleteResponseSchema = z
+  .object({ deleted: z.boolean() })
+  .openapi('AttackTemplateDeleted')
+
+const sharedAuthResponses = {
+  401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+} as const
+
 // ─── Attack Template CRUD ──────────────────────────────────────────
 
-attackTemplateRoutes.get(
-  '/',
-  requireProjectAccess(),
-  zValidator('query', listTemplatesQuerySchema),
-  async (c) => {
-    const { projectId } = c.get('scopedUser')!
-    const { limit, offset } = c.req.valid('query')
+attackTemplateRoutes.use('/', requireProjectAccess())
 
-    const result = await listAttackTemplates({ projectId, limit, offset })
-    return c.json(result)
+const listTemplatesRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['AttackTemplates'],
+  summary: 'List attack templates in the active project with paging',
+  security: [{ SessionCookie: [] }],
+  request: { query: listTemplatesQuerySchema },
+  responses: {
+    200: {
+      description: 'Page of attack templates.',
+      content: { 'application/json': { schema: templateListResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    ...sharedAuthResponses,
+  },
+})
+
+attackTemplateRoutes.openapi(listTemplatesRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
+  const { limit, offset } = c.req.valid('query')
+
+  const result = await listAttackTemplates({ projectId, limit, offset })
+  return c.json(result, 200)
+})
+
+const createTemplateRoute = createRoute({
+  method: 'post',
+  path: '/',
+  tags: ['AttackTemplates'],
+  summary: 'Create an attack template (admin / contributor only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: { content: { 'application/json': { schema: createAttackTemplateRequestSchema } } },
+  },
+  responses: {
+    201: {
+      description: 'Template created.',
+      content: { 'application/json': { schema: templateDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'A template with the same name already exists in this project.',
+      content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
+    },
+    ...sharedAuthResponses,
+  },
+})
+
+attackTemplateRoutes.openapi(createTemplateRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { userId, projectId } = c.get('scopedUser')!
+
+  const refError = await validateTemplateReferences(data, projectId)
+  if (refError) {
+    return c.json({ error: refError }, 404)
   }
-)
 
-attackTemplateRoutes.post(
-  '/',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', createAttackTemplateRequestSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { userId, projectId } = c.get('scopedUser')!
-
-    const refError = await validateTemplateReferences(data, projectId)
-    if (refError) {
-      return c.json({ error: refError }, 404)
+  try {
+    const template = await createAttackTemplate({ ...data, projectId, createdBy: userId })
+    return c.json({ template }, 201)
+  } catch (error) {
+    if (error instanceof DuplicateAttackTemplateNameError) {
+      return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
     }
-
-    try {
-      const template = await createAttackTemplate({ ...data, projectId, createdBy: userId })
-      return c.json({ template }, 201)
-    } catch (error) {
-      if (error instanceof DuplicateAttackTemplateNameError) {
-        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
-      }
-      throw error
-    }
+    throw error
   }
-)
+})
 
-attackTemplateRoutes.get(
-  '/:id',
-  requireProjectAccess(),
-  zValidator('param', templateIdParamSchema),
-  async (c) => {
-    const { id } = c.req.valid('param')
-    const template = await getAttackTemplateById(id)
+// Import precedes /:id routes so it doesn't get swallowed by the id
+// param. Same handler shape as create — only the route name differs.
 
-    if (!template) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-    }
+const importTemplateRoute = createRoute({
+  method: 'post',
+  path: '/import',
+  tags: ['AttackTemplates'],
+  summary: 'Import a serialized attack template (admin / contributor only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: { content: { 'application/json': { schema: importTemplateSchema } } },
+  },
+  responses: {
+    201: {
+      description: 'Template imported.',
+      content: { 'application/json': { schema: templateDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'A template with the same name already exists in this project.',
+      content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
+    },
+    ...sharedAuthResponses,
+  },
+})
 
-    const { projectId } = c.get('currentUser')
-    if (template.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-    }
+attackTemplateRoutes.openapi(importTemplateRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { userId, projectId } = c.get('scopedUser')!
 
-    return c.json({ template })
+  const refError = await validateTemplateReferences(data, projectId)
+  if (refError) {
+    return c.json({ error: refError }, 404)
   }
-)
 
-attackTemplateRoutes.patch(
-  '/:id',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('param', templateIdParamSchema),
-  zValidator('json', updateTemplateSchema),
-  async (c) => {
-    const { id } = c.req.valid('param')
-    const template = await getAttackTemplateById(id)
-
-    if (!template) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  try {
+    const template = await createAttackTemplate({ ...data, projectId, createdBy: userId })
+    return c.json({ template }, 201)
+  } catch (error) {
+    if (error instanceof DuplicateAttackTemplateNameError) {
+      return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
     }
-
-    const { projectId } = c.get('currentUser')
-    if (template.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-    }
-
-    const data = c.req.valid('json')
-
-    const refError = await validateTemplateReferences(data, projectId)
-    if (refError) {
-      return c.json({ error: refError }, 404)
-    }
-
-    try {
-      const updated = await updateAttackTemplate(id, data)
-
-      if (!updated) {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-      }
-
-      return c.json({ template: updated })
-    } catch (error) {
-      if (error instanceof DuplicateAttackTemplateNameError) {
-        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
-      }
-      throw error
-    }
+    throw error
   }
-)
+})
 
-attackTemplateRoutes.delete(
-  '/:id',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('param', templateIdParamSchema),
-  async (c) => {
-    const { id } = c.req.valid('param')
-    const template = await getAttackTemplateById(id)
+// ─── /:id routes ───────────────────────────────────────────────────
 
-    if (!template) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-    }
+attackTemplateRoutes.use('/:id', requireProjectAccess())
 
-    const { projectId } = c.get('currentUser')
-    if (template.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
-    }
+const getTemplateRoute = createRoute({
+  method: 'get',
+  path: '/{id}',
+  tags: ['AttackTemplates'],
+  summary: 'Get an attack template by id',
+  security: [{ SessionCookie: [] }],
+  request: { params: templateIdParamSchema },
+  responses: {
+    200: {
+      description: 'Template details.',
+      content: { 'application/json': { schema: templateDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
 
-    await deleteAttackTemplate(id)
-    return c.json({ deleted: true })
+attackTemplateRoutes.openapi(getTemplateRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const template = await getAttackTemplateById(id)
+
+  if (!template) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
   }
-)
 
-// ─── Import (must precede /:id routes to avoid param conflict) ────
-
-attackTemplateRoutes.post(
-  '/import',
-  requireMembershipRole('admin', 'contributor'),
-  zValidator('json', importTemplateSchema),
-  async (c) => {
-    const data = c.req.valid('json')
-    const { userId, projectId } = c.get('scopedUser')!
-
-    const refError = await validateTemplateReferences(data, projectId)
-    if (refError) {
-      return c.json({ error: refError }, 404)
-    }
-
-    try {
-      const template = await createAttackTemplate({ ...data, projectId, createdBy: userId })
-      return c.json({ template }, 201)
-    } catch (error) {
-      if (error instanceof DuplicateAttackTemplateNameError) {
-        return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
-      }
-      throw error
-    }
+  const { projectId } = c.get('currentUser')
+  if (template.projectId !== projectId) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
   }
-)
 
-// ─── Instantiate ───────────────────────────────────────────────────
+  return c.json({ template }, 200)
+})
 
-attackTemplateRoutes.post(
-  '/:id/instantiate',
-  requireProjectAccess(),
-  zValidator('param', templateIdParamSchema),
-  async (c) => {
-    const { id } = c.req.valid('param')
-    const template = await getAttackTemplateById(id)
+const updateTemplateRoute = createRoute({
+  method: 'patch',
+  path: '/{id}',
+  tags: ['AttackTemplates'],
+  summary: 'Update an attack template (admin / contributor only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: templateIdParamSchema,
+    body: { content: { 'application/json': { schema: updateTemplateSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Updated template.',
+      content: { 'application/json': { schema: templateDetailResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Rename would collide with an existing template name.',
+      content: { 'application/json': { schema: z.object({ error: z.unknown() }) } },
+    },
+    ...sharedAuthResponses,
+  },
+})
 
-    if (!template) {
+attackTemplateRoutes.openapi(updateTemplateRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const template = await getAttackTemplateById(id)
+
+  if (!template) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  const { projectId } = c.get('currentUser')
+  if (template.projectId !== projectId) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  const data = c.req.valid('json')
+
+  const refError = await validateTemplateReferences(data, projectId)
+  if (refError) {
+    return c.json({ error: refError }, 404)
+  }
+
+  try {
+    const updated = await updateAttackTemplate(id, data)
+
+    if (!updated) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
     }
 
-    const { projectId } = c.get('currentUser')
-    if (template.projectId !== projectId) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+    return c.json({ template: updated }, 200)
+  } catch (error) {
+    if (error instanceof DuplicateAttackTemplateNameError) {
+      return dashboardError(c, 409, 'DUPLICATE_NAME', error.message)
     }
-
-    const attack = extractAttackPayload(template)
-    return c.json({ attack })
+    throw error
   }
-)
+})
+
+const deleteTemplateRoute = createRoute({
+  method: 'delete',
+  path: '/{id}',
+  tags: ['AttackTemplates'],
+  summary: 'Delete an attack template (admin / contributor only)',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: { params: templateIdParamSchema },
+  responses: {
+    200: {
+      description: 'Deletion acknowledged.',
+      content: { 'application/json': { schema: templateDeleteResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
+
+attackTemplateRoutes.openapi(deleteTemplateRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const template = await getAttackTemplateById(id)
+
+  if (!template) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  const { projectId } = c.get('currentUser')
+  if (template.projectId !== projectId) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  await deleteAttackTemplate(id)
+  return c.json({ deleted: true }, 200)
+})
+
+const instantiateTemplateRoute = createRoute({
+  method: 'post',
+  path: '/{id}/instantiate',
+  tags: ['AttackTemplates'],
+  summary: 'Build an attack payload from a template (no DB write)',
+  security: [{ SessionCookie: [] }],
+  request: { params: templateIdParamSchema },
+  responses: {
+    200: {
+      description:
+        'Attack payload ready to submit to POST /campaigns or POST /campaigns/{id}/attacks.',
+      content: { 'application/json': { schema: templateInstantiateResponseSchema } },
+    },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    ...sharedAuthResponses,
+  },
+})
+
+attackTemplateRoutes.use('/:id/instantiate', requireProjectAccess())
+
+attackTemplateRoutes.openapi(instantiateTemplateRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const template = await getAttackTemplateById(id)
+
+  if (!template) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  const { projectId } = c.get('currentUser')
+  if (template.projectId !== projectId) {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack template not found')
+  }
+
+  const attack = extractAttackPayload(template)
+  return c.json({ attack }, 200)
+})
 
 export { attackTemplateRoutes }

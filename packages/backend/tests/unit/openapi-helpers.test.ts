@@ -23,6 +23,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   DASHBOARD_RESPONSE_REFS,
   _guardDuplicateComponentRegistrationForTest,
+  dashboardOpenApiHonoOptions,
   registerDashboardResponseComponents,
   sharedResponse,
 } from '../../src/openapi/components.js'
@@ -155,6 +156,78 @@ describe('registerDashboardResponseComponents', () => {
   })
 })
 
+describe('dashboardOpenApiHonoOptions.defaultHook', () => {
+  it('maps Zod validation failures to the dashboard error envelope and exits early on success', async () => {
+    // End-to-end: register a route with a body schema, fire a request
+    // with an invalid body, and assert the dashboard envelope plus the
+    // joined `path: message; path: message` shape the project's other
+    // routes rely on.
+    const app = new OpenAPIHono(dashboardOpenApiHonoOptions)
+    const route = createRoute({
+      method: 'post',
+      path: '/echo',
+      request: {
+        body: {
+          content: {
+            'application/json': {
+              schema: z.object({
+                name: z.string().min(1),
+                count: z.number().int(),
+              }),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: 'ok',
+          content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } },
+        },
+      },
+    })
+    app.openapi(route, (c) => c.json({ ok: true }, 200))
+
+    // Fire with two failing fields; expect both to surface, each
+    // prefixed with its `path.join('.')`.
+    const res = await app.request('/echo', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '', count: 'not a number' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error?: { code?: string; message?: string } }
+    expect(body.error?.code).toBe('VALIDATION_ERROR')
+    // Path prefix is on each issue; both issues are joined with `'; '`.
+    expect(body.error?.message).toContain('name')
+    expect(body.error?.message).toContain('count')
+    expect(body.error?.message).toContain('; ')
+  })
+
+  it('returns undefined on success so the handler chain continues', async () => {
+    // No body schema → no validation runs → handler returns 200 with
+    // the literal payload, proving the hook does NOT intercept the
+    // success path.
+    const app = new OpenAPIHono(dashboardOpenApiHonoOptions)
+    const route = createRoute({
+      method: 'get',
+      path: '/health',
+      responses: {
+        200: {
+          description: 'ok',
+          content: { 'application/json': { schema: z.object({ status: z.string() }) } },
+        },
+      },
+    })
+    app.openapi(route, (c) => c.json({ status: 'green' }, 200))
+
+    const res = await app.request('/health')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { status: string }
+    expect(body.status).toBe('green')
+  })
+})
+
 describe('sharedResponse', () => {
   it('produces a $ref payload that round-trips to a $ref in the emitted spec', () => {
     const app = buildSurface()
@@ -182,6 +255,70 @@ describe('sharedResponse', () => {
     const protectedGet = doc.paths['/protected']?.['get']
     expect(protectedGet?.responses['401']?.$ref).toBe('#/components/responses/AuthRequired')
     expect(protectedGet?.responses['403']?.$ref).toBe('#/components/responses/Forbidden')
+  })
+})
+
+describe('dashboard surface route registration', () => {
+  // Hono's path matcher is last-writer-wins on overlap; an accidental
+  // duplicate registration silently swallows the older handler. The
+  // split-file pattern (registerCampaignAttackRoutes,
+  // registerCampaignLifecycleRoutes, registerGenericResourceRoutes
+  // called 3x, registerChunkedUploadRoutes) makes this risk easy to
+  // introduce by accident.
+  //
+  // This test walks `surface.routes` — Hono's runtime routing table,
+  // populated by every `.get/.post/...` and `.openapi(...)` call —
+  // and asserts no duplicate `METHOD path` pair. We deliberately do
+  // NOT call `getOpenAPI31Document(...)` here: some converted route
+  // schemas use `z.coerce.number().catch(...)` patterns that the
+  // OpenAPI generator can't introspect today. Surfacing those as
+  // spec-generation gaps is U4's job (the diff script). The
+  // duplicate-route invariant is checkable independent of spec gen.
+  it('registers every dashboard path+method exactly once (no silent overlap)', async () => {
+    // Dynamic import so the surface aggregator (which transitively
+    // imports BetterAuth via the auth router) doesn't run at module
+    // load — keeps this test pure-in-process.
+    const { createDashboardSurface } = await import('../../src/routes/dashboard/index.js')
+    // The aggregator wants an upgradeWebSocket factory for the events
+    // sub-router. We never invoke it here, so a stub satisfies the
+    // signature without booting a Bun WebSocket runtime.
+    const stubUpgradeWebSocket = (() => () => {
+      throw new Error('upgradeWebSocket stub: never invoked in route-surface test')
+    }) as unknown as Parameters<typeof createDashboardSurface>[0]
+
+    const surface = createDashboardSurface(stubUpgradeWebSocket)
+    // The OpenAPIRegistry's `definitions` array contains one entry
+    // per `app.openapi(route, handler)` call (type 'route'), plus
+    // entries for components and parameters. Filtering to type
+    // 'route' gives us exactly the handler registrations we want
+    // to check for duplicates — middleware proliferation in
+    // Hono's `app.routes` table would otherwise drown out the signal.
+    const definitions = (
+      surface.openAPIRegistry as unknown as {
+        definitions: Array<{
+          type: string
+          route?: { method: string; path: string }
+        }>
+      }
+    ).definitions
+
+    const seen = new Map<string, number>()
+    for (const def of definitions) {
+      if (def.type !== 'route' || !def.route) continue
+      const key = `${def.route.method.toUpperCase()} ${def.route.path}`
+      seen.set(key, (seen.get(key) ?? 0) + 1)
+    }
+
+    const duplicates = Array.from(seen.entries())
+      .filter(([, count]) => count > 1)
+      .map(([key, count]) => `${key} (registered ${count}x)`)
+
+    expect(duplicates).toEqual([])
+
+    // Sanity: at least some routes registered (catches a silent
+    // "no routes mounted" regression where every domain router's
+    // openapi() calls were stripped).
+    expect(seen.size).toBeGreaterThan(0)
   })
 })
 
