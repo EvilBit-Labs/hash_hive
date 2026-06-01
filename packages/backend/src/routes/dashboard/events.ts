@@ -121,9 +121,12 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
   // Stays on the plain `.get()` form because `upgradeWebSocket(...)`
   // returns a middleware that hijacks the response into a WS upgrade —
   // there is no JSON response shape for createRoute/openapi to declare.
-  // OpenAPI 3.1 has no native WebSocket vocabulary, so the spec emits
-  // no entry for this path; the protocol is documented in prose in the
-  // upstream YAML (carried into the route layer here via comments).
+  // OpenAPI 3.1 has no native WebSocket vocabulary, so the dashboard's
+  // runtime spec (`GET /api/v1/dashboard/openapi.json`) emits no entry
+  // for this path. The protocol contract — frame shapes, close codes,
+  // and the in-handler auth handshake — is documented in the comments
+  // below; the WS upgrade is also exercised end-to-end by
+  // `tests/unit/websocket-auth.test.ts`.
 
   eventRoutes.get(
     '/stream',

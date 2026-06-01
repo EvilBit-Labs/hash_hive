@@ -13,6 +13,7 @@ import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
+import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
   sharedResponse,
@@ -530,8 +531,8 @@ resourceRoutes.openapi(importHashListRoute, async (c) => {
 const hashItemsQuerySchema = z.object({
   status: z.enum(['all', 'cracked', 'uncracked']).optional(),
   q: z.string().max(256).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50).catch(50),
-  offset: z.coerce.number().int().min(0).default(0).catch(0),
+  limit: coercedIntegerQuery({ min: 1, max: 100, default: 50 }),
+  offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
 const listHashItemsRoute = createRoute({

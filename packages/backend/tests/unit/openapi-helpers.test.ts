@@ -42,7 +42,7 @@ function buildSurface(): OpenAPIHono {
 }
 
 describe('registerDashboardSecurity', () => {
-  it('registers SessionCookie with the cookie name dashboard-api.yaml documents', () => {
+  it('registers SessionCookie with the BetterAuth cookie name the dashboard surface authenticates against', () => {
     const app = new OpenAPIHono()
     registerDashboardSecurity(app)
 

@@ -13,8 +13,9 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
 // ─── Mock BetterAuth ─────────────────────────────────────────────────
 //
-// Reuse the same cookie convention as dashboard-api-contract tests so
-// the auth middleware behavior is identical.
+// Use the standard `hh.session_token=<id>` cookie shape the dashboard
+// auth middleware (`requireSession`) parses; the value is matched by
+// the auth mock below so a known session id maps to a fixed user/project.
 
 mock.module('../../src/lib/auth.js', () => ({
   auth: {

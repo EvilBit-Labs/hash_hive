@@ -120,6 +120,15 @@ if (!IS_ISOLATED) {
   const mockDeleteHashList = mock(async () => true)
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
 
+  // Chunked-upload mocks — extracted so route-level tests can override
+  // per-case (e.g., to throw UploadResourceNotFoundError and assert the
+  // handler's 404 mapping). Return shapes mirror the production service
+  // signatures (`uploadChunkPart → { etag }`, `completeChunkedUpload →
+  // { resourceId }`) so mock drift doesn't silently mask a real wire
+  // contract change.
+  const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
+  const mockCompleteChunkedUpload = mock(async () => ({ resourceId: 1 }))
+
   // Surfaces used by the broader service surface — kept inert so the
   // route module's static imports resolve without exploding.
   const noop = mock(async () => undefined)
@@ -142,6 +151,27 @@ if (!IS_ISOLATED) {
     constructor(message: string) {
       super(message)
       this.name = 'ResourceInUseError'
+    }
+  }
+
+  // The route handler uses `err instanceof UploadResourceNotFoundError`
+  // against the value imported from `../../src/services/resources.js`.
+  // Bun's `mock.module(...)` below rewrites that import to point at this
+  // mock class, so both sides end up referencing the SAME class identity
+  // at runtime and `instanceof` matches. The check would silently fail —
+  // and the handler would re-map the error to a generic 500 — if any
+  // caller imported the real `UploadResourceNotFoundError` from a path
+  // the mock doesn't replace. Keep the mock module mapping below and
+  // this class shape in lockstep with the production class in
+  // `packages/backend/src/services/resources.ts`.
+  class UploadResourceNotFoundErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(`Resource ${resourceId} (${resourceType}) not found or not in project scope`)
+      this.name = 'UploadResourceNotFoundError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
     }
   }
 
@@ -175,8 +205,8 @@ if (!IS_ISOLATED) {
     escapeLike: (s: string) => s,
     // Chunked upload
     initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),
-    uploadChunkPart: mock(async () => ({ etag: 'e' })),
-    completeChunkedUpload: mock(async () => ({ key: 'k' })),
+    uploadChunkPart: mockUploadChunkPart,
+    completeChunkedUpload: mockCompleteChunkedUpload,
     abortChunkedUpload: noop,
     getChunkedUploadStatus: mock(async () => ({ parts: [] })),
     // Error classes — the route imports these as values so we must
@@ -184,6 +214,7 @@ if (!IS_ISOLATED) {
     // synthetic errors we throw from the upload mock below.
     UploadTooLargeError: UploadTooLargeErrorMock,
     ResourceInUseError: ResourceInUseErrorMock,
+    UploadResourceNotFoundError: UploadResourceNotFoundErrorMock,
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 
@@ -641,6 +672,65 @@ if (!IS_ISOLATED) {
       const json = (await res.json()) as { error?: { code?: string } }
       expect(json.error?.code).toBe('VALIDATION_ERROR')
       expect(mockCreateHashList).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('chunked-upload 404 mapping', () => {
+    // The dashboard spec documents `404 ResourceNotFound` on the
+    // `PUT /upload/{id}/part/{n}` and `POST /upload/{id}/complete`
+    // routes. The runtime contract is only correct if the handler
+    // actually translates `UploadResourceNotFoundError` from the
+    // service layer into that 404 — otherwise the documented response
+    // is unreachable and route-as-spec lies about wire behavior.
+    // These two tests pin the mapping.
+
+    const UPLOAD_PART_URL =
+      '/api/v1/dashboard/resources/upload/u-1/part/1?resourceId=42&resourceType=hash-lists'
+    const UPLOAD_COMPLETE_URL = '/api/v1/dashboard/resources/upload/u-1/complete'
+
+    it('PUT /upload/{id}/part/{n} maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockUploadChunkPart.mockReset()
+      mockUploadChunkPart.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'hash-lists')
+      })
+
+      const res = await app.request(UPLOAD_PART_URL, {
+        method: 'PUT',
+        headers: makeHeaders({ 'content-type': 'application/octet-stream' }),
+        body: new Uint8Array([1, 2, 3]),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      // Pin the generic client message — the handler does NOT echo
+      // err.message back, matching the uploadStatus 404 wording for
+      // wire-response consistency. resourceId/resourceType are logged
+      // server-side at debug level only.
+      expect(json.error?.message).toBe('Upload not found')
+    })
+
+    it('POST /upload/{id}/complete maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'hash-lists')
+      })
+
+      const res = await app.request(UPLOAD_COMPLETE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: 'e' }],
+          resourceId: 42,
+          resourceType: 'hash-lists',
+        }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      // Same generic-message pin as the upload-part case above.
+      expect(json.error?.message).toBe('Upload not found')
     })
   })
 } // end IS_ISOLATED

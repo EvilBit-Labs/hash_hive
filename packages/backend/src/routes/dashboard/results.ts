@@ -8,6 +8,10 @@ import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 import {
+  coercedIntegerQuery,
+  coercedOptionalPositiveIntegerQuery,
+} from '../../openapi/coerced-query.js'
+import {
   DASHBOARD_RESPONSE_REFS,
   sharedResponse,
   dashboardOpenApiHonoOptions,
@@ -51,23 +55,23 @@ function escapeCsv(val: string | null | undefined): string {
 // Coerce + clamp pagination at the schema boundary so handlers stay thin.
 // Permissive: invalid values fall back to defaults rather than 400 — matches
 // the rest of the dashboard surface, and keeps NaN/Infinity from leaking
-// into Drizzle's `.limit()`/`.offset()`.
+// into Drizzle's `.limit()`/`.offset()`. Annotated via `coercedIntegerQuery`
+// / `coercedOptionalPositiveIntegerQuery` so the OpenAPI generator can
+// emit a serializable schema (see openapi/coerced-query.ts).
 const resultsFilterShape = {
-  campaignId: z.coerce.number().int().positive().optional().catch(undefined),
-  hashListId: z.coerce.number().int().positive().optional().catch(undefined),
+  campaignId: coercedOptionalPositiveIntegerQuery(),
+  hashListId: coercedOptionalPositiveIntegerQuery(),
   q: z.string().min(1).optional(),
 }
 
 const listResultsQuerySchema = z.object({
   ...resultsFilterShape,
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(RESULTS_LIST_MAX_LIMIT)
-    .catch(RESULTS_LIST_DEFAULT_LIMIT)
-    .default(RESULTS_LIST_DEFAULT_LIMIT),
-  offset: z.coerce.number().int().min(0).catch(0).default(0),
+  limit: coercedIntegerQuery({
+    min: 1,
+    max: RESULTS_LIST_MAX_LIMIT,
+    default: RESULTS_LIST_DEFAULT_LIMIT,
+  }),
+  offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
 const exportResultsQuerySchema = z.object(resultsFilterShape)

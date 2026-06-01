@@ -699,11 +699,11 @@ components:
     DashboardStats:
       description: |
         Project-scoped dashboard stat aggregates. Mirrors
-        `dashboardStatsSchema` in `@hashhive/shared` field-for-field and
-        matches `DashboardStats` in `dashboard-api.yaml`. Any drift
-        between the Zod schema and either OpenAPI mirror fails the
-        contract test in
-        `packages/backend/tests/unit/dashboard-api-contract.test.ts`.
+        `dashboardStatsSchema` in `@hashhive/shared` field-for-field.
+        The dashboard surface itself is route-as-spec via
+        `@hono/zod-openapi` (no companion YAML); this control-surface
+        mirror exists because the same aggregates ship on `/api/v1/control/stats`
+        for CLI/automation consumers that don't have a session cookie.
       type: object
       required: [agents, campaigns, tasks, cracked]
       additionalProperties: false

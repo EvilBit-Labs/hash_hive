@@ -9,6 +9,7 @@ import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess, requireMembershipRole } from '../../middleware/rbac.js'
+import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
   dashboardOpenApiHonoOptions,
@@ -60,14 +61,12 @@ const listCampaignsQuerySchema = z.object({
   // Coerce-and-clamp pagination at the schema boundary so malformed
   // URL params fall back to safe defaults instead of 400-ing the
   // request. Mirrors the agents-list pattern at routes/dashboard/agents.ts.
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(CAMPAIGN_LIST_MAX_LIMIT)
-    .catch(CAMPAIGN_LIST_DEFAULT_LIMIT)
-    .default(CAMPAIGN_LIST_DEFAULT_LIMIT),
-  offset: z.coerce.number().int().min(0).catch(0).default(0),
+  limit: coercedIntegerQuery({
+    min: 1,
+    max: CAMPAIGN_LIST_MAX_LIMIT,
+    default: CAMPAIGN_LIST_DEFAULT_LIMIT,
+  }),
+  offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
 // `campaignIdParamSchema`, `campaignRowSchema`, `attackRowSchema`

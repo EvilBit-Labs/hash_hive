@@ -5,6 +5,7 @@ import type { AppEnv } from '../../types.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
+import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
   sharedResponse,
@@ -33,14 +34,12 @@ const AGENT_LIST_DEFAULT_LIMIT = 50
 // Drizzle's `.offset()`/`.limit()`.
 const listAgentsQuerySchema = z.object({
   status: z.string().optional(),
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(AGENT_LIST_MAX_LIMIT)
-    .catch(AGENT_LIST_DEFAULT_LIMIT)
-    .default(AGENT_LIST_DEFAULT_LIMIT),
-  offset: z.coerce.number().int().min(0).catch(0).default(0),
+  limit: coercedIntegerQuery({
+    min: 1,
+    max: AGENT_LIST_MAX_LIMIT,
+    default: AGENT_LIST_DEFAULT_LIMIT,
+  }),
+  offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
 const agentIdParamSchema = z.object({

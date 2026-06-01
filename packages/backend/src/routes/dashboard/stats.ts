@@ -53,8 +53,9 @@ function sumRows(rows: ReadonlyArray<{ count: number }>): number {
 
 // Decorate the shared schema as a named component so the generated
 // dashboard spec emits `$ref: '#/components/schemas/DashboardStats'`
-// rather than inlining the object. Matches the component name in
-// packages/openapi/dashboard-api.yaml.
+// rather than inlining the object. The dashboard surface is route-as-spec
+// (no companion YAML); this name is the canonical identifier for any
+// downstream client codegen.
 const DashboardStats = dashboardStatsSchema.openapi('DashboardStats')
 
 // Specific error envelope for the PROJECT_NOT_SELECTED 400 — the only
