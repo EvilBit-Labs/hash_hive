@@ -151,6 +151,16 @@ if (!IS_ISOLATED) {
     }
   }
 
+  // The route handler uses `err instanceof UploadResourceNotFoundError`
+  // against the value imported from `../../src/services/resources.js`.
+  // Bun's `mock.module(...)` below rewrites that import to point at this
+  // mock class, so both sides end up referencing the SAME class identity
+  // at runtime and `instanceof` matches. The check would silently fail —
+  // and the handler would re-map the error to a generic 500 — if any
+  // caller imported the real `UploadResourceNotFoundError` from a path
+  // the mock doesn't replace. Keep the mock module mapping below and
+  // this class shape in lockstep with the production class in
+  // `packages/backend/src/services/resources.ts`.
   class UploadResourceNotFoundErrorMock extends Error {
     resourceId: number
     resourceType: string

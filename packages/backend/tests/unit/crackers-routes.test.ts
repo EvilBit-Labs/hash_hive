@@ -3,9 +3,9 @@
  *
  * Validates auth gates, validation errors, and the typed-error mapping
  * for the cracker routes. Mocks DB and storage modules so the suite
- * runs without infrastructure. Mirrors the mock pattern in
- * `dashboard-api-contract.test.ts` but is scoped to the cracker
- * surface to keep the test file focused.
+ * runs without infrastructure. Uses the same per-test mock-module
+ * pattern as the other dashboard-route test files in this directory,
+ * scoped to the cracker surface to keep the test file focused.
  *
  * Service-layer behaviors (engine normalization, version comparison,
  * unique-violation detection, fileRef projection) are covered in

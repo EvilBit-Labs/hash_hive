@@ -201,4 +201,53 @@ if (IS_ISOLATED) {
       expect(mockDeleteFile).not.toHaveBeenCalled()
     })
   })
+
+  describe('chunked-upload not-found throw paths', () => {
+    // The route handlers in `routes/dashboard/resources-chunked-upload.ts`
+    // map `UploadResourceNotFoundError` to the documented 404 response.
+    // The route tests in `dashboard-resources-routes.test.ts` prove the
+    // mapping but mock the service entirely, so they can't catch a
+    // regression where the service's `if (!row) throw ...` predicate
+    // gets flipped or the throw is replaced with a generic Error.
+    // These tests pin the service side of the contract: a missing row
+    // MUST produce `UploadResourceNotFoundError`, not the prior bare
+    // `Error('Resource N not found')` that would re-map to 500.
+
+    beforeEach(() => {
+      selectByTable = new Map()
+    })
+
+    test('uploadChunkPart throws UploadResourceNotFoundError when the hash-list row is missing', async () => {
+      selectByTable.set('hash_lists', [])
+      const { uploadChunkPart, UploadResourceNotFoundError } =
+        await import('../../src/services/resources.js')
+      await expect(
+        uploadChunkPart('upload-id', 1, new Uint8Array([1]), 99, 'hash-lists', 1)
+      ).rejects.toBeInstanceOf(UploadResourceNotFoundError)
+    })
+
+    test('completeChunkedUpload throws UploadResourceNotFoundError when the hash-list row is missing', async () => {
+      selectByTable.set('hash_lists', [])
+      const { completeChunkedUpload, UploadResourceNotFoundError } =
+        await import('../../src/services/resources.js')
+      await expect(
+        completeChunkedUpload('upload-id', [{ partNumber: 1, etag: 'e' }], 99, 'hash-lists', 1)
+      ).rejects.toBeInstanceOf(UploadResourceNotFoundError)
+    })
+
+    test('UploadResourceNotFoundError carries the resourceId and resourceType from the call', async () => {
+      selectByTable.set('hash_lists', [])
+      const { uploadChunkPart, UploadResourceNotFoundError } =
+        await import('../../src/services/resources.js')
+      try {
+        await uploadChunkPart('upload-id', 1, new Uint8Array([1]), 42, 'hash-lists', 7)
+        throw new Error('expected uploadChunkPart to throw')
+      } catch (err) {
+        expect(err).toBeInstanceOf(UploadResourceNotFoundError)
+        const e = err as InstanceType<typeof UploadResourceNotFoundError>
+        expect(e.resourceId).toBe(42)
+        expect(e.resourceType).toBe('hash-lists')
+      }
+    })
+  })
 } // end IS_ISOLATED

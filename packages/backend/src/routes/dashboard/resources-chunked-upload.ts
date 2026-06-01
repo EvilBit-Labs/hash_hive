@@ -171,7 +171,7 @@ const abortUploadRoute = createRoute({
   tags,
   summary: 'Abort an in-progress multipart upload session',
   description:
-    'Idempotent: returns 200 acknowledged even when the upload/resource row is missing or already aborted. No 404 path — `abortChunkedUpload` silently returns when the row is not found so retries are safe. The deleted YAML mistakenly documented a 404 response that the handler never produced.',
+    'Idempotent on the row-missing path: `abortChunkedUpload` returns silently when the resource row does not exist, so retries against an already-aborted upload return 200. No 404 is declared because the not-found case is not surfaced to the caller. The 500 path covers unexpected failures (unknown `resourceType`, database errors) — the inner S3 abort call swallows its own errors with a warn log so an S3-side failure alone does not bubble.',
   security,
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
   request: {
@@ -186,6 +186,10 @@ const abortUploadRoute = createRoute({
     400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: {
+      description: 'Upload abort failed',
+      content: { 'application/json': { schema: passthroughObject('UploadAbortFailedError') } },
+    },
   },
 })
 
@@ -312,8 +316,21 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
     const { resourceId, resourceType } = c.req.valid('query')
     const { projectId } = c.get('scopedUser')!
 
-    await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
-    return c.json({ acknowledged: true }, 200)
+    // `abortChunkedUpload` is idempotent on the row-missing path (returns
+    // void) but can still throw on an unknown `resourceType` or a DB
+    // error. Without this guard the throw bubbles to Hono's root onError
+    // as an undocumented generic 500 — the route's documented 500 envelope
+    // would be unreachable from the wire.
+    try {
+      await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
+      return c.json({ acknowledged: true }, 200)
+    } catch (err) {
+      logger.error(
+        { err, uploadId, resourceId, resourceType, projectId },
+        'Failed to abort chunked upload'
+      )
+      return dashboardError(c, 500, 'UPLOAD_ABORT_FAILED', 'Failed to abort upload')
+    }
   })
 
   router.openapi(uploadStatusRoute, async (c) => {

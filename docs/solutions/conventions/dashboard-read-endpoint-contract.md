@@ -1,6 +1,8 @@
 ---
-module: packages/backend, packages/frontend, packages/shared, packages/openapi
+module: packages/backend, packages/frontend, packages/shared
 date: 2026-05-30
+status: partially-superseded
+superseded_by: docs/plans/2026-05-31-001-feat-openapi-auto-generation-migration-plan.md
 problem_type: convention
 component: api-contract
 severity: medium
@@ -20,6 +22,8 @@ applies_when:
 ---
 
 # Dashboard read-endpoint contract
+
+> **Status note (U4 of the OpenAPI auto-generation migration):** The "OpenAPI mirror" pillar described below no longer applies to the dashboard surface. `packages/openapi/dashboard-api.yaml` was deleted in U4 — the dashboard spec is now generated at runtime from `createRoute(...)` definitions in `packages/backend/src/routes/dashboard/*` via `@hono/zod-openapi` and served at `GET /api/v1/dashboard/openapi.json`. The structural parity test `packages/backend/tests/unit/dashboard-api-contract.test.ts` is also deleted (tautological once the YAML is gone). The remaining three pillars (shared Zod schema, integration test, realtime invalidation hook) still apply unchanged. U7 of the migration will rewrite this document end-to-end; until then, treat the OpenAPI-mirror sections as historical context, not actionable guidance.
 
 ## Context
 

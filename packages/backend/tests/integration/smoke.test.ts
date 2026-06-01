@@ -6,7 +6,10 @@
  * routing, middleware, and validation work end-to-end.
  *
  * Authenticated tests requiring BetterAuth sessions need a running DB
- * and are covered by dashboard-api-contract tests with mocked auth.
+ * and live in the per-route `tests/unit/dashboard-*-routes.test.ts`
+ * files, which use module-scoped `mock.module('../../src/lib/auth.js')`
+ * stubs to bypass the real BetterAuth handshake. This smoke suite
+ * stays anonymous-only so it can run without that mock plumbing.
  */
 import { describe, expect, it, mock } from 'bun:test'
 

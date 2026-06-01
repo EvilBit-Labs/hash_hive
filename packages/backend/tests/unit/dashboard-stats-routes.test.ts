@@ -12,10 +12,12 @@
  *
  * AGENTS.md gold-standard would be a real-DB integration test, but the
  * project's `tests/integration/` suite mocks the drizzle client the
- * same way; this file follows that convention. The contract test in
- * `dashboard-api-contract.test.ts` adds the round-trip
- * `dashboardStatsSchema.parse()` proof so OpenAPI ↔ shared ↔ wire stay
- * in sync.
+ * same way; this file follows that convention. The OpenAPI ↔ shared ↔
+ * wire round-trip is now enforced by the runtime spec — the dashboard
+ * surface registers `dashboardStatsSchema` directly via
+ * `.openapi('DashboardStats')` in `routes/dashboard/stats.ts`, so any
+ * drift between the Zod schema and the served `/openapi.json` is a
+ * compile-time / spec-gen failure rather than a separate contract test.
  */
 import {
   agents,

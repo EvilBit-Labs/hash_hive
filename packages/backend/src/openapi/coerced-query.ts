@@ -34,6 +34,15 @@ export interface CoercedIntegerQueryOpts {
  * similar pagination params.
  */
 export function coercedIntegerQuery(opts: CoercedIntegerQueryOpts) {
+  // Guard against swapped bounds at construction time. A schema with
+  // `min > max` is unsatisfiable for any input, so every request would
+  // silently fall through to `.catch(opts.default)` and the
+  // `.min(...)`/`.max(...)` constraints would be load-bearing in name
+  // only. Throwing at module load surfaces the bug at the boot path
+  // rather than as a mysterious "every value defaults" runtime symptom.
+  if (opts.max !== undefined && opts.max < opts.min) {
+    throw new Error(`coercedIntegerQuery: max (${opts.max}) must be >= min (${opts.min})`)
+  }
   const base = z.coerce.number().int().min(opts.min)
   const withMax = opts.max !== undefined ? base.max(opts.max) : base
   return withMax
