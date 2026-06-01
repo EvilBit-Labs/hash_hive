@@ -119,7 +119,7 @@ export function registerGenericResourceRoutes(
 
   router.openapi(getResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
-    const id = Number(c.req.param('id'))
+    const { id } = c.req.valid('param')
     const item = await getResourceById(table, id, projectId)
 
     if (!item) {
@@ -134,17 +134,11 @@ export function registerGenericResourceRoutes(
     path: `/${prefix}/{id}/upload`,
     tags,
     summary: `Upload the file payload for a ${prefix} entry`,
+    description: `Multipart body (\`file\` field) is intentionally NOT declared on the route. createRoute validates the request body BEFORE the handler runs, which would parseBody and buffer the entire upload before \`enforceMultipartSizeLimit(c)\` can reject oversize Content-Length headers with 413 / chunked transfer-encoding with 411. The handler enforces field presence after the size guard.`,
     security,
     middleware: [requireMembershipRole('admin', 'contributor')] as const,
     request: {
       params: idParamSchema,
-      body: {
-        content: {
-          'multipart/form-data': {
-            schema: z.object({ file: z.unknown() }),
-          },
-        },
-      },
     },
     responses: {
       200: {
@@ -229,10 +223,7 @@ export function registerGenericResourceRoutes(
 
   router.openapi(deleteResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
-    const id = Number(c.req.param('id'))
-    if (!Number.isInteger(id) || id <= 0) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', `Invalid ${prefix} id`)
-    }
+    const { id } = c.req.valid('param')
     try {
       const deleted = await deleteResource(table, id, projectId, prefix)
       if (!deleted) {

@@ -222,23 +222,13 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
   })
 
   router.openapi(uploadPartRoute, async (c) => {
-    const uploadId = c.req.param('uploadId')
-    const partNumber = Number(c.req.param('partNumber'))
-    const resourceId = Number(c.req.query('resourceId'))
-    const resourceType = c.req.query('resourceType')
-
-    if (!uploadId || !partNumber || !resourceId || !resourceType) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'uploadId, partNumber, resourceId, and resourceType are required',
-          },
-        },
-        400
-      )
-    }
-
+    // Route declares `params: uploadPartParamSchema` (uploadId + coerced
+    // partNumber) and `query: uploadPartQuerySchema` (coerced resourceId +
+    // enum resourceType), so c.req.valid('param')/('query') returns the
+    // already-validated shapes and the dashboard defaultHook handles any
+    // validation failure with the standard envelope.
+    const { uploadId, partNumber } = c.req.valid('param')
+    const { resourceId, resourceType } = c.req.valid('query')
     const { projectId } = c.get('scopedUser')!
 
     // Read the raw body as a Uint8Array — do NOT use c.req.json() or
@@ -302,27 +292,8 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
   })
 
   router.openapi(abortUploadRoute, async (c) => {
-    const uploadId = c.req.param('uploadId')
-    if (!uploadId) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
-    }
-    const parsed = uploadStatusQuerySchema.safeParse({
-      resourceId: c.req.query('resourceId'),
-      resourceType: c.req.query('resourceType'),
-    })
-    if (!parsed.success) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: parsed.error.issues.map((i) => i.message).join('; '),
-          },
-        },
-        400
-      )
-    }
-    const { resourceId, resourceType } = parsed.data
-
+    const { uploadId } = c.req.valid('param')
+    const { resourceId, resourceType } = c.req.valid('query')
     const { projectId } = c.get('scopedUser')!
 
     await abortChunkedUpload(uploadId, resourceId, resourceType, projectId)
@@ -330,27 +301,8 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
   })
 
   router.openapi(uploadStatusRoute, async (c) => {
-    const uploadId = c.req.param('uploadId')
-    if (!uploadId) {
-      return dashboardError(c, 400, 'VALIDATION_ERROR', 'uploadId is required')
-    }
-    const parsed = uploadStatusQuerySchema.safeParse({
-      resourceId: c.req.query('resourceId'),
-      resourceType: c.req.query('resourceType'),
-    })
-    if (!parsed.success) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: parsed.error.issues.map((i) => i.message).join('; '),
-          },
-        },
-        400
-      )
-    }
-    const { resourceId, resourceType } = parsed.data
-
+    const { uploadId } = c.req.valid('param')
+    const { resourceId, resourceType } = c.req.valid('query')
     const { projectId } = c.get('scopedUser')!
 
     const result = await getChunkedUploadStatus(uploadId, resourceId, resourceType, projectId)

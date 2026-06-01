@@ -287,9 +287,10 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
   // operator-actionable context (which body fields were unparseable
   // vs. which were missing). Mirrors the multipart branch's
   // `logger.warn` on parseBody failure above.
+  const requestId = c.get('requestId')
   const parsedBody = await c.req.json().catch((err: unknown) => {
     logger.warn(
-      { err, projectId },
+      { err, projectId, requestId },
       'Failed to parse JSON body for POST /hash-lists (legacy create-empty path)'
     )
     return null
@@ -409,17 +410,12 @@ const uploadHashListRoute = createRoute({
   path: '/hash-lists/{id}/upload',
   tags,
   summary: 'Upload the hashes file for an existing hash list',
+  description:
+    'Multipart body (`file` field) is intentionally NOT declared on the route. createRoute validates the request body BEFORE the handler runs, which would parseBody and buffer the entire upload before `enforceMultipartSizeLimit(c)` can reject oversize Content-Length headers with 413 / chunked transfer-encoding with 411. The handler enforces field presence after the size guard.',
   security,
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
   request: {
     params: idParamSchema,
-    body: {
-      content: {
-        'multipart/form-data': {
-          schema: z.object({ file: z.unknown() }),
-        },
-      },
-    },
   },
   responses: {
     200: {
@@ -527,11 +523,15 @@ resourceRoutes.openapi(importHashListRoute, async (c) => {
   return c.json(result, 200)
 })
 
+// Permissive at the boundary so a malformed `?limit=abc` doesn't 400 —
+// `.catch(default)` swaps in the default on coercion/range failure, which
+// keeps NaN/Infinity out of Drizzle's `.limit()`/`.offset()`. Matches the
+// pattern used on `listResultsQuerySchema` elsewhere on the dashboard.
 const hashItemsQuerySchema = z.object({
   status: z.enum(['all', 'cracked', 'uncracked']).optional(),
   q: z.string().max(256).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  offset: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50).catch(50),
+  offset: z.coerce.number().int().min(0).default(0).catch(0),
 })
 
 const listHashItemsRoute = createRoute({
@@ -558,21 +558,8 @@ const listHashItemsRoute = createRoute({
 
 resourceRoutes.openapi(listHashItemsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
-
-  const hashListId = Number(c.req.param('id'))
-
-  // Validate query params — fail fast on invalid input
-  const statusRaw = c.req.query('status')
-  const VALID_STATUSES = ['all', 'cracked', 'uncracked'] as const
-  const status =
-    statusRaw && VALID_STATUSES.includes(statusRaw as (typeof VALID_STATUSES)[number])
-      ? (statusRaw as 'all' | 'cracked' | 'uncracked')
-      : undefined
-  const q = c.req.query('q')?.slice(0, 256) || undefined
-  const limitRaw = Number(c.req.query('limit') ?? 50)
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 100)) : 50
-  const offsetRaw = Number(c.req.query('offset') ?? 0)
-  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0
+  const { id: hashListId } = c.req.valid('param')
+  const { status, q, limit, offset } = c.req.valid('query')
 
   const result = await getHashItems(hashListId, projectId, { status, search: q, limit, offset })
 
