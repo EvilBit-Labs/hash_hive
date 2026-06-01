@@ -250,14 +250,13 @@ reviews:
         - Single-project users auto-redirect to dashboard after login
     - path: 'packages/openapi/**/*.yaml'
       instructions: |
-        Review OpenAPI spec patterns (agent + control surfaces only — the
-        dashboard surface migrated to route-as-spec via @hono/zod-openapi
-        and no longer maintains a YAML file):
-        - The repo carries one spec per surface under `packages/openapi/`:
-          `agent-api.yaml` and `control-api.yaml`. There is no
-          `openapi/` directory at the repo root.
-        - Agent and control API contract tests should validate responses against the YAML schemas.
-        - Never break the agent API to improve the dashboard experience.
+        Review OpenAPI spec patterns (agent surface only — dashboard and
+        control surfaces migrated to route-as-spec via @hono/zod-openapi
+        and no longer maintain YAML files):
+        - The repo carries one spec under `packages/openapi/agent-api.yaml`.
+          There is no `openapi/` directory at the repo root.
+        - Agent API contract tests should validate responses against the YAML schema.
+        - Never break the agent API to improve the dashboard or control experience.
     - path: 'packages/backend/src/config/env.ts'
       instructions: |
         Review environment configuration:

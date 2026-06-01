@@ -10,8 +10,9 @@
  * **Control surface.** Seven named responses (`AuthError`, `Forbidden`,
  * `NotFound`, `ValidationError`, `Conflict`, `InternalError`,
  * `ServiceUnavailable`) point at the RFC 9457 problem-details
- * envelope. Names mirror the deleted-soon `packages/openapi/control-api.yaml`
- * for stable client codegen output across the migration cutover.
+ * envelope. Names mirror the pre-deletion `packages/openapi/control-api.yaml`
+ * (removed in U5 of the OpenAPI migration) for stable client codegen
+ * output across the cutover.
  *
  * **The $ref escape hatch.** `createRoute({ responses: {...} })` expects
  * inline response definitions. The library's documented mechanism to
@@ -254,9 +255,9 @@ const controlProblemDetailsSchema = z
   .openapi('ProblemDetails')
 
 /**
- * Names mirror the deleted-soon `packages/openapi/control-api.yaml`
- * `components.responses` keys so client codegen output stays stable
- * across the migration cutover (plan D7).
+ * Names mirror the pre-deletion `packages/openapi/control-api.yaml`
+ * `components.responses` keys (removed in U5 of the OpenAPI migration)
+ * so client codegen output stays stable across the cutover (plan D7).
  */
 const CONTROL_RESPONSE_NAMES = [
   'AuthError',

@@ -59,9 +59,9 @@ export interface SystemHealth {
  * Schema version of the SystemHealth envelope. Bump when the
  * `components` shape, status enum, or aggregate semantics change in a
  * way consumers must adapt to. Distinct from the app's package version
- * since the health surface evolves on its own cadence; see the
- * Control API spec at packages/openapi/control-api.yaml for the
- * matching `info.version` it documents.
+ * since the health surface evolves on its own cadence; mirrored on the
+ * Control API spec's `info.version` (served at runtime from
+ * `/api/v1/control/openapi.json`) so consumers can gate on it.
  *
  * 2.0.0 (issue #156) — `components.minio` renamed to `components.object_store`
  *   across both the rich envelope and the legacy public envelope. No
