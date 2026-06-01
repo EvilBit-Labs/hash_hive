@@ -29,8 +29,12 @@ const RESULTS_LIST_DEFAULT_LIMIT = 50
 // password of `=cmd|...` would otherwise execute as a formula when the
 // exported CSV is opened. Quote-wrapping does not neutralize this; the
 // canonical mitigation is to prefix the cell with a leading apostrophe so
-// spreadsheet apps treat it as literal text. See OWASP "CSV Injection".
-const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r]/
+// spreadsheet apps treat it as literal text. `\n` and `\r` are included
+// because Excel/Sheets strip leading whitespace (including newlines that
+// the CSV reader preserved inside a quoted cell) before evaluating
+// formula triggers, so a quoted value like `"\n=HYPERLINK(...)"` would
+// otherwise evaluate as a formula. See OWASP "CSV Injection".
+const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r\n]/
 
 function escapeCsv(val: string | null | undefined): string {
   if (val == null) return ''

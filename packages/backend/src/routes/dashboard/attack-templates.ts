@@ -170,6 +170,7 @@ const listTemplatesRoute = createRoute({
       description: 'Page of attack templates.',
       content: { 'application/json': { schema: templateListResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...sharedAuthResponses,
   },
 })
@@ -197,6 +198,7 @@ const createTemplateRoute = createRoute({
       description: 'Template created.',
       content: { 'application/json': { schema: templateDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'A template with the same name already exists in this project.',
@@ -244,6 +246,7 @@ const importTemplateRoute = createRoute({
       description: 'Template imported.',
       content: { 'application/json': { schema: templateDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'A template with the same name already exists in this project.',
@@ -289,6 +292,7 @@ const getTemplateRoute = createRoute({
       description: 'Template details.',
       content: { 'application/json': { schema: templateDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
@@ -326,6 +330,7 @@ const updateTemplateRoute = createRoute({
       description: 'Updated template.',
       content: { 'application/json': { schema: templateDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Rename would collide with an existing template name.',
@@ -384,6 +389,7 @@ const deleteTemplateRoute = createRoute({
       description: 'Deletion acknowledged.',
       content: { 'application/json': { schema: templateDeleteResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
@@ -419,6 +425,7 @@ const instantiateTemplateRoute = createRoute({
         'Attack payload ready to submit to POST /campaigns or POST /campaigns/{id}/attacks.',
       content: { 'application/json': { schema: templateInstantiateResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },

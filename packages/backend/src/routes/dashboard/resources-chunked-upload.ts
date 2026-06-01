@@ -243,7 +243,7 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
     } catch (err) {
       logger.warn(
         { err, uploadId, partNumber, resourceId, resourceType },
-        'Failed to read request body for cracker upload part'
+        'Failed to read request body for resource chunk upload part'
       )
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Failed to read request body')
     }

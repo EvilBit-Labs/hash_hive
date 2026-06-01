@@ -170,6 +170,7 @@ const listCrackersRoute = createRoute({
       description: 'List of cracker binaries.',
       content: { 'application/json': { schema: crackerListResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...adminAuthResponses,
   },
 })
@@ -201,6 +202,7 @@ const getCrackerRoute = createRoute({
       description: 'Cracker binary details.',
       content: { 'application/json': { schema: crackerDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...adminAuthResponses,
   },
@@ -298,6 +300,7 @@ const updateCrackerRoute = createRoute({
       description: 'Updated cracker binary.',
       content: { 'application/json': { schema: crackerDetailResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...adminAuthResponses,
   },
@@ -331,6 +334,7 @@ const deleteCrackerRoute = createRoute({
       description: 'Cracker binary deleted.',
       content: { 'application/json': { schema: acknowledgedResponseSchema } },
     },
+    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     502: {
       description: 'Storage delete failed; DB row preserved for retry.',

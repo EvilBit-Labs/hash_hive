@@ -7,12 +7,7 @@ import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
-import { requireSession } from '../../middleware/auth.js'
-import {
-  DASHBOARD_RESPONSE_REFS,
-  dashboardOpenApiHonoOptions,
-  sharedResponse,
-} from '../../openapi/components.js'
+import { dashboardOpenApiHonoOptions } from '../../openapi/components.js'
 import { findProjectMembership } from '../../services/auth.js'
 import { getClientCount, registerClient, unregisterClient } from '../../services/events.js'
 
@@ -111,14 +106,15 @@ const eventsStatusResponseSchema = z
 export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
   const eventRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
-  // `requireSession` is scoped to `/status` only. `/stream` performs
+  // Both `/status` and `/stream` are unauthenticated at the middleware
+  // layer to preserve the pre-migration contract. `/stream` performs
   // its own session check inside `onOpen` so it can map auth failures
   // to WS close codes (4001 missing session, 4002 no project context)
-  // rather than the HTTP 401 the middleware would emit. Applying
-  // `requireSession` to `*` here would intercept the WS upgrade
-  // request before it reaches the handler that knows to close the
-  // socket cleanly.
-  eventRoutes.use('/status', requireSession)
+  // rather than the HTTP 401 a `requireSession` middleware would emit
+  // before the upgrade completes. `/status` returns only a
+  // connected-client count + timestamp and stayed anonymous in the
+  // original `.get()` form; gating it now would be a behavior change
+  // unrelated to the createRoute migration.
 
   // ─── GET /stream — WebSocket upgrade for real-time events ───────────
   //
@@ -235,13 +231,13 @@ export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
     path: '/status',
     tags: ['Events'],
     summary: 'Number of connected WebSocket clients on the events surface',
-    security: [{ SessionCookie: [] }],
+    // Anonymous: matches the pre-migration `.get('/status', ...)` contract.
+    // No `security` field → no `401` response declared.
     responses: {
       200: {
         description: 'Connected-client snapshot.',
         content: { 'application/json': { schema: eventsStatusResponseSchema } },
       },
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     },
   })
 
