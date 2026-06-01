@@ -125,6 +125,7 @@ const uploadPartRoute = createRoute({
     400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     500: {
       description: 'Upload part failed',
       content: { 'application/json': { schema: passthroughObject('UploadPartFailedError') } },
@@ -155,6 +156,7 @@ const completeUploadRoute = createRoute({
     400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     500: {
       description: 'Upload completion failed',
       content: { 'application/json': { schema: passthroughObject('UploadCompleteFailedError') } },
@@ -181,6 +183,7 @@ const abortUploadRoute = createRoute({
     400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
