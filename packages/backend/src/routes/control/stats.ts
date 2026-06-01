@@ -17,15 +17,20 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
+import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
-import { Hono } from 'hono'
 
 import type { AppEnv } from '../../types.js'
 
 import { db } from '../../db/index.js'
+import {
+  CONTROL_RESPONSE_REFS,
+  controlOpenApiHonoOptions,
+  sharedResponse,
+} from '../../openapi/components.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
-export const controlStatsRoutes = new Hono<AppEnv>()
+export const controlStatsRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
 
 function countFor(rows: ReadonlyArray<{ status: string; count: number }>, literal: string): number {
   for (const row of rows) {
@@ -40,7 +45,57 @@ function sumRows(rows: ReadonlyArray<{ count: number }>): number {
   return total
 }
 
-controlStatsRoutes.get('/', async (c) => {
+const dashboardStatsSchema = z
+  .object({
+    agents: z.object({
+      total: z.number().int().nonnegative(),
+      online: z.number().int().nonnegative(),
+      offline: z.number().int().nonnegative(),
+      busy: z.number().int().nonnegative(),
+      error: z.number().int().nonnegative(),
+      benchmarked: z.number().int().nonnegative(),
+    }),
+    campaigns: z.object({
+      total: z.number().int().nonnegative(),
+      draft: z.number().int().nonnegative(),
+      running: z.number().int().nonnegative(),
+      paused: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      cancelled: z.number().int().nonnegative(),
+    }),
+    tasks: z.object({
+      total: z.number().int().nonnegative(),
+      pending: z.number().int().nonnegative(),
+      running: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+    }),
+    cracked: z.object({
+      total: z.number().int().nonnegative(),
+    }),
+  })
+  .openapi('ControlDashboardStats')
+
+const getStatsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Stats'],
+  summary:
+    'Aggregate counters for agents, campaigns, tasks, and cracked hashes in the active project',
+  security: [{ ControlApiKey: [] }],
+  responses: {
+    200: {
+      description: 'Aggregate stats.',
+      content: { 'application/json': { schema: dashboardStatsSchema } },
+    },
+    400: sharedResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlStatsRoutes.openapi(getStatsRoute, async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c)
 
@@ -113,7 +168,7 @@ controlStatsRoutes.get('/', async (c) => {
       },
     }
 
-    return c.json(body)
+    return c.json(body, 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }
