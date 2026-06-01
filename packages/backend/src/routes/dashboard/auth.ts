@@ -33,32 +33,58 @@ authRouter.use('*', requireSession)
 // is the operator-visible contract today.
 
 // ─── Shared response shapes ─────────────────────────────────────────
+//
+// These schemas mirror `getUserWithProjects` / `issueUserApiKey` /
+// `getUserApiKeyMetadata` in `services/auth.ts`. Keep them aligned: any
+// drift between the handler's return shape and the schemas declared
+// here surfaces as a wrong OpenAPI spec, which the generated TypeScript
+// client (and downstream consumers) trust as the contract.
+//
+// `apiKeyMetadataSchema` is a discriminated union on `hasKey` so an
+// inconsistent value (`{ hasKey: true }` with `prefix: null`) cannot be
+// constructed at compile time — matches the `ApiKeyMetadata` type in
+// `@hashhive/shared`.
+
+const meUserSchema = z.object({
+  id: z.number().int().positive(),
+  email: z.string(),
+  name: z.string(),
+  status: z.string(),
+  roles: z.array(z.string()).min(1),
+})
+
+const meProjectSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string(),
+  slug: z.string(),
+  roles: z.array(z.string()).min(1),
+})
 
 const meResponseSchema = z
   .object({
-    id: z.number().int(),
-    email: z.string(),
-    name: z.string(),
-    roles: z.array(z.string()).optional(),
-    projects: z.array(z.unknown()),
-    selectedProjectId: z.number().int().nullable(),
+    user: meUserSchema,
+    projects: z.array(meProjectSchema),
+    selectedProjectId: z.number().int().positive().nullable(),
   })
-  .passthrough()
-  .openapi('Me')
+  .openapi('MeResponse')
+
+const apiKeyMetadataAbsentSchema = z.object({ hasKey: z.literal(false) })
+const apiKeyMetadataPresentSchema = z.object({
+  hasKey: z.literal(true),
+  prefix: z.string(),
+  lastUsedAt: z.string().nullable(),
+})
 
 const apiKeyMetadataSchema = z
-  .object({
-    lastFour: z.string().nullable(),
-    issuedAt: z.string().nullable(),
-    revokedAt: z.string().nullable().optional(),
-  })
-  .passthrough()
+  .union([apiKeyMetadataAbsentSchema, apiKeyMetadataPresentSchema])
   .openapi('ApiKeyMetadata')
 
 const issueApiKeyResponseSchema = z
   .object({
     token: z.string(),
-    metadata: apiKeyMetadataSchema,
+    // Issuance always returns the present variant — the service
+    // unconditionally writes `hasKey: true` with the new prefix.
+    metadata: apiKeyMetadataPresentSchema,
   })
   .openapi('IssueApiKeyResponse')
 
@@ -79,6 +105,7 @@ const getMeRoute = createRoute({
     },
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -125,6 +152,7 @@ const issueApiKeyRoute = createRoute({
       content: { 'application/json': { schema: issueApiKeyResponseSchema } },
     },
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -149,10 +177,12 @@ const getApiKeyRoute = createRoute({
   security: [{ SessionCookie: [] }],
   responses: {
     200: {
-      description: 'API key metadata (lastFour, issuedAt, optional revokedAt).',
+      description:
+        'API key metadata. `{ hasKey: false }` when the user has no active key; `{ hasKey: true, prefix, lastUsedAt }` otherwise.',
       content: { 'application/json': { schema: apiKeyMetadataSchema } },
     },
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -177,6 +207,7 @@ const revokeApiKeyRoute = createRoute({
   responses: {
     204: { description: 'API key revoked.' },
     401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 

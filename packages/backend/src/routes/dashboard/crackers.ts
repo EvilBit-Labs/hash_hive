@@ -59,7 +59,14 @@ crackerRoutes.use('*', requireSession)
 
 const listCrackersQuerySchema = z.object({
   engine: z.string().optional(),
-  includeInactive: z.coerce.boolean().optional(),
+  // `z.coerce.boolean()` would map any non-empty string (including the
+  // literal "false") to `true`, silently flipping `?includeInactive=false`
+  // into the opposite of what the caller asked for. Restrict to the two
+  // canonical string forms and transform after validation.
+  includeInactive: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
 })
 
 const crackerIdParamSchema = z.object({ id: z.coerce.number().int().positive() })

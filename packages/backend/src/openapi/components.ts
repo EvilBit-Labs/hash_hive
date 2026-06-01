@@ -51,6 +51,7 @@ const DASHBOARD_RESPONSE_NAMES = [
   'Forbidden',
   'ValidationFailed',
   'ResourceNotFound',
+  'InternalError',
 ] as const
 
 type DashboardResponseName = (typeof DASHBOARD_RESPONSE_NAMES)[number]
@@ -66,6 +67,8 @@ const DASHBOARD_RESPONSE_DESCRIPTIONS: Record<DashboardResponseName, string> = {
   Forbidden: 'Authenticated but not authorized for the target project or resource.',
   ValidationFailed: 'Request body, query, or path parameters failed schema validation.',
   ResourceNotFound: "Target resource does not exist or is outside the caller's project scope.",
+  InternalError:
+    'Unexpected server error - downstream dependency (database, BetterAuth, external service) failed and the request could not be completed.',
 }
 
 /**

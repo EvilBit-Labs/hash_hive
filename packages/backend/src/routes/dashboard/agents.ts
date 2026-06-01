@@ -116,7 +116,12 @@ const listAgentsRoute = createRoute({
 dashboardAgentRoutes.openapi(listAgentsRoute, async (c) => {
   const { projectId } = c.get('currentUser')
   const { status, limit, offset } = c.req.valid('query')
-  const result = await listAgents({ projectId: projectId ?? undefined, status, limit, offset })
+  const result = await listAgents({
+    ...(projectId !== undefined && projectId !== null ? { projectId } : {}),
+    status,
+    limit,
+    offset,
+  })
   return c.json(result, 200)
 })
 

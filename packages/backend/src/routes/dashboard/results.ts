@@ -23,6 +23,27 @@ resultsRoutes.use('/export', requireProjectAccess())
 const RESULTS_LIST_MAX_LIMIT = 100
 const RESULTS_LIST_DEFAULT_LIMIT = 50
 
+// Characters that trigger spreadsheet formula evaluation in Excel, Google
+// Sheets, and LibreOffice Calc when they appear at the start of a cell.
+// `plaintext` and `hashValue` are attacker-influenced data — a recovered
+// password of `=cmd|...` would otherwise execute as a formula when the
+// exported CSV is opened. Quote-wrapping does not neutralize this; the
+// canonical mitigation is to prefix the cell with a leading apostrophe so
+// spreadsheet apps treat it as literal text. See OWASP "CSV Injection".
+const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r]/
+
+function escapeCsv(val: string | null | undefined): string {
+  if (val == null) return ''
+  let str = String(val)
+  if (CSV_FORMULA_TRIGGER_REGEX.test(str)) {
+    str = `'${str}`
+  }
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
+}
+
 // Coerce + clamp pagination at the schema boundary so handlers stay thin.
 // Permissive: invalid values fall back to defaults rather than 400 — matches
 // the rest of the dashboard surface, and keeps NaN/Infinity from leaking
@@ -213,17 +234,8 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
 
   // Build CSV
   const csvHeader = 'hash_value,plaintext,campaign,attack_mode,hash_list,cracked_at\n'
-  const csvRows = results.map((r) => {
-    const escapeCsv = (val: string | null | undefined) => {
-      if (val == null) return ''
-      const str = String(val)
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`
-      }
-      return str
-    }
-
-    return [
+  const csvRows = results.map((r) =>
+    [
       escapeCsv(r.hashValue),
       escapeCsv(r.plaintext),
       escapeCsv(r.campaignName),
@@ -231,7 +243,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
       escapeCsv(r.hashListName),
       r.crackedAt ? new Date(r.crackedAt).toISOString() : '',
     ].join(',')
-  })
+  )
 
   const csv = csvHeader + csvRows.join('\n')
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
