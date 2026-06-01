@@ -63,7 +63,7 @@ function buildLifecycleAliasRoute(action: LifecycleAliasAction) {
   return createRoute({
     method: 'post',
     path: `/{id}/${action}`,
-    tags: ['campaigns'],
+    tags: ['Campaigns'],
     summary: `Transition a campaign via the /${action} alias`,
     security: [{ SessionCookie: [] }],
     middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -98,7 +98,7 @@ function buildLifecycleAliasRoute(action: LifecycleAliasAction) {
 const lifecycleActionRoute = createRoute({
   method: 'post',
   path: '/{id}/lifecycle',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Transition a campaign by action enum (start|pause|resume|stop|cancel)',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -149,16 +149,10 @@ export function registerCampaignLifecycleRoutes(router: OpenAPIHono<AppEnv>): vo
 
     const { action } = c.req.valid('json')
 
-    const statusMap = {
-      start: 'running',
-      pause: 'paused',
-      resume: 'running',
-      stop: 'draft',
-      cancel: 'cancelled',
-    } as const
-
-    const targetStatus = statusMap[action]
-    const result = await transitionCampaign(id, targetStatus)
+    // `lifecycleAliasStatus` is the shared action→status map both this
+    // action-enum route and the spec-named alias routes use, so a new
+    // lifecycle action only needs to be added in one place.
+    const result = await transitionCampaign(id, lifecycleAliasStatus[action])
     return respondToTransition(c, result)
   })
 

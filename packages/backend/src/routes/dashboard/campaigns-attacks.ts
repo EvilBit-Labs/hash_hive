@@ -87,7 +87,7 @@ const SYNTHETIC_NEW_ATTACK_ID = -1
 const createAttackRoute = createRoute({
   method: 'post',
   path: '/{id}/attacks',
-  tags: ['campaigns', 'attacks'],
+  tags: ['Campaigns'],
   summary: 'Create an attack on a draft campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -122,7 +122,7 @@ const createAttackRoute = createRoute({
 const listAttacksRoute = createRoute({
   method: 'get',
   path: '/{id}/attacks',
-  tags: ['campaigns', 'attacks'],
+  tags: ['Campaigns'],
   summary: 'List attacks for a campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireProjectAccess()] as const,
@@ -144,7 +144,7 @@ const listAttacksRoute = createRoute({
 const updateAttackRoute = createRoute({
   method: 'patch',
   path: '/{id}/attacks/{attackId}',
-  tags: ['campaigns', 'attacks'],
+  tags: ['Campaigns'],
   summary: 'Update an attack on a draft campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -179,7 +179,7 @@ const updateAttackRoute = createRoute({
 const deleteAttackRoute = createRoute({
   method: 'delete',
   path: '/{id}/attacks/{attackId}',
-  tags: ['campaigns', 'attacks'],
+  tags: ['Campaigns'],
   summary: 'Delete an attack from a draft campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,

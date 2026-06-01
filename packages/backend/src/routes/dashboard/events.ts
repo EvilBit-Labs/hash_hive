@@ -7,10 +7,11 @@ import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
+import { requireSession } from '../../middleware/auth.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
   dashboardOpenApiHonoOptions,
+  sharedResponse,
 } from '../../openapi/components.js'
 import { findProjectMembership } from '../../services/auth.js'
 import { getClientCount, registerClient, unregisterClient } from '../../services/events.js'
@@ -109,6 +110,15 @@ const eventsStatusResponseSchema = z
 
 export function createEventRoutes(upgradeWebSocket: UpgradeWebSocket) {
   const eventRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
+
+  // `requireSession` is scoped to `/status` only. `/stream` performs
+  // its own session check inside `onOpen` so it can map auth failures
+  // to WS close codes (4001 missing session, 4002 no project context)
+  // rather than the HTTP 401 the middleware would emit. Applying
+  // `requireSession` to `*` here would intercept the WS upgrade
+  // request before it reaches the handler that knows to close the
+  // socket cleanly.
+  eventRoutes.use('/status', requireSession)
 
   // ─── GET /stream — WebSocket upgrade for real-time events ───────────
   //

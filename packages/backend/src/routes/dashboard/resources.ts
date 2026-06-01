@@ -281,7 +281,20 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
   }
 
   // ─── Legacy JSON create-empty path ─────────────────────────────────
-  const parsed = createHashListRequestSchema.safeParse(await c.req.json().catch(() => null))
+  //
+  // The `.catch` logs the underlying SyntaxError before swallowing it
+  // so a flood of `'Invalid JSON body'` 400s in production carries
+  // operator-actionable context (which body fields were unparseable
+  // vs. which were missing). Mirrors the multipart branch's
+  // `logger.warn` on parseBody failure above.
+  const parsedBody = await c.req.json().catch((err: unknown) => {
+    logger.warn(
+      { err, projectId },
+      'Failed to parse JSON body for POST /hash-lists (legacy create-empty path)'
+    )
+    return null
+  })
+  const parsed = createHashListRequestSchema.safeParse(parsedBody)
   if (!parsed.success) {
     return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid JSON body')
   }

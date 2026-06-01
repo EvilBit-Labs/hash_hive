@@ -21,6 +21,17 @@ const authRouter = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
 authRouter.use('*', requireSession)
 
+// The /me/api-key responses set `Cache-Control: no-store` and `Pragma:
+// no-cache` at runtime (see the per-handler `c.header(...)` calls
+// below). Spec-level declaration of those headers via createRoute's
+// `responses[status].headers` would require the library's
+// `HeadersObject` shape (Zod-shape per header, not the loose
+// `{ schema, description }` literal that intuitively fits); the
+// awkward shape isn't worth the spec-side documentation gain when the
+// route description already names the invariant. Tightening the
+// header declaration is a follow-up; the per-route description prose
+// is the operator-visible contract today.
+
 // ─── Shared response shapes ─────────────────────────────────────────
 
 const meResponseSchema = z

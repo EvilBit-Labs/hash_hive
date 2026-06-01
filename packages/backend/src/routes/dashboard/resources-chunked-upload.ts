@@ -46,7 +46,7 @@ import {
 // ─── Schemas ────────────────────────────────────────────────────────
 
 const initiateUploadSchema = z.object({
-  resourceType: z.enum(['hash-lists', 'wordlists', 'rulelists', 'masklists']),
+  resourceType: z.enum(RESOURCE_TYPES),
   name: z.string().min(1).max(255),
   fileSize: z.number().int().positive().max(500_000_000_000),
   contentType: z.string().optional(),
@@ -67,7 +67,7 @@ const completeUploadSchema = z.object({
     )
     .min(1),
   resourceId: z.number().int().positive(),
-  resourceType: z.enum(['hash-lists', 'wordlists', 'rulelists', 'masklists']),
+  resourceType: z.enum(RESOURCE_TYPES),
 })
 
 // ─── Routes ─────────────────────────────────────────────────────────
@@ -239,15 +239,28 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       )
     }
 
-    // Read the raw body as a Uint8Array — do NOT use c.req.json() or c.req.parseBody()
-    const body = await c.req.arrayBuffer()
-    const chunk = new Uint8Array(body)
+    const { projectId } = c.get('scopedUser')!
+
+    // Read the raw body as a Uint8Array — do NOT use c.req.json() or
+    // c.req.parseBody(). A truncated client connection, malformed
+    // chunked transfer-encoding, or mid-stream socket close throws
+    // here; without this guard the exception bubbles to the root
+    // `app.onError` as a generic 500 with no upload-context.
+    let chunk: Uint8Array
+    try {
+      const body = await c.req.arrayBuffer()
+      chunk = new Uint8Array(body)
+    } catch (err) {
+      logger.warn(
+        { err, uploadId, partNumber, resourceId, resourceType },
+        'Failed to read request body for cracker upload part'
+      )
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Failed to read request body')
+    }
 
     if (chunk.byteLength === 0) {
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Request body is empty')
     }
-
-    const { projectId } = c.get('scopedUser')!
 
     try {
       const result = await uploadChunkPart(
@@ -260,7 +273,10 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       )
       return c.json(result, 200)
     } catch (err) {
-      logger.error({ err, uploadId, partNumber }, 'Failed to upload part')
+      logger.error(
+        { err, uploadId, partNumber, resourceId, resourceType, projectId },
+        'Failed to upload part'
+      )
       return dashboardError(c, 500, 'UPLOAD_PART_FAILED', 'Failed to upload part')
     }
   })

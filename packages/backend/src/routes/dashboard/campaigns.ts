@@ -117,7 +117,7 @@ const validateCampaignResponseSchema = z.object({}).passthrough()
 const listCampaignsRoute = createRoute({
   method: 'get',
   path: '/',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'List campaigns in the current project scope',
   security: [{ SessionCookie: [] }],
   middleware: [requireProjectAccess()] as const,
@@ -167,7 +167,7 @@ const createCampaignSchema = z.object({
 const createCampaignRoute = createRoute({
   method: 'post',
   path: '/',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Create a campaign, optionally with inline attacks',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -269,7 +269,7 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
 const getCampaignRoute = createRoute({
   method: 'get',
   path: '/{id}',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Get a campaign with its attacks, task stats, and active agents',
   security: [{ SessionCookie: [] }],
   middleware: [requireProjectAccess()] as const,
@@ -318,7 +318,7 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
 const deleteCampaignRoute = createRoute({
   method: 'delete',
   path: '/{id}',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Delete a draft campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -412,11 +412,11 @@ const putCampaignSchema = z.object({
   priority: z.number().int().min(1).max(10),
 })
 
-// Per-method update handler factory. PATCH and PUT share post-validation
-// logic but use different body schemas; createRoute is per-method so we
-// build two routes from one handler. The factory still takes a method
-// label so the runtime branch on result-kind responses stays identical
-// to the legacy implementation.
+// Shared post-load update logic for PATCH and PUT — the two routes
+// expose different body schemas (PATCH is partial, PUT is required)
+// but the lookup, project-scope check, service call, and result-kind
+// branch are identical. Each route's handler validates its body via
+// its own createRoute schema and then forwards the parsed `data` here.
 const updateCampaignHandler = async (
   c: Context<AppEnv>,
   id: number,
@@ -461,7 +461,7 @@ const updateCampaignHandler = async (
 const patchCampaignRoute = createRoute({
   method: 'patch',
   path: '/{id}',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Partially update a draft campaign',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -498,7 +498,7 @@ campaignRoutes.openapi(patchCampaignRoute, async (c) => {
 const putCampaignRoute = createRoute({
   method: 'put',
   path: '/{id}',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Replace a draft campaign in full',
   security: [{ SessionCookie: [] }],
   middleware: [requireMembershipRole('admin', 'contributor')] as const,
@@ -537,7 +537,7 @@ campaignRoutes.openapi(putCampaignRoute, async (c) => {
 const validateCampaignRoute = createRoute({
   method: 'get',
   path: '/{id}/validate',
-  tags: ['campaigns'],
+  tags: ['Campaigns'],
   summary: 'Validate the campaign DAG without mutating state',
   security: [{ SessionCookie: [] }],
   middleware: [requireProjectAccess()] as const,

@@ -19,10 +19,18 @@ export const campaignIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
-// Passthrough response shapes; the runtime spec gains entries but the
-// schema body stays open until U4's diff against dashboard-api.yaml.
-export const campaignRowSchema = z.object({}).passthrough().openapi('Campaign')
-export const attackRowSchema = z.object({}).passthrough().openapi('Attack')
+// Placeholder response shapes — the schema body is intentionally open
+// (passthrough) until the wire shape is added to `@hashhive/shared`.
+// The `description` tells spec consumers this is transitional, not a
+// deliberate polymorphic / "any extra fields" contract.
+export const campaignRowSchema = z.object({}).passthrough().openapi('Campaign', {
+  description:
+    'Schema pending: row shape will be promoted from the handler return type into `@hashhive/shared` in a follow-up. Until then this is a placeholder; consumers should not treat additional fields as a stable contract.',
+})
+export const attackRowSchema = z.object({}).passthrough().openapi('Attack', {
+  description:
+    'Schema pending: row shape will be promoted from the handler return type into `@hashhive/shared` in a follow-up. Until then this is a placeholder; consumers should not treat additional fields as a stable contract.',
+})
 
 export const lifecycleResponseSchema = z.object({
   campaign: campaignRowSchema.nullable(),
@@ -35,9 +43,22 @@ export const lifecycleResponseSchema = z.object({
  * same HTTP status and envelope across both surfaces. The attack-write
  * paths reuse the same mapping for queue / resource errors so a
  * deferred attack save behaves the same as a lifecycle transition.
+ *
+ * **Status codes returned:** 200 (success), 400 (INVALID_TRANSITION),
+ * 409 (RESOURCE_MISSING / STALE_STATE), 500 (TASK_GENERATION_FAILED),
+ * 503 (SERVICE_UNAVAILABLE — wraps QUEUE_UNAVAILABLE and
+ * RESOURCE_VALIDATION_FAILED). The exhaustive list is checked by the
+ * lifecycle/alias route definitions' `responses` block: every status
+ * this function can emit MUST be declared on the route, otherwise the
+ * runtime spec drifts from real behavior. The widened `Response`
+ * return type below is the deliberate trade-off: a single helper
+ * serving 6 sibling routes means the library's per-route response
+ * narrowing can't see through it, so the exhaustive-status invariant
+ * is enforced by the spec-vs-handler review checklist rather than
+ * by the compiler. Keep this list in sync when adding a new branch.
  */
 export type TransitionResult = Awaited<ReturnType<typeof transitionCampaign>>
-export function respondToTransition(c: Context<AppEnv>, result: TransitionResult) {
+export function respondToTransition(c: Context<AppEnv>, result: TransitionResult): Response {
   if ('error' in result) {
     const code = 'code' in result ? result.code : undefined
     if (code === 'QUEUE_UNAVAILABLE') {
@@ -65,7 +86,7 @@ export function respondToTransition(c: Context<AppEnv>, result: TransitionResult
     }
     return dashboardError(c, 400, 'INVALID_TRANSITION', result.error)
   }
-  return c.json({ campaign: result.campaign })
+  return c.json({ campaign: result.campaign }, 200)
 }
 
 /**

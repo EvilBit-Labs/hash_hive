@@ -88,30 +88,54 @@ export function sharedResponse(ref: DashboardResponseRef): ResponseConfig {
  * envelope so all dashboard routes keep the same wire shape on bad
  * input. Without this, `@hono/zod-openapi`'s default produces a
  * `{ success: false, error: ZodError }` body that breaks every
- * dashboard-routes test asserting `error.code === 'VALIDATION_ERROR'`.
+ * dashboard-routes test asserting `error.code === 'VALIDATION_ERROR'`
+ * (see `tests/unit/dashboard-resources-routes.test.ts`,
+ * `dashboard-campaigns-routes.test.ts`, and
+ * `dashboard-stats-routes.test.ts` for representative anchors).
+ *
+ * **Message shape.** Each failing issue's `path` (`['query', 'limit']`,
+ * `['body', 'name']`, etc.) is joined with `.` and prefixed before the
+ * issue message, then issues are joined with `'; '`. Path-less issues
+ * (rare; usually a refine on the root object) carry the bare message.
+ * This lets consumers programmatically discriminate `query.limit: ...`
+ * from `body.name: ...` instead of getting a flat semicolon-soup.
+ *
+ * **Security note.** Issue `message` strings are emitted verbatim. Any
+ * Zod schema on the dashboard surface that uses `.refine` /
+ * `.superRefine` MUST NOT interpolate server-side config / env values
+ * (e.g. internal secrets, file paths) into the message — they will
+ * land in client-visible 400 bodies.
+ *
+ * **Conventions adopted alongside this hook** for every dashboard
+ * `createRoute(...)` + `router.openapi(route, handler)` registration:
+ *  - `middleware: [requireXxx(), ...] as const` — the `as const` is
+ *    required by `@hono/zod-openapi` to preserve middleware tuple
+ *    typing so `c.get('scopedUser')` narrows inside handlers.
+ *  - `c.json(body, 200)` — the explicit status arg is required by the
+ *    library for response-type narrowing against the route's
+ *    `responses[200]` schema; omitting it falls back to a widened
+ *    return type that defeats compile-time response-shape checking.
  *
  * Spread into the constructor:
  *
  *   const router = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
  *
- * Returns `void` on success so the hook is a no-op and createRoute's
- * normal handler chain continues.
+ * Returns `undefined` on success so the hook is a no-op and
+ * createRoute's normal handler chain continues.
  */
 export const dashboardOpenApiHonoOptions = {
   defaultHook: <E extends Env>(
     result: { success: true } | { success: false; error: ZodError },
     c: Context<E>
-  ) => {
-    if (result.success) return
-    return c.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: result.error.issues.map((i) => i.message).join('; '),
-        },
-      },
-      400
-    )
+  ): Response | undefined => {
+    if (result.success) return undefined
+    const message = result.error.issues
+      .map((i) => {
+        const path = i.path.length > 0 ? i.path.join('.') : ''
+        return path ? `${path}: ${i.message}` : i.message
+      })
+      .join('; ')
+    return c.json({ error: { code: 'VALIDATION_ERROR', message } }, 400)
   },
 } as const
 

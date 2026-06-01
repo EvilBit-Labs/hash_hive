@@ -86,11 +86,21 @@ export const uploadStatusQuerySchema = z.object({
   resourceType: z.enum(RESOURCE_TYPES),
 })
 
-// Generic passthrough schema for response shapes that don't have a
-// corresponding shared Zod schema yet. The U4 diff script surfaces
-// these as gaps later — for now they keep the spec parseable without
-// inventing precise types that may drift from the service layer.
-export const passthroughObject = (name: string) => z.object({}).passthrough().openapi(name)
+/**
+ * Generic placeholder schema for response shapes that don't have a
+ * corresponding shared Zod schema yet. Each placeholder advertises
+ * `additionalProperties: true` in the spec; the embedded `description`
+ * tells consumers it's transitional rather than a deliberate
+ * polymorphic / "object of anything" contract. Per-route uses of
+ * `z.object({}).passthrough().openapi('Name')` elsewhere should
+ * follow the same convention — promote to a real `@hashhive/shared`
+ * schema as that wire shape stabilizes.
+ */
+export const passthroughObject = (name: string) =>
+  z.object({}).passthrough().openapi(name, {
+    description:
+      'Schema pending: response shape will be promoted into `@hashhive/shared` in a follow-up. Until then this is a placeholder; consumers should not treat additional fields as a stable contract.',
+  })
 
 export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
@@ -105,5 +115,9 @@ export const uploadPartParamSchema = z.object({
   partNumber: z.coerce.number().int().positive(),
 })
 
-export const tags: string[] = ['Dashboard/Resources']
+// The library types `tags` as `string[]` and `security` as
+// `SecurityRequirementObject[]` (mutable), so `as const` makes them
+// non-assignable. They stay as plain mutable arrays; the discipline
+// against `tags.push(...)` lives in the project review checklist.
+export const tags: string[] = ['Resources']
 export const security = [{ SessionCookie: [] }]
