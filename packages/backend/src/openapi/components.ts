@@ -340,7 +340,19 @@ export const controlOpenApiHonoOptions = {
     c: Context<E>
   ): Response | undefined => {
     if (result.success) return undefined
-    return problemResponse(c, 400, 'validation', 'Invalid request', mapZodError(result.error))
+    // Cast through `as z.ZodError` at the hook boundary per the
+    // GOTCHAS.md guidance: `@hono/zod-validator` v0.7 emits
+    // `$ZodError` (zod v4 core), but `mapZodError` is typed against
+    // `z.ZodError` (zod v3). The runtime `issues[]` shape matches;
+    // the cast keeps the type-level boundary in one place and avoids
+    // forcing each call site to manage the version difference.
+    return problemResponse(
+      c,
+      400,
+      'validation',
+      'Invalid request',
+      mapZodError(result.error as ZodError)
+    )
   },
 } as const
 

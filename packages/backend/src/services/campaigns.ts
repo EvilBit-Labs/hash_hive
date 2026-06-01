@@ -446,6 +446,7 @@ export type UpdateCampaignResult =
  */
 export async function updateCampaign(
   id: number,
+  projectId: number,
   data: {
     name?: string | undefined
     // PUT requests can pass `null` to explicitly clear the description;
@@ -457,18 +458,29 @@ export async function updateCampaign(
     priority?: number | undefined
   }
 ): Promise<UpdateCampaignResult> {
+  // `projectId` is part of the UPDATE WHERE so the project-scope
+  // check is atomic with the write. Callers' route-handler-level
+  // `existing.projectId === projectId` precheck is defense-in-depth;
+  // this clause is what actually keeps a contributor in project A
+  // from updating a campaign in project B by guessing its id.
   const [updated] = await db
     .update(campaigns)
     .set({ ...data, updatedAt: new Date() })
-    .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
+    .where(
+      and(eq(campaigns.id, id), eq(campaigns.projectId, projectId), eq(campaigns.status, 'draft'))
+    )
     .returning()
 
   if (updated) {
     return { kind: 'updated', campaign: updated }
   }
 
+  // Disambiguate: if the row exists in some project (regardless of the
+  // caller's scope), `not_draft` is the accurate verdict only when the
+  // row IS in the caller's project. A cross-project row should look
+  // like `not_found` to keep id existence non-enumerable.
   const existing = await getCampaignById(id)
-  if (!existing) {
+  if (!existing || existing.projectId !== projectId) {
     return { kind: 'not_found' }
   }
   return { kind: 'not_draft', status: existing.status }

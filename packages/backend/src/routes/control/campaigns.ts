@@ -75,9 +75,13 @@ const campaignPageSchema = z
   })
   .openapi('ControlCampaignPage')
 
+// `transitionCampaign` returns `{ campaign }` on the success path; the
+// error variants (RESOURCE_VALIDATION_FAILED, RESOURCE_MISSING,
+// QUEUE_UNAVAILABLE, STALE_STATE, TASK_GENERATION_FAILED) map to
+// non-200 problem-details responses in the route handler, so this
+// 200-body schema only needs the success shape.
 const transitionResponseSchema = z
-  .object({})
-  .passthrough()
+  .object({ campaign: selectCampaignSchema })
   .openapi('ControlCampaignTransitionResponse')
 
 // ─── GET / — list campaigns ──────────────────────────────────────────
@@ -233,7 +237,7 @@ controlCampaignRoutes.openapi(updateCampaignRoute, async (c) => {
     // gate is enforced at the service layer for both dashboard and
     // Control API consumers. Map each variant to the appropriate
     // Control-API RFC 9457 problem-details response.
-    const result = await updateCampaign(id, c.req.valid('json'))
+    const result = await updateCampaign(id, projectId, c.req.valid('json'))
     switch (result.kind) {
       case 'updated':
         return c.json(result.campaign, 200)

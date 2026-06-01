@@ -56,16 +56,38 @@ registerControlResponseComponents(controlRoutes)
 
 // Spec endpoint goes on FIRST so the per-router auth middleware never
 // gates it. Anonymous fetch is the contract for client codegen and
-// Swagger UI consumers.
-mountCachedSpec(controlRoutes, '/openapi.json', {
-  openapi: '3.1.0',
-  info: {
-    title: 'HashHive Control API',
-    version: '2.0.0',
-    description:
-      'Machine-readable REST API for CLI tooling, automation platforms, and CI integrations. Authenticated by per-user API keys (`Authorization: Bearer cst_...`), paginated with `offset`/`limit`, and emits RFC 9457 problem-details (`application/problem+json`) on errors.',
+// Swagger UI consumers. The `failureEnvelope` carries an RFC 9457
+// problem-details body so a spec-generation 500 matches the surface's
+// documented error contract — without it, `mountCachedSpec` would
+// default to the dashboard `{ error: { code, message } }` envelope on
+// failure, breaking problem-details clients that parse error bodies
+// uniformly.
+mountCachedSpec(
+  controlRoutes,
+  '/openapi.json',
+  {
+    openapi: '3.1.0',
+    info: {
+      title: 'HashHive Control API',
+      version: '2.0.0',
+      description:
+        'Machine-readable REST API for CLI tooling, automation platforms, and CI integrations. Authenticated by per-user API keys (`Authorization: Bearer cst_...`), paginated with `offset`/`limit`, and emits RFC 9457 problem-details (`application/problem+json`) on errors.',
+    },
   },
-})
+  {
+    failureEnvelope: {
+      body: JSON.stringify({
+        type: 'https://hashhive.dev/errors/internal',
+        title: 'Internal error',
+        status: 500,
+        detail:
+          'The OpenAPI spec for the control surface could not be generated. This indicates a backend route definition is malformed; check the backend logs for the underlying error.',
+        instance: '/api/v1/control/openapi.json',
+      }),
+      contentType: 'application/problem+json',
+    },
+  }
+)
 
 controlRoutes.use('*', requireApiKey)
 

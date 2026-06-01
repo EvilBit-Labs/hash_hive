@@ -434,7 +434,7 @@ const updateCampaignHandler = async (
   // PUT's `description` can be the literal `null` ("explicit clear");
   // updateCampaign accepts `undefined` to mean "leave alone", so we
   // pass null through unchanged and let the service write it.
-  const result = await updateCampaign(id, data)
+  const result = await updateCampaign(id, projectId, data)
 
   switch (result.kind) {
     case 'not_found':

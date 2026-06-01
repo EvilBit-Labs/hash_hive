@@ -10,6 +10,7 @@ import {
   agents,
   campaigns,
   type DashboardStats,
+  dashboardStatsSchema,
   hashItems,
   hashLists,
   TASK_DB_TO_BUCKET,
@@ -17,7 +18,7 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
-import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
+import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
@@ -45,36 +46,14 @@ function sumRows(rows: ReadonlyArray<{ count: number }>): number {
   return total
 }
 
-const dashboardStatsSchema = z
-  .object({
-    agents: z.object({
-      total: z.number().int().nonnegative(),
-      online: z.number().int().nonnegative(),
-      offline: z.number().int().nonnegative(),
-      busy: z.number().int().nonnegative(),
-      error: z.number().int().nonnegative(),
-      benchmarked: z.number().int().nonnegative(),
-    }),
-    campaigns: z.object({
-      total: z.number().int().nonnegative(),
-      draft: z.number().int().nonnegative(),
-      running: z.number().int().nonnegative(),
-      paused: z.number().int().nonnegative(),
-      completed: z.number().int().nonnegative(),
-      cancelled: z.number().int().nonnegative(),
-    }),
-    tasks: z.object({
-      total: z.number().int().nonnegative(),
-      pending: z.number().int().nonnegative(),
-      running: z.number().int().nonnegative(),
-      completed: z.number().int().nonnegative(),
-      failed: z.number().int().nonnegative(),
-    }),
-    cracked: z.object({
-      total: z.number().int().nonnegative(),
-    }),
-  })
-  .openapi('ControlStats')
+// Reuse the canonical `dashboardStatsSchema` from `@hashhive/shared`
+// — the control and dashboard surfaces emit the same wire shape, and
+// the local duplicate this file previously carried would drift the
+// moment a field landed on one side. `.openapi('ControlStats')`
+// registers the schema under a surface-specific component name so
+// dashboard codegen still sees `DashboardStats` while control
+// codegen sees `ControlStats`; the underlying shape is one source.
+const controlStatsResponseSchema = dashboardStatsSchema.openapi('ControlStats')
 
 const getStatsRoute = createRoute({
   method: 'get',
@@ -86,7 +65,7 @@ const getStatsRoute = createRoute({
   responses: {
     200: {
       description: 'Aggregate stats.',
-      content: { 'application/json': { schema: dashboardStatsSchema } },
+      content: { 'application/json': { schema: controlStatsResponseSchema } },
     },
     400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
     401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
