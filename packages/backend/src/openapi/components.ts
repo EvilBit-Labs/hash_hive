@@ -378,3 +378,128 @@ export function registerControlResponseComponents<E extends Env>(app: OpenAPIHon
     })
   }
 }
+
+// ─── Agent surface: `{ error: { code, message } }` envelope ─────────
+
+/**
+ * Agent error envelope. Mirrors what every agent route returns on a
+ * failure: `{ error: { code, message } }`. Distinct from the dashboard
+ * envelope (which adds `timestamp?`/`requestId?`); the agent surface
+ * stays narrow because the on-the-wire contract documented in the
+ * pre-deletion `packages/openapi/agent-api.yaml` is two fields exactly.
+ * Hashcat agents parse this envelope by `error.code` — adding fields
+ * would be a soft wire change.
+ */
+const agentErrorEnvelopeSchema = z
+  .object({
+    error: z.object({
+      code: z.string().describe('Machine-readable error code (e.g. HEARTBEAT_ERROR).'),
+      message: z.string(),
+    }),
+  })
+  .openapi('AgentErrorEnvelope')
+
+/**
+ * Names mirror the pre-deletion `packages/openapi/agent-api.yaml`
+ * `components.responses` keys so the generated agent client stays
+ * stable across the route-as-spec cutover (plan D7).
+ */
+const AGENT_RESPONSE_NAMES = [
+  'Acknowledged',
+  'AuthError',
+  'ValidationError',
+  'ServerError',
+] as const
+
+type AgentResponseName = (typeof AGENT_RESPONSE_NAMES)[number]
+
+export type AgentResponseRef = `#/components/responses/${AgentResponseName}`
+
+export const AGENT_RESPONSE_REFS = Object.fromEntries(
+  AGENT_RESPONSE_NAMES.map((name) => [name, `#/components/responses/${name}`] as const)
+) as { readonly [K in AgentResponseName]: `#/components/responses/${K}` }
+
+const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
+  Acknowledged: 'Request acknowledged. Body is `{ acknowledged: true }`.',
+  AuthError: 'Authentication failed - missing, invalid, or revoked agent bearer token.',
+  ValidationError: 'Request body or query parameters failed schema validation.',
+  ServerError:
+    'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`) so agents can switch on `error.code` and treat known codes specifically.',
+}
+
+/**
+ * Acknowledged response body schema (`{ acknowledged: true }`).
+ * Registered so the named `Acknowledged` shared response can `$ref`
+ * a named component schema rather than carrying an inline shape.
+ */
+const acknowledgedBodySchema = z
+  .object({ acknowledged: z.literal(true) })
+  .openapi('AgentAcknowledged')
+
+/**
+ * Surface-specific `$ref` wrappers, split per surface so a route on
+ * one surface cannot legally reference a sibling surface's response
+ * (the registries are isolated and the cross-reference would 404 at
+ * spec consumption time).
+ */
+export function sharedAgentResponse(ref: AgentResponseRef): ResponseConfig {
+  return { $ref: ref } as unknown as ResponseConfig
+}
+
+/**
+ * Default validation hook for every agent `OpenAPIHono` router. Maps
+ * Zod validation failures to the agent's `{ error: { code: 'VALIDATION_ERROR', message } }`
+ * envelope so all agent routes keep the same wire shape on bad input.
+ *
+ * The format mirrors the prior `agentValidationHook` in
+ * `routes/agent/index.ts` byte-for-byte: each failing issue's `path`
+ * (`['body', 'status']`, `['query', 'limit']`, etc.) is joined with
+ * `.` and prefixed before the issue message; issues without a path
+ * fall back to `'body'` as the synthetic prefix so agents always see
+ * a non-empty prefix per the legacy `formatValidationMessage` contract.
+ */
+export const agentOpenApiHonoOptions = {
+  defaultHook: <E extends Env>(
+    result: { success: true } | { success: false; error: ZodError },
+    c: Context<E>
+  ): Response | undefined => {
+    if (result.success) return undefined
+    const issues = result.error.issues
+    const message =
+      issues.length === 0
+        ? 'Invalid request body'
+        : issues
+            .map((i) => {
+              const path = i.path.length > 0 ? i.path.map(String).join('.') : 'body'
+              return i.message ? `${path}: ${i.message}` : path
+            })
+            .join('; ')
+    return c.json({ error: { code: 'VALIDATION_ERROR', message } }, 400)
+  },
+} as const
+
+/**
+ * Register the agent shared response components against the passed-in
+ * `OpenAPIHono`'s registry. Same idempotency boundary as the dashboard
+ * and control registrars - duplicates throw loudly.
+ */
+export function registerAgentResponseComponents<E extends Env>(app: OpenAPIHono<E>): void {
+  for (const name of AGENT_RESPONSE_NAMES) {
+    guardDuplicateComponentRegistration(app, 'responses', name)
+  }
+  app.openAPIRegistry.register('AgentErrorEnvelope', agentErrorEnvelopeSchema)
+  app.openAPIRegistry.register('AgentAcknowledged', acknowledgedBodySchema)
+
+  for (const name of AGENT_RESPONSE_NAMES) {
+    const schemaRef =
+      name === 'Acknowledged'
+        ? '#/components/schemas/AgentAcknowledged'
+        : '#/components/schemas/AgentErrorEnvelope'
+    app.openAPIRegistry.registerComponent('responses', name, {
+      description: AGENT_RESPONSE_DESCRIPTIONS[name],
+      content: {
+        'application/json': { schema: { $ref: schemaRef } },
+      },
+    })
+  }
+}
