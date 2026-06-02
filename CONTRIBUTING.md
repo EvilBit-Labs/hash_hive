@@ -78,8 +78,8 @@ hashhive/
 │   │   │   ├── stores/       # Zustand stores
 │   │   │   └── lib/          # Utilities and API client
 │   │   └── tests/            # Frontend tests
-│   ├── shared/           # Drizzle schema, Zod schemas, types
-│   │   └── src/
+│   └── shared/           # Drizzle schema, Zod schemas, types
+│       └── src/
 │           ├── db/           # Schema + migrations
 │           ├── schemas/      # Zod schemas (drizzle-zod + custom)
 │           └── types/        # Inferred types (z.infer exports)

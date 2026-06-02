@@ -186,12 +186,18 @@ const taskReportRequestSchema = z
   })
   .openapi('TaskReport')
 
+// Mirrors `getZapsForTask`'s runtime return shape (see
+// `services/tasks/zaps.ts`) and the pre-deletion `agent-api.yaml`
+// `ZapResponse` schema. `zaps` is the list of already-cracked hash
+// values for the task's hash list; `hasMore` signals truncation beyond
+// the requested `limit`. The agent's documented contract — do not
+// rename either key or generated Go clients will silently drop cracked
+// hashes and the agent will re-run already-cracked work.
 const zapResponseSchema = z
   .object({
-    taskId: z.number().int().positive(),
-    hashes: z.array(z.string()),
+    zaps: z.array(z.string()),
+    hasMore: z.boolean(),
   })
-  .passthrough()
   .openapi('ZapResponse')
 
 const agentErrorRequestSchema = z
@@ -212,13 +218,19 @@ const agentErrorRequestSchema = z
   })
   .openapi('AgentError')
 
-const acknowledgedResponseSchema = z
-  .object({ acknowledged: z.literal(true) })
-  .openapi('AgentAcknowledgedBody')
-
-const acknowledgedWithRetriedResponseSchema = z
-  .object({ acknowledged: z.literal(true), retried: z.boolean() })
-  .openapi('AgentAcknowledgedWithRetriedBody')
+// The base `{ acknowledged: true }` body schema lives in
+// `openapi/components.ts` as `AgentAcknowledged` and is served via the
+// shared `Acknowledged` response component. The local
+// `taskReportResponseSchema` below extends it with an optional
+// `retried` field — only the failure-retry branch of POST /tasks/{id}/report
+// surfaces that key; every other ack-bearing route uses the bare
+// shared response so the agent contract stays narrow.
+const taskReportResponseSchema = z
+  .object({
+    acknowledged: z.literal(true),
+    retried: z.boolean().optional(),
+  })
+  .openapi('TaskReportAcknowledged')
 
 const downloadUrlResponseSchema = z
   .object({
@@ -227,11 +239,16 @@ const downloadUrlResponseSchema = z
   })
   .openapi('AgentResourceDownloadUrl')
 
+// Param key is `taskId` (not `id`) to match the pre-deletion
+// `agent-api.yaml` path templates `/tasks/{taskId}/report` and
+// `/tasks/{taskId}/zaps`. Renaming would break any regenerated Go
+// agent client — codegen translates path-param names directly into
+// method-argument names. `z.coerce.number().int().positive()`
+// rejects non-numeric, zero, and negative inputs at the validator
+// boundary (replaces the old hand-rolled `Number.isNaN || taskId <= 0`
+// guard).
 const taskIdParamSchema = z.object({
-  // Path params arrive as strings; coerce so the handler reads a
-  // number directly. The downstream `Number.isNaN || taskId <= 0`
-  // guard catches negatives and zeros that pass coercion.
-  id: z.coerce.number().int().positive().openapi({ example: 42 }),
+  taskId: z.coerce.number().int().positive().openapi({ example: 42 }),
 })
 
 const resourceParamSchema = z.object({
@@ -327,11 +344,11 @@ agentRoutes.openapi(tasksNextRoute, async (c) => {
   }
 })
 
-// ─── POST /tasks/{id}/report — report task progress ─────────────────
+// ─── POST /tasks/{taskId}/report — report task progress ─────────────
 
 const taskReportRoute = createRoute({
   method: 'post',
-  path: '/tasks/{id}/report',
+  path: '/tasks/{taskId}/report',
   tags: ['Tasks'],
   summary: 'Report task progress, results, and errors',
   security: [{ AgentBearer: [] }],
@@ -341,8 +358,14 @@ const taskReportRoute = createRoute({
   },
   responses: {
     200: {
-      description: 'Report accepted; optional `retried` flag indicates failure retry routing.',
-      content: { 'application/json': { schema: acknowledgedWithRetriedResponseSchema } },
+      // `retried` appears ONLY on the failure-retry branch. On the
+      // ordinary success path the body is bare `{ acknowledged: true }`
+      // (preserves the pre-U6 wire shape that the hashcat agent
+      // project's strict JSON parser depends on — adding the field
+      // unconditionally would break a `disallowUnknownFields` consumer).
+      description:
+        'Report accepted. `retried: true|false` is included only when the report transitions the task to `failed`; the non-failure success path returns the bare `{ acknowledged: true }` body.',
+      content: { 'application/json': { schema: taskReportResponseSchema } },
     },
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
@@ -352,7 +375,7 @@ const taskReportRoute = createRoute({
 
 agentRoutes.openapi(taskReportRoute, async (c) => {
   const { agentId } = c.get('agent')
-  const { id: taskId } = c.req.valid('param')
+  const { taskId } = c.req.valid('param')
   const data = c.req.valid('json')
 
   try {
@@ -388,7 +411,7 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
       return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400)
     }
 
-    return c.json({ acknowledged: true, retried: false }, 200)
+    return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
     logger.error({ err, agentId, taskId, status: data.status }, 'Task report processing failed')
     return c.json(
@@ -398,11 +421,11 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
   }
 })
 
-// ─── GET /tasks/{id}/zaps — cracked hashes for a task ───────────────
+// ─── GET /tasks/{taskId}/zaps — cracked hashes for a task ───────────
 
 const zapsRoute = createRoute({
   method: 'get',
-  path: '/tasks/{id}/zaps',
+  path: '/tasks/{taskId}/zaps',
   tags: ['Tasks'],
   summary: 'Retrieve cracked hash values for a task',
   description:
@@ -419,19 +442,14 @@ const zapsRoute = createRoute({
     },
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
-    404: {
-      description: 'Task not found or not assigned to this agent.',
-      content: {
-        'application/json': { schema: { $ref: '#/components/schemas/AgentErrorEnvelope' } },
-      },
-    },
+    404: sharedAgentResponse(AGENT_RESPONSE_REFS.NotFound),
     500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
   },
 })
 
 agentRoutes.openapi(zapsRoute, async (c) => {
   const { agentId, projectId } = c.get('agent')
-  const { id: taskId } = c.req.valid('param')
+  const { taskId } = c.req.valid('param')
   const { since, limit } = c.req.valid('query')
 
   try {
@@ -468,10 +486,7 @@ const reportErrorRoute = createRoute({
     body: { content: { 'application/json': { schema: agentErrorRequestSchema } } },
   },
   responses: {
-    200: {
-      description: 'Error logged.',
-      content: { 'application/json': { schema: acknowledgedResponseSchema } },
-    },
+    200: sharedAgentResponse(AGENT_RESPONSE_REFS.Acknowledged),
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
     500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
@@ -505,10 +520,7 @@ const benchmarkRoute = createRoute({
     body: { content: { 'application/json': { schema: benchmarkSubmissionSchemaOA } } },
   },
   responses: {
-    200: {
-      description: 'Benchmark results stored.',
-      content: { 'application/json': { schema: acknowledgedResponseSchema } },
-    },
+    200: sharedAgentResponse(AGENT_RESPONSE_REFS.Acknowledged),
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
     500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
@@ -548,12 +560,7 @@ const downloadUrlRoute = createRoute({
     },
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
-    404: {
-      description: 'Resource not found or has no file.',
-      content: {
-        'application/json': { schema: { $ref: '#/components/schemas/AgentErrorEnvelope' } },
-      },
-    },
+    404: sharedAgentResponse(AGENT_RESPONSE_REFS.NotFound),
     500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
   },
 })

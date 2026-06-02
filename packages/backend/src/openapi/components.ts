@@ -1,8 +1,10 @@
 /**
- * Shared OpenAPI response components for the dashboard and control
- * surfaces. (Agent surface still inlines its envelope today; it will
- * grow its own shared-response set when the agent error envelope is
- * promoted out of inline route definitions.)
+ * Shared OpenAPI response components for all three HashHive API
+ * surfaces (dashboard, control, agent). Each surface gets its own
+ * envelope schema, named responses, defaultHook, and `$ref` wrapper —
+ * cross-surface `$ref` leaks are a compile error rather than a runtime
+ * miss because each wrapper accepts only its own surface's response-ref
+ * union.
  *
  * **Dashboard surface.** Five named responses (`AuthRequired`,
  * `Forbidden`, `ValidationFailed`, `ResourceNotFound`, `InternalError`)
@@ -14,18 +16,21 @@
  * envelope. Names mirror the pre-deletion `packages/openapi/control-api.yaml`
  * for stable client codegen output across the route-as-spec cutover.
  *
+ * **Agent surface.** Five named responses (`Acknowledged`, `AuthError`,
+ * `ValidationError`, `NotFound`, `ServerError`) point at the agent's
+ * `{ error: { code, message } }` envelope (Acknowledged points at the
+ * `{ acknowledged: true }` body schema instead). Names mirror the
+ * pre-deletion `packages/openapi/agent-api.yaml` for the same codegen
+ * stability reason.
+ *
  * **The $ref escape hatch.** `createRoute({ responses: {...} })` expects
  * inline response definitions. The library's documented mechanism to
  * reference a registered shared response is a `$ref` value cast through
- * `unknown` to satisfy the response config type. The split
- * `sharedDashboardResponse(ref)` / `sharedControlResponse(ref)`
- * helpers centralize that cast (one per surface) so the unsafe
- * boundary lives in one place AND cross-surface `$ref` leaks are a
- * compile error instead of a runtime miss.
- *
- * Agent surface uses a different envelope (the agent error shape) and
- * will get its own shared-response component set when that surface is
- * migrated.
+ * `unknown` to satisfy the response config type. The per-surface
+ * `sharedDashboardResponse(ref)` / `sharedControlResponse(ref)` /
+ * `sharedAgentResponse(ref)` helpers centralize that cast (one per
+ * surface) so the unsafe boundary lives in one place AND cross-surface
+ * `$ref` leaks are a compile error instead of a runtime miss.
  */
 
 import type { OpenAPIHono, RouteConfig } from '@hono/zod-openapi'
@@ -408,6 +413,7 @@ const AGENT_RESPONSE_NAMES = [
   'Acknowledged',
   'AuthError',
   'ValidationError',
+  'NotFound',
   'ServerError',
 ] as const
 
@@ -423,6 +429,8 @@ const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
   Acknowledged: 'Request acknowledged. Body is `{ acknowledged: true }`.',
   AuthError: 'Authentication failed - missing, invalid, or revoked agent bearer token.',
   ValidationError: 'Request body or query parameters failed schema validation.',
+  NotFound:
+    "Target resource does not exist or is outside the agent's project scope. Common cases: task not assigned to this agent, resource type/id outside the agent's project membership.",
   ServerError:
     'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`) so agents can switch on `error.code` and treat known codes specifically.',
 }

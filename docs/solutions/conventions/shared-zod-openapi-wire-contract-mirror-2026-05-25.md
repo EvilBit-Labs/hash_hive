@@ -2,7 +2,7 @@
 module: packages/shared, packages/backend
 date: 2026-05-25
 status: superseded
-superseded_by: docs/plans/2026-05-31-001-feat-openapi-auto-generation-migration-plan.md
+superseded_by: ARCHITECTURE.md (API Surfaces section -- all three surfaces are route-as-spec via @hono/zod-openapi)
 problem_type: convention
 component: api-contract
 severity: medium
