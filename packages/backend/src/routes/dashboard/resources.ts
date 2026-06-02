@@ -16,7 +16,7 @@ import { requireMembershipRole, requireProjectAccess } from '../../middleware/rb
 import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
@@ -70,7 +70,7 @@ const listHashTypesRoute = createRoute({
         },
       },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
   },
 })
 
@@ -97,8 +97,8 @@ const listHashListsRoute = createRoute({
         },
       },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
 })
 
@@ -152,9 +152,9 @@ const createHashListRoute = createRoute({
         },
       },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     411: {
       description: 'Length Required (chunked transfer-encoding rejected)',
       content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
@@ -321,9 +321,9 @@ const getHashListRoute = createRoute({
         },
       },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -373,10 +373,10 @@ const deleteHashListRoute = createRoute({
   request: { params: idParamSchema },
   responses: {
     204: { description: 'Hash list deleted' },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Resource in use and cannot be deleted',
       content: { 'application/json': { schema: passthroughObject('ResourceInUseError') } },
@@ -423,10 +423,10 @@ const uploadHashListRoute = createRoute({
       description: 'Upload accepted',
       content: { 'application/json': { schema: passthroughObject('HashListUploadResult') } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     411: {
       description: 'Length Required (chunked transfer-encoding rejected)',
       content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
@@ -490,9 +490,9 @@ const importHashListRoute = createRoute({
       description: 'Import queued',
       content: { 'application/json': { schema: passthroughObject('HashListImportResult') } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     503: {
       description: 'Import queue unavailable',
       content: { 'application/json': { schema: passthroughObject('ServiceUnavailableError') } },
@@ -551,9 +551,9 @@ const listHashItemsRoute = createRoute({
       description: 'Hash items page',
       content: { 'application/json': { schema: passthroughObject('HashItemsPage') } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -588,10 +588,10 @@ const downloadHashListRoute = createRoute({
         },
       },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -648,8 +648,8 @@ const detectHashTypeRoute = createRoute({
         },
       },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
   },
 })
 

@@ -13,7 +13,7 @@ import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
   dashboardOpenApiHonoOptions,
-  sharedResponse,
+  sharedDashboardResponse,
 } from '../../openapi/components.js'
 import {
   createCampaign,
@@ -128,9 +128,9 @@ const listCampaignsRoute = createRoute({
       description: 'List of campaigns matching the supplied filters.',
       content: { 'application/json': { schema: listCampaignsResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
   },
 })
 
@@ -182,9 +182,9 @@ const createCampaignRoute = createRoute({
       description: 'Campaign (and any inline attacks) created.',
       content: { 'application/json': { schema: createCampaignResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Inline attacks referenced a missing resource.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -280,10 +280,10 @@ const getCampaignRoute = createRoute({
       description: 'Campaign detail with enriched payload.',
       content: { 'application/json': { schema: campaignDetailResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 
@@ -329,10 +329,10 @@ const deleteCampaignRoute = createRoute({
       description: 'Campaign deleted.',
       content: { 'application/json': { schema: deleteCampaignResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Campaign is not in draft status and cannot be deleted.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -434,7 +434,7 @@ const updateCampaignHandler = async (
   // PUT's `description` can be the literal `null` ("explicit clear");
   // updateCampaign accepts `undefined` to mean "leave alone", so we
   // pass null through unchanged and let the service write it.
-  const result = await updateCampaign(id, data)
+  const result = await updateCampaign(id, projectId, data)
 
   switch (result.kind) {
     case 'not_found':
@@ -477,10 +477,10 @@ const patchCampaignRoute = createRoute({
       description: 'Campaign updated.',
       content: { 'application/json': { schema: updateCampaignResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Campaign is not in draft status and cannot be edited.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -514,10 +514,10 @@ const putCampaignRoute = createRoute({
       description: 'Campaign replaced.',
       content: { 'application/json': { schema: updateCampaignResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Campaign is not in draft status and cannot be edited.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -548,10 +548,10 @@ const validateCampaignRoute = createRoute({
       description: 'DAG validation result.',
       content: { 'application/json': { schema: validateCampaignResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 

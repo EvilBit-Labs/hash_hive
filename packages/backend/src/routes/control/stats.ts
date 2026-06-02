@@ -10,6 +10,7 @@ import {
   agents,
   campaigns,
   type DashboardStats,
+  dashboardStatsSchema,
   hashItems,
   hashLists,
   TASK_DB_TO_BUCKET,
@@ -17,15 +18,20 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
+import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
-import { Hono } from 'hono'
 
 import type { AppEnv } from '../../types.js'
 
 import { db } from '../../db/index.js'
+import {
+  CONTROL_RESPONSE_REFS,
+  controlOpenApiHonoOptions,
+  sharedControlResponse,
+} from '../../openapi/components.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
-export const controlStatsRoutes = new Hono<AppEnv>()
+export const controlStatsRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
 
 function countFor(rows: ReadonlyArray<{ status: string; count: number }>, literal: string): number {
   for (const row of rows) {
@@ -40,7 +46,35 @@ function sumRows(rows: ReadonlyArray<{ count: number }>): number {
   return total
 }
 
-controlStatsRoutes.get('/', async (c) => {
+// Reuse the canonical `dashboardStatsSchema` from `@hashhive/shared`
+// — the control and dashboard surfaces emit the same wire shape, and
+// the local duplicate this file previously carried would drift the
+// moment a field landed on one side. `.openapi('ControlStats')`
+// registers the schema under a surface-specific component name so
+// dashboard codegen still sees `DashboardStats` while control
+// codegen sees `ControlStats`; the underlying shape is one source.
+const controlStatsResponseSchema = dashboardStatsSchema.openapi('ControlStats')
+
+const getStatsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Stats'],
+  summary:
+    'Aggregate counters for agents, campaigns, tasks, and cracked hashes in the active project',
+  security: [{ ControlApiKey: [] }],
+  responses: {
+    200: {
+      description: 'Aggregate stats.',
+      content: { 'application/json': { schema: controlStatsResponseSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlStatsRoutes.openapi(getStatsRoute, async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c)
 
@@ -113,7 +147,7 @@ controlStatsRoutes.get('/', async (c) => {
       },
     }
 
-    return c.json(body)
+    return c.json(body, 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }

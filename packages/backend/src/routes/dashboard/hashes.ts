@@ -5,7 +5,7 @@ import type { AppEnv } from '../../types.js'
 import { requireSession } from '../../middleware/auth.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
@@ -46,8 +46,8 @@ const guessTypeRoute = createRoute({
       description: 'Candidate hash types for the supplied value.',
       content: { 'application/json': { schema: guessTypeResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
   },
 })
 

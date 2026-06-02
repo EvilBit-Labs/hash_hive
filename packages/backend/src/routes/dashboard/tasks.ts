@@ -7,7 +7,7 @@ import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { getTaskById, listTasks } from '../../services/tasks.js'
@@ -49,8 +49,8 @@ const listTasksRoute = createRoute({
       description: 'Paginated task list.',
       content: { 'application/json': { schema: taskListResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
 })
 
@@ -91,9 +91,9 @@ const getTaskRoute = createRoute({
       description: 'Task details.',
       content: { 'application/json': { schema: taskDetailResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 

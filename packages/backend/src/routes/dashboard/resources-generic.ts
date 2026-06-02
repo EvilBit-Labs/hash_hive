@@ -13,7 +13,7 @@ import type { AppEnv } from '../../types.js'
 
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
   createResource,
   deleteResource,
@@ -54,8 +54,8 @@ export function registerGenericResourceRoutes(
         description: `${prefix} collection`,
         content: { 'application/json': { schema: passthroughObject(`${prefix}ListResponse`) } },
       },
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     },
   })
 
@@ -85,9 +85,9 @@ export function registerGenericResourceRoutes(
         description: 'Created',
         content: { 'application/json': { schema: z.object({ item: z.unknown() }) } },
       },
-      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     },
   })
 
@@ -111,9 +111,9 @@ export function registerGenericResourceRoutes(
         description: 'Resource',
         content: { 'application/json': { schema: z.object({ item: z.unknown() }) } },
       },
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     },
   })
 
@@ -147,10 +147,10 @@ export function registerGenericResourceRoutes(
           'application/json': { schema: passthroughObject(`${prefix}UploadResult`) },
         },
       },
-      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
       411: {
         description: 'Length Required (chunked transfer-encoding rejected)',
         content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
@@ -210,10 +210,10 @@ export function registerGenericResourceRoutes(
     request: { params: idParamSchema },
     responses: {
       204: { description: 'Deleted' },
-      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
       409: {
         description: 'Resource in use',
         content: { 'application/json': { schema: passthroughObject('ResourceInUseError') } },
@@ -251,10 +251,10 @@ export function registerGenericResourceRoutes(
         description: 'Presigned URL',
         content: { 'application/json': { schema: z.object({ url: z.string() }) } },
       },
-      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     },
   })
 

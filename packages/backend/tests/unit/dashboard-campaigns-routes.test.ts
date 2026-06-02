@@ -156,7 +156,11 @@ if (!IS_ISOLATED) {
     | { kind: 'not_draft'; status: string }
 
   const mockUpdateCampaign = mock(
-    async (id: number, data: Record<string, unknown>): Promise<UpdateCampaignResult> => {
+    async (
+      id: number,
+      _projectId: number,
+      data: Record<string, unknown>
+    ): Promise<UpdateCampaignResult> => {
       if (id === 100) {
         return { kind: 'updated', campaign: makeCampaign({ ...data }) }
       }
@@ -601,7 +605,9 @@ if (!IS_ISOLATED) {
       const calls = mockUpdateCampaign.mock.calls
       const lastCall = calls[calls.length - 1]
       expect(lastCall).toBeDefined()
-      expect((lastCall![1] as { description?: string | null }).description).toBeNull()
+      // updateCampaign signature: (id, projectId, data). `description`
+      // lives on the data object at position [2].
+      expect((lastCall![2] as { description?: string | null }).description).toBeNull()
     })
 
     for (const method of ['PATCH', 'PUT'] as const) {

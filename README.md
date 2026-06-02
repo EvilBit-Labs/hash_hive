@@ -36,7 +36,7 @@ hash_hive/
 │   ├── backend/      # @hashhive/backend  — Bun + Hono API
 │   ├── frontend/     # @hashhive/frontend — React 19 + Vite UI
 │   ├── shared/       # @hashhive/shared   — Drizzle schema, Zod schemas, TS types
-│   └── openapi/      # OpenAPI specs (agent-api.yaml, control-api.yaml)
+│   └── openapi/      # OpenAPI spec for the agent surface (agent-api.yaml); dashboard and control are route-as-spec
 ├── docker/           # SeaweedFS IAM config + other container assets
 ├── docs/             # Architecture, development, testing, gotchas, solutions
 ├── spec/             # Tickets and design specs
@@ -126,7 +126,7 @@ HashHive exposes three distinct API surfaces, each with its own auth, error enve
 
 - **Agent API** (`/api/v1/agent/*`) — pre-shared Bearer token, used by hashcat worker agents. Spec: [`packages/openapi/agent-api.yaml`](./packages/openapi/agent-api.yaml). Never break this surface.
 - **Dashboard API** (`/api/v1/dashboard/*`) — BetterAuth cookie session, used by the React frontend. `limit` / `offset` pagination, `{ error: { code, message } }` envelope. Spec is generated from `@hono/zod-openapi` route definitions in `packages/backend/src/routes/dashboard/*` and served anonymously at runtime at `GET /api/v1/dashboard/openapi.json` (no static YAML file).
-- **Control API** (`/api/v1/control/*`) — per-user API keys (format `cst_*`), used by CLI tooling / automation / CI / the planned TUI. RFC 9457 problem-details errors, `offset` / `limit` pagination. Spec: [`packages/openapi/control-api.yaml`](./packages/openapi/control-api.yaml).
+- **Control API** (`/api/v1/control/*`) — per-user API keys (format `cst_*`), used by CLI tooling / automation / CI / the planned TUI. RFC 9457 problem-details errors (`application/problem+json`), `offset` / `limit` pagination. Spec is generated from `@hono/zod-openapi` route definitions in `packages/backend/src/routes/control/*` and served anonymously at runtime at `GET /api/v1/control/openapi.json` (no static YAML file).
 
 Users issue and rotate Control API keys from the dashboard Account page (`/account`).
 

@@ -25,7 +25,7 @@ import type { AppEnv } from '../../types.js'
 import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
   abortChunkedUpload,
   completeChunkedUpload,
@@ -92,9 +92,9 @@ const initiateUploadRoute = createRoute({
       description: 'Upload session initiated',
       content: { 'application/json': { schema: passthroughObject('UploadInitiateResult') } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     500: {
       description: 'Upload initiation failed',
       content: { 'application/json': { schema: passthroughObject('UploadInitFailedError') } },
@@ -123,10 +123,10 @@ const uploadPartRoute = createRoute({
       description: 'Part uploaded',
       content: { 'application/json': { schema: passthroughObject('UploadPartResult') } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     500: {
       description: 'Upload part failed',
       content: { 'application/json': { schema: passthroughObject('UploadPartFailedError') } },
@@ -154,10 +154,10 @@ const completeUploadRoute = createRoute({
       description: 'Upload completed',
       content: { 'application/json': { schema: passthroughObject('UploadCompleteResult') } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     500: {
       description: 'Upload completion failed',
       content: { 'application/json': { schema: passthroughObject('UploadCompleteFailedError') } },
@@ -183,9 +183,9 @@ const abortUploadRoute = createRoute({
       description: 'Abort acknowledged',
       content: { 'application/json': { schema: z.object({ acknowledged: z.boolean() }) } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     500: {
       description: 'Upload abort failed',
       content: { 'application/json': { schema: passthroughObject('UploadAbortFailedError') } },
@@ -209,10 +209,10 @@ const uploadStatusRoute = createRoute({
       description: 'Upload status',
       content: { 'application/json': { schema: passthroughObject('UploadStatusResult') } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
   },
 })
 

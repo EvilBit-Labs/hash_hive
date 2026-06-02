@@ -26,7 +26,7 @@ import type { AppEnv } from '../../types.js'
 
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole } from '../../middleware/rbac.js'
-import { DASHBOARD_RESPONSE_REFS, sharedResponse } from '../../openapi/components.js'
+import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import { getCampaignById, transitionCampaign } from '../../services/campaigns.js'
 import {
   campaignIdParamSchema,
@@ -75,10 +75,10 @@ function buildLifecycleAliasRoute(action: LifecycleAliasAction) {
         description: 'Campaign transitioned.',
         content: { 'application/json': { schema: lifecycleResponseSchema } },
       },
-      401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-      403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-      400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-      404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+      403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+      400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+      404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
       409: {
         description: 'Stale state or referenced resources missing.',
         content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -115,10 +115,10 @@ const lifecycleActionRoute = createRoute({
       description: 'Campaign transitioned.',
       content: { 'application/json': { schema: lifecycleResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Stale state or referenced resources missing.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },

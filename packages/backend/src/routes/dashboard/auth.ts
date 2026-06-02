@@ -7,7 +7,7 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import {
@@ -103,9 +103,9 @@ const getMeRoute = createRoute({
       description: 'User profile, memberships, and selected project context.',
       content: { 'application/json': { schema: meResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
-    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -151,8 +151,8 @@ const issueApiKeyRoute = createRoute({
       description: 'API key issued; token returned once (legacy response code).',
       content: { 'application/json': { schema: issueApiKeyResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -181,8 +181,8 @@ const getApiKeyRoute = createRoute({
         'API key metadata. `{ hasKey: false }` when the user has no active key; `{ hasKey: true, prefix, lastUsedAt }` otherwise.',
       content: { 'application/json': { schema: apiKeyMetadataSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -206,8 +206,8 @@ const revokeApiKeyRoute = createRoute({
   security: [{ SessionCookie: [] }],
   responses: {
     204: { description: 'API key revoked.' },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    500: sharedResponse(DASHBOARD_RESPONSE_REFS.InternalError),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 

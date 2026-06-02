@@ -13,7 +13,7 @@ import {
 } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
@@ -146,8 +146,8 @@ const listResultsRoute = createRoute({
       description: 'Page of cracked results with attribution joins.',
       content: { 'application/json': { schema: listResultsResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
 })
 
@@ -212,8 +212,8 @@ const exportResultsRoute = createRoute({
       description: 'CSV file with one row per cracked hash, capped at 10,000 rows.',
       content: { 'text/csv': { schema: z.string() } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-    403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
 })
 

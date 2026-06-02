@@ -15,7 +15,7 @@ import {
 } from '../../middleware/rbac.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedResponse,
+  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { findProjectMembership, setUserLastProjectIdIfMember } from '../../services/auth.js'
@@ -93,8 +93,8 @@ const membershipResponseSchema = z
 const successResponseSchema = z.object({ success: z.boolean() }).openapi('ProjectActionSuccess')
 
 const sharedAuthResponses = {
-  401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
-  403: sharedResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+  403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
 } as const
 
 // ─── GET /projects — list projects for current user ─────────────────
@@ -110,7 +110,7 @@ const listMyProjectsRoute = createRoute({
       description: 'Projects the user is a member of.',
       content: { 'application/json': { schema: projectListResponseSchema } },
     },
-    401: sharedResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
   },
 })
 
@@ -141,7 +141,7 @@ const createProjectRoute = createRoute({
       description: 'Project created; creator auto-granted project-admin.',
       content: { 'application/json': { schema: projectDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...sharedAuthResponses,
   },
 })
@@ -201,7 +201,7 @@ const selectProjectRoute = createRoute({
       description: 'Project selected; session updated.',
       content: { 'application/json': { schema: projectDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...sharedAuthResponses,
     500: {
       description:
@@ -332,8 +332,8 @@ const getProjectRoute = createRoute({
       description: 'Project details.',
       content: { 'application/json': { schema: projectDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
 })
@@ -365,8 +365,8 @@ const updateProjectRoute = createRoute({
       description: 'Updated project.',
       content: { 'application/json': { schema: projectDetailResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
 })
@@ -396,7 +396,7 @@ const listMembersRoute = createRoute({
       description: 'Project members and their roles.',
       content: { 'application/json': { schema: memberListResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...sharedAuthResponses,
   },
 })
@@ -423,7 +423,7 @@ const addMemberRoute = createRoute({
       description: 'Membership created.',
       content: { 'application/json': { schema: membershipResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     ...sharedAuthResponses,
   },
 })
@@ -451,8 +451,8 @@ const updateMemberRolesRoute = createRoute({
       description: 'Updated membership.',
       content: { 'application/json': { schema: membershipResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
 })
@@ -482,8 +482,8 @@ const removeMemberRoute = createRoute({
       description: 'Membership removed.',
       content: { 'application/json': { schema: successResponseSchema } },
     },
-    400: sharedResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
-    404: sharedResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     ...sharedAuthResponses,
   },
 })

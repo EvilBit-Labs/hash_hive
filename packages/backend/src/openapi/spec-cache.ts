@@ -28,13 +28,29 @@ import { logger } from '../config/logger.js'
 type SpecConfig = Parameters<OpenAPIHono['getOpenAPI31Document']>[0]
 type SpecGeneratorOpts = Parameters<OpenAPIHono['getOpenAPI31Document']>[1]
 
-const OPENAPI_SPEC_FAILURE_BODY = JSON.stringify({
-  error: {
-    code: 'OPENAPI_SPEC_GENERATION_FAILED',
-    message:
-      'The OpenAPI spec for this surface could not be generated. This indicates a backend route definition is malformed; check the backend logs for the underlying error.',
-  },
-})
+/**
+ * Surface-specific failure envelope. Default is the dashboard-shaped
+ * `{ error: { code, message } }`. The control surface passes an RFC
+ * 9457 problem-details body via the `mountCachedSpec` `failureEnvelope`
+ * option so a 500 from `/api/v1/control/openapi.json` matches the
+ * surface's documented error contract instead of leaking the
+ * dashboard envelope into a problem-details client SDK.
+ */
+export interface SpecFailureEnvelope {
+  body: string
+  contentType: string
+}
+
+const DASHBOARD_FAILURE_ENVELOPE: SpecFailureEnvelope = {
+  body: JSON.stringify({
+    error: {
+      code: 'OPENAPI_SPEC_GENERATION_FAILED',
+      message:
+        'The OpenAPI spec for this surface could not be generated. This indicates a backend route definition is malformed; check the backend logs for the underlying error.',
+    },
+  }),
+  contentType: 'application/json; charset=utf-8',
+}
 
 /**
  * Register a cached `GET /openapi.json` (or whatever path is supplied)
@@ -47,9 +63,11 @@ const OPENAPI_SPEC_FAILURE_BODY = JSON.stringify({
  * Production behavior: the document is generated once at this call
  * (eager boot-time validation; a malformed schema fails boot, not the
  * first poll). If generation throws, the failure is logged and the
- * endpoint serves a 500 with the dashboard error envelope on every
- * subsequent request until the underlying defect is fixed and the app
- * restarts.
+ * endpoint serves a 500 with the caller-supplied failure envelope
+ * (defaults to the dashboard `{ error: { code, message } }` shape;
+ * pass a problem-details envelope via `opts.failureEnvelope` for the
+ * control surface) on every subsequent request until the underlying
+ * defect is fixed and the app restarts.
  *
  * Dev / test behavior: the document is regenerated on each request so
  * route additions surface without a restart. Throws still bubble to
@@ -59,16 +77,21 @@ export function mountCachedSpec<E extends Env>(
   app: OpenAPIHono<E>,
   path: string,
   config: SpecConfig,
-  generatorOpts?: SpecGeneratorOpts
+  opts: {
+    generatorOpts?: SpecGeneratorOpts
+    failureEnvelope?: SpecFailureEnvelope
+  } = {}
 ): void {
   const isProduction = env.NODE_ENV === 'production'
+  const failure = opts.failureEnvelope ?? DASHBOARD_FAILURE_ENVELOPE
+  const successContentType = 'application/json; charset=utf-8'
 
   let cached: string | null = null
   let cacheFailed = false
 
   if (isProduction) {
     try {
-      cached = JSON.stringify(app.getOpenAPI31Document(config, generatorOpts))
+      cached = JSON.stringify(app.getOpenAPI31Document(config, opts.generatorOpts))
     } catch (err) {
       cacheFailed = true
       logger.error(
@@ -81,17 +104,15 @@ export function mountCachedSpec<E extends Env>(
   app.get(path, (c) => {
     if (isProduction) {
       if (cacheFailed || cached === null) {
-        return c.body(OPENAPI_SPEC_FAILURE_BODY, 500, {
-          'content-type': 'application/json; charset=utf-8',
-        })
+        return c.body(failure.body, 500, { 'content-type': failure.contentType })
       }
-      return c.body(cached, 200, { 'content-type': 'application/json; charset=utf-8' })
+      return c.body(cached, 200, { 'content-type': successContentType })
     }
 
     // Dev / test: regenerate per request so hot-reloaded routes appear
     // immediately. Errors propagate to Hono's onError handler — they
     // surface during local development rather than getting swallowed.
-    const body = JSON.stringify(app.getOpenAPI31Document(config, generatorOpts))
-    return c.body(body, 200, { 'content-type': 'application/json; charset=utf-8' })
+    const body = JSON.stringify(app.getOpenAPI31Document(config, opts.generatorOpts))
+    return c.body(body, 200, { 'content-type': successContentType })
   })
 }

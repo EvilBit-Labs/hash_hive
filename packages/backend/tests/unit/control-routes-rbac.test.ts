@@ -363,6 +363,56 @@ if (!IS_ISOLATED) {
         const res = await app.request('/0', { headers: authHeaders() })
         expect(res.status).toBe(400)
       })
+
+      // The U5 `controlOpenApiHonoOptions.defaultHook` covers body/
+      // query/params/headers uniformly. The two tests above pin the
+      // PARAM path; the two below pin BODY and QUERY so a future
+      // change that drops `mapZodError(...)` or returns the library
+      // default `{success:false, error: ZodError}` shape would
+      // regress every CLI client for those validation classes — not
+      // just the :id case.
+      it('returns 400 RFC 9457 with field-level errors[] for missing JSON body field on create', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['contributor'] }]
+        activeProjectId = 1
+        const app = makeApp(controlCampaignRoutes)
+        const res = await app.request('/', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          // `name` and `hashListId` are required by the create schema.
+          body: JSON.stringify({ description: 'no required fields' }),
+        })
+        expect(res.status).toBe(400)
+        expect(res.headers.get('content-type')).toContain('application/problem+json')
+        const body = (await res.json()) as {
+          type?: string
+          errors?: Array<{ path?: string; code?: string; message?: string }>
+        }
+        expect(body.type).toBe('https://hashhive.dev/errors/validation')
+        expect(Array.isArray(body.errors)).toBe(true)
+        // Each entry must carry `path`/`code`/`message` so consumers
+        // can render field-level errors without parsing the prose.
+        expect(body.errors?.[0]?.path).toBeDefined()
+        expect(body.errors?.[0]?.code).toBeDefined()
+        expect(body.errors?.[0]?.message).toBeDefined()
+      })
+
+      it('returns 400 RFC 9457 with field-level errors[] for malformed query param', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }]
+        activeProjectId = 1
+        const { controlAttackRoutes } = await import('../../src/routes/control/attacks.js')
+        const app = makeApp(controlAttackRoutes)
+        // `campaignId` is required + must be a positive integer.
+        const res = await app.request('/?campaignId=not-a-number', { headers: authHeaders() })
+        expect(res.status).toBe(400)
+        expect(res.headers.get('content-type')).toContain('application/problem+json')
+        const body = (await res.json()) as {
+          type?: string
+          errors?: Array<{ path?: string }>
+        }
+        expect(body.type).toBe('https://hashhive.dev/errors/validation')
+        expect(Array.isArray(body.errors)).toBe(true)
+        expect(body.errors?.[0]?.path).toBeDefined()
+      })
     })
   })
 
