@@ -81,9 +81,9 @@ Two API surfaces on the same Hono instance, backed by the same service and data 
 ### Agent API (`/api/v1/agent/*`)
 
 - Pre-shared token authenticated REST API for Go-based hashcat agents
-- Defined by a single OpenAPI spec: `packages/openapi/agent-api.yaml` (OpenAPI 3.1.0, `$ref`-based). A historical 3.0.3 inline copy at `openapi/agent-api.yaml` was removed in the Phase C tech-debt clearance -- a single source of truth eliminates the dual-spec drift risk on the "must never break" surface.
+- Route-as-spec via `@hono/zod-openapi`: `createRoute(...)` calls in `packages/backend/src/routes/agent/*` ARE the contract; the runtime OpenAPI 3.1 document is served anonymously at `GET /api/v1/agent/openapi.json`. The previous hand-maintained `packages/openapi/agent-api.yaml` was retired in the U6 migration -- the route handler is the single source of truth, which structurally eliminates the prior triple-sync drift class.
 - Supports batch operations: bulk inserts for hash submissions via Drizzle or raw `Bun.SQL`
-- Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/:id/report`
+- Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/{id}/report`
 
 ### Dashboard API (`/api/v1/dashboard/*`)
 
@@ -92,7 +92,7 @@ Two API surfaces on the same Hono instance, backed by the same service and data 
 - Standard CRUD operations with Zod validation
 - Low traffic (1-3 concurrent users)
 
-Agent API contract tests should validate responses against the OpenAPI spec to keep server and clients in sync. Never break the agent API to improve the dashboard experience.
+Agent API contract tests validate responses against the shared Zod schemas in `@hashhive/shared`; because the route handler IS the spec via `createRoute(...)`, schema conformance at the test layer is equivalent to OpenAPI conformance. Never break the agent API to improve the dashboard experience.
 
 ## Chunked Upload Protocol
 

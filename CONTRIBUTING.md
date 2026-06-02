@@ -80,10 +80,9 @@ hashhive/
 │   │   └── tests/            # Frontend tests
 │   ├── shared/           # Drizzle schema, Zod schemas, types
 │   │   └── src/
-│   │       ├── db/           # Schema + migrations
-│   │       ├── schemas/      # Zod schemas (drizzle-zod + custom)
-│   │       └── types/        # Inferred types (z.infer exports)
-│   └── openapi/          # API specifications
+│           ├── db/           # Schema + migrations
+│           ├── schemas/      # Zod schemas (drizzle-zod + custom)
+│           └── types/        # Inferred types (z.infer exports)
 └── turbo.json            # Turborepo configuration
 ```
 
@@ -281,7 +280,7 @@ bun install      # Fresh install
 
 - Check documentation in `docs/`
 - Review [ARCHITECTURE.md](./ARCHITECTURE.md) for system design decisions
-- Review OpenAPI specifications: the **agent** and **control** surfaces are documented in `packages/openapi/{agent,control}-api.yaml`. The **dashboard** surface is generated from `createRoute(...)` definitions in `packages/backend/src/routes/dashboard/*` and served at runtime at `/api/v1/dashboard/openapi.json` — review the route definitions directly.
+- Review route definitions in `packages/backend/src/routes/{agent,dashboard,control}/*` — the `createRoute(...)` definition IS the OpenAPI spec for that surface (route-as-spec via `@hono/zod-openapi`). Each runtime spec is served anonymously at `GET /api/v1/{agent,dashboard,control}/openapi.json`; there are no checked-in YAML files.
 - Review authoritative specs in `.kiro/steering/`
 - Review [GOTCHAS.md](./GOTCHAS.md) before working in an unfamiliar area
 - Ask questions in pull requests
