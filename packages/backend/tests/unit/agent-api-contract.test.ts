@@ -144,7 +144,7 @@ mock.module('../../src/services/tasks.js', () => ({
   reassignStaleTasks: mock(() => Promise.resolve([])),
   getTaskById: mock(() => Promise.resolve(null)),
   listTasks: mock(() => Promise.resolve([])),
-  getZapsForTask: mock(() => Promise.resolve({ taskId: 1, hashes: [] })),
+  getZapsForTask: mock(() => Promise.resolve({ zaps: [], hasMore: false })),
   // Re-export real impls so sibling tests see the genuine functions.
   AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
   projectAgentTaskRows: realProjectAgentTaskRows,
@@ -962,5 +962,306 @@ describe('Agent API: failure-path envelope shape', () => {
     })
 
     await expectAgentFailureEnvelope(res, 'CRACKER_UPDATE_ERROR')
+  })
+})
+
+// ─── GET /openapi.json — anonymous spec endpoint (U6) ───────────────
+//
+// The route-as-spec migration added `/api/v1/agent/openapi.json` as
+// the new authoritative spec source. The endpoint MUST be reachable
+// without a bearer token (codegen tools and Swagger UI consume it
+// anonymously) and the body MUST be a valid OpenAPI 3.1 document.
+// A regression that mounted the spec endpoint after `requireAgentToken`
+// would turn it 401 and break every downstream client — this suite is
+// the guard.
+
+describe('Agent API: GET /openapi.json (route-as-spec)', () => {
+  it('returns 200 without a bearer token (anonymous fetch contract)', async () => {
+    const res = await app.request(`${AGENT_BASE}/openapi.json`, { method: 'GET' })
+    expect(res.status).toBe(200)
+  })
+
+  it('returns a valid OpenAPI 3.1 document with the documented surface paths', async () => {
+    const res = await app.request(`${AGENT_BASE}/openapi.json`, { method: 'GET' })
+    const doc = (await res.json()) as Record<string, unknown>
+
+    expect(doc['openapi']).toBe('3.1.0')
+    expect(doc).toHaveProperty('info')
+    expect(doc).toHaveProperty('paths')
+
+    const paths = doc['paths'] as Record<string, unknown>
+    // Pin the agent surface's documented endpoints — a path silently
+    // disappearing from the spec (e.g., because a future refactor
+    // dropped `router.openapi(route, handler)` for `router.post(...)`)
+    // would be invisible without this assertion.
+    expect(paths).toHaveProperty('/heartbeat')
+    expect(paths).toHaveProperty('/tasks/next')
+    expect(paths).toHaveProperty('/tasks/{taskId}/report')
+    expect(paths).toHaveProperty('/tasks/{taskId}/zaps')
+    expect(paths).toHaveProperty('/errors')
+    expect(paths).toHaveProperty('/benchmark')
+    expect(paths).toHaveProperty('/cracker/check-update')
+    expect(paths).toHaveProperty('/resources/{type}/{id}/download-url')
+  })
+
+  it('declares the AgentBearer security scheme on the spec', async () => {
+    const res = await app.request(`${AGENT_BASE}/openapi.json`, { method: 'GET' })
+    const doc = (await res.json()) as Record<string, unknown>
+    const components = doc['components'] as Record<string, unknown>
+    const securitySchemes = components['securitySchemes'] as Record<string, unknown>
+    expect(securitySchemes).toHaveProperty('AgentBearer')
+  })
+
+  it('emits oneOf for the cracker check-update discriminated-union response', async () => {
+    // The crackerCheckUpdateResponseSchema is a z.discriminatedUnion
+    // on `updateAvailable`. The mountCachedSpec call passes
+    // `unionPreferredType: 'oneOf'` so the generated spec must emit
+    // `oneOf` (not `anyOf`) for the 200 response. A regression that
+    // dropped the generator option would silently break generated
+    // agent client codegen for this endpoint.
+    const res = await app.request(`${AGENT_BASE}/openapi.json`, { method: 'GET' })
+    const doc = (await res.json()) as Record<string, unknown>
+    const paths = doc['paths'] as Record<string, unknown>
+    const checkUpdate = paths['/cracker/check-update'] as Record<string, unknown>
+    const post = checkUpdate['post'] as Record<string, unknown>
+    const responses = post['responses'] as Record<string, unknown>
+    const ok = responses['200'] as Record<string, unknown>
+    const content = ok['content'] as Record<string, unknown>
+    const appJson = content['application/json'] as Record<string, unknown>
+    const schema = appJson['schema'] as Record<string, unknown>
+    // The schema may be either an inline `oneOf` block or a `$ref` to
+    // a component schema (`CrackerCheckUpdateResponse`) which itself
+    // declares `oneOf`. Accept both shapes — the wire contract is
+    // satisfied as long as the resolved schema is a `oneOf`.
+    if ('$ref' in schema) {
+      const refPath = (schema['$ref'] as string).replace('#/components/schemas/', '')
+      const components = doc['components'] as Record<string, unknown>
+      const schemas = components['schemas'] as Record<string, unknown>
+      const resolved = schemas[refPath] as Record<string, unknown>
+      expect(resolved).toHaveProperty('oneOf')
+    } else {
+      expect(schema).toHaveProperty('oneOf')
+    }
+  })
+})
+
+// ─── POST /tasks/:id/report — 200 body shape (post-U6 wire contract) ──
+//
+// U6 introduced a regression where the non-failure success path
+// returned `{ acknowledged: true, retried: false }` instead of the
+// pre-U6 bare `{ acknowledged: true }`. The fix preserves the original
+// shape on the success path and emits `retried` only on the
+// failure-retry branch where it carries useful signal. These tests pin
+// both shapes against the wire contract so any future regression
+// flipping them would fail loudly.
+
+describe('Agent API: POST /tasks/:id/report — 200 body shape', () => {
+  it('returns bare { acknowledged: true } on the success path (no `retried` field)', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    // Pin the omit-on-success behavior — adding `retried: false` to
+    // every ack body would silently break any strict
+    // (`disallowUnknownFields`) consumer of the agent contract.
+    expect(body['retried']).toBeUndefined()
+  })
+
+  it('returns { acknowledged: true, retried } on the failure-retry branch', async () => {
+    // Arrange — force `handleTaskFailure` to report a retry decision.
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.handleTaskFailure as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ retried: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'failed', errors: ['gpu hung'] }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    expect(body['retried']).toBe(true)
+  })
+
+  it('rejects non-numeric path param with 400 + VALIDATION_ERROR (zod coerce edge case)', async () => {
+    // Arrange — the new `z.coerce.number().int().positive()` schema
+    // replaces the old hand-rolled `Number.isNaN || taskId <= 0`
+    // guard. Pin the equivalence so a future schema relaxation that
+    // dropped `.positive()` or `.int()` would fail loudly.
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/abc/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
+
+  it('rejects zero path param with 400 + VALIDATION_ERROR (`.positive()` boundary)', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/0/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
+})
+
+// ─── Errored-agent strict-middleware coverage across work endpoints ──
+//
+// /heartbeat uses `requireAgentTokenForHeartbeatRecovery` (lenient so
+// an errored agent can post a clean heartbeat to recover). Every
+// other authenticated route uses the strict `requireAgentToken` which
+// rejects agents in `status='error'` with 401 + AUTH_TOKEN_INVALID.
+//
+// The /tasks/next case is already pinned above; this suite extends
+// the same guard across /errors, /benchmark, /resources/*, and
+// /cracker/* so a future regression that accidentally swapped the
+// middleware on any of them would fail loudly.
+
+describe('Agent API: errored-agent rejection across work endpoints', () => {
+  const TEST_AGENT_TOKEN_LOCAL = 'test-agent-preshared-token'
+  const errorAgentToken = () => agentToken(TEST_AGENT_TOKEN_LOCAL)
+
+  function withErroredAgent(fn: () => Promise<void>): () => Promise<void> {
+    return async () => {
+      const priorStatus = mockAgent.status
+      mockAgent.status = 'error'
+      try {
+        await fn()
+      } finally {
+        mockAgent.status = priorStatus
+      }
+    }
+  }
+
+  it(
+    'rejects errored agents on POST /errors',
+    withErroredAgent(async () => {
+      const res = await app.request(`${AGENT_BASE}/errors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${errorAgentToken()}`,
+        },
+        body: JSON.stringify({ severity: 'warning', message: 'test' }),
+      })
+      expect(res.status).toBe(401)
+      const body = (await res.json()) as Record<string, unknown>
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('AUTH_TOKEN_INVALID')
+    })
+  )
+
+  it(
+    'rejects errored agents on POST /benchmark',
+    withErroredAgent(async () => {
+      const res = await app.request(`${AGENT_BASE}/benchmark`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${errorAgentToken()}`,
+        },
+        body: JSON.stringify({ entries: [] }),
+      })
+      expect(res.status).toBe(401)
+    })
+  )
+
+  it(
+    'rejects errored agents on GET /resources/:type/:id/download-url',
+    withErroredAgent(async () => {
+      const res = await app.request(`${AGENT_BASE}/resources/wordlists/1/download-url`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${errorAgentToken()}` },
+      })
+      expect(res.status).toBe(401)
+    })
+  )
+
+  it(
+    'rejects errored agents on POST /cracker/check-update',
+    withErroredAgent(async () => {
+      const res = await app.request(`${AGENT_BASE}/cracker/check-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${errorAgentToken()}`,
+        },
+        body: JSON.stringify({
+          engine: 'hashcat',
+          platform: 'linux-x64',
+          version: '6.2.7',
+        }),
+      })
+      expect(res.status).toBe(401)
+    })
+  )
+})
+
+// ─── ZapResponse wire shape regression test (post-U6 fix) ───────────
+//
+// U6 initially declared ZapResponse as `{ taskId, hashes }` while
+// `getZapsForTask` actually returns `{ zaps, hasMore }`. The fix
+// restored the original `{ zaps, hasMore }` schema. This test pins
+// the contract against the real service mock so the wire shape and
+// the spec can never silently diverge again.
+
+describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
+  it('returns { zaps, hasMore } body matching getZapsForTask runtime shape', async () => {
+    // Arrange — override the default mock with a non-empty payload so
+    // the field-shape assertion has actual data to verify.
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.getZapsForTask as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ zaps: ['hash1', 'hash2'], hasMore: false }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/zaps`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body).toHaveProperty('zaps')
+    expect(body).toHaveProperty('hasMore')
+    expect(Array.isArray(body['zaps'])).toBe(true)
+    expect(body['hasMore']).toBe(false)
+    // Negative-shape assertions catch a regression that would re-add
+    // the wrong keys (`taskId`/`hashes`) and silently break agent
+    // codegen consumers parsing this response.
+    expect(body['taskId']).toBeUndefined()
+    expect(body['hashes']).toBeUndefined()
   })
 })
