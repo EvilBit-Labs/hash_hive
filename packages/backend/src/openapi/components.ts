@@ -73,11 +73,28 @@ const DASHBOARD_RESPONSE_NAMES = [
 
 type DashboardResponseName = (typeof DASHBOARD_RESPONSE_NAMES)[number]
 
-export type DashboardResponseRef = `#/components/responses/${DashboardResponseName}`
+/**
+ * Per-surface brand on the `$ref` types. Without branding, the template
+ * literal `'#/components/responses/${Name}'` is structurally identical
+ * across surfaces whenever the underlying name string collides — e.g.
+ * both control and agent have `'NotFound'`, so `'#/components/responses/NotFound'`
+ * would type-check on either `sharedControlResponse` or `sharedAgentResponse`
+ * without the brand. The brand is a unique-symbol intersection type
+ * with no runtime cost; the `Object.fromEntries` cast below adds the
+ * brand to each ref string at the type level.
+ */
+declare const __DASHBOARD_REF_BRAND__: unique symbol
+export type DashboardResponseRef = `#/components/responses/${DashboardResponseName}` & {
+  readonly [__DASHBOARD_REF_BRAND__]: true
+}
 
 export const DASHBOARD_RESPONSE_REFS = Object.fromEntries(
   DASHBOARD_RESPONSE_NAMES.map((name) => [name, `#/components/responses/${name}`] as const)
-) as { readonly [K in DashboardResponseName]: `#/components/responses/${K}` }
+) as {
+  readonly [K in DashboardResponseName]: `#/components/responses/${K}` & {
+    readonly [__DASHBOARD_REF_BRAND__]: true
+  }
+}
 
 const DASHBOARD_RESPONSE_DESCRIPTIONS: Record<DashboardResponseName, string> = {
   AuthRequired: 'Authentication required - cookie session missing or expired.',
@@ -292,11 +309,18 @@ const CONTROL_RESPONSE_NAMES = [
 
 type ControlResponseName = (typeof CONTROL_RESPONSE_NAMES)[number]
 
-export type ControlResponseRef = `#/components/responses/${ControlResponseName}`
+declare const __CONTROL_REF_BRAND__: unique symbol
+export type ControlResponseRef = `#/components/responses/${ControlResponseName}` & {
+  readonly [__CONTROL_REF_BRAND__]: true
+}
 
 export const CONTROL_RESPONSE_REFS = Object.fromEntries(
   CONTROL_RESPONSE_NAMES.map((name) => [name, `#/components/responses/${name}`] as const)
-) as { readonly [K in ControlResponseName]: `#/components/responses/${K}` }
+) as {
+  readonly [K in ControlResponseName]: `#/components/responses/${K}` & {
+    readonly [__CONTROL_REF_BRAND__]: true
+  }
+}
 
 const CONTROL_RESPONSE_DESCRIPTIONS: Record<ControlResponseName, string> = {
   AuthError: 'Authentication required - missing, invalid, or revoked Control API key.',
@@ -419,11 +443,18 @@ const AGENT_RESPONSE_NAMES = [
 
 type AgentResponseName = (typeof AGENT_RESPONSE_NAMES)[number]
 
-export type AgentResponseRef = `#/components/responses/${AgentResponseName}`
+declare const __AGENT_REF_BRAND__: unique symbol
+export type AgentResponseRef = `#/components/responses/${AgentResponseName}` & {
+  readonly [__AGENT_REF_BRAND__]: true
+}
 
 export const AGENT_RESPONSE_REFS = Object.fromEntries(
   AGENT_RESPONSE_NAMES.map((name) => [name, `#/components/responses/${name}`] as const)
-) as { readonly [K in AgentResponseName]: `#/components/responses/${K}` }
+) as {
+  readonly [K in AgentResponseName]: `#/components/responses/${K}` & {
+    readonly [__AGENT_REF_BRAND__]: true
+  }
+}
 
 const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
   Acknowledged: 'Request acknowledged. Body is `{ acknowledged: true }`.',
@@ -432,7 +463,7 @@ const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
   NotFound:
     "Target resource does not exist or is outside the agent's project scope. Common cases: task not assigned to this agent, resource type/id outside the agent's project membership.",
   ServerError:
-    'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`) so agents can switch on `error.code` and treat known codes specifically.',
+    'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`) so agents can switch on `error.code` and treat known codes specifically. The dedicated `OPENAPI_SPEC_GENERATION_FAILED` code is emitted on `GET /openapi.json` only when production-mode spec generation fails at boot; treat it as an operator-side defect, not an agent retry case.',
 }
 
 /**
@@ -459,12 +490,29 @@ export function sharedAgentResponse(ref: AgentResponseRef): ResponseConfig {
  * Zod validation failures to the agent's `{ error: { code: 'VALIDATION_ERROR', message } }`
  * envelope so all agent routes keep the same wire shape on bad input.
  *
- * The format mirrors the prior `agentValidationHook` in
- * `routes/agent/index.ts` byte-for-byte: each failing issue's `path`
- * (`['body', 'status']`, `['query', 'limit']`, etc.) is joined with
- * `.` and prefixed before the issue message; issues without a path
- * fall back to `'body'` as the synthetic prefix so agents always see
- * a non-empty prefix per the legacy `formatValidationMessage` contract.
+ * **Message contract.** Each failing issue's `path` (`['body', 'status']`,
+ * `['query', 'limit']`, etc.) is `.`-joined and prefixed before the
+ * issue message; issues are then `'; '`-joined into a single string.
+ * Path-less issues fall back to `'body'` as the synthetic prefix so the
+ * wire always carries a non-empty prefix. An empty `issues` array
+ * collapses to the literal `'Invalid request body'` (rare; only
+ * reachable through a `.refine` on the root that produces no issues —
+ * a defensive-default branch, not a normal code path).
+ *
+ * Return contract is `Response | undefined`. **`undefined` MUST mean
+ * "continue handler chain" — do NOT change this to `void`.** The
+ * library inspects the return value: a `Response` short-circuits with
+ * the validation envelope, anything not-a-Response (including `void`
+ * or `null`) is treated as "fall through to the handler". A future
+ * refactor that drops the early `return undefined` would silently
+ * ship a 200 response with no body on every successful validation
+ * across every agent route.
+ *
+ * **Security note.** Issue `message` strings are emitted verbatim. Any
+ * Zod schema on the agent surface that uses `.refine` / `.superRefine`
+ * MUST NOT interpolate server-side config / env values (e.g. internal
+ * secrets, file paths) into the message — they will land in
+ * client-visible 400 bodies on the agent contract.
  */
 export const agentOpenApiHonoOptions = {
   defaultHook: <E extends Env>(

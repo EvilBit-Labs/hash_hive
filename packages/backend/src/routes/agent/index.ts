@@ -221,15 +221,26 @@ const agentErrorRequestSchema = z
 // The base `{ acknowledged: true }` body schema lives in
 // `openapi/components.ts` as `AgentAcknowledged` and is served via the
 // shared `Acknowledged` response component. The local
-// `taskReportResponseSchema` below extends it with an optional
-// `retried` field — only the failure-retry branch of POST /tasks/{id}/report
-// surfaces that key; every other ack-bearing route uses the bare
-// shared response so the agent contract stays narrow.
+// `taskReportResponseSchema` below is a discriminated UNION so the
+// "retried appears only on failure-retry" wire contract is type-enforced
+// rather than left to handler discipline:
+//
+//   - Bare success body: `{ acknowledged: true }` (.strict() so a future
+//     handler adding `retried: false` here is a compile-time error AND
+//     a runtime Zod failure — matches the disallowUnknownFields
+//     posture of the hashcat agent project's strict JSON parser).
+//   - Failure-retry body: `{ acknowledged: true, retried: boolean }`
+//     (.strict() so `retried` is required in this branch).
+//
+// Only the failure-retry branch of POST /tasks/{taskId}/report surfaces
+// the `retried` key; every other ack-bearing agent route uses the bare
+// shared `Acknowledged` response so the agent contract stays narrow.
+const taskReportAckSchema = z.object({ acknowledged: z.literal(true) }).strict()
+const taskReportRetryAckSchema = z
+  .object({ acknowledged: z.literal(true), retried: z.boolean() })
+  .strict()
 const taskReportResponseSchema = z
-  .object({
-    acknowledged: z.literal(true),
-    retried: z.boolean().optional(),
-  })
+  .union([taskReportAckSchema, taskReportRetryAckSchema])
   .openapi('TaskReportAcknowledged')
 
 const downloadUrlResponseSchema = z
@@ -246,9 +257,13 @@ const downloadUrlResponseSchema = z
 // method-argument names. `z.coerce.number().int().positive()`
 // rejects non-numeric, zero, and negative inputs at the validator
 // boundary (replaces the old hand-rolled `Number.isNaN || taskId <= 0`
-// guard).
+// guard). The `.max(MAX_PG_INT4)` upper bound keeps absurd inputs
+// like `/tasks/1e15/report` from reaching the service layer (and the
+// downstream PostgreSQL `serial` / int4 column) where they would
+// surface as an opaque 500 instead of a clean 400.
+const MAX_PG_INT4 = 2_147_483_647
 const taskIdParamSchema = z.object({
-  taskId: z.coerce.number().int().positive().openapi({ example: 42 }),
+  taskId: z.coerce.number().int().positive().max(MAX_PG_INT4).openapi({ example: 42 }),
 })
 
 const resourceParamSchema = z.object({
@@ -662,7 +677,11 @@ agentRoutes.openapi(crackerCheckUpdateRoute, async (c) => {
       // available rather than failing the agent's poll. Logged at warn so
       // an admin can find rows that were created but never uploaded.
       logger.warn(
-        { crackerBinaryId: latest.id, engine, platform: data.platform },
+        // `platform` is the trimmed local binding (line above); using
+        // `data.platform` here would log a possibly-whitespace-padded
+        // value that operators couldn't correlate against the trimmed
+        // value the unknown-engine warn emits.
+        { crackerBinaryId: latest.id, engine, platform },
         'Latest cracker binary has no completed file; agent will not see this version'
       )
       return c.json({ updateAvailable: false as const, engine }, 200)
