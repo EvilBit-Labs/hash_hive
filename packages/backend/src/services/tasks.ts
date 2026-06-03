@@ -591,7 +591,26 @@ export async function updateTaskProgress(
     return { error: 'Task was reassigned during update' }
   }
 
-  // Insert cracked hash results if submitted
+  // Insert cracked hash results if submitted.
+  //
+  // **Data-integrity gate.** When the agent submits cracked results
+  // but the task's campaign has no associated `hashListId`, the
+  // results cannot be stored — there is no hash list row to attach
+  // them to. The prior implementation only LOGGED this and fell
+  // through to a successful `{ task: updated }` return, leaving the
+  // agent with no signal that its cracked hashes were dropped on the
+  // floor. That silently lost work — exactly the failure class the
+  // agent contract was built to prevent.
+  //
+  // The corrected behavior surfaces an `{ error }` envelope so the
+  // route's `'error' in result` branch returns a 400 + `TASK_ERROR`
+  // and the agent can quarantine the report (or escalate the
+  // campaign-misconfiguration alert) rather than mark the task done
+  // with phantom progress. The task-row update above is allowed to
+  // stand — `data.status` and `data.progress` are still meaningful
+  // signal — but the results-loss branch returns instead of falling
+  // through to `updateCampaignProgress` so the campaign aggregate
+  // doesn't tick forward on dropped work.
   if (data.results && data.results.length > 0 && !taskRow.hashListId) {
     logger.error(
       {
@@ -601,6 +620,10 @@ export async function updateTaskProgress(
       },
       'Cannot store crack results: campaign has no associated hash list'
     )
+    return {
+      error:
+        'Campaign has no associated hash list; cracked results cannot be stored. Check campaign configuration before resubmitting.',
+    }
   }
 
   if (data.results && data.results.length > 0 && taskRow.hashListId) {

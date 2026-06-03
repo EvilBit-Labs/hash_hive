@@ -1195,6 +1195,52 @@ describe('Agent API: POST /tasks/:id/report — 200 body shape', () => {
     expect(res.status).toBe(400)
     await expectAgentValidationError(res)
   })
+
+  it('returns 400 TASK_ERROR when the campaign has no hash list (silent data-loss guard)', async () => {
+    // Arrange — force `updateTaskProgress` to return the new
+    // `{error}` shape that the service now emits when the agent
+    // submits cracked results against a campaign with no
+    // `hashListId`. Before this guard, the service logged the
+    // condition and fell through to a successful response, which
+    // silently dropped the cracked hashes on the floor and let the
+    // campaign aggregate tick forward on phantom progress. The
+    // route's `'error' in result` branch now surfaces this as a
+    // 400 + TASK_ERROR so the agent can quarantine the report
+    // instead of marking the task done.
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.updateTaskProgress as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        error:
+          'Campaign has no associated hash list; cracked results cannot be stored. Check campaign configuration before resubmitting.',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        status: 'completed',
+        results: [{ hashValue: 'abc', plaintext: 'def' }],
+      }),
+    })
+
+    // Assert
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: Record<string, unknown> }
+    expect(body.error.code).toBe('TASK_ERROR')
+    // Pin the message verbatim so future service-layer wording
+    // changes are caught at the contract layer; agents may surface
+    // this string to operators.
+    expect(body.error.message).toMatch(/no associated hash list/i)
+  })
 })
 
 // ─── Errored-agent strict-middleware coverage across work endpoints ──

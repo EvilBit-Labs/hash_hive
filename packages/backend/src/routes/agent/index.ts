@@ -68,6 +68,7 @@ import {
   handleTaskFailure,
   updateTaskProgress,
 } from '../../services/tasks.js'
+import { agentInternalError } from './helpers.js'
 
 const agentRoutes = new OpenAPIHono<AppEnv>(agentOpenApiHonoOptions)
 
@@ -334,13 +335,13 @@ agentRoutes.openapi(heartbeatRoute, async (c) => {
     // this try/catch the throw would fall through to the global
     // `app.onError` and return the dashboard envelope, violating the
     // Agent API's `{ error: { code, message } }` contract.
-    logger.error(
-      { err, agentId, status: data.status, hasError: Boolean(data.error) },
+    return agentInternalError(
+      c,
+      err,
+      'HEARTBEAT_ERROR',
+      'Failed to process heartbeat',
+      { agentId, status: data.status, hasError: Boolean(data.error) },
       'Heartbeat processing failed'
-    )
-    return c.json(
-      { error: { code: 'HEARTBEAT_ERROR', message: 'Failed to process heartbeat' } },
-      500
     )
   }
 })
@@ -369,10 +370,13 @@ agentRoutes.openapi(tasksNextRoute, async (c) => {
     const task = await assignNextTask(agentId)
     return c.json({ task }, 200)
   } catch (err: unknown) {
-    logger.error({ err, agentId }, 'Task assignment failed')
-    return c.json(
-      { error: { code: 'TASK_ASSIGN_ERROR', message: 'Failed to assign next task' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'TASK_ASSIGN_ERROR',
+      'Failed to assign next task',
+      { agentId },
+      'Task assignment failed'
     )
   }
 })
@@ -446,10 +450,13 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
 
     return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
-    logger.error({ err, agentId, taskId, status: data.status }, 'Task report processing failed')
-    return c.json(
-      { error: { code: 'TASK_REPORT_ERROR', message: 'Failed to process task report' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'TASK_REPORT_ERROR',
+      'Failed to process task report',
+      { agentId, taskId, status: data.status },
+      'Task report processing failed'
     )
   }
 })
@@ -494,10 +501,13 @@ agentRoutes.openapi(zapsRoute, async (c) => {
 
     return c.json(result, 200)
   } catch (err: unknown) {
-    logger.error({ err, agentId, taskId }, 'Task zap lookup failed')
-    return c.json(
-      { error: { code: 'TASK_ZAP_ERROR', message: 'Failed to retrieve cracked hashes' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'TASK_ZAP_ERROR',
+      'Failed to retrieve cracked hashes',
+      { agentId, taskId },
+      'Task zap lookup failed'
     )
   }
 })
@@ -533,10 +543,13 @@ agentRoutes.openapi(reportErrorRoute, async (c) => {
     await logAgentError({ ...data, agentId })
     return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
-    logger.error({ err, agentId, severity: data.severity }, 'Agent error log ingestion failed')
-    return c.json(
-      { error: { code: 'ERROR_INGEST_ERROR', message: 'Failed to record agent error' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'ERROR_INGEST_ERROR',
+      'Failed to record agent error',
+      { agentId, severity: data.severity },
+      'Agent error log ingestion failed'
     )
   }
 })
@@ -567,10 +580,13 @@ agentRoutes.openapi(benchmarkRoute, async (c) => {
     await submitBenchmarks(agentId, data.entries, data.crackerVersion)
     return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
-    logger.error({ err, agentId, entryCount: data.entries.length }, 'Benchmark submission failed')
-    return c.json(
-      { error: { code: 'BENCHMARK_ERROR', message: 'Failed to store benchmark results' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'BENCHMARK_ERROR',
+      'Failed to store benchmark results',
+      { agentId, entryCount: data.entries.length },
+      'Benchmark submission failed'
     )
   }
 })
@@ -614,15 +630,13 @@ agentRoutes.openapi(downloadUrlRoute, async (c) => {
 
     return c.json(result, 200)
   } catch (err: unknown) {
-    logger.error(
-      { err, agentId, resourceType, resourceId },
+    return agentInternalError(
+      c,
+      err,
+      'RESOURCE_URL_ERROR',
+      'Failed to generate resource download URL',
+      { agentId, resourceType, resourceId },
       'Resource download URL generation failed'
-    )
-    return c.json(
-      {
-        error: { code: 'RESOURCE_URL_ERROR', message: 'Failed to generate resource download URL' },
-      },
-      500
     )
   }
 })
@@ -716,10 +730,13 @@ agentRoutes.openapi(crackerCheckUpdateRoute, async (c) => {
       200
     )
   } catch (err: unknown) {
-    logger.error({ err, agentId, engine, platform }, 'Cracker update check failed')
-    return c.json(
-      { error: { code: 'CRACKER_UPDATE_ERROR', message: 'Failed to check for cracker update' } },
-      500
+    return agentInternalError(
+      c,
+      err,
+      'CRACKER_UPDATE_ERROR',
+      'Failed to check for cracker update',
+      { agentId, engine, platform },
+      'Cracker update check failed'
     )
   }
 })
