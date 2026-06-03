@@ -459,7 +459,8 @@ export const AGENT_RESPONSE_REFS = Object.fromEntries(
 const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
   Acknowledged: 'Request acknowledged. Body is `{ acknowledged: true }`.',
   AuthError: 'Authentication failed - missing, invalid, or revoked agent bearer token.',
-  ValidationError: 'Request body or query parameters failed schema validation.',
+  ValidationError:
+    "The 400-class envelope for the agent surface. Two sources reach this response: (a) request body / query / path-param shapes failed Zod schema validation (envelope `code: 'VALIDATION_ERROR'`, emitted by `agentOpenApiHonoOptions.defaultHook`), and (b) semantic task-state errors on `POST /tasks/{taskId}/report` -- the service rejecting the report because the task is not assigned to this agent or was reassigned mid-update (envelope `code: 'TASK_ERROR'`, message is the service-supplied reason). Agents should switch on `error.code` to distinguish; both share this response component because both share the agent envelope shape (`{ error: { code, message } }`) and the 400 status.",
   NotFound:
     "Target resource does not exist or is outside the agent's project scope. Common cases: task not assigned to this agent, resource type/id outside the agent's project membership.",
   ServerError:

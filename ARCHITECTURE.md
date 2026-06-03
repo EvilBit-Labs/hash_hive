@@ -83,7 +83,7 @@ Two API surfaces on the same Hono instance, backed by the same service and data 
 - Pre-shared token authenticated REST API for Go-based hashcat agents
 - Route-as-spec via `@hono/zod-openapi`: `createRoute(...)` calls in `packages/backend/src/routes/agent/*` ARE the contract; the runtime OpenAPI 3.1 document is served anonymously at `GET /api/v1/agent/openapi.json`. The previous hand-maintained `packages/openapi/agent-api.yaml` was retired in the U6 migration -- the route handler is the single source of truth, which structurally eliminates the prior triple-sync drift class.
 - Supports batch operations: bulk inserts for hash submissions via Drizzle or raw `Bun.SQL`
-- Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/{id}/report`
+- Core endpoints: `POST /agent/heartbeat`, `POST /agent/tasks/next`, `POST /agent/tasks/{taskId}/report`
 
 ### Dashboard API (`/api/v1/dashboard/*`)
 
