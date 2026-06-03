@@ -67,7 +67,7 @@ reviews:
     - label: 'infrastructure'
       instructions: 'Apply when PR modifies docker-compose.yml, Dockerfile, CI workflows, or deployment configs.'
     - label: 'agent-api'
-      instructions: 'Apply when PR modifies packages/backend/src/routes/agent/ or packages/openapi/ (Agent API surface).'
+      instructions: 'Apply when PR modifies packages/backend/src/routes/agent/ (Agent API surface, route-as-spec).'
     - label: 'priority:critical'
       instructions: 'Apply for security vulnerabilities, data loss risks, or production outages. Requires immediate attention.'
     - label: 'priority:high'
@@ -248,15 +248,6 @@ reviews:
         - Login via UI form (not API calls) -- BetterAuth handles auth at /api/auth/*
         - Test credentials: test@hashhive.local / TestPassword123!
         - Single-project users auto-redirect to dashboard after login
-    - path: 'packages/openapi/**/*.yaml'
-      instructions: |
-        Review OpenAPI spec patterns (agent surface only — dashboard and
-        control surfaces migrated to route-as-spec via @hono/zod-openapi
-        and no longer maintain YAML files):
-        - The repo carries one spec under `packages/openapi/agent-api.yaml`.
-          There is no `openapi/` directory at the repo root.
-        - Agent API contract tests should validate responses against the YAML schema.
-        - Never break the agent API to improve the dashboard or control experience.
     - path: 'packages/backend/src/config/env.ts'
       instructions: |
         Review environment configuration:

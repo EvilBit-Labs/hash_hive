@@ -21,7 +21,7 @@ This file provides AI coding assistants with project context. All substantive do
 
 HashHive exposes three distinct API surfaces, each with its own auth, error envelope, and pagination shape:
 
-- **Agent API** (`/api/v1/agent/*`) -- pre-shared Bearer token, used by hashcat worker agents. Spec: `packages/openapi/agent-api.yaml`. Never break this surface.
+- **Agent API** (`/api/v1/agent/*`) -- pre-shared Bearer token, used by hashcat worker agents. Spec is generated from `@hono/zod-openapi` route definitions in `packages/backend/src/routes/agent/*` and served anonymously at runtime at `GET /api/v1/agent/openapi.json` (no static YAML file). Never break this surface.
 - **Dashboard API** (`/api/v1/dashboard/*`) -- BetterAuth cookie session, used by the React frontend. `limit`/`offset` pagination, `{ error: { code, message } }` envelope. Spec is generated from `@hono/zod-openapi` route definitions in `packages/backend/src/routes/dashboard/*` and served anonymously at runtime at `GET /api/v1/dashboard/openapi.json` (no static YAML file).
 - **Control API** (`/api/v1/control/*`) -- per-user API keys (format `cst_*`, bcrypt-hashed in `users.api_key_hash`), used by CLI tooling, automation, CI, and the planned TUI. RFC 9457 problem-details errors (`application/problem+json`), `offset`/`limit` pagination. Spec is generated from `@hono/zod-openapi` route definitions in `packages/backend/src/routes/control/*` and served anonymously at runtime at `GET /api/v1/control/openapi.json` (no static YAML file).
 
@@ -34,7 +34,7 @@ Users issue and rotate Control API keys from the dashboard Account page (`/accou
 - Prefer mermaid diagrams for architectural or sequence diagrams in documentation.
 - Agents (hashcat workers) are the primary API consumer. Never break the agent API to improve the dashboard or control experience.
 - **Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas.** Do not declare local TypeScript interfaces in `packages/backend/src/services/*` or `packages/frontend/src/hooks/*` for shapes that cross the API boundary — add a schema to `packages/shared/src/schemas/index.ts`, export the `z.infer<...>` type from `packages/shared/src/types/index.ts`, and import. The same rule applies to test fixtures (`tests/fixtures/api-responses.ts`).
-- **Keep the OpenAPI spec in sync with shared types.** The **agent** surface still ships a hand-maintained spec at `packages/openapi/agent-api.yaml`; when adding or changing a wire shape on that surface, update the YAML schema (properties + `required` list) and the contract test in the same change — generated clients rely on the spec, not the TypeScript type. The **dashboard** and **control** surfaces are route-as-spec via `@hono/zod-openapi`: the `createRoute(...)` definition in `packages/backend/src/routes/{dashboard,control}/*` IS the contract, and the served `/api/v1/{dashboard,control}/openapi.json` is generated from it — no separate YAML to update.
+- **All three surfaces are route-as-spec via `@hono/zod-openapi`.** The `createRoute(...)` definition in `packages/backend/src/routes/{agent,dashboard,control}/*` IS the contract, and the served `/api/v1/{agent,dashboard,control}/openapi.json` is generated from it. When changing a wire shape, update the shared Zod schema in `@hashhive/shared` and reference it from the relevant `createRoute(...)` — there is no separate YAML to keep in sync, and there is no `packages/openapi/` directory.
 
 ## Validation Gates (MANDATORY)
 

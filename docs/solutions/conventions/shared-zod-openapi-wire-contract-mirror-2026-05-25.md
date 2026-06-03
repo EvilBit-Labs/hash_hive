@@ -1,6 +1,8 @@
 ---
-module: packages/shared, packages/openapi, packages/backend
+module: packages/shared, packages/backend
 date: 2026-05-25
+status: superseded
+superseded_by: ARCHITECTURE.md (API Surfaces section -- all three surfaces are route-as-spec via @hono/zod-openapi)
 problem_type: convention
 component: api-contract
 severity: medium
@@ -19,6 +21,17 @@ applies_when:
 ---
 
 # Mirror agent-API wire shapes across Zod + OpenAPI + route boundary
+
+## Status
+
+**Superseded as of 2026-06-01.** The triple-sync requirement this convention captured is structurally eliminated — the route IS the spec via `@hono/zod-openapi`. All three surfaces (agent, dashboard, control) bind their shared Zod schemas directly into `createRoute(...)` definitions; the runtime OpenAPI document is generated from those bindings and served at `GET /api/v1/{agent,dashboard,control}/openapi.json`. There is no hand-maintained YAML to keep in sync, and there is no `packages/openapi/` directory.
+
+The two surviving rules from this convention are simpler:
+
+1. Wire shapes that cross an API boundary live in `@hashhive/shared` as Zod schemas with inferred types in `packages/shared/src/types/index.ts`. The route handler imports from `@hashhive/shared` rather than re-declaring local types.
+2. The integration test for any route round-trips the live response through the shared schema's `.parse()` — schema conformance equals OpenAPI conformance because the route uses the same schema as its `createRoute(...)` response definition.
+
+The historical context below is preserved for archaeology; do not use the three-pillar trail as forward guidance — pillar 2 (OpenAPI YAML mirror) no longer applies.
 
 ## Context
 
