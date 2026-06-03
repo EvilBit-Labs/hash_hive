@@ -8,23 +8,25 @@ HashHive is a distributed password-cracking platform that orchestrates [hashcat]
 
 Multi-project sign-in flow: login → project selector (with "remember this project on next sign-in") → dashboard → sidebar sign-out. Captured via the e2e harness in `packages/frontend/e2e/demo-capture.spec.ts`.
 
+![Attack template creation flow: dashboard → templates → new template form → filled form → template list](docs/feature_demo/attack-templates/demo-preview.gif)
+
 ## Stack
 
-| Layer | Tech |
-|-------|------|
-| Runtime + package manager + test runner | Bun (latest stable) |
-| Backend | Hono on `Bun.serve()` |
-| Database | PostgreSQL + Drizzle ORM |
-| Task queue | Redis + BullMQ |
-| Object storage | SeaweedFS (S3-compatible, Apache-2.0) — swappable with AWS S3 in hosted deployments |
-| Frontend | React 19 + Vite |
-| UI | Tailwind CSS + shadcn/ui (Catppuccin Macchiato dark theme) |
-| Server state | TanStack Query v5 |
-| Client state | Zustand |
-| Monorepo | Turborepo + Bun workspaces |
-| Lint + format | oxlint + oxfmt (JS/TS/JSON/CSS), taplo (TOML) |
-| Tests | bun:test (unit / integration), Playwright (e2e) |
-| Tasks | [just](https://github.com/casey/just) (recommended) |
+| Layer                                   | Tech                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------- |
+| Runtime + package manager + test runner | Bun (latest stable)                                                                 |
+| Backend                                 | Hono on `Bun.serve()`                                                               |
+| Database                                | PostgreSQL + Drizzle ORM                                                            |
+| Task queue                              | Redis + BullMQ                                                                      |
+| Object storage                          | SeaweedFS (S3-compatible, Apache-2.0) — swappable with AWS S3 in hosted deployments |
+| Frontend                                | React 19 + Vite                                                                     |
+| UI                                      | Tailwind CSS + shadcn/ui (Catppuccin Macchiato dark theme)                          |
+| Server state                            | TanStack Query v5                                                                   |
+| Client state                            | Zustand                                                                             |
+| Monorepo                                | Turborepo + Bun workspaces                                                          |
+| Lint + format                           | oxlint + oxfmt (JS/TS/JSON/CSS), taplo (TOML)                                       |
+| Tests                                   | bun:test (unit / integration), Playwright (e2e)                                     |
+| Tasks                                   | [just](https://github.com/casey/just) (recommended)                                 |
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full architectural overview and [.kiro/steering/tech.md](.kiro/steering/tech.md) for the constraints on what NOT to introduce.
 
@@ -67,13 +69,13 @@ Or run `just setup` to do most of the above in one step. See [docs/development.m
 
 ### Default ports
 
-| Service | URL | Notes |
-|---------|-----|-------|
-| Backend API | <http://localhost:4000> | Hono on `Bun.serve()` |
-| Frontend UI | <http://localhost:3000> | Vite dev server |
-| PostgreSQL | `localhost:5432` | `hashhive` / `hashhive` |
-| Redis | `localhost:6379` | — |
-| SeaweedFS (S3 API) | <http://localhost:9000> | `minioadmin` / `minioadmin` |
+| Service            | URL                     | Notes                                       |
+| ------------------ | ----------------------- | ------------------------------------------- |
+| Backend API        | <http://localhost:4000> | Hono on `Bun.serve()`                       |
+| Frontend UI        | <http://localhost:3000> | Vite dev server                             |
+| PostgreSQL         | `localhost:5432`        | `hashhive` / `hashhive`                     |
+| Redis              | `localhost:6379`        | —                                           |
+| SeaweedFS (S3 API) | <http://localhost:9000> | `minioadmin` / `minioadmin`                 |
 | SeaweedFS (master) | <http://127.0.0.1:9333> | Loopback-only (unauthenticated status page) |
 
 ## Common Commands
