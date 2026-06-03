@@ -17,11 +17,11 @@ MVP migrates the dashboard API and validates against the current hand-rolled `da
 
 Three OpenAPI specs totalling 4,234 LOC are hand-maintained today:
 
-| Spec | LOC | Paths | Schemas |
-|---|---|---|---|
-| `packages/openapi/dashboard-api.yaml` | 2,386 | 44 | 50 |
-| `packages/openapi/control-api.yaml` | 1,011 | 21 | 27 |
-| `packages/openapi/agent-api.yaml` | 837 | 9 | 16 |
+| Spec                                  | LOC   | Paths | Schemas |
+| ------------------------------------- | ----- | ----- | ------- |
+| `packages/openapi/dashboard-api.yaml` | 2,386 | 44    | 50      |
+| `packages/openapi/control-api.yaml`   | 1,011 | 21    | 27      |
+| `packages/openapi/agent-api.yaml`     | 837   | 9     | 16      |
 
 PR #181 + #183 (issue #161) shipped the dashboard read-endpoint contract that mandates a triple-sync between Zod schemas in `@hashhive/shared`, OpenAPI component schemas, and route response annotations — enforced by a structural parity test in `packages/backend/tests/unit/dashboard-api-contract.test.ts` that walks `dashboardStatsSchema._def.shape` and deep-compares against the parsed YAML.
 
