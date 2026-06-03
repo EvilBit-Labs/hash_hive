@@ -245,7 +245,12 @@ const taskReportResponseSchema = z
 
 const downloadUrlResponseSchema = z
   .object({
-    url: z.string(),
+    // `.url()` makes the generator emit `format: uri` (matching the
+    // pre-migration YAML) so generated client codegen recognizes the
+    // field as a URL rather than a free-form string. Every emit site
+    // calls `getPresignedUrl` so a non-URL value would itself be a
+    // service-layer bug; the schema simply locks the contract.
+    url: z.string().url(),
     expiresIn: z.number().int().positive(),
   })
   .openapi('AgentResourceDownloadUrl')
@@ -266,9 +271,22 @@ const taskIdParamSchema = z.object({
   taskId: z.coerce.number().int().positive().max(MAX_PG_INT4).openapi({ example: 42 }),
 })
 
+// `type` is a closed vocabulary on the service side: `getAgentDownloadUrl`
+// in services/resources.ts only accepts `'hash-lists' | 'wordlists' |
+// 'rulelists' | 'masklists'` and silently returns null (→ route 404)
+// for everything else. Encoding the enum at the validator boundary
+// turns a 404 ("resource not found") into a clean 400
+// VALIDATION_ERROR so generated agent clients can discover the
+// supported values from the spec and so the failure mode discriminates
+// between "you misspelled the type" and "the row genuinely doesn't
+// exist". `id` carries the same `.max(MAX_PG_INT4)` bound as taskId
+// for the same reason: keep absurd inputs from reaching the
+// PostgreSQL serial column where they would surface as opaque 500s.
 const resourceParamSchema = z.object({
-  type: z.string().openapi({ example: 'wordlists' }),
-  id: z.coerce.number().int().positive().openapi({ example: 1 }),
+  type: z
+    .enum(['hash-lists', 'wordlists', 'rulelists', 'masklists'])
+    .openapi({ example: 'wordlists' }),
+  id: z.coerce.number().int().positive().max(MAX_PG_INT4).openapi({ example: 1 }),
 })
 
 const zapQuerySchema = z.object({

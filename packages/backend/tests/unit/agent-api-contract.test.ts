@@ -1366,3 +1366,36 @@ describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
     expect(body['hashes']).toBeUndefined()
   })
 })
+
+// ─── GET /resources/:type/:id/download-url — param validation ───────
+//
+// `resourceParamSchema` was widened from `z.string()` to a closed
+// `z.enum(['hash-lists', 'wordlists', 'rulelists', 'masklists'])`
+// after the route-as-spec migration, and `id` got a MAX_PG_INT4 upper
+// bound. Both changes turn what was a downstream 404 (unknown type) or
+// 500 (id too large for the int4 column) into a clean 400
+// VALIDATION_ERROR at the validator boundary so agents can discover
+// the supported `type` vocabulary from the spec and so absurd `id`
+// values can't reach the database.
+
+describe('Agent API: GET /resources/:type/:id/download-url — param validation', () => {
+  it('rejects unknown resource type with 400 + VALIDATION_ERROR', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/widgets/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
+
+  it('rejects resource id above PostgreSQL int4 max with 400 + VALIDATION_ERROR', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/wordlists/2147483648/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(400)
+    await expectAgentValidationError(res)
+  })
+})
