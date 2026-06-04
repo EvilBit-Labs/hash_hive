@@ -26,9 +26,9 @@ tags:
 
 ## Context
 
-In PR #190 (the route-as-spec OpenAPI migration), three wire-contract regressions landed in a single commit and all 595 backend tests passed. The most severe: `packages/backend/src/routes/agent/index.ts` declared the `GET /tasks/{taskId}/zaps` response as `{ taskId: number, hashes: string[] }`, but the real service `getZapsForTask` in `packages/backend/src/services/tasks/zaps.ts` returns `{ zaps: string[], hasMore: boolean }`. The route handler does `c.json(result, 200)` and passes the service return verbatim.
+In PR #190 (the route-as-spec OpenAPI migration), three wire-contract regressions landed in a single commit and all 595 backend tests passed. The most severe: `packages/backend/src/routes/agent/index.ts` declared the `GET /tasks/{taskId}/zaps` response as `{ taskId: number, hashes: string[] }`, but the real service `getZapsForTask` in `packages/backend/src/services/tasks/zaps.ts` returns `{ zaps: string[], hasMore: boolean } | { error: string }` (the route maps the `error` arm to a 404). The route handler does `c.json(result, 200)` and passes the service return verbatim.
 
-`OpenAPIHono.c.json()` does **not** validate the body against the declared response schema at runtime — it's a compile-time narrowing tool only. So the wrong-schema-vs-real-shape mismatch produced no runtime error.
+The Hono context's `c.json(...)` (the call site `OpenAPIHono` routes hand off to) does **not** validate the body against the declared response schema at runtime — `@hono/zod-openapi`'s response schema is a compile-time narrowing tool only. So the wrong-schema-vs-real-shape mismatch produced no runtime error.
 
 The contract test at `packages/backend/tests/unit/agent-api-contract.test.ts:147` (before the fix) returned `{ taskId: 1, hashes: [] }` from the `getZapsForTask` mock — matching the route schema, not the real service. So the route schema, the test mock, and the runtime response builder all agreed on the wrong shape. The test suite was green. The generated OpenAPI spec at `/api/v1/agent/openapi.json` actively lied about the wire contract, and agent codegen would have produced a Go client that silently dropped cracked hash lists.
 
@@ -45,19 +45,25 @@ Two reinforcing techniques. Both are required on any contract test that mocks a 
 **1. Pin the mock shape to the real service return type via `satisfies` (static fixtures).**
 
 ```ts
-import type { getZapsForTask } from '../../src/services/tasks/zaps.js'
+// Type-only import via `typeof import('...').fn` so the snippet is
+// copy/paste-safe in a type-checked file. A plain `import type { fn }`
+// followed by `typeof fn` won't compile — `typeof` requires a value
+// symbol, and `import type` only brings the type into scope.
+type GetZapsForTask = typeof import('../../src/services/tasks/zaps.js').getZapsForTask
 
 const zapsResult = {
   zaps: ['5f4dcc3b5aa765d61d8327deb882cf99:password'],
   hasMore: false,
-} satisfies Awaited<ReturnType<typeof getZapsForTask>>
+} satisfies Awaited<ReturnType<GetZapsForTask>>
 
 mock.module('../../src/services/tasks.js', () => ({
   getZapsForTask: async () => zapsResult,
 }))
 ```
 
-`satisfies Awaited<ReturnType<typeof svc>>` lifts the mock into the type-check scope of the real service. If the service signature later changes, the mock fails type-check at `just check`. If the route schema drifts from the service, the route test will fail when the real response shape doesn't match what the contract test expects.
+`satisfies Awaited<ReturnType<GetZapsForTask>>` lifts the mock into the type-check scope of the real service. If the service signature later changes, the mock fails type-check in any tool that includes the test file — `tsc` runs covering `tests/**`, type-aware ESLint, your editor, or any CI step that widens the type-check scope.
+
+**Important enforcement caveat:** `packages/backend/tsconfig.json` currently scopes `tsc --noEmit` to `src/**/*` (tests are excluded — documented in `GOTCHAS.md` "Tests are NOT in the type-check scope"). With the default scope, `just check` does **not** validate the `satisfies` constraint in `tests/**`. The pin is still load-bearing: editor type-checking, type-aware linters, and any future widening of the tsc scope will catch drift the moment the test file enters the type-check graph. Treat the pin as documentation-plus-future-guarantee rather than as a today-CI-enforced invariant until the test scope is widened.
 
 **2. Type the factory body via `typeof svc` (dynamic-return mocks).**
 
@@ -73,9 +79,11 @@ mock.module('../../src/services/campaigns.js', () => ({
 The convention's static-fixture `satisfies` pattern can't apply directly here — there's no single fixture to pin. Instead, type the factory's callable shape:
 
 ```ts
-import type { getCampaignById } from '../../src/services/campaigns.js'
+// Same type-only `typeof import('...').fn` idiom — no runtime import
+// and no `import type` + `typeof` foot-gun.
+type GetCampaignById = typeof import('../../src/services/campaigns.js').getCampaignById
 
-const getCampaignByIdMock: typeof getCampaignById = async (id) =>
+const getCampaignByIdMock: GetCampaignById = async (id) =>
   mockCampaigns.find((c) => c.id === id) ?? null
 
 mock.module('../../src/services/campaigns.js', () => ({
@@ -83,7 +91,7 @@ mock.module('../../src/services/campaigns.js', () => ({
 }))
 ```
 
-This requires that the underlying `mockCampaigns` state array carries full rows satisfying the real `Awaited<ReturnType<typeof getCampaignById>>` shape, not a stripped-down test-fixture shape. Expanding state arrays to carry full rows is part of adopting this convention for dynamic-return tests.
+This requires that the underlying `mockCampaigns` state array carries full rows satisfying the real `Awaited<ReturnType<GetCampaignById>>` shape, not a stripped-down test-fixture shape. Expanding state arrays to carry full rows is part of adopting this convention for dynamic-return tests.
 
 **3. Add negative-shape assertions on every RED-fixed route and one representative case per YELLOW route per surface.**
 
@@ -100,7 +108,7 @@ The negative assertion is cheap insurance against silent regression. A YELLOW ro
 
 ## Why This Matters
 
-Routes that pass service results verbatim through `OpenAPIHono.c.json()` have **no runtime validation** between the service return value and the declared response schema. TypeScript narrowing only fires if you construct an object literal at the `c.json` call site; passing a variable typed as `unknown` or as the service return type silently widens, and the schema becomes documentation-only.
+Routes that pass service results verbatim through Hono's `c.json(...)` have **no runtime validation** between the service return value and the declared `@hono/zod-openapi` response schema. TypeScript narrowing only fires if you construct an object literal at the `c.json` call site; passing a variable typed as `unknown` or as the service return type silently widens, and the schema becomes documentation-only.
 
 This means the OpenAPI spec — the artifact downstream clients are generated from — can diverge from reality without any test catching it, as long as the test mock agrees with the (wrong) schema. The failure mode is the worst kind: green CI, generated client compiles, runtime behavior silently drops or mistypes fields. For HashHive's agent API specifically, the consumers are out-of-process Go binaries built from the spec; a wrong schema isn't a typo, it's a wire break that ships to every deployed agent on the next codegen.
 
@@ -169,15 +177,16 @@ const zapResponseSchema = z.object({
 })
 ```
 
-Test mock pinned to the real return type:
+Test mock pinned to the real return type (using `typeof import(...).fn`
+so the snippet is copy/paste-safe in a type-checked file):
 
 ```ts
-import type { getZapsForTask } from '../../src/services/tasks/zaps.js'
+type GetZapsForTask = typeof import('../../src/services/tasks/zaps.js').getZapsForTask
 
 const zapsResult = {
   zaps: ['5f4dcc3b5aa765d61d8327deb882cf99:password'],
   hasMore: false,
-} satisfies Awaited<ReturnType<typeof getZapsForTask>>
+} satisfies Awaited<ReturnType<GetZapsForTask>>
 
 mock.module('../../src/services/tasks.js', () => ({
   getZapsForTask: async () => zapsResult,

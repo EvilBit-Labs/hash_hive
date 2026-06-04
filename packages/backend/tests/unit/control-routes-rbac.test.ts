@@ -312,6 +312,14 @@ if (!IS_ISOLATED) {
         { id: 60, campaignId: 200, projectId: 2 },
       ]
       activeUserId = 1
+      // Reset the transitionCampaign mock to the happy {campaign}
+      // branch. Failure-branch tests later in this file mutate this
+      // shared variable in place; without the reset, the override
+      // leaks into any subsequent test that runs after them and
+      // depends on the happy default.
+      mockTransitionResult = {
+        campaign: makeCampaign({ id: 1, projectId: 1, status: 'running', name: 'Default' }),
+      }
     })
 
     describe('campaigns', () => {

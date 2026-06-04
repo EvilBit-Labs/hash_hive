@@ -205,14 +205,16 @@ const getZapsForTaskFixture = {
 } satisfies Awaited<ReturnType<TasksZapsService['getZapsForTask']>>
 
 // Sibling mocks pinned via `mock<typeof svc[fnName]>(...)` per the
-// contract-test mocks convention's dynamic-return pattern. Even though
-// only assignNextTask + updateTaskProgress + handleTaskFailure +
-// getZapsForTask are called by the agent routes under test, the others
-// must be present in the mock namespace (mock.module REPLACES, not
-// merges — exports omitted here are undefined for any module that
-// resolves tasks.js after this file loads). Pinning each return shape
-// makes a service signature drift surface here at construction time
-// instead of as undefined-method errors elsewhere.
+// contract-test mocks convention's dynamic-return pattern. Bun's
+// `mock.module` MERGES — non-mocked exports pass through to the real
+// module (per GOTCHAS.md "Shared module cache"). But the real
+// `services/tasks.js` pulls in DB / queue modules that this test's
+// mock graph can't load cleanly, so any export the route module
+// touches needs an explicit mock here to keep the merged namespace
+// import-safe. Only assignNextTask + updateTaskProgress +
+// handleTaskFailure + getZapsForTask are actually called from the
+// agent routes under test; the others are kept-and-pinned to harden
+// the namespace and to surface signature drift at construction time.
 const listTasksEmpty = {
   tasks: [],
   total: 0,
