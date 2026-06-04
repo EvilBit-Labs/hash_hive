@@ -2,18 +2,17 @@ import { afterEach, describe, expect, it } from 'bun:test'
 
 import { StatCard } from '../../src/components/features/stat-card'
 import {
-  cleanup,
   cleanupAll,
   fireEvent,
   renderWithMotion,
   renderWithProviders,
   renderWithRouter,
   screen,
+  waitFor,
 } from '../test-utils'
 
 afterEach(() => {
   cleanupAll()
-  cleanup()
 })
 
 describe('StatCard', () => {
@@ -136,6 +135,19 @@ describe('StatCard', () => {
     )
     const sparkRegion = screen.getByLabelText(/Agents trend/i)
     expect(sparkRegion).toBeDefined()
+  })
+
+  it('mounts a fresh value span on rerender when the numeric value changes', async () => {
+    // Cross-fade is keyed by `String(value)`; rerendering with a new value
+    // unmounts the old motion.span and mounts a new one. Happy-dom does not
+    // reliably fire Motion's exit-complete callback so the outgoing span can
+    // briefly linger — assert the new value appears, which is the
+    // user-observable signal the cross-fade fired.
+    const { rerender } = renderWithMotion(<StatCard title="Cracked" value={5} subtitle="Total" />)
+    expect(screen.getByText('5')).toBeDefined()
+
+    rerender(<StatCard title="Cracked" value={42} subtitle="Total" />)
+    await waitFor(() => expect(screen.getByText('42')).toBeDefined())
   })
 
   it('renders two cards side-by-side without crashing on shared sparkData (gradient id uniqueness)', () => {

@@ -1,37 +1,38 @@
 import { Activity } from 'lucide-react'
 import { useId } from 'react'
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip,
+  type TooltipContentProps,
+  XAxis,
+  YAxis,
+} from 'recharts'
+
+import type { SparkPoint } from '../../hooks/use-spark-history'
 
 import { Skeleton } from '../ui/skeleton'
 
-export interface CrackPoint {
-  readonly sampledAt: number
-  readonly value: number
-}
-
 interface CrackRateTrendChartProps {
-  readonly data: ReadonlyArray<CrackPoint>
+  readonly data: ReadonlyArray<SparkPoint>
   readonly loading?: boolean
 }
 
-interface TooltipPayloadEntry {
-  value?: number | string
-}
-
-interface CustomTooltipProps {
-  active?: boolean
-  payload?: TooltipPayloadEntry[]
-  label?: number | string
-}
-
-function DashboardTooltip({ active, payload }: CustomTooltipProps) {
+function DashboardTooltip({ active, payload }: TooltipContentProps) {
   if (!active || !payload || payload.length === 0) {
     return null
   }
-  const v = payload[0]?.value
+  const raw = payload[0]?.value
+  // Recharts payload values are typed `number | string | undefined` because
+  // a chart can also bind to a categorical axis. Guard non-finite so a
+  // malformed point never renders `NaN cracked` silently.
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null
+  }
   return (
     <div className="bg-surface-0 border-surface-1 rounded-md border px-2 py-1 text-xs">
-      <span className="text-ctp-peach font-mono tabular-nums">{v}</span>
+      <span className="text-ctp-peach font-mono tabular-nums">{raw}</span>
       <span className="text-muted-foreground ml-1">cracked</span>
     </div>
   )
@@ -82,7 +83,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
       </h2>
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height={256}>
-          <AreaChart data={data as CrackPoint[]} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+          <AreaChart data={data as SparkPoint[]} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="hsl(var(--ctp-peach))" stopOpacity={0.3} />
@@ -98,7 +99,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
             />
             <YAxis hide />
             <Tooltip
-              content={<DashboardTooltip />}
+              content={DashboardTooltip}
               cursor={{ stroke: 'hsl(var(--ctp-surface2))', strokeWidth: 1 }}
             />
             <Area

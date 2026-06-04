@@ -43,11 +43,13 @@ describe('ConnectionIndicator', () => {
     expect(document.querySelector('.bg-warning')).not.toBeNull()
   })
 
-  it('renders the fallback state with warning color, Activity icon, and "Polling - 60s" label (R14)', () => {
+  it('renders fallback state with warning color, Activity icon, and "Polling - 60s" label', () => {
     renderWithProviders(<ConnectionIndicator status="fallback" />)
 
-    // Distinct from error: WS dropped but polling is still functioning, not "Disconnected"
-    expect(screen.getByText(/Polling/i)).toBeDefined()
+    // Distinct from error: WS dropped but the 60s polling fallback is still
+    // delivering data. Assert the literal label so drift to "Polling..." or
+    // "Offline - polling" fails the test.
+    expect(screen.getByText('Polling - 60s')).toBeDefined()
     // Warning color, NOT destructive
     expect(document.querySelector('.bg-warning')).not.toBeNull()
     expect(document.querySelector('.bg-destructive')).toBeNull()

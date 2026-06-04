@@ -40,8 +40,11 @@ function visualForStatus(status: ConnectionStatus): VisualState {
         text: 'Reconnecting...',
       }
     case 'fallback':
-      // WS dropped but polling fallback is active — operationally degraded,
-      // not broken. Distinct visual + label from `error` per R14 / Principle 3.
+      // WS dropped but the 60s polling fallback is still delivering data —
+      // operationally degraded, not broken. Distinct from `error`: warning
+      // amber + Activity icon + explicit "Polling - 60s" label so a
+      // color-blind or glance-reading operator can tell data is
+      // fresh-on-poll, not stale (color + icon + label, never color alone).
       return {
         dotClass: 'bg-warning',
         labelClass: 'text-warning',
@@ -83,8 +86,10 @@ export function ConnectionIndicator({ status }: ConnectionIndicatorProps = {}) {
             className={cn(
               v.dotClass,
               'absolute inline-flex h-full w-full animate-ping rounded-full opacity-50',
-              // Tailwind's animate-ping does not honor prefers-reduced-motion
-              // automatically — gate explicitly per the system-health-card precedent.
+              // Tailwind's animate-ping does not honor prefers-reduced-motion;
+              // disable the animation under reduce. system-health-card.tsx
+              // uses motion-reduce:hidden for the same gap — both techniques
+              // are valid; we prefer keep-the-dot-visible here.
               'motion-reduce:animate-none'
             )}
           />

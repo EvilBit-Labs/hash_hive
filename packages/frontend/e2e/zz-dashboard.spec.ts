@@ -50,11 +50,17 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
     // Crack-rate region (R16) — section with accessible name "Crack rate trend"
     await expect(page.getByRole('region', { name: /crack rate trend/i })).toBeVisible()
 
-    // Connection indicator renders exactly one of the four labeled status buckets
-    const indicator = page.locator('output[aria-label]').filter({
+    // ConnectionIndicator currently renders in three places on `/`: the app
+    // layout (`components/features/layout.tsx`), the sidebar
+    // (`components/features/sidebar.tsx`), and the dashboard header itself
+    // (`pages/dashboard.tsx`). Each emits an `<output aria-label="...">`
+    // with one of the four status labels. We assert the expected count of 3
+    // so any future consolidation lands as an intentional test update,
+    // rather than a surprise.
+    const indicators = page.locator('output[aria-label]').filter({
       hasText: /Live|Polling|Reconnecting|Disconnected/i,
     })
-    await expect(indicator).toHaveCount(1)
+    await expect(indicators).toHaveCount(3)
   })
 
   test('Cracked card uses text-3xl prominence (R13)', async ({ page }) => {

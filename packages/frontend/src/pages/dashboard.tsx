@@ -14,13 +14,20 @@ export function DashboardPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const { data: stats, isLoading } = useDashboardStats()
 
-  // Ring-buffer keys carry the project id so switching projects resets cleanly
-  // per KTD4. Numeric values are sampled on every render the hook sees.
+  // Ring-buffer keys carry the project id so switching projects clears the
+  // sparkline state cleanly. Hooks must run before the early return below,
+  // but when no project is selected we pass `undefined` so the hook
+  // short-circuits its append guard rather than silently accumulating
+  // samples behind the empty state under a phantom `none:*` key.
   const projectKey = selectedProjectId ?? 'none'
-  const agentsSpark = useSparkHistory(`${projectKey}:agents`, stats?.agents.online)
-  const campaignsSpark = useSparkHistory(`${projectKey}:campaigns`, stats?.campaigns.running)
-  const tasksSpark = useSparkHistory(`${projectKey}:tasks`, stats?.tasks.running)
-  const crackedSpark = useSparkHistory(`${projectKey}:cracked`, stats?.cracked.total, 60)
+  const agentsValue = selectedProjectId ? stats?.agents.online : undefined
+  const campaignsValue = selectedProjectId ? stats?.campaigns.running : undefined
+  const tasksValue = selectedProjectId ? stats?.tasks.running : undefined
+  const crackedValue = selectedProjectId ? stats?.cracked.total : undefined
+  const agentsSpark = useSparkHistory(`${projectKey}:agents`, agentsValue)
+  const campaignsSpark = useSparkHistory(`${projectKey}:campaigns`, campaignsValue)
+  const tasksSpark = useSparkHistory(`${projectKey}:tasks`, tasksValue)
+  const crackedSpark = useSparkHistory(`${projectKey}:cracked`, crackedValue, 60)
 
   if (!selectedProjectId) {
     return (

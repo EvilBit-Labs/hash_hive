@@ -3,13 +3,10 @@ import { useId } from 'react'
 import { useNavigate } from 'react-router'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
+import type { SparkPoint } from '../../hooks/use-spark-history'
+
 import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
-
-export interface SparkPoint {
-  readonly sampledAt: number
-  readonly value: number
-}
 
 interface StatCardProps {
   readonly title: string
@@ -22,7 +19,11 @@ interface StatCardProps {
   readonly accent?: string
   /** Recent samples for the embedded sparkline; sparkline renders only when length >= 2. */
   readonly sparkData?: ReadonlyArray<SparkPoint>
-  /** When true, value uses text-3xl instead of text-2xl (R13 — primary-metric emphasis). */
+  /**
+   * When true, value uses `text-3xl` instead of `text-2xl`. Reserved for the
+   * primary operator metric so the grid does not read as a uniform 4-card
+   * SaaS dashboard (the editorial-hierarchy direction in .impeccable.md).
+   */
   readonly prominent?: boolean
 }
 
