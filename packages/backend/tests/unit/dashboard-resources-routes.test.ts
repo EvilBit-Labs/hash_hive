@@ -184,7 +184,11 @@ if (!IS_ISOLATED) {
     getHashListById: mockGetHashListById,
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
-    getHashItems: mock(async () => ({ items: [], total: 0 })),
+    // Real getHashItems returns `{items, total, limit, offset} | null`.
+    // Mock shape pinned to match; the prior `{items, total}` stub
+    // missed the limit/offset fields the route passes through to the
+    // wire (and the null branch the route maps to 404).
+    getHashItems: mock(async () => ({ items: [], total: 0, limit: 50, offset: 0 })),
     getHashListStats: mock(async () => ({
       totalCount: 0,
       crackedCount: 0,
@@ -200,7 +204,14 @@ if (!IS_ISOLATED) {
     uploadResourceFile: mock(async () => ({ key: 'k', size: 0 })),
     deleteResource: mock(async () => true),
     getResourcePresignedUrl: mock(async () => 'https://example/test'),
-    getAgentDownloadUrl: mock(async () => 'https://example/test'),
+    // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
+    // dashboard route consumes this service from this test file's
+    // surface, but `routes/agent/index.ts` imports the function at
+    // module-load time so the export must exist in the mocked module
+    // (bun's mock.module replaces the namespace; missing exports break
+    // import resolution for transitive consumers). Pinned to the real
+    // shape per the contract-test-mocks convention.
+    getAgentDownloadUrl: mock(async () => ({ url: 'https://example/test', expiresIn: 600 })),
     // String helper used by results routes.
     escapeLike: (s: string) => s,
     // Chunked upload

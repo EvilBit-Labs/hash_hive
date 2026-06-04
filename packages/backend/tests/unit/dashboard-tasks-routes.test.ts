@@ -79,8 +79,13 @@ const mockListTasks = mock(async (filters: { projectId: number }) => ({
 
 const mockGetTaskById = mock(async (id: number, projectId: number) => {
   // Task 100 lives in project 1; task 200 lives in project 999 (foreign).
+  // Real `getTaskById` returns the tasks DB row (no `projectId` column —
+  // that's joined from campaigns at the service-layer query). The mock
+  // previously included a ghost `projectId` field that would leak to
+  // the wire if any future route refactor passed the result through to
+  // c.json() verbatim. Stripped per the contract-test-mocks convention.
   if (id === 100 && projectId === 1) {
-    return { id: 100, campaignId: 7, status: 'pending', projectId: 1 }
+    return { id: 100, campaignId: 7, status: 'pending' }
   }
   return null
 })
