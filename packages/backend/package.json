@@ -19,7 +19,7 @@
     "worker:tasks": "bun src/worker-task-generation.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1054.0",
+    "@aws-sdk/client-s3": "3.1055.0",
     "@aws-sdk/s3-request-presigner": "3.1054.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
