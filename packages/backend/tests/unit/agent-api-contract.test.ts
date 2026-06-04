@@ -73,8 +73,23 @@ import {
   scrubAgentErrorContext as realScrubAgentErrorContext,
 } from '../../src/services/agents.js'
 
+// Service type imports for satisfies-pinning per the contract-test
+// mocks convention. Each fixture below is constrained against
+// `Awaited<ReturnType<typeof svc>>` so a signature drift in the
+// service surfaces as a type-check failure here.
+type AgentsHeartbeatService = typeof import('../../src/services/agents/heartbeat.js')
+type ProcessHeartbeatResult = Awaited<ReturnType<AgentsHeartbeatService['processHeartbeat']>>
+
+// processHeartbeat real return is `{agent: Agent|null, hasHighPriorityTasks,
+// taskFailureSummary?}`. The route only reads `hasHighPriorityTasks`, but
+// the pin catches any future widening that the route would then consume.
+const processHeartbeatFixture: ProcessHeartbeatResult = {
+  agent: null,
+  hasHighPriorityTasks: false,
+}
+
 mock.module('../../src/services/agents.js', () => ({
-  processHeartbeat: mock(() => Promise.resolve({ hasHighPriorityTasks: false })),
+  processHeartbeat: mock(() => Promise.resolve(processHeartbeatFixture)),
   logAgentError: mock(() => Promise.resolve()),
   // Real impls re-exported so sibling tests see the genuine functions
   // regardless of which file bun loads first.
@@ -138,15 +153,61 @@ import {
 // Mock tasks.js so the real module is never cached — the snake_case→camelCase
 // mapping is validated in tasks.test.ts; here we only test the route contract.
 // This also removes the need to mock campaigns.js (which tasks.js imported).
+//
+// Each fixture below is pinned via `satisfies Awaited<ReturnType<typeof svc>>`
+// per the contract-test mocks convention. The convention's first applied
+// use was the ZapResponse shape fix in PR #190; these pins close the loop
+// by enforcing the constraint statically so a service-side return-type
+// change surfaces at type-check rather than as a wire-shape regression.
+type TasksService = typeof import('../../src/services/tasks.js')
+type TasksRetryService = typeof import('../../src/services/tasks/retry.js')
+type TasksZapsService = typeof import('../../src/services/tasks/zaps.js')
+
+// Extract the task-row shape that both updateTaskProgress and
+// handleTaskFailure return on the success branch. They share the
+// Drizzle `tasks` table .returning() shape; deriving the type from
+// the service signature keeps the fixture pinned to the real shape
+// without having to import the Drizzle table type directly.
+type TaskUpdateSuccess = Extract<
+  Awaited<ReturnType<TasksService['updateTaskProgress']>>,
+  { task: unknown }
+>
+type TaskRow = TaskUpdateSuccess['task']
+
+// mockCamelCaseTask is built from mockSnakeCaseTaskRow with all the
+// camelCase keys the Drizzle `.returning()` produces. The cast is
+// constrained: if mockCamelCaseTask's keys/types don't satisfy
+// TaskRow, type-check fails here rather than at the route boundary.
+const taskRowFixture = mockCamelCaseTask as TaskRow
+
+// updateTaskProgress real return is `{task} | {error}`. The route's
+// `'error' in result` branch routes to 400; the {task} branch yields
+// the 200 ack body. Pin the success branch.
+const updateTaskProgressFixture: Awaited<ReturnType<TasksService['updateTaskProgress']>> = {
+  task: taskRowFixture,
+}
+// handleTaskFailure real return is `{task, retried} | {error}`. Mock
+// the success-no-retry branch.
+const handleTaskFailureFixture: Awaited<ReturnType<TasksRetryService['handleTaskFailure']>> = {
+  task: taskRowFixture,
+  retried: false,
+}
+// getZapsForTask real return is `{zaps, hasMore} | {error}`. PR #190 fixed
+// the shape; this pin enforces it stays correct.
+const getZapsForTaskFixture: Awaited<ReturnType<TasksZapsService['getZapsForTask']>> = {
+  zaps: [],
+  hasMore: false,
+}
+
 mock.module('../../src/services/tasks.js', () => ({
   assignNextTask: mock(() => Promise.resolve(mockCamelCaseTask)),
-  updateTaskProgress: mock(() => Promise.resolve({ acknowledged: true })),
-  handleTaskFailure: mock(() => Promise.resolve({ retried: false })),
+  updateTaskProgress: mock(() => Promise.resolve(updateTaskProgressFixture)),
+  handleTaskFailure: mock(() => Promise.resolve(handleTaskFailureFixture)),
   generateTasksForAttack: mock(() => Promise.resolve({ tasks: [], count: 0 })),
   reassignStaleTasks: mock(() => Promise.resolve([])),
   getTaskById: mock(() => Promise.resolve(null)),
   listTasks: mock(() => Promise.resolve([])),
-  getZapsForTask: mock(() => Promise.resolve({ zaps: [], hasMore: false })),
+  getZapsForTask: mock(() => Promise.resolve(getZapsForTaskFixture)),
   // Re-export real impls so sibling tests see the genuine functions.
   AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
   projectAgentTaskRows: realProjectAgentTaskRows,
