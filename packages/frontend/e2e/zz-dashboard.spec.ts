@@ -8,6 +8,11 @@ const TEST_PASSWORD = 'TestPassword123!'
 // 1280x720 "Desktop Chrome" projects entry without forking a new project.
 test.use({ viewport: { width: 1440, height: 900 } })
 
+// Filename prefix `zz-` puts this spec last in the alphabetical run order so
+// it does not corrupt the `last_project_id` state that `select-project.spec.ts`
+// asserts against earlier in the same `workers: 1` session. The flake is
+// documented in `docs/solutions/test-failures/playwright-shared-seed-user-last-project-id-flake.md`.
+//
 // Screenshot baselines are CI-Linux-canonical. macOS-local runs will
 // diff on font rendering — use `--update-snapshots` only when adjusting
 // the baseline intentionally, never to silence drift.
@@ -45,8 +50,11 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
     // Crack-rate region (R16) — section with accessible name "Crack rate trend"
     await expect(page.getByRole('region', { name: /crack rate trend/i })).toBeVisible()
 
-    // Connection indicator renders one of the four buckets
-    await expect(page.locator('output')).toHaveCount(1)
+    // Connection indicator renders exactly one of the four labeled status buckets
+    const indicator = page.locator('output[aria-label]').filter({
+      hasText: /Live|Polling|Reconnecting|Disconnected/i,
+    })
+    await expect(indicator).toHaveCount(1)
   })
 
   test('Cracked card uses text-3xl prominence (R13)', async ({ page }) => {
