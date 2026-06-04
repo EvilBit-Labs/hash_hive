@@ -68,20 +68,49 @@ mock.module('../../src/services/auth.js', () => ({
 // ─── Mock Tasks Service Layer ────────────────────────────────────────
 //
 // The mocks capture the `projectId` argument so the tests can assert
-// the route correctly forwarded the session-scoped project.
+// the route correctly forwarded the session-scoped project. Both
+// factories are typed via `mock<TasksService['fnName']>(...)` per the
+// contract-test-mocks-mirror-service-not-schema convention's
+// dynamic-return pattern — signature drift in `tasks.ts` surfaces here
+// as a type-check failure instead of a wire-shape regression.
+type TasksService = typeof import('../../src/services/tasks.js')
+type TaskRow = NonNullable<Awaited<ReturnType<TasksService['getTaskById']>>>
 
-const mockListTasks = mock(async (filters: { projectId: number }) => ({
-  tasks: filters.projectId === 1 ? [{ id: 42, campaignId: 7, status: 'pending' }] : [],
+// Minimal task row built from the real Drizzle shape so the mock
+// satisfies `typeof svc`. Fields the route doesn't read get safe
+// defaults; the route only inspects id/campaignId/status today.
+const taskRowFixture = {
+  id: 42,
+  attackId: 0,
+  campaignId: 7,
+  agentId: null,
+  status: 'pending',
+  workRange: {},
+  progress: {},
+  resultStats: {},
+  requiredCapabilities: {},
+  assignedAt: null,
+  startedAt: null,
+  completedAt: null,
+  failureReason: null,
+  retryCount: 0,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+} satisfies TaskRow
+
+const mockListTasks = mock<TasksService['listTasks']>(async (filters) => ({
+  tasks: filters.projectId === 1 ? [{ ...taskRowFixture, id: 42 }] : [],
   total: filters.projectId === 1 ? 1 : 0,
   limit: 50,
   offset: 0,
 }))
 
-const mockGetTaskById = mock(async (id: number, projectId: number) => {
-  // Task 100 lives in project 1; task 200 lives in project 999 (foreign).
-  if (id === 100 && projectId === 1) {
-    return { id: 100, campaignId: 7, status: 'pending', projectId: 1 }
-  }
+// Real `getTaskById` returns the tasks DB row (no `projectId` column —
+// that's joined from campaigns at the service-layer query). The mock's
+// shape is now pinned to the real return type via `mock<typeof svc>`,
+// so any future addition of a ghost field would fail type-check here.
+const mockGetTaskById = mock<TasksService['getTaskById']>(async (id, projectId) => {
+  if (id === 100 && projectId === 1) return { ...taskRowFixture, id: 100 }
   return null
 })
 
@@ -142,8 +171,14 @@ describe('Dashboard tasks routes: project isolation (S-H1)', () => {
       headers: { cookie: ADMIN_COOKIE },
     })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { task?: { id?: number } }
-    expect(body.task?.id).toBe(100)
+    const body = (await res.json()) as { task?: Record<string, unknown> }
+    expect(body.task?.['id']).toBe(100)
+    // Negative-shape assertion (convention's technique 3): the real
+    // service return has no `projectId` column (it's joined from
+    // campaigns server-side). A regression that re-introduces a ghost
+    // projectId on the wire would leak the JOIN concern and confuse
+    // dashboard consumers; pin its absence.
+    expect(body.task?.['projectId']).toBeUndefined()
   })
 
   it('GET /:id returns 404 for task in foreign project (service returns null)', async () => {

@@ -27,6 +27,12 @@ if (!IS_ISOLATED) {
   })
 } else {
   // ─── Test state ───────────────────────────────────────────────────
+  //
+  // The state arrays carry only the fields tests actually set; the
+  // `make*` builders below expand each partial to a full Drizzle row
+  // so the typed factory bodies (dynamic-return pattern from the
+  // contract-test-mocks-mirror-service-not-schema convention) can
+  // satisfy `typeof svc` without losing test-fixture ergonomics.
 
   interface MockMembership {
     userId: number
@@ -34,11 +40,76 @@ if (!IS_ISOLATED) {
     roles: string[]
   }
 
+  // Import service types so the typed-factory pattern can constrain
+  // mock factories against the real service signatures.
+  type CampaignsService = typeof import('../../src/services/campaigns.js')
+  type AgentsService = typeof import('../../src/services/agents.js')
+  type FullCampaign = NonNullable<Awaited<ReturnType<CampaignsService['getCampaignById']>>>
+  type FullAttack = NonNullable<Awaited<ReturnType<CampaignsService['getAttackById']>>>
+  type FullAgent = NonNullable<Awaited<ReturnType<AgentsService['getAgentById']>>>
+
+  type CampaignPartial = Pick<FullCampaign, 'id' | 'projectId' | 'status' | 'name'>
+  type AttackPartial = Pick<FullAttack, 'id' | 'campaignId' | 'projectId'>
+  type AgentPartial = Pick<FullAgent, 'id' | 'projectId' | 'status' | 'name'>
+
   let mockMemberships: MockMembership[] = []
   let mockProjects: Array<{ id: number; name: string }> = []
-  let mockCampaigns: Array<{ id: number; projectId: number; status: string; name: string }> = []
-  let mockAgents: Array<{ id: number; projectId: number; status: string; name: string }> = []
-  let mockAttacks: Array<{ id: number; campaignId: number; projectId: number }> = []
+  let mockCampaigns: CampaignPartial[] = []
+  let mockAgents: AgentPartial[] = []
+  let mockAttacks: AttackPartial[] = []
+
+  // Builders expand the partial fixtures into full Drizzle rows so the
+  // mock factories below satisfy `typeof svc`. Each builder fills the
+  // optional/defaulted columns with realistic NULLs / empty-object
+  // defaults so the route handler downstream sees a representative row.
+  function makeCampaign(p: CampaignPartial): FullCampaign {
+    return {
+      ...p,
+      description: null,
+      hashListId: 1,
+      priority: 5,
+      progress: {},
+      metadata: {},
+      createdBy: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+  }
+
+  function makeAttack(p: AttackPartial): FullAttack {
+    return {
+      ...p,
+      mode: 0,
+      hashTypeId: null,
+      wordlistId: null,
+      rulelistId: null,
+      masklistId: null,
+      advancedConfiguration: {},
+      keyspace: null,
+      status: 'pending',
+      dependencies: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+  }
+
+  function makeAgent(p: AgentPartial): FullAgent {
+    return {
+      ...p,
+      operatingSystemId: null,
+      authToken: null,
+      authTokenHash: null,
+      authTokenFormat: 'plaintext',
+      capabilities: {},
+      hardwareProfile: {},
+      crackerVersion: null,
+      lastSeenAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+  }
 
   function findMembership(userId: number, projectId: number) {
     return mockMemberships.find((m) => m.userId === userId && m.projectId === projectId) ?? null
@@ -74,46 +145,94 @@ if (!IS_ISOLATED) {
         })),
   }))
 
-  let mockTransitionResult: { campaign: object } | { error: string; code?: string } = {
-    campaign: {},
+  // `transitionCampaign` returns `{campaign: <row>} | {error, code?}`.
+  // Default to a "campaign present" shape so the happy path tests pass;
+  // individual tests override via `mockTransitionResult = {error: ...}`
+  // when they need to exercise a failure branch.
+  let mockTransitionResult: Awaited<ReturnType<CampaignsService['transitionCampaign']>> = {
+    campaign: makeCampaign({ id: 1, projectId: 1, status: 'running', name: 'Default' }),
   }
 
-  mock.module('../../src/services/campaigns.js', () => ({
-    getCampaignById: async (id: number) => mockCampaigns.find((c) => c.id === id) ?? null,
-    listCampaigns: async ({ projectId }: { projectId?: number }) => ({
-      campaigns: mockCampaigns.filter((c) => c.projectId === projectId),
-      total: mockCampaigns.filter((c) => c.projectId === projectId).length,
+  // Typed factory bodies — dynamic-return pattern from the
+  // contract-test-mocks-mirror-service-not-schema convention.
+  // Type each factory via `typeof svc[fnName]` so the signature is
+  // constrained at definition time. A signature drift in the service
+  // surfaces as a type-check failure here rather than as a runtime
+  // wire-shape regression.
+  const getCampaignByIdMock: CampaignsService['getCampaignById'] = async (id) => {
+    const partial = mockCampaigns.find((c) => c.id === id)
+    return partial ? makeCampaign(partial) : null
+  }
+  const listCampaignsMock: CampaignsService['listCampaigns'] = async ({ projectId }) => {
+    const matched = mockCampaigns.filter((c) => c.projectId === projectId).map(makeCampaign)
+    return {
+      campaigns: matched,
+      total: matched.length,
       limit: 50,
       offset: 0,
-    }),
-    createCampaign: async (data: { projectId: number; name: string }) => ({
-      id: 999,
-      projectId: data.projectId,
-      name: data.name,
-      status: 'draft',
-    }),
-    updateCampaign: async (id: number) => ({ id }),
-    transitionCampaign: async () => mockTransitionResult,
-    listAttacks: async () => [],
-    listAttacksPaginated: async (campaignId: number) => ({
-      items: mockAttacks.filter((a) => a.campaignId === campaignId),
-      total: mockAttacks.filter((a) => a.campaignId === campaignId).length,
-    }),
-    getAttackById: async (id: number) => mockAttacks.find((a) => a.id === id) ?? null,
-    createAttack: async (data: { campaignId: number; projectId: number }) => ({ id: 888, ...data }),
-    updateAttack: async (id: number) => ({ id }),
-    deleteAttack: async () => undefined,
+    }
+  }
+  const createCampaignMock: CampaignsService['createCampaign'] = async (data) =>
+    makeCampaign({ id: 999, projectId: data.projectId, name: data.name, status: 'draft' })
+  // Discriminated-union return (`{kind: 'updated', campaign} | {kind:
+  // 'not_found'} | {kind: 'not_draft', status}`). Default to the
+  // happy `updated` branch; individual tests can override via
+  // mockImplementationOnce when they need to exercise the other kinds.
+  const updateCampaignMock: CampaignsService['updateCampaign'] = async (id, projectId) => ({
+    kind: 'updated',
+    campaign: makeCampaign({ id, projectId, status: 'draft', name: 'Updated' }),
+  })
+  const transitionCampaignMock: CampaignsService['transitionCampaign'] = async () =>
+    mockTransitionResult
+  const listAttacksMock: CampaignsService['listAttacks'] = async () => []
+  const listAttacksPaginatedMock: CampaignsService['listAttacksPaginated'] = async (campaignId) => {
+    const matched = mockAttacks.filter((a) => a.campaignId === campaignId).map(makeAttack)
+    return { items: matched, total: matched.length }
+  }
+  const getAttackByIdMock: CampaignsService['getAttackById'] = async (id) => {
+    const partial = mockAttacks.find((a) => a.id === id)
+    return partial ? makeAttack(partial) : null
+  }
+  const createAttackMock: CampaignsService['createAttack'] = async (data) =>
+    makeAttack({ id: 888, campaignId: data.campaignId, projectId: data.projectId })
+  const updateAttackMock: CampaignsService['updateAttack'] = async (id) =>
+    makeAttack({ id, campaignId: 1, projectId: 1 })
+  const deleteAttackMock: CampaignsService['deleteAttack'] = async () => null
+
+  mock.module('../../src/services/campaigns.js', () => ({
+    getCampaignById: getCampaignByIdMock,
+    listCampaigns: listCampaignsMock,
+    createCampaign: createCampaignMock,
+    updateCampaign: updateCampaignMock,
+    transitionCampaign: transitionCampaignMock,
+    listAttacks: listAttacksMock,
+    listAttacksPaginated: listAttacksPaginatedMock,
+    getAttackById: getAttackByIdMock,
+    createAttack: createAttackMock,
+    updateAttack: updateAttackMock,
+    deleteAttack: deleteAttackMock,
   }))
 
-  mock.module('../../src/services/agents.js', () => ({
-    listAgents: async ({ projectId }: { projectId?: number }) => ({
-      agents: mockAgents.filter((a) => a.projectId === projectId),
-      total: mockAgents.filter((a) => a.projectId === projectId).length,
+  const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {
+    const matched = mockAgents.filter((a) => a.projectId === projectId).map(makeAgent)
+    return {
+      agents: matched,
+      total: matched.length,
       limit: 50,
       offset: 0,
-    }),
-    getAgentById: async (id: number) => mockAgents.find((a) => a.id === id) ?? null,
-    updateAgent: async (id: number) => ({ id }),
+    }
+  }
+  const getAgentByIdMock: AgentsService['getAgentById'] = async (id) => {
+    const partial = mockAgents.find((a) => a.id === id)
+    return partial ? makeAgent(partial) : null
+  }
+  const updateAgentMock: AgentsService['updateAgent'] = async (id) =>
+    makeAgent({ id, projectId: 1, status: 'offline', name: 'Updated' })
+
+  mock.module('../../src/services/agents.js', () => ({
+    listAgents: listAgentsMock,
+    getAgentById: getAgentByIdMock,
+    updateAgent: updateAgentMock,
   }))
 
   mock.module('../../src/db/index.js', () => ({
@@ -193,6 +312,14 @@ if (!IS_ISOLATED) {
         { id: 60, campaignId: 200, projectId: 2 },
       ]
       activeUserId = 1
+      // Reset the transitionCampaign mock to the happy {campaign}
+      // branch. Failure-branch tests later in this file mutate this
+      // shared variable in place; without the reset, the override
+      // leaks into any subsequent test that runs after them and
+      // depends on the happy default.
+      mockTransitionResult = {
+        campaign: makeCampaign({ id: 1, projectId: 1, status: 'running', name: 'Default' }),
+      }
     })
 
     describe('campaigns', () => {
