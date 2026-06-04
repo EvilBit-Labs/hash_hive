@@ -143,11 +143,18 @@ mock.module('../../src/services/tasks.js', () => ({
 Real service in `packages/backend/src/services/tasks/zaps.ts`:
 
 ```ts
-export async function getZapsForTask(...): Promise<{ zaps: string[]; hasMore: boolean }> {
+export async function getZapsForTask(
+  ...
+): Promise<{ zaps: string[]; hasMore: boolean } | { error: string }> {
   // ...
   return { zaps, hasMore }
 }
 ```
+
+The discriminated union is the safety net — the route's `'error' in result`
+branch handles the failure case, and the test fixture below pins the success
+variant. A `satisfies` pin against the full union keeps both branches
+honest as the service evolves.
 
 595 tests pass. The OpenAPI spec advertises `{ taskId, hashes }`. The agent receives `{ zaps, hasMore }`. The Go client drops both fields.
 

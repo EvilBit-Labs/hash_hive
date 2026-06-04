@@ -94,27 +94,21 @@ if (!IS_ISOLATED) {
   // Per the contract-test-mocks-mirror-service-not-schema convention:
   // local type aliases derive from the real service return types so a
   // signature drift in the service surfaces here as a type-check
-  // failure rather than as a wire-shape regression. The mocks below
-  // keep their existing Promise<X> return annotations; the annotations
-  // now bind to the real-service-derived types instead of independent
-  // local interfaces.
+  // failure rather than as a wire-shape regression. Every dynamic-return
+  // mock below is typed via `mock<CampaignsService['fnName']>(...)` per
+  // the convention's dynamic-return pattern; the type aliases (CampaignRow,
+  // UpdateCampaignResult, etc.) exist for the row builder and per-test
+  // assertions that need to name the shape directly.
   type CampaignsService = typeof import('../../src/services/campaigns.js')
   type CampaignRow = NonNullable<Awaited<ReturnType<CampaignsService['getCampaignById']>>>
-  type UpdateCampaignResult = Awaited<ReturnType<CampaignsService['updateCampaign']>>
-  type DeleteCampaignResult = Awaited<ReturnType<CampaignsService['deleteCampaign']>>
-  type ListCampaignsResult = Awaited<ReturnType<CampaignsService['listCampaigns']>>
-  // CreateWithAttacksResult and TransitionResult are used implicitly by
-  // the `mock<typeof svc>()` declarations below — they don't need
-  // standalone type aliases here.
+  type CreateWithAttacksResult = Awaited<ReturnType<CampaignsService['createCampaignWithAttacks']>>
 
-  const mockListCampaigns = mock(
-    async (_filters: Record<string, unknown>): Promise<ListCampaignsResult> => ({
-      campaigns: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-    })
-  )
+  const mockListCampaigns = mock<CampaignsService['listCampaigns']>(async () => ({
+    campaigns: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  }))
 
   const makeCampaign = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
     id: 100,
@@ -134,27 +128,23 @@ if (!IS_ISOLATED) {
     ...overrides,
   })
 
-  const mockGetCampaignById = mock(async (id: number): Promise<CampaignRow | null> => {
+  const mockGetCampaignById = mock<CampaignsService['getCampaignById']>(async (id) => {
     if (id === 100) return makeCampaign()
     if (id === 101) return makeCampaign({ id: 101, status: 'running' })
     if (id === 200) return makeCampaign({ id: 200, projectId: 999 })
     return null
   })
 
-  const mockDeleteCampaign = mock(async (id: number): Promise<DeleteCampaignResult> => {
+  const mockDeleteCampaign = mock<CampaignsService['deleteCampaign']>(async (id) => {
     if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
     if (id === 101) return { kind: 'not_draft', status: 'running' }
     return { kind: 'not_found' }
   })
 
-  const mockUpdateCampaign = mock(
-    async (
-      id: number,
-      _projectId: number,
-      data: Record<string, unknown>
-    ): Promise<UpdateCampaignResult> => {
+  const mockUpdateCampaign = mock<CampaignsService['updateCampaign']>(
+    async (id, _projectId, data) => {
       if (id === 100) {
-        return { kind: 'updated', campaign: makeCampaign({ ...data }) }
+        return { kind: 'updated', campaign: makeCampaign({ ...(data as Partial<CampaignRow>) }) }
       }
       if (id === 101) return { kind: 'not_draft', status: 'running' }
       return { kind: 'not_found' }
@@ -169,9 +159,6 @@ if (!IS_ISOLATED) {
     failed: 1,
   }))
 
-  // TransitionResult is derived above from the real service signature.
-  // The factory below uses the derived type instead of the prior
-  // hand-maintained local union.
   const mockTransitionCampaign = mock<CampaignsService['transitionCampaign']>(async () => ({
     campaign: makeCampaign(),
   }))
@@ -206,21 +193,17 @@ if (!IS_ISOLATED) {
     ): Promise<ResourceCheckResult> => ({ valid: true })
   )
 
-  // CreateWithAttacksResult is derived above from the real service.
-
-  const mockCreateCampaign = mock(
-    async (data: { name: string; projectId: number; hashListId: number }) =>
-      makeCampaign({ name: data.name, projectId: data.projectId, hashListId: data.hashListId })
+  const mockCreateCampaign = mock<CampaignsService['createCampaign']>(async (data) =>
+    makeCampaign({ name: data.name, projectId: data.projectId, hashListId: data.hashListId })
   )
 
-  const mockCreateCampaignWithAttacks = mock(
-    async (_input: {
-      attacks: ReadonlyArray<{ dependencyIndices?: number[] | undefined }>
-    }): Promise<CreateWithAttacksResult> => ({
-      kind: 'created',
-      campaign: makeCampaign(),
-      attacks: [],
-    })
+  const mockCreateCampaignWithAttacks = mock<CampaignsService['createCampaignWithAttacks']>(
+    async () =>
+      ({
+        kind: 'created',
+        campaign: makeCampaign(),
+        attacks: [],
+      }) satisfies CreateWithAttacksResult
   )
 
   const mockCreateAttack = mock(async () => ({ id: 555 }))

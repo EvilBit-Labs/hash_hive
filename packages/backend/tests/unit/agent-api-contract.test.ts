@@ -83,10 +83,13 @@ type ProcessHeartbeatResult = Awaited<ReturnType<AgentsHeartbeatService['process
 // processHeartbeat real return is `{agent: Agent|null, hasHighPriorityTasks,
 // taskFailureSummary?}`. The route only reads `hasHighPriorityTasks`, but
 // the pin catches any future widening that the route would then consume.
-const processHeartbeatFixture: ProcessHeartbeatResult = {
+// Use `satisfies` rather than a type annotation so the fixture's literal
+// types aren't widened to the service's return-type union (the convention's
+// "Do NOT use explicit type annotations on the fixture" anti-pattern).
+const processHeartbeatFixture = {
   agent: null,
   hasHighPriorityTasks: false,
-}
+} satisfies ProcessHeartbeatResult
 
 mock.module('../../src/services/agents.js', () => ({
   processHeartbeat: mock(() => Promise.resolve(processHeartbeatFixture)),
@@ -175,39 +178,70 @@ type TaskUpdateSuccess = Extract<
 type TaskRow = TaskUpdateSuccess['task']
 
 // mockCamelCaseTask is built from mockSnakeCaseTaskRow with all the
-// camelCase keys the Drizzle `.returning()` produces. The cast is
-// constrained: if mockCamelCaseTask's keys/types don't satisfy
-// TaskRow, type-check fails here rather than at the route boundary.
-const taskRowFixture = mockCamelCaseTask as TaskRow
+// camelCase keys the Drizzle `.returning()` produces. `satisfies`
+// constrains the value without widening it: if mockCamelCaseTask's
+// keys/types don't satisfy TaskRow, type-check fails here rather
+// than at the route boundary. `as` would silently accept divergence.
+const taskRowFixture = mockCamelCaseTask satisfies TaskRow
 
 // updateTaskProgress real return is `{task} | {error}`. The route's
 // `'error' in result` branch routes to 400; the {task} branch yields
-// the 200 ack body. Pin the success branch.
-const updateTaskProgressFixture: Awaited<ReturnType<TasksService['updateTaskProgress']>> = {
+// the 200 ack body. Pin the success branch. `satisfies` keeps the
+// literal type narrow (per the convention's annotation anti-pattern).
+const updateTaskProgressFixture = {
   task: taskRowFixture,
-}
+} satisfies Awaited<ReturnType<TasksService['updateTaskProgress']>>
 // handleTaskFailure real return is `{task, retried} | {error}`. Mock
 // the success-no-retry branch.
-const handleTaskFailureFixture: Awaited<ReturnType<TasksRetryService['handleTaskFailure']>> = {
+const handleTaskFailureFixture = {
   task: taskRowFixture,
   retried: false,
-}
+} satisfies Awaited<ReturnType<TasksRetryService['handleTaskFailure']>>
 // getZapsForTask real return is `{zaps, hasMore} | {error}`. PR #190 fixed
 // the shape; this pin enforces it stays correct.
-const getZapsForTaskFixture: Awaited<ReturnType<TasksZapsService['getZapsForTask']>> = {
+const getZapsForTaskFixture = {
   zaps: [],
   hasMore: false,
-}
+} satisfies Awaited<ReturnType<TasksZapsService['getZapsForTask']>>
 
+// Sibling mocks pinned via `mock<typeof svc[fnName]>(...)` per the
+// contract-test mocks convention's dynamic-return pattern. Even though
+// only assignNextTask + updateTaskProgress + handleTaskFailure +
+// getZapsForTask are called by the agent routes under test, the others
+// must be present in the mock namespace (mock.module REPLACES, not
+// merges — exports omitted here are undefined for any module that
+// resolves tasks.js after this file loads). Pinning each return shape
+// makes a service signature drift surface here at construction time
+// instead of as undefined-method errors elsewhere.
+const listTasksEmpty = {
+  tasks: [],
+  total: 0,
+  limit: 50,
+  offset: 0,
+} satisfies Awaited<ReturnType<TasksService['listTasks']>>
+const reassignStaleEmpty = {
+  reassigned: 0,
+  rebalanced: 0,
+  failedOverrun: 0,
+  failedMaxRetries: 0,
+  errored: 0,
+} satisfies Awaited<ReturnType<TasksRetryService['reassignStaleTasks']>>
 mock.module('../../src/services/tasks.js', () => ({
-  assignNextTask: mock(() => Promise.resolve(mockCamelCaseTask)),
-  updateTaskProgress: mock(() => Promise.resolve(updateTaskProgressFixture)),
-  handleTaskFailure: mock(() => Promise.resolve(handleTaskFailureFixture)),
-  generateTasksForAttack: mock(() => Promise.resolve({ tasks: [], count: 0 })),
-  reassignStaleTasks: mock(() => Promise.resolve([])),
-  getTaskById: mock(() => Promise.resolve(null)),
-  listTasks: mock(() => Promise.resolve([])),
-  getZapsForTask: mock(() => Promise.resolve(getZapsForTaskFixture)),
+  assignNextTask: mock<TasksService['assignNextTask']>(async () => mockCamelCaseTask),
+  updateTaskProgress: mock<TasksService['updateTaskProgress']>(
+    async () => updateTaskProgressFixture
+  ),
+  handleTaskFailure: mock<TasksRetryService['handleTaskFailure']>(
+    async () => handleTaskFailureFixture
+  ),
+  generateTasksForAttack: mock<TasksService['generateTasksForAttack']>(async () => ({
+    tasks: [],
+    count: 0,
+  })),
+  reassignStaleTasks: mock<TasksRetryService['reassignStaleTasks']>(async () => reassignStaleEmpty),
+  getTaskById: mock<TasksService['getTaskById']>(async () => null),
+  listTasks: mock<TasksService['listTasks']>(async () => listTasksEmpty),
+  getZapsForTask: mock<TasksZapsService['getZapsForTask']>(async () => getZapsForTaskFixture),
   // Re-export real impls so sibling tests see the genuine functions.
   AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
   projectAgentTaskRows: realProjectAgentTaskRows,
@@ -1442,6 +1476,32 @@ describe('Agent API: errored-agent rejection across work endpoints', () => {
 // restored the original `{ zaps, hasMore }` schema. This test pins
 // the contract against the real service mock so the wire shape and
 // the spec can never silently diverge again.
+
+describe('Agent API: POST /tasks/:id/report — wire shape', () => {
+  it('returns bare { acknowledged: true } body on the non-failure path', async () => {
+    // Arrange — default updateTaskProgress mock already returns the
+    // {task} success branch; route is supposed to emit the bare
+    // taskReportAckSchema body (no `retried` field).
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    // Negative-shape assertion: the bug PR #190 originally shipped had
+    // `retried: false` on the non-failure path, breaking consumers with
+    // `disallowUnknownFields`. The retried key MUST only appear on the
+    // failure-retry branch — pin its absence on the bare-success path.
+    expect(body['retried']).toBeUndefined()
+  })
+})
 
 describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
   it('returns { zaps, hasMore } body matching getZapsForTask runtime shape', async () => {

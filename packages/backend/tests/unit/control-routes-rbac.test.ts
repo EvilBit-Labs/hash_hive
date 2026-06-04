@@ -30,9 +30,9 @@ if (!IS_ISOLATED) {
   //
   // The state arrays carry only the fields tests actually set; the
   // `make*` builders below expand each partial to a full Drizzle row
-  // so the typed factory bodies (per D4 of the contract-test-mocks
-  // convention) can satisfy `typeof svc` without losing test-fixture
-  // ergonomics.
+  // so the typed factory bodies (dynamic-return pattern from the
+  // contract-test-mocks-mirror-service-not-schema convention) can
+  // satisfy `typeof svc` without losing test-fixture ergonomics.
 
   interface MockMembership {
     userId: number
@@ -40,8 +40,8 @@ if (!IS_ISOLATED) {
     roles: string[]
   }
 
-  // Import service types so the typed-factory pattern (D4) can
-  // constrain mock factories against the real service signatures.
+  // Import service types so the typed-factory pattern can constrain
+  // mock factories against the real service signatures.
   type CampaignsService = typeof import('../../src/services/campaigns.js')
   type AgentsService = typeof import('../../src/services/agents.js')
   type FullCampaign = NonNullable<Awaited<ReturnType<CampaignsService['getCampaignById']>>>
@@ -104,9 +104,8 @@ if (!IS_ISOLATED) {
       authTokenFormat: 'plaintext',
       capabilities: {},
       hardwareProfile: {},
-      hashcatVersion: null,
+      crackerVersion: null,
       lastSeenAt: null,
-      lastErrorReportedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }
@@ -154,8 +153,9 @@ if (!IS_ISOLATED) {
     campaign: makeCampaign({ id: 1, projectId: 1, status: 'running', name: 'Default' }),
   }
 
-  // Typed factory bodies — per D4 of the contract-test-mocks convention,
-  // type each factory function via `typeof svc` so the signature is
+  // Typed factory bodies — dynamic-return pattern from the
+  // contract-test-mocks-mirror-service-not-schema convention.
+  // Type each factory via `typeof svc[fnName]` so the signature is
   // constrained at definition time. A signature drift in the service
   // surfaces as a type-check failure here rather than as a runtime
   // wire-shape regression.

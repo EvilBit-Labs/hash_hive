@@ -80,8 +80,16 @@ type AgentsService = typeof import('../../src/services/agents.js')
 type TasksService = typeof import('../../src/services/tasks.js')
 type AgentRow = NonNullable<Awaited<ReturnType<AgentsService['getAgentById']>>>
 
+// Defaults come first so `??` falls through to safe values; the
+// trailing-spread footgun is avoided by enumerating every field
+// explicitly. Callers can still set any field via `p` (including
+// id/projectId from the Pick) and the `??` fallback covers absent
+// keys. Setting a field to `undefined` explicitly still hits the
+// default — that's the intended invariant.
 function makeAgent(p: Partial<AgentRow> & Pick<AgentRow, 'id' | 'projectId'>): AgentRow {
   return {
+    id: p.id,
+    projectId: p.projectId,
     name: p.name ?? `Agent ${p.id}`,
     status: p.status ?? 'online',
     operatingSystemId: p.operatingSystemId ?? null,
@@ -94,7 +102,6 @@ function makeAgent(p: Partial<AgentRow> & Pick<AgentRow, 'id' | 'projectId'>): A
     lastSeenAt: p.lastSeenAt ?? new Date(),
     createdAt: p.createdAt ?? new Date(),
     updatedAt: p.updatedAt ?? new Date(),
-    ...p,
   }
 }
 
