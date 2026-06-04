@@ -90,27 +90,25 @@ if (!IS_ISOLATED) {
   }))
 
   // ─── Mock the Campaigns Service Layer ───────────────────────────────
+  //
+  // Per the contract-test-mocks-mirror-service-not-schema convention:
+  // local type aliases derive from the real service return types so a
+  // signature drift in the service surfaces here as a type-check
+  // failure rather than as a wire-shape regression. Every dynamic-return
+  // mock below is typed via `mock<CampaignsService['fnName']>(...)` per
+  // the convention's dynamic-return pattern; the type aliases (CampaignRow,
+  // UpdateCampaignResult, etc.) exist for the row builder and per-test
+  // assertions that need to name the shape directly.
+  type CampaignsService = typeof import('../../src/services/campaigns.js')
+  type CampaignRow = NonNullable<Awaited<ReturnType<CampaignsService['getCampaignById']>>>
+  type CreateWithAttacksResult = Awaited<ReturnType<CampaignsService['createCampaignWithAttacks']>>
 
-  const mockListCampaigns = mock(
-    async (_filters: Record<string, unknown>) =>
-      ({ campaigns: [], total: 0, limit: 50, offset: 0 }) as const
-  )
-
-  interface CampaignRow {
-    id: number
-    projectId: number
-    status: string
-    name: string
-    hashListId: number
-    priority: number
-    description: string | null
-    progress: Record<string, unknown> | null
-    createdAt: Date
-    startedAt: Date | null
-    completedAt: Date | null
-    updatedAt: Date
-    createdBy: number | null
-  }
+  const mockListCampaigns = mock<CampaignsService['listCampaigns']>(async () => ({
+    campaigns: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  }))
 
   const makeCampaign = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
     id: 100,
@@ -121,6 +119,7 @@ if (!IS_ISOLATED) {
     priority: 5,
     description: null,
     progress: {},
+    metadata: {},
     createdAt: new Date('2026-01-01'),
     startedAt: null,
     completedAt: null,
@@ -129,40 +128,23 @@ if (!IS_ISOLATED) {
     ...overrides,
   })
 
-  const mockGetCampaignById = mock(async (id: number): Promise<CampaignRow | null> => {
+  const mockGetCampaignById = mock<CampaignsService['getCampaignById']>(async (id) => {
     if (id === 100) return makeCampaign()
     if (id === 101) return makeCampaign({ id: 101, status: 'running' })
     if (id === 200) return makeCampaign({ id: 200, projectId: 999 })
     return null
   })
 
-  const mockDeleteCampaign = mock(
-    async (
-      id: number
-    ): Promise<
-      | { kind: 'deleted'; id: number; projectId: number }
-      | { kind: 'not_found' }
-      | { kind: 'not_draft'; status: string }
-    > => {
-      if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
-      if (id === 101) return { kind: 'not_draft', status: 'running' }
-      return { kind: 'not_found' }
-    }
-  )
+  const mockDeleteCampaign = mock<CampaignsService['deleteCampaign']>(async (id) => {
+    if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
+    if (id === 101) return { kind: 'not_draft', status: 'running' }
+    return { kind: 'not_found' }
+  })
 
-  type UpdateCampaignResult =
-    | { kind: 'updated'; campaign: CampaignRow }
-    | { kind: 'not_found' }
-    | { kind: 'not_draft'; status: string }
-
-  const mockUpdateCampaign = mock(
-    async (
-      id: number,
-      _projectId: number,
-      data: Record<string, unknown>
-    ): Promise<UpdateCampaignResult> => {
+  const mockUpdateCampaign = mock<CampaignsService['updateCampaign']>(
+    async (id, _projectId, data) => {
       if (id === 100) {
-        return { kind: 'updated', campaign: makeCampaign({ ...data }) }
+        return { kind: 'updated', campaign: makeCampaign({ ...(data as Partial<CampaignRow>) }) }
       }
       if (id === 101) return { kind: 'not_draft', status: 'running' }
       return { kind: 'not_found' }
@@ -177,20 +159,9 @@ if (!IS_ISOLATED) {
     failed: 1,
   }))
 
-  type TransitionErrorCode =
-    | 'QUEUE_UNAVAILABLE'
-    | 'INVALID_TRANSITION'
-    | 'NOT_FOUND'
-    | 'RESOURCE_MISSING'
-    | 'RESOURCE_VALIDATION_FAILED'
-    | 'STALE_STATE'
-    | 'TASK_GENERATION_FAILED'
-  type TransitionResult =
-    | { campaign: { id: number; status: string } | null }
-    | { error: string; code?: TransitionErrorCode }
-  const mockTransitionCampaign = mock<(id: number, target: string) => Promise<TransitionResult>>(
-    async () => ({ campaign: null })
-  )
+  const mockTransitionCampaign = mock<CampaignsService['transitionCampaign']>(async () => ({
+    campaign: makeCampaign(),
+  }))
 
   const mockListActiveAgentsByCampaign = mock(async (_id: number) => [
     {
@@ -222,28 +193,17 @@ if (!IS_ISOLATED) {
     ): Promise<ResourceCheckResult> => ({ valid: true })
   )
 
-  type CreateWithAttacksResult =
-    | {
-        kind: 'created'
-        campaign: CampaignRow
-        attacks: Array<{ id: number; dependencies: number[] | null }>
-      }
-    | { kind: 'dag_invalid'; error: string }
-    | { kind: 'resource_missing'; missing: string[] }
-
-  const mockCreateCampaign = mock(
-    async (data: { name: string; projectId: number; hashListId: number }) =>
-      makeCampaign({ name: data.name, projectId: data.projectId, hashListId: data.hashListId })
+  const mockCreateCampaign = mock<CampaignsService['createCampaign']>(async (data) =>
+    makeCampaign({ name: data.name, projectId: data.projectId, hashListId: data.hashListId })
   )
 
-  const mockCreateCampaignWithAttacks = mock(
-    async (_input: {
-      attacks: ReadonlyArray<{ dependencyIndices?: number[] | undefined }>
-    }): Promise<CreateWithAttacksResult> => ({
-      kind: 'created',
-      campaign: makeCampaign(),
-      attacks: [],
-    })
+  const mockCreateCampaignWithAttacks = mock<CampaignsService['createCampaignWithAttacks']>(
+    async () =>
+      ({
+        kind: 'created',
+        campaign: makeCampaign(),
+        attacks: [],
+      }) satisfies CreateWithAttacksResult
   )
 
   const mockCreateAttack = mock(async () => ({ id: 555 }))

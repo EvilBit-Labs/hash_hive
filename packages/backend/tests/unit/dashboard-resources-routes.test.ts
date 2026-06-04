@@ -184,7 +184,19 @@ if (!IS_ISOLATED) {
     getHashListById: mockGetHashListById,
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
-    getHashItems: mock(async () => ({ items: [], total: 0 })),
+    // Real getHashItems returns `{items, total, limit, offset} | null`.
+    // Mock shape pinned via `satisfies` so the mirror-service-not-schema
+    // convention's static-fixture pattern fails type-check (in any tool
+    // that includes test files) if the service shape drifts. The prior
+    // `{items, total}` stub missed the limit/offset fields the route
+    // passes through to the wire (and the null branch the route maps
+    // to 404).
+    getHashItems: mock(
+      async () =>
+        ({ items: [], total: 0, limit: 50, offset: 0 }) satisfies NonNullable<
+          Awaited<ReturnType<typeof import('../../src/services/resources.js').getHashItems>>
+        >
+    ),
     getHashListStats: mock(async () => ({
       totalCount: 0,
       crackedCount: 0,
@@ -200,7 +212,23 @@ if (!IS_ISOLATED) {
     uploadResourceFile: mock(async () => ({ key: 'k', size: 0 })),
     deleteResource: mock(async () => true),
     getResourcePresignedUrl: mock(async () => 'https://example/test'),
-    getAgentDownloadUrl: mock(async () => 'https://example/test'),
+    // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
+    // dashboard route consumes this service from this test file's
+    // surface, but `routes/agent/index.ts` imports the function at
+    // module-load time. Bun's `mock.module` MERGES — non-mocked
+    // exports pass through to the real module (per GOTCHAS.md "Shared
+    // module cache"). However, the real `services/resources.ts` pulls
+    // in DB / S3 modules that this test's mock graph doesn't provide,
+    // so the real export can't load cleanly; providing an explicit
+    // mock here keeps the merged namespace import-safe for transitive
+    // consumers. Pinned via `satisfies` per the convention's static-
+    // fixture pattern.
+    getAgentDownloadUrl: mock(
+      async () =>
+        ({ url: 'https://example/test', expiresIn: 600 }) satisfies NonNullable<
+          Awaited<ReturnType<typeof import('../../src/services/resources.js').getAgentDownloadUrl>>
+        >
+    ),
     // String helper used by results routes.
     escapeLike: (s: string) => s,
     // Chunked upload
