@@ -90,27 +90,31 @@ if (!IS_ISOLATED) {
   }))
 
   // ─── Mock the Campaigns Service Layer ───────────────────────────────
+  //
+  // Per the contract-test-mocks-mirror-service-not-schema convention:
+  // local type aliases derive from the real service return types so a
+  // signature drift in the service surfaces here as a type-check
+  // failure rather than as a wire-shape regression. The mocks below
+  // keep their existing Promise<X> return annotations; the annotations
+  // now bind to the real-service-derived types instead of independent
+  // local interfaces.
+  type CampaignsService = typeof import('../../src/services/campaigns.js')
+  type CampaignRow = NonNullable<Awaited<ReturnType<CampaignsService['getCampaignById']>>>
+  type UpdateCampaignResult = Awaited<ReturnType<CampaignsService['updateCampaign']>>
+  type DeleteCampaignResult = Awaited<ReturnType<CampaignsService['deleteCampaign']>>
+  type ListCampaignsResult = Awaited<ReturnType<CampaignsService['listCampaigns']>>
+  // CreateWithAttacksResult and TransitionResult are used implicitly by
+  // the `mock<typeof svc>()` declarations below — they don't need
+  // standalone type aliases here.
 
   const mockListCampaigns = mock(
-    async (_filters: Record<string, unknown>) =>
-      ({ campaigns: [], total: 0, limit: 50, offset: 0 }) as const
+    async (_filters: Record<string, unknown>): Promise<ListCampaignsResult> => ({
+      campaigns: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
   )
-
-  interface CampaignRow {
-    id: number
-    projectId: number
-    status: string
-    name: string
-    hashListId: number
-    priority: number
-    description: string | null
-    progress: Record<string, unknown> | null
-    createdAt: Date
-    startedAt: Date | null
-    completedAt: Date | null
-    updatedAt: Date
-    createdBy: number | null
-  }
 
   const makeCampaign = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
     id: 100,
@@ -121,6 +125,7 @@ if (!IS_ISOLATED) {
     priority: 5,
     description: null,
     progress: {},
+    metadata: {},
     createdAt: new Date('2026-01-01'),
     startedAt: null,
     completedAt: null,
@@ -136,24 +141,11 @@ if (!IS_ISOLATED) {
     return null
   })
 
-  const mockDeleteCampaign = mock(
-    async (
-      id: number
-    ): Promise<
-      | { kind: 'deleted'; id: number; projectId: number }
-      | { kind: 'not_found' }
-      | { kind: 'not_draft'; status: string }
-    > => {
-      if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
-      if (id === 101) return { kind: 'not_draft', status: 'running' }
-      return { kind: 'not_found' }
-    }
-  )
-
-  type UpdateCampaignResult =
-    | { kind: 'updated'; campaign: CampaignRow }
-    | { kind: 'not_found' }
-    | { kind: 'not_draft'; status: string }
+  const mockDeleteCampaign = mock(async (id: number): Promise<DeleteCampaignResult> => {
+    if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
+    if (id === 101) return { kind: 'not_draft', status: 'running' }
+    return { kind: 'not_found' }
+  })
 
   const mockUpdateCampaign = mock(
     async (
@@ -177,20 +169,12 @@ if (!IS_ISOLATED) {
     failed: 1,
   }))
 
-  type TransitionErrorCode =
-    | 'QUEUE_UNAVAILABLE'
-    | 'INVALID_TRANSITION'
-    | 'NOT_FOUND'
-    | 'RESOURCE_MISSING'
-    | 'RESOURCE_VALIDATION_FAILED'
-    | 'STALE_STATE'
-    | 'TASK_GENERATION_FAILED'
-  type TransitionResult =
-    | { campaign: { id: number; status: string } | null }
-    | { error: string; code?: TransitionErrorCode }
-  const mockTransitionCampaign = mock<(id: number, target: string) => Promise<TransitionResult>>(
-    async () => ({ campaign: null })
-  )
+  // TransitionResult is derived above from the real service signature.
+  // The factory below uses the derived type instead of the prior
+  // hand-maintained local union.
+  const mockTransitionCampaign = mock<CampaignsService['transitionCampaign']>(async () => ({
+    campaign: makeCampaign(),
+  }))
 
   const mockListActiveAgentsByCampaign = mock(async (_id: number) => [
     {
@@ -222,14 +206,7 @@ if (!IS_ISOLATED) {
     ): Promise<ResourceCheckResult> => ({ valid: true })
   )
 
-  type CreateWithAttacksResult =
-    | {
-        kind: 'created'
-        campaign: CampaignRow
-        attacks: Array<{ id: number; dependencies: number[] | null }>
-      }
-    | { kind: 'dag_invalid'; error: string }
-    | { kind: 'resource_missing'; missing: string[] }
+  // CreateWithAttacksResult is derived above from the real service.
 
   const mockCreateCampaign = mock(
     async (data: { name: string; projectId: number; hashListId: number }) =>
