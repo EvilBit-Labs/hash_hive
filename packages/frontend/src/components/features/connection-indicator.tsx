@@ -1,5 +1,7 @@
 import type { ConnectionStatus } from '@hashhive/shared'
 
+import { Activity } from 'lucide-react'
+
 import { cn } from '../../lib/utils'
 import { useEventsConnection } from './events-provider'
 
@@ -9,6 +11,7 @@ interface VisualState {
   pulse: boolean
   ariaLabel: string
   text: string
+  showFallbackIcon?: boolean
 }
 
 /**
@@ -37,12 +40,15 @@ function visualForStatus(status: ConnectionStatus): VisualState {
         text: 'Reconnecting...',
       }
     case 'fallback':
+      // WS dropped but polling fallback is active — operationally degraded,
+      // not broken. Distinct visual + label from `error` per R14 / Principle 3.
       return {
-        dotClass: 'bg-destructive',
-        labelClass: 'text-destructive',
+        dotClass: 'bg-warning',
+        labelClass: 'text-warning',
         pulse: false,
-        ariaLabel: 'Offline - polling',
-        text: 'Offline - polling',
+        ariaLabel: 'Polling - 60s',
+        text: 'Polling - 60s',
+        showFallbackIcon: true,
       }
     case 'error':
       return {
@@ -76,12 +82,22 @@ export function ConnectionIndicator({ status }: ConnectionIndicatorProps = {}) {
           <span
             className={cn(
               v.dotClass,
-              'absolute inline-flex h-full w-full animate-ping rounded-full opacity-50'
+              'absolute inline-flex h-full w-full animate-ping rounded-full opacity-50',
+              // Tailwind's animate-ping does not honor prefers-reduced-motion
+              // automatically — gate explicitly per the system-health-card precedent.
+              'motion-reduce:animate-none'
             )}
           />
         )}
         <span className={cn('relative inline-flex h-2 w-2 rounded-full', v.dotClass)} />
       </span>
+      {v.showFallbackIcon && (
+        <Activity
+          data-testid="connection-fallback-icon"
+          aria-hidden="true"
+          className={cn('h-3 w-3', v.labelClass)}
+        />
+      )}
       <span className={v.labelClass}>{v.text}</span>
     </output>
   )

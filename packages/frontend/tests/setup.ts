@@ -4,7 +4,10 @@
  * Loaded via bun's --preload flag. Sets up a happy-dom window as the
  * global DOM environment for Testing Library to render into.
  */
+import { mock } from 'bun:test'
 import { Window } from 'happy-dom'
+import { createElement, type ReactNode } from 'react'
+import * as RechartsActual from 'recharts'
 
 const window = new Window({ url: 'http://localhost:3000' })
 
@@ -54,3 +57,19 @@ Object.assign(globalThis, {
   setTimeout: window.setTimeout.bind(window),
   clearTimeout: window.clearTimeout.bind(window),
 })
+
+// Recharts mock: happy-dom does not lay out parents with computed dimensions,
+// so ResponsiveContainer measures 0x0 and the SVG never renders. Replace it
+// with a fixed-size wrapper while preserving every other Recharts export.
+// The factory MUST spread the real module — partial-shape factories drop
+// AreaChart/Area/Tooltip/etc and downstream tests fail at module-init.
+// Hoisted above any SUT import per docs/solutions/conventions/bun-test-mock-module-import-order.md.
+mock.module('recharts', () => ({
+  ...RechartsActual,
+  ResponsiveContainer: ({ children }: { children: ReactNode }) =>
+    createElement(
+      'div',
+      { style: { width: 500, height: 200 }, 'data-testid': 'recharts-responsive-container' },
+      children
+    ),
+}))

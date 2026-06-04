@@ -83,9 +83,13 @@ describe('DashboardPage', () => {
     setAuthenticatedWithProject(1)
     renderWithProviders(<DashboardPage />)
 
-    // All stat cards should show em dash placeholder
-    const placeholders = screen.getAllByText('-')
-    expect(placeholders.length).toBe(4)
+    // All stat cards should render <Skeleton> placeholders, not the literal "-"
+    expect(screen.queryAllByText('-')).toHaveLength(0)
+    const cards = screen.getAllByTestId('stat-card')
+    expect(cards).toHaveLength(4)
+    for (const card of cards) {
+      expect(card.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThanOrEqual(1)
+    }
   })
 
   it('displays connection indicator', async () => {
