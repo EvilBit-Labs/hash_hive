@@ -91,22 +91,25 @@ mock.module('../../src/services/auth.js', () => ({
 //
 // We mock the service so route-level behavior (validation, error mapping,
 // auth gates) is exercised without standing up a real DB. Service
-// behavior is covered in crackers.test.ts.
+// behavior is covered in crackers.test.ts. Per the
+// contract-test-mocks-mirror-service-not-schema convention, the mock
+// factories are typed via `typeof svc` so a signature drift in the
+// service surfaces here as a type-check failure.
 
-const mockListCrackerBinaries = mock(async () => [])
-const mockCreateCrackerBinary = mock(
-  async (data: { engine: string; version: string; platform: string }) => ({
-    id: 42,
-    engine: data.engine,
-    version: data.version,
-    platform: data.platform,
-    fileRef: {},
-    isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  })
-)
-const mockGetCrackerBinaryById = mock(async (id: number) =>
+type CrackersService = typeof import('../../src/services/crackers.js')
+
+const mockListCrackerBinaries: CrackersService['listCrackerBinaries'] = mock(async () => [])
+const mockCreateCrackerBinary: CrackersService['createCrackerBinary'] = mock(async (data) => ({
+  id: 42,
+  engine: data.engine,
+  version: data.version,
+  platform: data.platform,
+  fileRef: {},
+  isActive: true,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+}))
+const mockGetCrackerBinaryById: CrackersService['getCrackerBinaryById'] = mock(async (id) =>
   id === 42
     ? {
         id: 42,
@@ -120,9 +123,11 @@ const mockGetCrackerBinaryById = mock(async (id: number) =>
       }
     : null
 )
-const mockGetLatestCracker = mock(async () => null)
-const mockGetCrackerDownloadUrl = mock(async () => null)
-const mockDeleteCrackerBinary = mock(async () => 'deleted' as const)
+const mockGetLatestCracker: CrackersService['getLatestCracker'] = mock(async () => null)
+const mockGetCrackerDownloadUrl: CrackersService['getCrackerDownloadUrl'] = mock(async () => null)
+const mockDeleteCrackerBinary: CrackersService['deleteCrackerBinary'] = mock(
+  async () => 'deleted' as const
+)
 
 class MockMismatch extends Error {
   constructor(
