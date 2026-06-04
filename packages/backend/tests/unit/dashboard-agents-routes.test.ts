@@ -68,69 +68,59 @@ mock.module('../../src/services/auth.js', () => ({
 }))
 
 // ─── Mock the Agents Service Layer ───────────────────────────────────
+//
+// Per the contract-test-mocks-mirror-service-not-schema convention:
+// type the mock factories via `typeof svc` and derive the row shape
+// from the real service so a signature drift surfaces as a type-check
+// failure. A `makeAgent` builder fills the partial fixtures used by
+// tests with the full Drizzle row (operatingSystemId, authTokenHash,
+// authTokenFormat) so the mocks satisfy the real return type.
 
-const mockGetAgentById = mock(async (id: number) => {
-  if (id === 100) {
-    // Same-project agent.
-    return {
-      id: 100,
-      name: 'Rig Alpha',
-      status: 'online',
-      lastSeenAt: new Date(),
-      projectId: 1,
-      capabilities: null,
-      hardwareProfile: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      authToken: 'tok',
-      crackerVersion: null,
-    }
+type AgentsService = typeof import('../../src/services/agents.js')
+type TasksService = typeof import('../../src/services/tasks.js')
+type AgentRow = NonNullable<Awaited<ReturnType<AgentsService['getAgentById']>>>
+
+function makeAgent(p: Partial<AgentRow> & Pick<AgentRow, 'id' | 'projectId'>): AgentRow {
+  return {
+    name: p.name ?? `Agent ${p.id}`,
+    status: p.status ?? 'online',
+    operatingSystemId: p.operatingSystemId ?? null,
+    authToken: p.authToken ?? 'tok',
+    authTokenHash: p.authTokenHash ?? null,
+    authTokenFormat: p.authTokenFormat ?? 'plaintext',
+    capabilities: p.capabilities ?? {},
+    hardwareProfile: p.hardwareProfile ?? {},
+    crackerVersion: p.crackerVersion ?? null,
+    lastSeenAt: p.lastSeenAt ?? new Date(),
+    createdAt: p.createdAt ?? new Date(),
+    updatedAt: p.updatedAt ?? new Date(),
+    ...p,
   }
-  if (id === 200) {
-    // Foreign-project agent — same numeric id space, different project.
-    return {
-      id: 200,
-      name: 'Rig Beta',
-      status: 'online',
-      lastSeenAt: new Date(),
-      projectId: 999,
-      capabilities: null,
-      hardwareProfile: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      authToken: 'tok',
-      crackerVersion: null,
-    }
+}
+
+const mockGetAgentById: AgentsService['getAgentById'] = mock(async (id: number) => {
+  if (id === 100) return makeAgent({ id: 100, projectId: 1, name: 'Rig Alpha' })
+  if (id === 200) return makeAgent({ id: 200, projectId: 999, name: 'Rig Beta' })
+  return null
+})
+
+const mockUpdateAgent: AgentsService['updateAgent'] = mock(async (id, patch, projectId) => {
+  // Honors the atomic UPDATE WHERE projectId contract: id=100 lives
+  // in project 1, id=200 lives in project 999 (foreign). A mismatch
+  // collapses to null exactly the way the real query would after the
+  // 0 rows-affected.
+  if (id === 100 && projectId === 1) {
+    return makeAgent({
+      id: 100,
+      projectId: 1,
+      name: patch.name ?? 'Rig Alpha',
+      status: patch.status ?? 'online',
+    })
   }
   return null
 })
 
-const mockUpdateAgent = mock(
-  async (id: number, patch: { name?: string; status?: string }, projectId: number) => {
-    // Honors the atomic UPDATE WHERE projectId contract: id=100 lives
-    // in project 1, id=200 lives in project 999 (foreign). A mismatch
-    // collapses to null exactly the way the real query would after the
-    // 0 rows-affected.
-    if (id === 100 && projectId === 1) {
-      return {
-        id: 100,
-        name: patch.name ?? 'Rig Alpha',
-        status: patch.status ?? 'online',
-        lastSeenAt: new Date(),
-        projectId: 1,
-        capabilities: null,
-        hardwareProfile: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        authToken: 'tok',
-        crackerVersion: null,
-      }
-    }
-    return null
-  }
-)
-
-const mockRotateAgentToken = mock(async (agentId: number, projectId: number) => {
+const mockRotateAgentToken: AgentsService['rotateAgentToken'] = mock(async (agentId, projectId) => {
   // Mirrors the real service: same-project rotation succeeds and
   // returns the raw token once; cross-project hands back null so the
   // route maps to 404.
@@ -142,27 +132,42 @@ const mockRotateAgentToken = mock(async (agentId: number, projectId: number) => 
 
 mock.module('../../src/services/agents.js', () => ({
   getAgentById: mockGetAgentById,
-  getAgentErrors: mock(async () => []),
-  getBenchmarksForAgent: mock(async () => []),
-  listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
+  getAgentErrors: mock(
+    async () => [] satisfies Awaited<ReturnType<AgentsService['getAgentErrors']>>
+  ),
+  getBenchmarksForAgent: mock(
+    async () => [] satisfies Awaited<ReturnType<AgentsService['getBenchmarksForAgent']>>
+  ),
+  listAgents: mock(
+    async () =>
+      ({
+        agents: [],
+        total: 0,
+        limit: 50,
+        offset: 0,
+      }) satisfies Awaited<ReturnType<AgentsService['listAgents']>>
+  ),
   rotateAgentToken: mockRotateAgentToken,
   updateAgent: mockUpdateAgent,
 }))
 
 mock.module('../../src/services/tasks.js', () => ({
-  listTasksByAgent: mock(async () => [
-    {
-      id: 1,
-      campaignId: 1,
-      campaignName: 'Test Campaign',
-      attackId: 1,
-      attackMode: 0,
-      status: 'running',
-      progress: {},
-      startedAt: null,
-      assignedAt: null,
-    },
-  ]),
+  listTasksByAgent: mock(
+    async () =>
+      [
+        {
+          id: 1,
+          campaignId: 1,
+          campaignName: 'Test Campaign',
+          attackId: 1,
+          attackMode: 0,
+          status: 'running',
+          progress: {},
+          startedAt: null,
+          assignedAt: null,
+        },
+      ] satisfies Awaited<ReturnType<TasksService['listTasksByAgent']>>
+  ),
 }))
 
 // ─── Mock DB / Storage / Redis (route handlers don't reach these, but
