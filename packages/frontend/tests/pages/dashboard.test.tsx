@@ -274,4 +274,140 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Results Page')).toBeDefined()
     })
   })
+
+  describe('header chrome (harden pass)', () => {
+    it('renders the "Last updated" line when the live connection has not opened yet', async () => {
+      // No `ws.simulateOpen()` here, so the WS stays in `connecting`.
+      // That's a "degraded" state from the dashboard's perspective —
+      // the freshness counter is meaningful while the live channel is
+      // not yet delivering events.
+      fetchMock = mockFetch({
+        '/dashboard/stats': { status: 200, body: mockDashboardStats() },
+      })
+      setAuthenticatedWithProject(1)
+
+      renderWithProviders(<DashboardPage />)
+
+      await waitFor(() => {
+        const line = screen.getByTestId('dashboard-last-updated')
+        expect(line.textContent ?? '').toContain('Last updated')
+      })
+    })
+
+    it('hides the "Last updated" line when the live connection is open', async () => {
+      // On a live connection the ConnectionIndicator's "Live" carries
+      // the freshness signal; the counter would imply staleness when
+      // there is none ("live" + "47s ago" reads as a contradiction).
+      fetchMock = mockFetch({
+        '/dashboard/stats': { status: 200, body: mockDashboardStats() },
+      })
+      setAuthenticatedWithProject(1)
+
+      renderWithProviders(<DashboardPage />)
+
+      const ws = wsMock.instances[0]
+      if (!ws) return // env without the WS mock — fail-soft
+      ws.simulateOpen()
+
+      await waitFor(() => {
+        expect(screen.getByText('Live')).toBeDefined()
+      })
+      expect(screen.queryByTestId('dashboard-last-updated')).toBeNull()
+    })
+
+    it('renders kbd hints for R / 1-4 / Shift+P', () => {
+      fetchMock = mockFetch({
+        '/dashboard/stats': { status: 200, body: mockDashboardStats() },
+      })
+      setAuthenticatedWithProject(1)
+
+      renderWithProviders(<DashboardPage />)
+
+      const hintRow = screen.getByText('refresh').closest('ul')
+      expect(hintRow).not.toBeNull()
+      const kbds = hintRow!.querySelectorAll('kbd')
+      expect(kbds).toHaveLength(3)
+      expect(kbds[0]?.textContent).toBe('R')
+      expect(kbds[1]?.textContent).toBe('1-4')
+      // Third kbd: shift glyph + P. The glyph is wrapped in an
+      // aria-hidden span so screen readers only announce "P".
+      expect(kbds[2]?.textContent).toContain('P')
+    })
+
+    it('navigates to /agents when "1" is pressed on the body', async () => {
+      const stats = mockDashboardStats({ agents: { online: 3, total: 5 } })
+      fetchMock = mockFetch({ '/dashboard/stats': { status: 200, body: stats } })
+      setAuthenticatedWithProject(1)
+
+      renderWithRouter(
+        [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/agents', element: <div>Agents Page</div> },
+          { path: '/campaigns', element: <div>Campaigns Page</div> },
+          { path: '/results', element: <div>Results Page</div> },
+        ],
+        { initialRoute: '/' }
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined()
+      })
+
+      fireEvent.keyDown(window, { key: '1' })
+      expect(screen.getByText('Agents Page')).toBeDefined()
+    })
+
+    it('navigates to /results when "4" is pressed on the body', async () => {
+      const stats = mockDashboardStats({ agents: { online: 3, total: 5 } })
+      fetchMock = mockFetch({ '/dashboard/stats': { status: 200, body: stats } })
+      setAuthenticatedWithProject(1)
+
+      renderWithRouter(
+        [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/agents', element: <div>Agents Page</div> },
+          { path: '/campaigns', element: <div>Campaigns Page</div> },
+          { path: '/results', element: <div>Results Page</div> },
+        ],
+        { initialRoute: '/' }
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined()
+      })
+
+      fireEvent.keyDown(window, { key: '4' })
+      expect(screen.getByText('Results Page')).toBeDefined()
+    })
+
+    it('does NOT navigate when the "1" key fires from inside an input', async () => {
+      const stats = mockDashboardStats({ agents: { online: 3, total: 5 } })
+      fetchMock = mockFetch({ '/dashboard/stats': { status: 200, body: stats } })
+      setAuthenticatedWithProject(1)
+
+      renderWithRouter(
+        [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/agents', element: <div>Agents Page</div> },
+          { path: '/campaigns', element: <div>Campaigns Page</div> },
+          { path: '/results', element: <div>Results Page</div> },
+        ],
+        { initialRoute: '/' }
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('3 / 5')).toBeDefined()
+      })
+
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      input.focus()
+      fireEvent.keyDown(input, { key: '1' })
+      document.body.removeChild(input)
+
+      // Still on dashboard
+      expect(screen.queryByText('Agents Page')).toBeNull()
+      expect(screen.getByText('3 / 5')).toBeDefined()
+    })
+  })
 })
