@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 
+import type { MonotonicMs } from '../../src/hooks/use-spark-history'
+
 import { StatCard } from '../../src/components/features/stat-card'
 import {
   cleanupAll,
@@ -78,14 +80,14 @@ describe('StatCard', () => {
     expect(liveRegion).not.toBeNull()
   })
 
-  it('uses text-3xl for the value when prominent is true (R13)', () => {
-    renderWithProviders(<StatCard title="Cracked" value={42} subtitle="Total" prominent />)
+  it('uses text-3xl for the value when emphasis is primary', () => {
+    renderWithProviders(<StatCard title="Cracked" value={42} subtitle="Total" emphasis="primary" />)
     const valueEl = screen.getByText('42')
     expect(valueEl.className).toContain('text-3xl')
     expect(valueEl.className).not.toContain('text-2xl')
   })
 
-  it('uses text-2xl for the value when prominent is false / default', () => {
+  it('uses text-2xl for the value when emphasis is secondary / default', () => {
     renderWithProviders(<StatCard title="Agents" value={7} subtitle="3 online" />)
     const valueEl = screen.getByText('7')
     expect(valueEl.className).toContain('text-2xl')
@@ -97,7 +99,7 @@ describe('StatCard', () => {
         title="Agents"
         value={7}
         subtitle="3 online"
-        sparkData={[{ sampledAt: 1, value: 7 }]}
+        sparkData={[{ sampledAtMs: 1 as MonotonicMs, value: 7 }]}
         accent="--ctp-teal"
       />
     )
@@ -111,8 +113,8 @@ describe('StatCard', () => {
         value={7}
         subtitle="3 online"
         sparkData={[
-          { sampledAt: 1, value: 5 },
-          { sampledAt: 2, value: 7 },
+          { sampledAtMs: 1 as MonotonicMs, value: 5 },
+          { sampledAtMs: 2 as MonotonicMs, value: 7 },
         ]}
         accent="--ctp-teal"
       />
@@ -127,8 +129,8 @@ describe('StatCard', () => {
         value={7}
         subtitle="3 online"
         sparkData={[
-          { sampledAt: 1, value: 5 },
-          { sampledAt: 2, value: 7 },
+          { sampledAtMs: 1 as MonotonicMs, value: 5 },
+          { sampledAtMs: 2 as MonotonicMs, value: 7 },
         ]}
         accent="--ctp-teal"
       />
@@ -162,8 +164,8 @@ describe('StatCard', () => {
           value={7}
           subtitle="online"
           sparkData={[
-            { sampledAt: 1, value: 5 },
-            { sampledAt: 2, value: 7 },
+            { sampledAtMs: 1 as MonotonicMs, value: 5 },
+            { sampledAtMs: 2 as MonotonicMs, value: 7 },
           ]}
           accent="--ctp-teal"
         />
@@ -172,8 +174,8 @@ describe('StatCard', () => {
           value={3}
           subtitle="running"
           sparkData={[
-            { sampledAt: 1, value: 1 },
-            { sampledAt: 2, value: 3 },
+            { sampledAtMs: 1 as MonotonicMs, value: 1 },
+            { sampledAtMs: 2 as MonotonicMs, value: 3 },
           ]}
           accent="--ctp-lavender"
         />

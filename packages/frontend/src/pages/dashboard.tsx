@@ -82,7 +82,7 @@ export function DashboardPage() {
             to="/results"
             accent="--success"
             sparkData={crackedSpark}
-            prominent
+            emphasis="primary"
           />
         </div>
 

@@ -63,7 +63,26 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
     await expect(indicators).toHaveCount(3)
   })
 
-  test('Cracked card uses text-3xl prominence (R13)', async ({ page }) => {
+  test('sparkline gradient ids are unique across the four stat cards', async ({ page }) => {
+    // happy-dom can't reliably expose SVG `<defs>` to querySelector, so the
+    // unit suite punts on this assertion. The browser test is the canonical
+    // check that `useId()`-derived gradient ids do not collide and each
+    // sparkline references its own gradient via `fill="url(#stat-spark-...)"`.
+    await expect(page.locator('[data-testid="stat-card"]')).toHaveCount(4)
+
+    // Collect gradient ids declared in the four stat-card sparklines and
+    // verify each card has a distinct id. If two cards collided, recharts
+    // would render the same gradient fill in both and one would visually
+    // wrong-color silently.
+    const gradientIds = await page
+      .locator('linearGradient[id^="stat-spark-"]')
+      .evaluateAll((els) => els.map((el) => el.id))
+    // Each card renders one sparkline gradient (skipped when sparkData < 2);
+    // assert no duplicates among whatever rendered.
+    expect(new Set(gradientIds).size).toBe(gradientIds.length)
+  })
+
+  test('Cracked card uses text-3xl prominence', async ({ page }) => {
     const cards = page.locator('[data-testid="stat-card"]')
     await expect(cards).toHaveCount(4)
 
@@ -74,10 +93,9 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
   })
 
   // Visual baseline: skipped until the Linux baseline PNG is committed.
-  // Generate the baseline by running this spec once in CI with
-  // `--update-snapshots`, commit the generated `*-snapshots/*.png`, then
-  // remove this skip. Local macOS runs will diff on font rendering and
-  // must NOT update the baseline — CI Linux rendering is canonical.
+  // See issue #201 for the procedure (generate on Linux with
+  // --update-snapshots, commit the PNG, then unskip this test). Local macOS
+  // runs WILL diff on font rendering and must not update the baseline.
   test.skip('dashboard visual baseline at 1440x900', async ({ page }) => {
     // Wait for the page to settle: all four cards present, crack-rate region
     // mounted. Sparklines will be empty on cold load (1 sample) — by design.

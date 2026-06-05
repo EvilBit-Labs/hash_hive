@@ -13,13 +13,14 @@ import {
 import type { SparkPoint } from '../../hooks/use-spark-history'
 
 import { Skeleton } from '../ui/skeleton'
+import { ChartErrorBoundary } from './chart-error-boundary'
 
 interface CrackRateTrendChartProps {
   readonly data: ReadonlyArray<SparkPoint>
   readonly loading?: boolean
 }
 
-function DashboardTooltip({ active, payload }: TooltipContentProps) {
+export function DashboardTooltip({ active, payload }: TooltipContentProps) {
   if (!active || !payload || payload.length === 0) {
     return null
   }
@@ -73,7 +74,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
     )
   }
 
-  return (
+  const errorFallback = (
     <section
       aria-labelledby={headingId}
       className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
@@ -81,38 +82,58 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
       <h2 id={headingId} className="sr-only">
         Crack rate trend
       </h2>
-      <div className="h-64 w-full">
-        <ResponsiveContainer width="100%" height={256}>
-          <AreaChart data={data as SparkPoint[]} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(var(--ctp-peach))" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(var(--ctp-peach))" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis
-              dataKey="sampledAt"
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: 'hsl(var(--ctp-overlay1))', fontSize: 11 }}
-              tickFormatter={() => ''}
-            />
-            <YAxis hide />
-            <Tooltip
-              content={DashboardTooltip}
-              cursor={{ stroke: 'hsl(var(--ctp-surface2))', strokeWidth: 1 }}
-            />
-            <Area
-              type="monotone"
-              dataKey="value"
-              stroke="hsl(var(--ctp-peach))"
-              strokeWidth={2}
-              fill={`url(#${gradientId})`}
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
+      <output className="flex h-64 w-full flex-col items-center justify-center gap-2">
+        <Activity className="text-ctp-overlay0 h-6 w-6" aria-hidden="true" />
+        <p className="text-ctp-overlay1 text-sm">Chart unavailable</p>
+      </output>
     </section>
+  )
+
+  return (
+    <ChartErrorBoundary fallback={errorFallback}>
+      <section
+        aria-labelledby={headingId}
+        className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
+      >
+        <h2 id={headingId} className="sr-only">
+          Crack rate trend
+        </h2>
+        <div className="h-64 w-full">
+          <ResponsiveContainer width="100%" height={256}>
+            <AreaChart
+              data={data as SparkPoint[]}
+              margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
+            >
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="hsl(var(--ctp-peach))" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="hsl(var(--ctp-peach))" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis
+                dataKey="sampledAtMs"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fill: 'hsl(var(--ctp-overlay1))', fontSize: 11 }}
+                tickFormatter={() => ''}
+              />
+              <YAxis hide />
+              <Tooltip
+                content={DashboardTooltip}
+                cursor={{ stroke: 'hsl(var(--ctp-surface2))', strokeWidth: 1 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke="hsl(var(--ctp-peach))"
+                strokeWidth={2}
+                fill={`url(#${gradientId})`}
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+    </ChartErrorBoundary>
   )
 }

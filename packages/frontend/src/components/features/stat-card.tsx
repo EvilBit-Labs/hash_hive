@@ -7,6 +7,31 @@ import type { SparkPoint } from '../../hooks/use-spark-history'
 
 import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
+import { ChartErrorBoundary } from './chart-error-boundary'
+
+/**
+ * CSS custom-property names for stat-card accent colors. Locked to the
+ * Catppuccin Macchiato palette tokens defined in `src/index.css`. New
+ * accents must land here so a typo at the call site becomes a TS error,
+ * not a silently-invisible sparkline at runtime.
+ */
+export type StatAccent =
+  | '--ctp-teal'
+  | '--ctp-lavender'
+  | '--ctp-peach'
+  | '--info'
+  | '--success'
+  | '--warning'
+  | '--destructive'
+
+/**
+ * Visual emphasis for the stat value. `primary` reserves `text-3xl` for the
+ * one operator-critical metric per surface (the moment a hash cracks);
+ * `secondary` keeps the supporting cards at `text-2xl` so the grid does not
+ * read as a uniform 4-card SaaS dashboard. Enum rather than boolean so
+ * future levels (`hero`, `tertiary`) land without a breaking prop change.
+ */
+export type StatEmphasis = 'primary' | 'secondary'
 
 interface StatCardProps {
   readonly title: string
@@ -15,16 +40,12 @@ interface StatCardProps {
   readonly loading?: boolean
   /** SPA route to navigate to when clicked. Omit for non-interactive card. */
   readonly to?: string
-  /** CSS custom property name for the left-border + sparkline accent (e.g. "--ctp-teal"). */
-  readonly accent?: string
+  /** Catppuccin token name (e.g. "--ctp-teal") for the left-border and sparkline stroke. */
+  readonly accent?: StatAccent
   /** Recent samples for the embedded sparkline; sparkline renders only when length >= 2. */
   readonly sparkData?: ReadonlyArray<SparkPoint>
-  /**
-   * When true, value uses `text-3xl` instead of `text-2xl`. Reserved for the
-   * primary operator metric so the grid does not read as a uniform 4-card
-   * SaaS dashboard (the editorial-hierarchy direction in .impeccable.md).
-   */
-  readonly prominent?: boolean
+  /** Visual emphasis; defaults to `secondary`. Use `primary` for the single hero metric. */
+  readonly emphasis?: StatEmphasis
 }
 
 const ANIMATE_FROM = { opacity: 0, y: 4 } as const
@@ -39,7 +60,7 @@ export function StatCard({
   to,
   accent,
   sparkData,
-  prominent,
+  emphasis = 'secondary',
 }: StatCardProps) {
   const navigate = useNavigate()
   const gradientId = `stat-spark-${useId().replace(/:/g, '')}`
@@ -60,7 +81,7 @@ export function StatCard({
           transition={{ duration: 0.2, ease: 'easeOut' }}
           className={cn(
             'text-foreground inline-block font-mono font-bold tabular-nums',
-            prominent ? 'text-3xl' : 'text-2xl'
+            emphasis === 'primary' ? 'text-3xl' : 'text-2xl'
           )}
         >
           {value}
@@ -70,35 +91,38 @@ export function StatCard({
   )
 
   const sparkStroke = accentColor ?? 'hsl(var(--muted-foreground))'
+  const emptySparkline = <div className="mt-3 h-10 w-full" aria-hidden="true" />
   const sparklineSlot = loading ? (
     <Skeleton className="mt-3 h-10 w-full" />
   ) : hasSparkline ? (
-    <div className="mt-3 h-10 w-full" aria-label={`${title} trend, ${sparkData.length} samples`}>
-      <ResponsiveContainer width="100%" height={40}>
-        <AreaChart
-          data={sparkData as SparkPoint[]}
-          margin={{ top: 4, right: 0, bottom: 0, left: 0 }}
-        >
-          <defs>
-            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={sparkStroke} stopOpacity={0.3} />
-              <stop offset="95%" stopColor={sparkStroke} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke={sparkStroke}
-            strokeWidth={1.5}
-            fill={`url(#${gradientId})`}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
+    <ChartErrorBoundary fallback={emptySparkline}>
+      <div className="mt-3 h-10 w-full" aria-label={`${title} trend, ${sparkData.length} samples`}>
+        <ResponsiveContainer width="100%" height={40}>
+          <AreaChart
+            data={sparkData as SparkPoint[]}
+            margin={{ top: 4, right: 0, bottom: 0, left: 0 }}
+          >
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={sparkStroke} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={sparkStroke} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke={sparkStroke}
+              strokeWidth={1.5}
+              fill={`url(#${gradientId})`}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartErrorBoundary>
   ) : (
-    <div className="mt-3 h-10 w-full" aria-hidden="true" />
+    emptySparkline
   )
 
   const content = (

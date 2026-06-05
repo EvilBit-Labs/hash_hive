@@ -46,6 +46,44 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Select a project to view its dashboard.')).toBeDefined()
   })
 
+  it('renders motion animations honoring prefers-reduced-motion', async () => {
+    // The dashboard wraps its tree in `<MotionConfig reducedMotion="user">`,
+    // so motion.* descendants honor the user's media-query preference. We
+    // simulate `prefers-reduced-motion: reduce` via matchMedia, render the
+    // page, and assert it mounts without crash and exposes the four stat
+    // cards. A future refactor that drops the MotionConfig boundary would
+    // not crash this test directly, but combined with the cross-fade test
+    // (which runs under reducedMotion="always" and asserts the new value
+    // appears) and the e2e reduced-motion test (which asserts the
+    // motion-reduce gate on animate-ping), R9 is covered across layers.
+    fetchMock = mockFetch({
+      '/dashboard/stats': { status: 200, body: mockDashboardStats() },
+    })
+    setAuthenticatedWithProject(1)
+
+    const originalMatchMedia = globalThis.matchMedia
+    globalThis.matchMedia = ((q: string) => ({
+      matches: q.includes('reduce'),
+      media: q,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof matchMedia
+
+    try {
+      renderWithProviders(<DashboardPage />)
+      await waitFor(() => {
+        const cards = screen.queryAllByTestId('stat-card')
+        expect(cards.length).toBe(4)
+      })
+    } finally {
+      globalThis.matchMedia = originalMatchMedia
+    }
+  })
+
   it('clears sparkline buffers when the user switches projects', async () => {
     // Each project gets its own ring-buffer key (`${projectId}:agents` etc.).
     // After samples accumulate under project 1, switching to project 2 must

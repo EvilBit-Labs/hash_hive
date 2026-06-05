@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { StrictMode } from 'react'
 
 import { useSparkHistory } from '../../src/hooks/use-spark-history'
 import { cleanupAll, renderHook } from '../test-utils'
@@ -34,7 +35,7 @@ describe('useSparkHistory', () => {
     expect(values).toHaveLength(capacity)
   })
 
-  it('preserves stable monotonic sampledAt ids across renders', () => {
+  it('preserves stable monotonic sampledAtMs ids across renders', () => {
     const { result, rerender } = renderHook(
       ({ value }: { value: number }) => useSparkHistory('agents', value),
       { initialProps: { value: 1 } }
@@ -45,9 +46,9 @@ describe('useSparkHistory', () => {
     // Re-render with same value (no append) — existing ids must not be re-stamped
     rerender({ value: 3 })
     const second = result.current
-    expect(second.map((p) => p.sampledAt)).toEqual(first.map((p) => p.sampledAt))
-    // sampledAt is strictly increasing
-    const ids = first.map((p) => p.sampledAt)
+    expect(second.map((p) => p.sampledAtMs)).toEqual(first.map((p) => p.sampledAtMs))
+    // sampledAtMs is strictly increasing
+    const ids = first.map((p) => p.sampledAtMs)
     for (let i = 1; i < ids.length; i++) {
       expect(ids[i]).toBeGreaterThan(ids[i - 1] ?? 0)
     }
@@ -89,6 +90,30 @@ describe('useSparkHistory', () => {
     expect(result.current.map((p) => p.value)).toEqual([5])
     rerender({ value: 6 })
     expect(result.current.map((p) => p.value)).toEqual([5, 6])
+  })
+
+  it('uses the default capacity of 20 when no capacity is provided', () => {
+    const { result, rerender } = renderHook(
+      ({ value }: { value: number }) => useSparkHistory('agents', value),
+      { initialProps: { value: 1 } }
+    )
+    for (let v = 2; v <= 25; v++) {
+      rerender({ value: v })
+    }
+    expect(result.current).toHaveLength(20)
+    expect(result.current[0]?.value).toBe(6)
+    expect(result.current[19]?.value).toBe(25)
+  })
+
+  it('does not double-append on first mount under StrictMode', () => {
+    // React 19 StrictMode invokes effects twice in dev. The hook's
+    // duplicate-suppression branch dedupes when the second invocation sees
+    // the same value as the buffer tail, so a single mount under StrictMode
+    // produces exactly one sample, not two.
+    const { result } = renderHook(() => useSparkHistory('agents', 5), {
+      wrapper: StrictMode,
+    })
+    expect(result.current.map((p) => p.value)).toEqual([5])
   })
 
   it('key change resets buffer even when numeric value is identical', () => {

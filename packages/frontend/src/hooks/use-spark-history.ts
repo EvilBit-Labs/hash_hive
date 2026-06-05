@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 
+/**
+ * Branded monotonic-ms type. Minted only by `useSparkHistory` via
+ * `performance.now()` + tiebreak — never equal to wall-clock `Date.now()`.
+ * Carrying the brand at the type level prevents callers from mixing the two
+ * time domains (the recurring footgun) and makes the unit visible at call
+ * sites that read or compare timestamps.
+ */
+export type MonotonicMs = number & { readonly __brand: 'MonotonicMs' }
+
 export interface SparkPoint {
-  readonly sampledAt: number
+  readonly sampledAtMs: MonotonicMs
   readonly value: number
 }
 
@@ -17,7 +26,8 @@ const DEFAULT_CAPACITY = 20
  * - Drops the oldest entry once the buffer exceeds `capacity`.
  * - Clears the buffer entirely when `key` changes (no cross-key contamination).
  *
- * sampledAt ids are strictly monotonic per buffer and stable across renders.
+ * `sampledAtMs` ids are strictly monotonic per buffer and stable across renders.
+ * The hook is the sole producer of `MonotonicMs`; callers cannot mint one.
  */
 export function useSparkHistory(
   key: string,
@@ -45,9 +55,11 @@ export function useSparkHistory(
         // Guarantee strictly monotonic ids even if performance.now() returns
         // a value equal to the previous (rare but possible on hot loops).
         const now = performance.now()
-        const sampledAt = now > lastSampledAtRef.current ? now : lastSampledAtRef.current + 1
-        lastSampledAtRef.current = sampledAt
-        const next = [...bufferRef.current, { sampledAt, value }]
+        const sampledAtMs = (
+          now > lastSampledAtRef.current ? now : lastSampledAtRef.current + 1
+        ) as MonotonicMs
+        lastSampledAtRef.current = sampledAtMs
+        const next = [...bufferRef.current, { sampledAtMs, value }]
         bufferRef.current = next.length > capacity ? next.slice(-capacity) : next
         mutated = true
       }
@@ -56,10 +68,12 @@ export function useSparkHistory(
     if (mutated) {
       setRevision((r) => r + 1)
     }
+    // No cleanup: the effect only mutates refs + a state setter, no
+    // subscriptions, timers, or external resources to release.
   }, [key, value, capacity])
 
-  // Read `revision` so this render is invalidated when the buffer mutates;
-  // return a defensive slice so downstream identity comparisons work.
+  // Read `revision` so this render subscribes to its updates; React invalidates
+  // downstream `useMemo` derivations when the buffer mutates.
   void revision
   return bufferRef.current.slice()
 }
