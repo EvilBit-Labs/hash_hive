@@ -1,4 +1,4 @@
-import { Trophy } from 'lucide-react'
+import { Layers, ListChecks, Server, Trophy } from 'lucide-react'
 import { MotionConfig } from 'motion/react'
 
 import { ConnectionIndicator } from '../components/features/connection-indicator'
@@ -94,6 +94,7 @@ export function DashboardPage() {
             to="/agents"
             accent="--ctp-teal"
             sparkData={agentsSpark}
+            icon={Server}
           />
           <StatCard
             title="Campaigns"
@@ -103,6 +104,7 @@ export function DashboardPage() {
             to="/campaigns"
             accent="--info"
             sparkData={campaignsSpark}
+            icon={Layers}
           />
           <StatCard
             title="Tasks"
@@ -112,6 +114,7 @@ export function DashboardPage() {
             to="/campaigns"
             accent="--ctp-lavender"
             sparkData={tasksSpark}
+            icon={ListChecks}
           />
         </div>
 

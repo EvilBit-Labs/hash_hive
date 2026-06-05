@@ -143,6 +143,15 @@ export function StatCard({
     emptySparkline
   )
 
+  // Per-domain accent for the title and corner icon on supporting cards.
+  // Editorial-color direction from .impeccable.md: "per-attack-mode colors
+  // for chunking" — the accent token carries each supporting card's
+  // identity through its title text and corner icon, not as a side
+  // stripe or surface drench (the hero Cracked card already owns surface
+  // commitment). Falls back to muted-foreground when no accent is set.
+  const accentColor = accent ? `hsl(var(${accent}))` : undefined
+  const secondaryAccentStyle = accentColor ? { color: accentColor } : undefined
+
   // Primary content is laid out as a flex column so the title hugs the top
   // and the value + subtitle + sparkline cluster at the bottom of the
   // tall hero card. Secondary keeps its compact stacked rhythm.
@@ -166,9 +175,22 @@ export function StatCard({
   ) : (
     <>
       {Icon && (
-        <Icon aria-hidden="true" className="text-muted-foreground absolute top-4 right-4 h-5 w-5" />
+        <Icon
+          aria-hidden="true"
+          className={cn(
+            'absolute top-4 right-4 h-5 w-5',
+            accentColor ? '' : 'text-muted-foreground'
+          )}
+          style={secondaryAccentStyle}
+        />
       )}
-      <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
+      <p
+        className={cn(
+          'text-xs font-medium tracking-[0.18em] uppercase',
+          accentColor ? '' : 'text-muted-foreground'
+        )}
+        style={secondaryAccentStyle}
+      >
         {title}
       </p>
       {valueSlot}

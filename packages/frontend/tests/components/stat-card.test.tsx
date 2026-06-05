@@ -104,6 +104,22 @@ describe('StatCard', () => {
     expect(card.getAttribute('style') ?? '').not.toContain('border-left-color')
   })
 
+  it('tints the secondary card title in the per-domain accent color', () => {
+    renderWithProviders(
+      <StatCard title="Agents" value={7} subtitle="3 online" accent="--ctp-teal" />
+    )
+    const title = screen.getByText('Agents')
+    expect(title.getAttribute('style') ?? '').toContain('hsl(var(--ctp-teal))')
+    expect(title.className).not.toContain('text-muted-foreground')
+  })
+
+  it('falls back to muted-foreground when no accent is set on a secondary card', () => {
+    renderWithProviders(<StatCard title="Agents" value={7} subtitle="3 online" />)
+    const title = screen.getByText('Agents')
+    expect(title.className).toContain('text-muted-foreground')
+    expect(title.getAttribute('style') ?? '').not.toContain('hsl(var(')
+  })
+
   it('does not render a sparkline when sparkData has fewer than 2 points', () => {
     renderWithProviders(
       <StatCard
