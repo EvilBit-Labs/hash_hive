@@ -9,6 +9,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
+    "db:seed": "drizzle-kit migrate && bun src/scripts/seed-admin.ts && bun src/scripts/migrate-auth-accounts.ts",
     "db:studio": "drizzle-kit studio",
     "dev": "bun --hot src/index.ts",
     "lint": "oxlint --type-aware ./src",
