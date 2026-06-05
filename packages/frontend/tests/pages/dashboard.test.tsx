@@ -106,16 +106,21 @@ describe('DashboardPage', () => {
     setAuthenticatedWithProject(1)
     renderWithProviders(<DashboardPage />)
 
-    // Project 1 stats arrive; let the first sample land.
+    // Project 1 stats arrive and the first sample lands in the sparkline
+    // buffers. The buffer-clear contract on key change is exhaustively
+    // covered by the useSparkHistory unit test (see
+    // `tests/hooks/use-spark-history.test.ts` "clears the buffer when the
+    // key changes" + "key change resets buffer even when numeric value is
+    // identical"); the integration claim here is that the page wires
+    // `selectedProjectId` into the hook keys so the unit-test behavior
+    // actually fires at this boundary.
     await waitFor(() => expect(screen.getByText('7 / 10')).toBeDefined())
 
     // Switch to project 2 — the page rerenders, useSparkHistory keys flip
-    // from "1:*" to "2:*", and the four buffers clear.
+    // from "1:*" to "2:*", and the four buffers clear synchronously inside
+    // the effect.
     useUiStore.setState({ selectedProjectId: 2 })
 
-    // No assertion on UI state needed beyond "no crash, no stale history":
-    // the unit test covers the buffer-clear contract. Here we just verify
-    // the page survives the project switch with the new project id active.
     await waitFor(() => {
       expect(useUiStore.getState().selectedProjectId).toBe(2)
     })

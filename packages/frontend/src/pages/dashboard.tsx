@@ -46,10 +46,20 @@ export function DashboardPage() {
           <ConnectionIndicator />
         </div>
 
-        <div aria-live="polite" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/*
+          No `aria-live` on the grid wrapper: each StatCard's value slot is
+          its own `aria-live="polite" aria-atomic="true"` region scoped to
+          one metric, so nesting a polite region around them would cause
+          duplicate or merged screen-reader announcements.
+
+          Fallback value `'?'` (not `0` or empty string) is the consistent
+          post-load unknown indicator across all four cards — so a failed
+          stats query does not silently render a real-looking `0`.
+        */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Agents"
-            value={stats ? `${stats.agents.online} / ${stats.agents.total}` : ''}
+            value={stats ? `${stats.agents.online} / ${stats.agents.total}` : '?'}
             subtitle="Online"
             loading={isLoading}
             to="/agents"
@@ -58,7 +68,7 @@ export function DashboardPage() {
           />
           <StatCard
             title="Campaigns"
-            value={stats?.campaigns.running ?? 0}
+            value={stats?.campaigns.running ?? '?'}
             subtitle="Running"
             loading={isLoading}
             to="/campaigns"
@@ -67,7 +77,7 @@ export function DashboardPage() {
           />
           <StatCard
             title="Tasks"
-            value={stats?.tasks.running ?? 0}
+            value={stats?.tasks.running ?? '?'}
             subtitle="Running"
             loading={isLoading}
             to="/campaigns"
@@ -76,7 +86,7 @@ export function DashboardPage() {
           />
           <StatCard
             title="Cracked"
-            value={stats?.cracked.total ?? 0}
+            value={stats?.cracked.total ?? '?'}
             subtitle="Total hashes"
             loading={isLoading}
             to="/results"

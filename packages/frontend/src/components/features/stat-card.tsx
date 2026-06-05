@@ -72,13 +72,13 @@ export function StatCard({
     <Skeleton className="mt-2 h-8 w-20" />
   ) : (
     <div className="relative mt-2 inline-block" aria-live="polite" aria-atomic="true">
-      <AnimatePresence initial={false} mode="sync">
+      <AnimatePresence initial={false} mode="wait">
         <motion.span
           key={String(value)}
           initial={ANIMATE_FROM}
           animate={ANIMATE_TO}
           exit={ANIMATE_EXIT}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
           className={cn(
             'text-foreground inline-block font-mono font-bold tabular-nums',
             emphasis === 'primary' ? 'text-3xl' : 'text-2xl'

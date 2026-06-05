@@ -13,9 +13,9 @@ import {
   waitFor,
 } from '../test-utils'
 
-afterEach(() => {
-  cleanupAll()
-})
+// cleanupAll() already invokes Testing Library's cleanup() plus
+// resetAllStores(); calling cleanup() explicitly was redundant.
+afterEach(cleanupAll)
 
 describe('StatCard', () => {
   it('renders title, value, and subtitle', () => {

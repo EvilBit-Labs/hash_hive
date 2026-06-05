@@ -122,13 +122,14 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
 
     await expect(page.locator('[data-testid="stat-card"]')).toHaveCount(4)
 
-    // The animate-ping ping span on the connection indicator must carry the
-    // motion-reduce gate so it does not animate under reduce.
-    const ping = page.locator('.animate-ping').first()
-    const isVisible = await ping.isVisible().catch(() => false)
-    if (isVisible) {
-      const cls = await ping.getAttribute('class')
-      expect(cls).toContain('motion-reduce:animate-none')
-    }
+    // Deterministic R9 assertion: every `.animate-ping` element on the page
+    // MUST carry the `motion-reduce:animate-none` gate. We do not assert the
+    // ping exists (WS state is non-deterministic in CI), but we DO assert
+    // that an ungated ping never appears — if one shows up, the page is
+    // animating under prefers-reduced-motion: reduce. Empty count is a pass
+    // (no pings = no R9 violation); any non-zero count of ungated pings is
+    // a hard fail.
+    const ungatedPings = page.locator('.animate-ping:not(.motion-reduce\\:animate-none)')
+    await expect(ungatedPings).toHaveCount(0)
   })
 })
