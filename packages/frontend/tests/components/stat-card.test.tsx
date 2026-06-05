@@ -80,17 +80,28 @@ describe('StatCard', () => {
     expect(liveRegion).not.toBeNull()
   })
 
-  it('uses text-3xl for the value when emphasis is primary', () => {
+  it('uses the hero text scale (text-5xl) for the value when emphasis is primary', () => {
     renderWithProviders(<StatCard title="Cracked" value={42} subtitle="Total" emphasis="primary" />)
     const valueEl = screen.getByText('42')
-    expect(valueEl.className).toContain('text-3xl')
+    expect(valueEl.className).toContain('text-5xl')
     expect(valueEl.className).not.toContain('text-2xl')
   })
 
-  it('uses text-2xl for the value when emphasis is secondary / default', () => {
+  it('uses the supporting text scale (text-2xl) for the value when emphasis is secondary / default', () => {
     renderWithProviders(<StatCard title="Agents" value={7} subtitle="3 online" />)
     const valueEl = screen.getByText('7')
     expect(valueEl.className).toContain('text-2xl')
+    expect(valueEl.className).not.toContain('text-5xl')
+  })
+
+  it('drops the side-stripe accent border (full border only, no border-l-2)', () => {
+    renderWithProviders(
+      <StatCard title="Agents" value={7} subtitle="3 online" accent="--ctp-teal" />
+    )
+    const card = screen.getByTestId('stat-card')
+    expect(card.className).not.toContain('border-l-2')
+    // No inline border-left-color either — the side-stripe is the banned pattern
+    expect(card.getAttribute('style') ?? '').not.toContain('border-left-color')
   })
 
   it('does not render a sparkline when sparkData has fewer than 2 points', () => {

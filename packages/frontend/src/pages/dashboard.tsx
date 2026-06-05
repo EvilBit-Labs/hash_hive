@@ -1,3 +1,4 @@
+import { Trophy } from 'lucide-react'
 import { MotionConfig } from 'motion/react'
 
 import { ConnectionIndicator } from '../components/features/connection-indicator'
@@ -90,9 +91,10 @@ export function DashboardPage() {
             subtitle="Total hashes"
             loading={isLoading}
             to="/results"
-            accent="--success"
+            accent="--ctp-peach"
             sparkData={crackedSpark}
             emphasis="primary"
+            icon={Trophy}
           />
         </div>
 
