@@ -48,16 +48,44 @@ export function DashboardPage() {
         </div>
 
         {/*
-          No `aria-live` on the grid wrapper: each StatCard's value slot is
-          its own `aria-live="polite" aria-atomic="true"` region scoped to
-          one metric, so nesting a polite region around them would cause
-          duplicate or merged screen-reader announcements.
+          Hero composition: Cracked (the operator-moment metric) sits on
+          the left of row 1, paired side-by-side with its crack-rate trend
+          chart. The two read as one editorial block ("here is the number,
+          here is its recent shape") rather than as a four-card grid plus
+          a trend below. Cracked spans 5 of 12 columns, the trend spans 7;
+          below `lg`, they stack vertically so the pairing still reads on
+          tablet/narrow.
+
+          Per-card aria-live regions on the value slot are scoped inside
+          each StatCard, so wrapping this grid in another `aria-live`
+          would just nest polite regions; intentionally omitted.
 
           Fallback value `'?'` (not `0` or empty string) is the consistent
-          post-load unknown indicator across all four cards — so a failed
+          post-load unknown indicator across all four cards: a failed
           stats query does not silently render a real-looking `0`.
         */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-12 lg:gap-4">
+          <StatCard
+            title="Cracked"
+            value={stats?.cracked.total ?? '?'}
+            subtitle="Total hashes"
+            loading={isLoading}
+            to="/results"
+            accent="--ctp-peach"
+            sparkData={crackedSpark}
+            emphasis="primary"
+            icon={Trophy}
+            className="lg:col-span-5"
+          />
+          <CrackRateTrendChart data={crackedSpark} loading={isLoading} className="lg:col-span-7" />
+        </div>
+
+        {/*
+          Surveillance strip: three supporting metrics in a thin
+          equal-width row. Calmer than the hero block above; per-domain
+          colors live in the sparkline strokes only, not as card chrome.
+        */}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <StatCard
             title="Agents"
             value={stats ? `${stats.agents.online} / ${stats.agents.total}` : '?'}
@@ -85,20 +113,7 @@ export function DashboardPage() {
             accent="--ctp-lavender"
             sparkData={tasksSpark}
           />
-          <StatCard
-            title="Cracked"
-            value={stats?.cracked.total ?? '?'}
-            subtitle="Total hashes"
-            loading={isLoading}
-            to="/results"
-            accent="--ctp-peach"
-            sparkData={crackedSpark}
-            emphasis="primary"
-            icon={Trophy}
-          />
         </div>
-
-        <CrackRateTrendChart data={crackedSpark} loading={isLoading} />
 
         <SystemHealthCard />
       </div>

@@ -12,12 +12,15 @@ import {
 
 import type { SparkPoint } from '../../hooks/use-spark-history'
 
+import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
 import { ChartErrorBoundary } from './chart-error-boundary'
 
 interface CrackRateTrendChartProps {
   readonly data: ReadonlyArray<SparkPoint>
   readonly loading?: boolean
+  /** Extra classes for the rendered <section> (e.g. `lg:col-span-7` from a bento parent grid). */
+  readonly className?: string
 }
 
 export function DashboardTooltip({ active, payload }: TooltipContentProps) {
@@ -39,16 +42,14 @@ export function DashboardTooltip({ active, payload }: TooltipContentProps) {
   )
 }
 
-export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps) {
+export function CrackRateTrendChart({ data, loading, className }: CrackRateTrendChartProps) {
   const headingId = useId()
   const gradientId = `crack-rate-fill-${useId().replace(/:/g, '')}`
+  const sectionClass = cn('bg-surface-0/40 border-surface-0 rounded-md border p-4', className)
 
   if (loading) {
     return (
-      <section
-        aria-labelledby={headingId}
-        className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
-      >
+      <section aria-labelledby={headingId} className={sectionClass}>
         <h2 id={headingId} className="sr-only">
           Crack rate trend
         </h2>
@@ -59,10 +60,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
 
   if (data.length < 2) {
     return (
-      <section
-        aria-labelledby={headingId}
-        className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
-      >
+      <section aria-labelledby={headingId} className={sectionClass}>
         <h2 id={headingId} className="sr-only">
           Crack rate trend
         </h2>
@@ -75,10 +73,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
   }
 
   const errorFallback = (
-    <section
-      aria-labelledby={headingId}
-      className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
-    >
+    <section aria-labelledby={headingId} className={sectionClass}>
       <h2 id={headingId} className="sr-only">
         Crack rate trend
       </h2>
@@ -91,10 +86,7 @@ export function CrackRateTrendChart({ data, loading }: CrackRateTrendChartProps)
 
   return (
     <ChartErrorBoundary fallback={errorFallback}>
-      <section
-        aria-labelledby={headingId}
-        className="bg-surface-0/40 border-surface-0 rounded-md border p-4"
-      >
+      <section aria-labelledby={headingId} className={sectionClass}>
         <h2 id={headingId} className="sr-only">
           Crack rate trend
         </h2>

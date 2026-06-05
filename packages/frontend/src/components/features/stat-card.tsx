@@ -56,6 +56,8 @@ interface StatCardProps {
   readonly emphasis?: StatEmphasis
   /** Optional lucide icon, rendered in the top-right corner. Used by `emphasis="primary"`. */
   readonly icon?: LucideIcon
+  /** Extra classes for the outer surface (e.g. `lg:col-span-5` from a bento parent grid). */
+  readonly className?: string
 }
 
 const ANIMATE_FROM = { opacity: 0, y: 4 } as const
@@ -72,6 +74,7 @@ export function StatCard({
   sparkData,
   emphasis = 'secondary',
   icon: Icon,
+  className,
 }: StatCardProps) {
   const navigate = useNavigate()
   const gradientId = `stat-spark-${useId().replace(/:/g, '')}`
@@ -140,45 +143,49 @@ export function StatCard({
     emptySparkline
   )
 
-  const content = (
+  // Primary content is laid out as a flex column so the title hugs the top
+  // and the value + subtitle + sparkline cluster at the bottom of the
+  // tall hero card. Secondary keeps its compact stacked rhythm.
+  const content = isPrimary ? (
     <>
       {Icon && (
         <Icon
           aria-hidden="true"
-          className={cn(
-            'absolute top-4 right-4 h-5 w-5',
-            isPrimary ? 'text-[hsl(var(--ctp-peach)/0.7)]' : 'text-muted-foreground'
-          )}
+          className="absolute top-5 right-5 h-6 w-6 text-[hsl(var(--ctp-peach)/0.7)]"
         />
       )}
-      <p
-        className={cn(
-          'text-xs font-medium tracking-[0.18em] uppercase',
-          isPrimary ? 'text-[hsl(var(--ctp-peach)/0.85)]' : 'text-muted-foreground'
-        )}
-      >
+      <p className="text-xs font-medium tracking-[0.18em] text-[hsl(var(--ctp-peach)/0.85)] uppercase">
+        {title}
+      </p>
+      <div className="flex flex-col gap-1">
+        {valueSlot}
+        <p className="text-xs text-[hsl(var(--ctp-peach)/0.65)]">{subtitle}</p>
+        {sparklineSlot}
+      </div>
+    </>
+  ) : (
+    <>
+      {Icon && (
+        <Icon aria-hidden="true" className="text-muted-foreground absolute top-4 right-4 h-5 w-5" />
+      )}
+      <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
         {title}
       </p>
       {valueSlot}
-      <p
-        className={cn(
-          'mt-1 text-xs',
-          isPrimary ? 'text-[hsl(var(--ctp-peach)/0.65)]' : 'text-muted-foreground'
-        )}
-      >
-        {subtitle}
-      </p>
+      <p className="text-muted-foreground mt-1 text-xs">{subtitle}</p>
       {sparklineSlot}
     </>
   )
 
   // Drenched primary card: peach surface gradient + peach border. Carries
   // ~50% of the card area in peach tint so the hero metric is unmistakable
-  // from across the room. Supporting cards stay neutral so this one card
-  // doesn't have to compete for attention.
+  // from across the room. `min-h-64` pairs with the adjacent crack-rate
+  // trend chart (h-64) on the dashboard bento; the inner `flex-col
+  // justify-between` pins the title at the top and the value+sparkline
+  // cluster at the bottom of the tall hero card.
   const primarySurface = cn(
-    'relative bg-gradient-to-b from-[hsl(var(--ctp-peach)/0.16)] to-[hsl(var(--ctp-peach)/0.04)]',
-    'rounded-md border border-[hsl(var(--ctp-peach)/0.35)] p-5',
+    'relative flex flex-col justify-between bg-gradient-to-b from-[hsl(var(--ctp-peach)/0.16)] to-[hsl(var(--ctp-peach)/0.04)]',
+    'min-h-64 rounded-md border border-[hsl(var(--ctp-peach)/0.35)] p-6',
     'transition-colors',
     'hover:from-[hsl(var(--ctp-peach)/0.22)] hover:to-[hsl(var(--ctp-peach)/0.06)]',
     'hover:border-[hsl(var(--ctp-peach)/0.55)]',
@@ -195,7 +202,7 @@ export function StatCard({
     'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
   )
 
-  const surface = isPrimary ? primarySurface : secondarySurface
+  const surface = cn(isPrimary ? primarySurface : secondarySurface, className)
 
   if (to) {
     return (
