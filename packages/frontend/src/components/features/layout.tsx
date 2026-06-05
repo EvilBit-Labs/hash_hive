@@ -3,7 +3,7 @@ import { Outlet } from 'react-router'
 
 import logoSvg from '../../assets/logo.svg'
 import { useUiStore } from '../../stores/ui'
-import { ConnectionIndicator } from './connection-indicator'
+import { ConnectionBanner, ConnectionIndicator } from './connection-indicator'
 import { EventsProvider } from './events-provider'
 import { MobileSidebar, Sidebar } from './sidebar'
 
@@ -17,6 +17,16 @@ export function AppLayout() {
         <Sidebar />
 
         <div className="flex flex-1 flex-col overflow-hidden">
+          {/*
+            Full-width alert banner for degraded / disconnected states.
+            Sits above all other chrome so the operator can't miss it on
+            a wall display. Renders nothing for `open` and the transient
+            connecting / reconnecting / authenticating states; the inline
+            `ConnectionIndicator` (top-right of pages, sidebar footer)
+            carries those signals ambiently.
+          */}
+          <ConnectionBanner />
+
           {/* Mobile header - visible below md */}
           <header className="border-surface-0/50 bg-mantle flex items-center gap-3 border-b px-4 py-3 md:hidden">
             <button

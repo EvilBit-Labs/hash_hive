@@ -1,6 +1,7 @@
 import type { ConnectionStatus } from '@hashhive/shared'
+import type { LucideIcon } from 'lucide-react'
 
-import { Activity } from 'lucide-react'
+import { Activity, WifiOff } from 'lucide-react'
 
 import { cn } from '../../lib/utils'
 import { useEventsConnection } from './events-provider'
@@ -105,5 +106,121 @@ export function ConnectionIndicator({ status }: ConnectionIndicatorProps = {}) {
       )}
       <span className={v.labelClass}>{v.text}</span>
     </output>
+  )
+}
+
+interface BannerConfig {
+  readonly surface: string
+  readonly iconBg: string
+  readonly iconColor: string
+  readonly titleColor: string
+  readonly title: string
+  readonly description: string
+  readonly Icon: LucideIcon
+}
+
+/**
+ * Renders an `alert` banner only for the two "operator must know"
+ * connection states. `connecting` and its transient siblings produce
+ * nothing — they pass too fast to be useful at this surface, and the
+ * inline `ConnectionIndicator` already carries the ambient signal.
+ */
+function bannerForStatus(status: ConnectionStatus): BannerConfig | null {
+  switch (status) {
+    case 'fallback':
+      return {
+        surface: 'bg-warning/10 border-warning/30',
+        iconBg: 'bg-warning/15',
+        iconColor: 'text-warning',
+        titleColor: 'text-warning',
+        title: 'Live updates paused',
+        description:
+          'WebSocket connection dropped. Falling back to 60-second polling; data may be up to 60s stale.',
+        Icon: Activity,
+      }
+    case 'error':
+      return {
+        surface: 'bg-destructive/10 border-destructive/30',
+        iconBg: 'bg-destructive/15',
+        iconColor: 'text-destructive',
+        titleColor: 'text-destructive',
+        title: 'Disconnected from the backend',
+        description:
+          'Live and polled updates have stopped. Recent data may be stale until the connection recovers.',
+        Icon: WifiOff,
+      }
+    case 'open':
+    case 'connecting':
+    case 'authenticating':
+    case 'reconnecting':
+      return null
+  }
+}
+
+interface ConnectionBannerProps {
+  /**
+   * When provided, the banner renders for this status directly (used
+   * by tests). When omitted, reads from `useEventsConnection()`.
+   */
+  readonly status?: ConnectionStatus
+}
+
+/**
+ * "Impossible to miss" full-width alert for degraded / disconnected
+ * states, mounted at the AppLayout root. Operators on a wall display
+ * notice this within one glance — the inline `ConnectionIndicator` is
+ * for ambient awareness, this is for action signals.
+ *
+ * `Reload page` is the explicit operator verb because the underlying
+ * `useEvents` hook already auto-retries with backoff; a fresh page
+ * load forces a clean BetterAuth handshake + new WebSocket attempt and
+ * is what most operators want at this point ("I lost connection;
+ * confirm the system is fully back"). A softer in-place `reconnect()`
+ * would need to be added to `useEvents` and surfaced through the
+ * `EventsContext`; deferred until there's evidence operators want it.
+ */
+export function ConnectionBanner({ status }: ConnectionBannerProps = {}) {
+  const ctx = useEventsConnection()
+  const resolved = status ?? ctx.status
+  const config = bannerForStatus(resolved)
+  if (!config) return null
+
+  const { surface, iconBg, iconColor, titleColor, title, description, Icon } = config
+
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      data-testid="connection-banner"
+      className={cn(
+        'border-b px-4 py-3 sm:px-6 lg:px-8',
+        // Transition the color tokens, not layout properties, so an
+        // entering banner doesn't reflow the main scroll position.
+        'transition-colors',
+        surface
+      )}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-md', iconBg)}>
+          <Icon aria-hidden="true" className={cn('h-5 w-5', iconColor)} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className={cn('text-sm font-semibold', titleColor)}>{title}</p>
+          <p className="text-foreground/80 text-xs">{description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className={cn(
+            'inline-flex h-9 shrink-0 items-center justify-center rounded-md border px-4 text-xs font-medium',
+            'border-foreground/25 text-foreground transition-colors',
+            'hover:bg-foreground/5 hover:border-foreground/40',
+            'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
+          )}
+        >
+          Reload page
+        </button>
+      </div>
+    </div>
   )
 }
