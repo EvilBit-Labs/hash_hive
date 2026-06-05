@@ -10,7 +10,7 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
 
   // PostgreSQL
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.url(),
   // Connection pool sizing. Default 50 covers request handlers,
   // BullMQ workers (which currently share this pool), and the
   // health/heartbeat sweeps. Pre-#159 baseline of 20 saturated under
@@ -23,10 +23,10 @@ const envSchema = z.object({
   DATABASE_IDLE_TIMEOUT: z.coerce.number().int().min(0).default(30),
 
   // Redis
-  REDIS_URL: z.string().url(),
+  REDIS_URL: z.url(),
 
   // Object storage (SeaweedFS in dev / air-gapped prod, AWS S3 in hosted envs)
-  S3_ENDPOINT: z.string().url(),
+  S3_ENDPOINT: z.url(),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
   // Trim before applying min so a whitespace-only env var fails env
@@ -43,7 +43,7 @@ const envSchema = z.object({
 
   // BetterAuth (generate with: openssl rand -base64 32)
   BETTER_AUTH_SECRET: z.string().min(32),
-  BETTER_AUTH_URL: z.string().url().optional(),
+  BETTER_AUTH_URL: z.url().optional(),
 
   // System health monitoring (issue #109)
   HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
