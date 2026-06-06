@@ -284,11 +284,13 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                               variant="ghost"
                               size="sm"
                               onClick={() => handleUseType(c.hashcatMode)}
-                              disabled={applyDisabled}
+                              disabled={applyDisabled || hashTypes.isLoading || !hashTypes.data}
                               title={
                                 selectedListId === null
                                   ? 'Pick a hash list above to apply'
-                                  : undefined
+                                  : hashTypes.isLoading || !hashTypes.data
+                                    ? 'Loading hash type registry…'
+                                    : undefined
                               }
                             >
                               {isApplying ? 'Applying…' : 'Use This Type'}

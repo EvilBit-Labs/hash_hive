@@ -194,13 +194,18 @@ if (!IS_ISOLATED) {
     // returns null → 404. Pinned via the mirror-service-not-schema
     // convention's dynamic-factory pattern.
     setHashListType: mockSetHashListType,
-    isForeignKeyViolation: (err: unknown): boolean => {
+    isForeignKeyViolation: (err: unknown, expectedConstraint?: string): boolean => {
       // Mirror the real helper's behavior so route-level tests can
       // simulate FK violations without standing up a real Postgres.
       if (!(err instanceof Error)) return false
       const code = 'code' in err ? ((err as { code?: string }).code ?? undefined) : undefined
-      if (code === '23503') return true
-      return /foreign key|violates|reference/i.test(err.message)
+      const constraint =
+        'constraint' in err ? ((err as { constraint?: string }).constraint ?? undefined) : undefined
+      const isFkBySqlstate = code === '23503'
+      const isFkByMessage = !isFkBySqlstate && /foreign key|violates|reference/i.test(err.message)
+      if (!isFkBySqlstate && !isFkByMessage) return false
+      if (expectedConstraint === undefined) return true
+      return constraint === expectedConstraint
     },
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
@@ -859,15 +864,17 @@ if (!IS_ISOLATED) {
       expect(mockSetHashListType).not.toHaveBeenCalled()
     })
 
-    it('maps Postgres FK violation (SQLSTATE 23503) to 400 "Unknown hashTypeId"', async () => {
+    it('maps Postgres FK violation (SQLSTATE 23503) on the hash_type_id constraint to 400 "Unknown hashTypeId"', async () => {
       mockSetHashListType.mockReset()
       mockSetHashListType.mockImplementation(async () => {
         const err = new Error(
-          'insert or update on table "hash_lists" violates foreign key constraint "hash_lists_hash_type_id_fkey"'
+          'insert or update on table "hash_lists" violates foreign key constraint "hash_lists_hash_type_id_hash_types_id_fk"'
         )
-        // Drizzle/postgres-js surfaces SQLSTATE 23503 for FK violation
-        // on the err.code property.
-        ;(err as Error & { code?: string }).code = '23503'
+        // Drizzle/postgres-js surfaces SQLSTATE 23503 on err.code and
+        // the constraint name on err.constraint for FK violations.
+        ;(err as Error & { code?: string; constraint?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint?: string }).constraint =
+          'hash_lists_hash_type_id_hash_types_id_fk'
         throw err
       })
 
@@ -883,6 +890,31 @@ if (!IS_ISOLATED) {
       expect(json.error?.message).toBe('Unknown hashTypeId')
     })
 
+    it('does NOT map an unrelated FK violation to 400 — falls through to 5xx', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        // Simulate a different FK violation (e.g., a future trigger
+        // that references another table). The isForeignKeyViolation
+        // helper's constraint-name check must keep this as a 5xx so
+        // we don't tell the user "Unknown hashTypeId" when the real
+        // problem is elsewhere.
+        const err = new Error(
+          'insert or update on table "hash_lists" violates foreign key constraint "some_other_fk"'
+        )
+        ;(err as Error & { code?: string; constraint?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint?: string }).constraint = 'some_other_fk'
+        throw err
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBeGreaterThanOrEqual(500)
+    })
+
     it('rethrows non-FK errors as 5xx so transient infra failure surfaces, not as 400', async () => {
       mockSetHashListType.mockReset()
       mockSetHashListType.mockImplementation(async () => {
@@ -895,12 +927,9 @@ if (!IS_ISOLATED) {
         body: JSON.stringify({ hashTypeId: 1000 }),
       })
 
-      // The route handler doesn't catch non-FK errors; Hono's default
-      // 500 envelope handles it. The exact status (500 here) is the
-      // backstop — the assertion is "not 400" so a genuine infra
-      // outage doesn't get misclassified as bad client input.
-      expect(res.status).not.toBe(400)
-      expect(res.status).not.toBe(404)
+      // Tighter than "not 400" — a regression that returns 200 with
+      // an empty body would have escaped the original assertion.
+      expect(res.status).toBeGreaterThanOrEqual(500)
     })
   })
 } // end IS_ISOLATED

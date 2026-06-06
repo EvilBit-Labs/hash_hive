@@ -222,16 +222,42 @@ export function useUploadResourceFile(type: ResourceType) {
       const timeoutSignal = AbortSignal.timeout(DIRECT_UPLOAD_TIMEOUT_MS)
       const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
-      const res = await fetch(`/api/v1/dashboard/resources/${type}/${id}/upload`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-        signal: combinedSignal,
-      })
+      let res: Response
+      try {
+        res = await fetch(`/api/v1/dashboard/resources/${type}/${id}/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          body: formData,
+          signal: combinedSignal,
+        })
+      } catch (err) {
+        // Distinguish timeout-driven abort from operator-driven abort
+        // so the modal can surface the right hint. AbortSignal.timeout
+        // throws DOMException with name 'TimeoutError'; manual abort
+        // via the caller's signal throws name 'AbortError'.
+        if (err instanceof DOMException && err.name === 'TimeoutError') {
+          throw new Error(
+            `Upload timed out after ${Math.round(DIRECT_UPLOAD_TIMEOUT_MS / 1000)}s. ` +
+              'Try a smaller file or check your network.'
+          )
+        }
+        throw err
+      }
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        const error = body.error ?? {}
-        throw new Error(error.message ?? 'Upload failed')
+        // Fall back to text() when the response body isn't JSON (proxy
+        // 502 returning HTML, gateway timeout returning plaintext) so
+        // the operator gets a real diagnostic instead of the bare
+        // "Upload failed".
+        let body: { error?: { message?: string } } = {}
+        try {
+          body = await res.json()
+        } catch {
+          const text = await res.text().catch(() => '')
+          throw new Error(
+            `Upload failed (HTTP ${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`
+          )
+        }
+        throw new Error(body.error?.message ?? `Upload failed (HTTP ${res.status})`)
       }
       return res.json()
     },
@@ -255,9 +281,21 @@ export function useDeleteResource(type: ResourceType) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (id: number) => api.delete<{ success: true }>(`/dashboard/resources/${type}/${id}`),
+    // Both DELETE routes return 204 No Content. `api.request` returns
+    // `undefined` for 204 (api.ts:72), so the mutation result type is
+    // `void` — claiming `{ success: true }` would be a runtime lie and
+    // a future caller dereferencing `result.success` would get a
+    // TypeError.
+    mutationFn: (id: number) => api.delete<void>(`/dashboard/resources/${type}/${id}`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: [type] })
+      // Also invalidate hash-list-detail in case the caller is mid-
+      // navigation from a detail page when the delete fires. Cheap;
+      // the hash-list-detail cache is per-id so only the deleted
+      // row's detail entry is invalidated.
+      if (type === 'hash-lists') {
+        void queryClient.invalidateQueries({ queryKey: ['hash-list-detail'] })
+      }
     },
   })
 }

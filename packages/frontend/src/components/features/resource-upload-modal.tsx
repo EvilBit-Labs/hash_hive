@@ -37,6 +37,11 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const [error, setError] = useState<string | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // AbortController for the direct (<100 MB) upload path so the user
+  // can cancel a wedged upload without waiting for the 5-minute
+  // timeout. The chunked path owns its own controller inside
+  // useChunkedUpload — they're orthogonal.
+  const directUploadAbortRef = useRef<AbortController | null>(null)
 
   const createResource = useCreateResource(type)
   const uploadFile = useUploadResourceFile(type)
@@ -133,22 +138,26 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
     // chunked path's backend handler already rolls back on multipart
     // failure; this client mirrors that contract for the direct path.
     let createdResourceId: number | null = null
+    const controller = new AbortController()
+    directUploadAbortRef.current = controller
     try {
       const result = await createResource.mutateAsync({ name: name.trim() })
       createdResourceId = result.item.id
 
-      await uploadFile.mutateAsync({ id: createdResourceId, file })
+      await uploadFile.mutateAsync({ id: createdResourceId, file, signal: controller.signal })
 
       onSuccess(createdResourceId)
       handleClose()
     } catch (err) {
+      // Distinguish operator-cancel from server failure so the user
+      // sees an actionable message rather than the bare DOMException.
+      const isOperatorCancel = controller.signal.aborted && !isTimeoutAbort(err)
       if (createdResourceId !== null) {
-        // Best-effort rollback. If the delete fails we surface the
-        // original upload error to the operator (more actionable
-        // than the cleanup failure) and log the orphan id for
-        // post-mortem. React Query's onSuccess invalidation in the
-        // delete hook still fires so the orphan disappears from the
-        // table if the delete eventually succeeds.
+        // Best-effort rollback. If the delete fails we expose the
+        // orphan id to the operator so they can manually clean up
+        // and so support can correlate. React Query's onSuccess
+        // invalidation in the delete hook still fires so the orphan
+        // disappears from the table if the delete eventually succeeds.
         try {
           await deleteResource.mutateAsync(createdResourceId)
         } catch (cleanupErr) {
@@ -157,10 +166,30 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             resourceId: createdResourceId,
             error: cleanupErr,
           })
+          setError(
+            `${err instanceof Error ? err.message : 'Upload failed'} ` +
+              `(orphan row id ${createdResourceId} could not be auto-cleaned; ` +
+              `delete it manually or contact an admin).`
+          )
+          return
         }
       }
-      setError(err instanceof Error ? err.message : 'Upload failed')
+      if (isOperatorCancel) {
+        setError('Upload cancelled.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Upload failed')
+      }
+    } finally {
+      directUploadAbortRef.current = null
     }
+  }
+
+  // Distinguish a TimeoutAbortSignal trigger from a manual abort so
+  // the operator gets the right hint. AbortSignal.timeout() throws
+  // with `name === 'TimeoutError'`; manual aborts throw with
+  // `name === 'AbortError'`.
+  function isTimeoutAbort(err: unknown): boolean {
+    return err instanceof DOMException && err.name === 'TimeoutError'
   }
 
   const handleReset = () => {
@@ -175,6 +204,10 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const handleClose = () => {
     if (chunkedUpload.isUploading) {
       chunkedUpload.cancel()
+    }
+    if (directUploadAbortRef.current) {
+      directUploadAbortRef.current.abort()
+      directUploadAbortRef.current = null
     }
     handleReset()
     onClose()
@@ -305,7 +338,12 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
         </div>
 
         <div className="mt-6 flex justify-end gap-2">
-          <Button variant="secondary" onClick={handleClose} disabled={isSmallUpload}>
+          {/* Cancel stays clickable during a direct upload now that
+              handleClose aborts the in-flight controller. Disabled
+              only while the chunked path's own cancel is mid-flight
+              (the chunked-upload hook manages its own cancellation
+              latency). */}
+          <Button variant="secondary" onClick={handleClose}>
             Cancel
           </Button>
           <Button onClick={handleUpload} disabled={!file || !name.trim() || isUploading}>

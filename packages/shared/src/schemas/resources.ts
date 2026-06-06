@@ -100,7 +100,10 @@ export const resourceUpdateEventDataSchema = z.discriminatedUnion('action', [
     action: z.literal('hash_list_failed'),
     projectId: z.number().int().positive(),
     hashListId: z.number().int().positive(),
-    error: z.string(),
+    // Operator-facing error message. Bounded to catch a producer bug
+    // that sets it to "" (the original schema allowed empty strings)
+    // and to keep a hostile/log-bomb producer from spamming the wire.
+    error: z.string().min(1).max(2000),
   }),
 ])
 
@@ -141,12 +144,13 @@ export const resourceStatusSchema = z.enum([
  */
 export const fileRefSchema = z
   .object({
-    bucket: z.string(),
-    key: z.string(),
+    bucket: z.string().min(1),
+    key: z.string().min(1),
     contentType: z.string(),
     size: z.number().int().nonnegative(),
     name: z.string(),
-    uploadedAt: z.string(),
+    // ISO 8601 datetime — matches `hashListStatisticsSchema.lastUpdated`.
+    uploadedAt: z.string().datetime(),
   })
   .openapi('FileRef')
 

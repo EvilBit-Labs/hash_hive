@@ -137,15 +137,31 @@ export async function listHashListsPaginated(
 }
 
 /**
- * Detect a Postgres foreign-key-violation either by SQLSTATE 23503 (the
- * canonical, locale-stable signal) or by a regex against `err.message`
- * (fallback for older PG / test mocks that don't surface the code).
+ * Detect a Postgres foreign-key-violation. SQLSTATE 23503 is the
+ * canonical, locale-stable signal; the message regex is a fallback for
+ * older driver versions and test mocks that don't surface `err.code`.
+ *
+ * When `expectedConstraint` is supplied, the constraint name on the
+ * error must match — this prevents misclassifying an unrelated FK
+ * violation (e.g., a trigger that references another table) as the
+ * specific FK the caller is mapping to a 400. Drizzle/postgres-js
+ * surfaces the constraint name on `err.constraint` for SQLSTATE 23503
+ * violations.
  */
-export function isForeignKeyViolation(err: unknown): boolean {
+export function isForeignKeyViolation(err: unknown, expectedConstraint?: string): boolean {
   if (!(err instanceof Error)) return false
   const code = 'code' in err ? (err as { code?: string }).code : undefined
-  if (code === '23503') return true
-  return /foreign key|violates|reference/i.test(err.message)
+  const constraint = 'constraint' in err ? (err as { constraint?: string }).constraint : undefined
+  const isFkBySqlstate = code === '23503'
+  const isFkByMessage = !isFkBySqlstate && /foreign key|violates|reference/i.test(err.message)
+  if (!isFkBySqlstate && !isFkByMessage) return false
+  // No expected constraint: any FK violation counts (backward-compatible).
+  if (expectedConstraint === undefined) return true
+  // Expected constraint: require an exact match. If the error didn't
+  // surface a constraint name (older driver, mock), be conservative
+  // and return false so the caller falls through to the generic 500
+  // rather than silently misclassifying.
+  return constraint === expectedConstraint
 }
 
 /**

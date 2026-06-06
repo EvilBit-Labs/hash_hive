@@ -191,7 +191,7 @@ controlHashListRoutes.openapi(setHashListTypeRoute, async (c) => {
     if (!updated) return problemResponse(c, 404, 'not_found', 'hash list not found')
     return c.json(updated, 200)
   } catch (err) {
-    if (isForeignKeyViolation(err)) {
+    if (isForeignKeyViolation(err, 'hash_lists_hash_type_id_hash_types_id_fk')) {
       return problemResponse(c, 400, 'validation', 'unknown hashTypeId')
     }
     return controlErrorResponse(c, err)

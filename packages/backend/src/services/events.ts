@@ -349,7 +349,14 @@ export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput
   // filtering in useEvents, but inner-payload projectId lets routeEvent
   // and any future per-row update path validate ownership without
   // re-reading frame state (issue #163 Step 7).
-  const payload = { ...input, projectId } as ResourceUpdatePayload
+  //
+  // Per-branch narrow on `input.action` so each spread satisfies the
+  // discriminated union without an `as ResourceUpdatePayload` cast.
+  // A blanket cast here would silently keep compiling if the schema
+  // gains a third branch with a new required field — narrowing forces
+  // every new branch to land here too.
+  const payload: ResourceUpdatePayload =
+    input.action === 'hash_list_ready' ? { ...input, projectId } : { ...input, projectId }
   // The cast widens the typed payload to AppEvent.data's
   // `Record<string, unknown>`. AppEvent.data stays unstructured because
   // the WebSocket wire is untyped JSON anyway — subscribers re-narrow

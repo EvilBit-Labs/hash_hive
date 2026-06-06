@@ -474,11 +474,16 @@ resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
     // rather than letting it bubble as a 500 — the client supplied a
     // bad value, not a server fault. The route only updates
     // hash_type_id, so the only FK that can violate here is
-    // hash_lists.hash_type_id → hash_types.id. Uses the shared
-    // SQLSTATE-first detector to stay locale-stable.
-    if (isForeignKeyViolation(err)) {
+    // hash_lists.hash_type_id → hash_types.id (the constraint name
+    // is verified inside the helper).
+    if (isForeignKeyViolation(err, 'hash_lists_hash_type_id_hash_types_id_fk')) {
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Unknown hashTypeId')
     }
+    // Non-FK errors: log with route context before rethrow so the
+    // generic 500 envelope from Hono's default handler isn't a black
+    // hole for ops triage. Matches the pattern used by the upload
+    // route's logger.error above.
+    logger.error({ hashListId: id, projectId, hashTypeId, err }, 'setHashListType failed')
     throw err
   }
 })
