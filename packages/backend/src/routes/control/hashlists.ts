@@ -5,7 +5,11 @@
  * existing lists.
  */
 
-import { hashListStatisticsSchema, selectHashListSchema } from '@hashhive/shared'
+import {
+  hashListStatisticsSchema,
+  selectHashListSchema,
+  setHashListTypeRequestSchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -20,7 +24,9 @@ import {
 import {
   getHashListById,
   getHashListStats,
+  isForeignKeyViolation,
   listHashListsPaginated,
+  setHashListType,
 } from '../../services/resources.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
@@ -138,6 +144,56 @@ controlHashListRoutes.openapi(getHashListStatsRoute, async (c) => {
     const stats = await getHashListStats(id)
     return c.json(stats, 200)
   } catch (err) {
+    return controlErrorResponse(c, err)
+  }
+})
+
+// ─── PATCH /hash-lists/{id} — set hash type (agent-native parity) ───
+//
+// Operator-facing PATCH set-hash-type exists on the dashboard surface;
+// this is the Control-API parallel so CLI/automation can perform the
+// same operation without going through the cookie-session flow. Mirrors
+// the dashboard's project-scoping (404 on cross-project lookup) and
+// FK-violation → 400 mapping.
+
+const setHashListTypeRoute = createRoute({
+  method: 'patch',
+  path: '/{id}',
+  tags: ['HashLists'],
+  summary: 'Set the hash type on an existing hash list',
+  security: [{ ControlApiKey: [] }],
+  request: {
+    params: idParamSchema,
+    body: {
+      content: { 'application/json': { schema: setHashListTypeRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: 'Updated hash list.',
+      content: { 'application/json': { schema: hashListSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlHashListRoutes.openapi(setHashListTypeRoute, async (c) => {
+  try {
+    const { projectId } = await requireProjectMembership(c)
+    const { id } = c.req.valid('param')
+    const { hashTypeId } = c.req.valid('json')
+    const updated = await setHashListType(id, projectId, hashTypeId)
+    if (!updated) return problemResponse(c, 404, 'not_found', 'hash list not found')
+    return c.json(updated, 200)
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      return problemResponse(c, 400, 'validation', 'unknown hashTypeId')
+    }
     return controlErrorResponse(c, err)
   }
 })

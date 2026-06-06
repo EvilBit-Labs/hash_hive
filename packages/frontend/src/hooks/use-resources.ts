@@ -198,26 +198,42 @@ export function useHashListItems(
   })
 }
 
+// Upload timeout for the direct (<100 MB) path. fetch has no built-in
+// upload timeout and the modal's Cancel button is disabled while the
+// request is pending, so a hung backend or proxy would wedge the UI
+// indefinitely without this guard. 5 minutes is the soft cap — a
+// 100 MB upload on a 1 Mbps link is ~13 minutes worst-case, so this
+// is below that floor; chunked path covers anything that legitimately
+// takes longer.
+const DIRECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000
+
 export function useUploadResourceFile(type: ResourceType) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ id, file }: { id: number; file: File }) => {
+    mutationFn: async ({ id, file, signal }: { id: number; file: File; signal?: AbortSignal }) => {
       const formData = new FormData()
       formData.append('file', file)
 
-      return fetch(`/api/v1/dashboard/resources/${type}/${id}/upload`, {
+      // Compose the caller's signal (from the modal's AbortController)
+      // with a timeout signal. AbortSignal.any short-circuits on either
+      // — operator-cancelled abort takes precedence over timeout, and
+      // the timeout still fires when the caller didn't supply a signal.
+      const timeoutSignal = AbortSignal.timeout(DIRECT_UPLOAD_TIMEOUT_MS)
+      const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+
+      const res = await fetch(`/api/v1/dashboard/resources/${type}/${id}/upload`, {
         method: 'POST',
         credentials: 'include',
         body: formData,
-      }).then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          const error = body.error ?? {}
-          throw new Error(error.message ?? 'Upload failed')
-        }
-        return res.json()
+        signal: combinedSignal,
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        const error = body.error ?? {}
+        throw new Error(error.message ?? 'Upload failed')
+      }
+      return res.json()
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: [type] })

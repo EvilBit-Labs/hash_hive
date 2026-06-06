@@ -30,6 +30,7 @@ import {
   getHashListStats,
   getResourcePresignedUrl,
   importHashList,
+  isForeignKeyViolation,
   listHashLists,
   listHashTypes,
   ResourceInUseError,
@@ -469,10 +470,13 @@ resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
     }
     return c.json({ hashList: updated }, 200)
   } catch (err) {
-    // FK violation on hash_type_id → unknown hash type. Map to a 400
+    // FK violation on hash_type_id → unknown hash type. Map to 400
     // rather than letting it bubble as a 500 — the client supplied a
-    // bad value, not a server fault.
-    if (err instanceof Error && /violates foreign key|fk_/i.test(err.message)) {
+    // bad value, not a server fault. The route only updates
+    // hash_type_id, so the only FK that can violate here is
+    // hash_lists.hash_type_id → hash_types.id. Uses the shared
+    // SQLSTATE-first detector to stay locale-stable.
+    if (isForeignKeyViolation(err)) {
       return dashboardError(c, 400, 'VALIDATION_ERROR', 'Unknown hashTypeId')
     }
     throw err

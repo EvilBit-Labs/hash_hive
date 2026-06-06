@@ -1,4 +1,4 @@
-import { useCallback, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
 
 import type { UploadProgress } from '../lib/chunked-upload/types'
 
@@ -112,6 +112,27 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
       uploadIdRef.current = null
     }
     dispatch({ type: 'RESET' })
+  }, [])
+
+  // Unmount cleanup. If the consumer modal lives inside a tab subtree
+  // (resources.tsx), switching tabs unmounts it without invoking the
+  // Cancel button's handler — orchestrateUpload would keep PUTting
+  // chunks and saveUploadState would keep writing to localStorage,
+  // followed by dispatches landing on an unmounted reducer. Abort the
+  // in-flight controller and clear persisted state on unmount so the
+  // upload cleanly stops. The Cancel button still handles the explicit
+  // case.
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
+      if (uploadIdRef.current) {
+        clearUploadState(uploadIdRef.current)
+        uploadIdRef.current = null
+      }
+    }
   }, [])
 
   return {

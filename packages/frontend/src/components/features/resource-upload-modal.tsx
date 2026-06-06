@@ -3,7 +3,11 @@ import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 import { useCallback, useRef, useState } from 'react'
 
 import { useChunkedUpload } from '../../hooks/use-chunked-upload'
-import { useCreateResource, useUploadResourceFile } from '../../hooks/use-resources'
+import {
+  useCreateResource,
+  useDeleteResource,
+  useUploadResourceFile,
+} from '../../hooks/use-resources'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { ErrorBanner } from '../ui/error-banner'
@@ -36,6 +40,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
 
   const createResource = useCreateResource(type)
   const uploadFile = useUploadResourceFile(type)
+  const deleteResource = useDeleteResource(type)
 
   const handleChunkedComplete = useCallback(
     (resourceId: number) => {
@@ -122,15 +127,38 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
       return
     }
 
+    // Direct (<100 MB) path: two-step create-then-upload. If the
+    // upload step fails after the row is created we must roll back
+    // the row, otherwise repeated retries multiply orphans. The
+    // chunked path's backend handler already rolls back on multipart
+    // failure; this client mirrors that contract for the direct path.
+    let createdResourceId: number | null = null
     try {
       const result = await createResource.mutateAsync({ name: name.trim() })
-      const resourceId = result.item.id
+      createdResourceId = result.item.id
 
-      await uploadFile.mutateAsync({ id: resourceId, file })
+      await uploadFile.mutateAsync({ id: createdResourceId, file })
 
-      onSuccess(resourceId)
+      onSuccess(createdResourceId)
       handleClose()
     } catch (err) {
+      if (createdResourceId !== null) {
+        // Best-effort rollback. If the delete fails we surface the
+        // original upload error to the operator (more actionable
+        // than the cleanup failure) and log the orphan id for
+        // post-mortem. React Query's onSuccess invalidation in the
+        // delete hook still fires so the orphan disappears from the
+        // table if the delete eventually succeeds.
+        try {
+          await deleteResource.mutateAsync(createdResourceId)
+        } catch (cleanupErr) {
+          // oxlint-disable-next-line no-console -- diagnostic for orphan-row rollback failure
+          console.warn('[resource-upload-modal] rollback delete failed for orphaned row', {
+            resourceId: createdResourceId,
+            error: cleanupErr,
+          })
+        }
+      }
       setError(err instanceof Error ? err.message : 'Upload failed')
     }
   }

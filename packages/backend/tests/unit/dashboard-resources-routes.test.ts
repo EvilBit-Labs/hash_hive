@@ -119,6 +119,12 @@ if (!IS_ISOLATED) {
   const mockImportHashList = mock(async () => ({ status: 'processing' as const, queued: true }))
   const mockDeleteHashList = mock(async () => true)
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
+  // PATCH /hash-lists/{id} set-hash-type mock. Default: row not in
+  // project (null) → route maps to 404. Tests override per-case via
+  // mockSetHashListType.mockImplementationOnce(...).
+  const mockSetHashListType = mock(
+    async (_id: number, _projectId: number, _hashTypeId: number) => null as HashListRow | null
+  )
 
   // Chunked-upload mocks — extracted so route-level tests can override
   // per-case (e.g., to throw UploadResourceNotFoundError and assert the
@@ -182,17 +188,20 @@ if (!IS_ISOLATED) {
     importHashList: mockImportHashList,
     deleteHashList: mockDeleteHashList,
     getHashListById: mockGetHashListById,
-    // PATCH /hash-lists/{id} set-hash-type (issue #163). Mock returns
-    // null by default so the route maps to 404; tests that exercise
-    // the success path override per-call via `mockSetHashListType
-    // .mockImplementationOnce(...)`. Pinned via `satisfies` per the
-    // mirror-service-not-schema convention.
-    setHashListType: mock(
-      async () =>
-        null satisfies Awaited<
-          ReturnType<typeof import('../../src/services/resources.js').setHashListType>
-        >
-    ),
+    // PATCH /hash-lists/{id} set-hash-type (issue #163). Wires the
+    // outer-scope `mockSetHashListType` declared above so per-test
+    // mockImplementationOnce overrides reach the route. Default
+    // returns null → 404. Pinned via the mirror-service-not-schema
+    // convention's dynamic-factory pattern.
+    setHashListType: mockSetHashListType,
+    isForeignKeyViolation: (err: unknown): boolean => {
+      // Mirror the real helper's behavior so route-level tests can
+      // simulate FK violations without standing up a real Postgres.
+      if (!(err instanceof Error)) return false
+      const code = 'code' in err ? ((err as { code?: string }).code ?? undefined) : undefined
+      if (code === '23503') return true
+      return /foreign key|violates|reference/i.test(err.message)
+    },
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
     // Real getHashItems returns `{items, total, limit, offset} | null`.
@@ -770,6 +779,128 @@ if (!IS_ISOLATED) {
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
       // Same generic-message pin as the upload-part case above.
       expect(json.error?.message).toBe('Upload not found')
+    })
+  })
+
+  describe('PATCH /hash-lists/{id} — set hash type (issue #163)', () => {
+    const SET_TYPE_URL = '/api/v1/dashboard/resources/hash-lists/42'
+
+    it('happy path: returns 200 with the updated row when service resolves', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async (id, projectId, hashTypeId) =>
+        makeHashList({ id, projectId, hashTypeId })
+      )
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as {
+        hashList?: { id?: number; hashTypeId?: number }
+      }
+      expect(json.hashList?.id).toBe(42)
+      expect(json.hashList?.hashTypeId).toBe(1000)
+      // Service called with (id, projectId, hashTypeId) — pin the
+      // ordering so a future refactor that swaps argument positions
+      // gets caught at the route boundary.
+      expect(mockSetHashListType).toHaveBeenCalledTimes(1)
+      const callArgs = mockSetHashListType.mock.calls[0]
+      expect(callArgs?.[0]).toBe(42)
+      expect(callArgs?.[2]).toBe(1000)
+    })
+
+    it('returns 404 RESOURCE_NOT_FOUND when service returns null (cross-project or deleted)', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => null)
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      // Generic message — no existence disclosure between cross-
+      // project miss and genuinely-deleted row.
+      expect(json.error?.message).toBe('Hash list not found')
+    })
+
+    it('returns 400 VALIDATION_ERROR for non-positive integer id', async () => {
+      mockSetHashListType.mockReset()
+      const res = await app.request('/api/v1/dashboard/resources/hash-lists/0', {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      // Service not invoked when the path-param guard rejects.
+      expect(mockSetHashListType).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 VALIDATION_ERROR for non-positive hashTypeId in body', async () => {
+      mockSetHashListType.mockReset()
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 0 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(mockSetHashListType).not.toHaveBeenCalled()
+    })
+
+    it('maps Postgres FK violation (SQLSTATE 23503) to 400 "Unknown hashTypeId"', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        const err = new Error(
+          'insert or update on table "hash_lists" violates foreign key constraint "hash_lists_hash_type_id_fkey"'
+        )
+        // Drizzle/postgres-js surfaces SQLSTATE 23503 for FK violation
+        // on the err.code property.
+        ;(err as Error & { code?: string }).code = '23503'
+        throw err
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 99999 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(json.error?.message).toBe('Unknown hashTypeId')
+    })
+
+    it('rethrows non-FK errors as 5xx so transient infra failure surfaces, not as 400', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        throw new Error('ECONNREFUSED — database unreachable')
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      // The route handler doesn't catch non-FK errors; Hono's default
+      // 500 envelope handles it. The exact status (500 here) is the
+      // backstop — the assertion is "not 400" so a genuine infra
+      // outage doesn't get misclassified as bad client input.
+      expect(res.status).not.toBe(400)
+      expect(res.status).not.toBe(404)
     })
   })
 } // end IS_ISOLATED

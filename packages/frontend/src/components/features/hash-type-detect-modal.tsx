@@ -117,10 +117,14 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     })
   }
 
+  const inFlight = detect.isPending || setType.isPending
+
   const handleTextareaKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Submit on Ctrl/Cmd + Enter so operators can paste-then-trigger
-    // from the keyboard without reaching for the mouse.
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && inRange && !detect.isPending) {
+    // from the keyboard without reaching for the mouse. Block while
+    // any mutation is in flight so a fresh detect can't race the
+    // pending set-type apply.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && inRange && !inFlight) {
       e.preventDefault()
       handleDetect()
     }
@@ -197,7 +201,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
               value={rawText}
               onChange={(e) => setRawText(e.target.value)}
               onKeyDown={handleTextareaKeyDown}
-              disabled={detect.isPending}
+              disabled={inFlight}
               rows={6}
               className="border-surface-1 bg-base focus-visible:ring-primary mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
               placeholder={`Paste ${MIN_SAMPLES}–${MAX_SAMPLES} hashes, one per line`}
@@ -301,10 +305,10 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
         </div>
 
         <div className="mt-6 flex justify-end gap-2">
-          <Button variant="secondary" onClick={handleClose} disabled={setType.isPending}>
+          <Button variant="secondary" onClick={handleClose} disabled={inFlight}>
             Close
           </Button>
-          <Button onClick={handleDetect} disabled={!inRange || detect.isPending}>
+          <Button onClick={handleDetect} disabled={!inRange || inFlight}>
             {detect.isPending ? 'Detecting…' : 'Detect'}
           </Button>
         </div>

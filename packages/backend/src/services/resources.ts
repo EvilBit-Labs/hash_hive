@@ -141,7 +141,7 @@ export async function listHashListsPaginated(
  * canonical, locale-stable signal) or by a regex against `err.message`
  * (fallback for older PG / test mocks that don't surface the code).
  */
-function isForeignKeyViolation(err: unknown): boolean {
+export function isForeignKeyViolation(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const code = 'code' in err ? (err as { code?: string }).code : undefined
   if (code === '23503') return true
