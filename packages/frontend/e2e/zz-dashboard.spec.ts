@@ -82,13 +82,14 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
     expect(new Set(gradientIds).size).toBe(gradientIds.length)
   })
 
-  test('Cracked card uses text-3xl prominence', async ({ page }) => {
+  test('Cracked card uses hero text-5xl prominence', async ({ page }) => {
     const cards = page.locator('[data-testid="stat-card"]')
     await expect(cards).toHaveCount(4)
 
-    // The fourth card is Cracked (per dashboard.tsx render order) and uses
-    // text-3xl; the other three use text-2xl.
-    const crackedValue = cards.nth(3).locator('span.text-3xl').first()
+    // Cracked is the first card in the bento (top-left of the 12-col grid,
+    // col-span-5) and uses text-5xl as the hero metric per the bolder pass
+    // — see StatCard primary emphasis. Supporting cards use text-2xl.
+    const crackedValue = cards.nth(0).locator('span.text-5xl').first()
     await expect(crackedValue).toBeVisible()
   })
 

@@ -103,7 +103,7 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
               onClick={onCopy}
               aria-label={copied ? 'Command copied' : 'Copy command to clipboard'}
               className={cn(
-                'absolute top-3 right-3 inline-flex h-7 w-7 items-center justify-center rounded',
+                'absolute top-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded',
                 'border-surface-1 bg-surface-0/95 hover:bg-surface-1 border transition-colors',
                 'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
               )}
@@ -118,13 +118,17 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
 
           <p className="text-muted-foreground text-xs">
             Replace <code className="text-foreground/90 font-mono">{'<AGENT_TOKEN>'}</code> with a
-            token from the agents page.{' '}
+            token from the{' '}
             <Link
               to="/agents"
-              className="text-[hsl(var(--ctp-peach))] underline-offset-2 hover:underline"
+              className={cn(
+                'rounded-sm text-[hsl(var(--ctp-peach))] underline-offset-2 hover:underline',
+                'focus-visible:ring-2 focus-visible:ring-[hsl(var(--ctp-peach)/0.6)] focus-visible:outline-none'
+              )}
             >
-              Manage agents
+              agents page
             </Link>
+            .
           </p>
         </div>
       </div>

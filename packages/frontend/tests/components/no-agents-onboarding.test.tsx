@@ -35,10 +35,16 @@ describe('NoAgentsOnboarding', () => {
     expect(block.textContent ?? '').toContain('<AGENT_TOKEN>')
   })
 
-  it('links to the agents management page', () => {
+  it('links to the agents management page via an inline "agents page" link', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-    const link = screen.getByRole('link', { name: 'Manage agents' })
+    const link = screen.getByRole('link', { name: 'agents page' })
     expect(link.getAttribute('href')).toBe('/agents')
+  })
+
+  it('renders a focus-visible ring class on the agents-page link for keyboard nav', () => {
+    renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
+    const link = screen.getByRole('link', { name: 'agents page' })
+    expect(link.className).toContain('focus-visible:ring-2')
   })
 
   describe('copy button', () => {

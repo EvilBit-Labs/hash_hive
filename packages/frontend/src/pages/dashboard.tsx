@@ -160,7 +160,7 @@ export function DashboardPage() {
                 isConnectionStale ? 'text-muted-foreground/50' : 'text-muted-foreground'
               )}
             >
-              <span aria-live="polite">Last updated {lastUpdatedLabel}</span>
+              <span>Last updated {lastUpdatedLabel}</span>
               {isFetching && <span className="text-muted-foreground/70 ml-2">refreshing...</span>}
             </p>
           )}
