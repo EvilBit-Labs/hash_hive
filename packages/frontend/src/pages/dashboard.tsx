@@ -20,6 +20,35 @@ import { useUiStore } from '../stores/ui'
 const KBD_BASE_CLASS =
   'border-surface-1 bg-surface-0/80 text-foreground/85 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border px-1 font-mono text-[10px] font-medium leading-none'
 
+interface FreshnessLineProps {
+  readonly dataUpdatedAt: number
+  readonly isFetching: boolean
+  readonly isStale: boolean
+}
+
+/**
+ * Hosts the 1Hz interval ticker that drives the relative-time string.
+ * Scoping it to this small leaf means the rerender cycle stays local;
+ * if useRelativeTime were called in DashboardPage directly, every
+ * StatCard, the trend chart, and the system health card would
+ * rerender every second.
+ */
+function FreshnessLine({ dataUpdatedAt, isFetching, isStale }: FreshnessLineProps) {
+  const lastUpdatedLabel = useRelativeTime(dataUpdatedAt || null)
+  return (
+    <p
+      data-testid="dashboard-last-updated"
+      className={cn(
+        'text-xs transition-colors',
+        isStale ? 'text-muted-foreground/50' : 'text-muted-foreground'
+      )}
+    >
+      <span>Last updated {lastUpdatedLabel}</span>
+      {isFetching && <span className="text-muted-foreground/70 ml-2">refreshing...</span>}
+    </p>
+  )
+}
+
 function focusProjectPicker() {
   // Two `Select` mounts with the same `aria-label="Select project"` can
   // coexist (desktop sidebar + mobile drawer rendered together but
@@ -70,9 +99,11 @@ export function DashboardPage() {
   // staleness when there is none. On `fallback` / `error` / the
   // reconnecting transients, the counter is the operator's answer to
   // "how stale is what I'm reading?" — that's when it earns its place.
-  // `dataUpdatedAt` is React Query's wall-clock-ms timestamp of the
-  // most recent successful fetch; 0 before the first resolve.
-  const lastUpdatedLabel = useRelativeTime(dataUpdatedAt || null)
+  //
+  // The 1Hz ticker that drives the relative-time string lives inside
+  // the FreshnessLine component below, scoped so its rerender stays
+  // local. Calling useRelativeTime here would force the entire
+  // DashboardPage subtree to rerender every second.
   const isConnectionStale = conn.status === 'fallback' || conn.status === 'error'
   const showFreshnessLine = conn.status !== 'open' && !isLoading
 
@@ -153,16 +184,11 @@ export function DashboardPage() {
               "Live" carries the freshness signal; a counter here
               would contradict it. */}
           {showFreshnessLine && (
-            <p
-              data-testid="dashboard-last-updated"
-              className={cn(
-                'text-xs transition-colors',
-                isConnectionStale ? 'text-muted-foreground/50' : 'text-muted-foreground'
-              )}
-            >
-              <span>Last updated {lastUpdatedLabel}</span>
-              {isFetching && <span className="text-muted-foreground/70 ml-2">refreshing...</span>}
-            </p>
+            <FreshnessLine
+              dataUpdatedAt={dataUpdatedAt}
+              isFetching={isFetching}
+              isStale={isConnectionStale}
+            />
           )}
         </div>
 

@@ -44,6 +44,12 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
   )
 
   const onCopy = useCallback(() => {
+    // navigator.clipboard is undefined in non-secure contexts (plain
+    // http, some embedded webviews). Reading `.writeText` would throw
+    // a TypeError synchronously, which the `.catch` below cannot
+    // catch. Short-circuit so the button click stays a no-op rather
+    // than crashing the page; the snippet text is still selectable.
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return
     void navigator.clipboard
       .writeText(command)
       .then(() => {
@@ -52,10 +58,8 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
         timeoutRef.current = setTimeout(() => setCopied(false), COPIED_FLASH_MS)
       })
       .catch(() => {
-        // Clipboard API failure is rare (Safari over plain http, locked
-        // permissions). The command is still visible and selectable,
-        // so we silently fail the copy rather than surface a toast for
-        // a non-blocking action.
+        // Clipboard write rejected at runtime (locked permissions,
+        // user-deny prompt). Non-blocking action — no toast.
       })
   }, [command])
 

@@ -6,10 +6,21 @@ interface ChartErrorBoundaryProps {
   readonly fallback: ReactNode
   /** Optional hook for logging the error (defaults to console.error in dev). */
   readonly onError?: (error: Error, info: ErrorInfo) => void
+  /**
+   * When this value changes between renders, the boundary clears its
+   * caught-error state and re-mounts the children. Recharts can throw
+   * on transient inputs (zero-dimension parents during a layout pass,
+   * a one-off malformed payload). Without a reset signal, one such
+   * throw locks the chart into the fallback for the rest of the
+   * session. The dashboard passes the data series length so a fresh
+   * sample after the bad one recovers the chart.
+   */
+  readonly resetKey?: string | number
 }
 
 interface ChartErrorBoundaryState {
   hasError: boolean
+  resetKey: string | number | undefined
 }
 
 /**
@@ -26,10 +37,23 @@ export class ChartErrorBoundary extends Component<
   ChartErrorBoundaryProps,
   ChartErrorBoundaryState
 > {
-  override state: ChartErrorBoundaryState = { hasError: false }
+  override state: ChartErrorBoundaryState = {
+    hasError: false,
+    resetKey: this.props.resetKey,
+  }
 
-  static getDerivedStateFromError(): ChartErrorBoundaryState {
+  static getDerivedStateFromError(): Partial<ChartErrorBoundaryState> {
     return { hasError: true }
+  }
+
+  static getDerivedStateFromProps(
+    nextProps: ChartErrorBoundaryProps,
+    prevState: ChartErrorBoundaryState
+  ): Partial<ChartErrorBoundaryState> | null {
+    if (nextProps.resetKey !== prevState.resetKey) {
+      return { hasError: false, resetKey: nextProps.resetKey }
+    }
+    return null
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo) {

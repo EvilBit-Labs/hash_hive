@@ -42,6 +42,16 @@ export function DashboardTooltip({ active, payload }: TooltipContentProps) {
   )
 }
 
+/** Format a monotonic-ms delta as a compact elapsed label (`0s` / `45s` / `2m`). */
+function formatElapsedFromFirst(sampledAtMs: number, firstSampledAtMs: number): string {
+  const elapsedSec = Math.max(0, Math.round((sampledAtMs - firstSampledAtMs) / 1000))
+  if (elapsedSec < 60) return `${elapsedSec}s`
+  const minutes = Math.floor(elapsedSec / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h`
+}
+
 export function CrackRateTrendChart({ data, loading, className }: CrackRateTrendChartProps) {
   const headingId = useId()
   const gradientId = `crack-rate-fill-${useId().replace(/:/g, '')}`
@@ -84,8 +94,15 @@ export function CrackRateTrendChart({ data, loading, className }: CrackRateTrend
     </section>
   )
 
+  // Elapsed-time anchor for the X axis. We render `sampledAtMs - first` as
+  // "0s" / "45s" / "2m" so operators see how recent each sample is without
+  // implying wall-clock time (`sampledAtMs` is `performance.now()`-domain,
+  // not Unix epoch). `data.length >= 2` is guaranteed by the early returns
+  // above so `data[0]` is always defined here.
+  const firstSampledAtMs = data[0]!.sampledAtMs as number
+
   return (
-    <ChartErrorBoundary fallback={errorFallback}>
+    <ChartErrorBoundary fallback={errorFallback} resetKey={data.length}>
       <section aria-labelledby={headingId} className={sectionClass}>
         <h2 id={headingId} className="sr-only">
           Crack rate trend
@@ -107,7 +124,7 @@ export function CrackRateTrendChart({ data, loading, className }: CrackRateTrend
                 tickLine={false}
                 axisLine={false}
                 tick={{ fill: 'hsl(var(--ctp-overlay1))', fontSize: 11 }}
-                tickFormatter={() => ''}
+                tickFormatter={(ms: number) => formatElapsedFromFirst(ms, firstSampledAtMs)}
               />
               <YAxis hide />
               <Tooltip

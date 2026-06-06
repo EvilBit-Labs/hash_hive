@@ -84,13 +84,12 @@ describe('DashboardPage', () => {
     }
   })
 
-  it('clears sparkline buffers when the user switches projects', async () => {
-    // Each project gets its own ring-buffer key (`${projectId}:agents` etc.).
-    // After samples accumulate under project 1, switching to project 2 must
-    // clear all buffers so the new project does not inherit project 1's
-    // history. Project switch is the most-likely real-world correctness
-    // failure path; the hook unit tests cover the key-change reset in
-    // isolation, this test locks the page-level wiring.
+  it('refetches dashboard stats when the user switches projects (page-level wiring)', async () => {
+    // The useSparkHistory unit tests cover the buffer-clear-on-key-change
+    // contract in isolation. This integration test locks the page-level
+    // claim that switching `selectedProjectId` actually drives a refetch
+    // under a new query key, which is the *observable* signal that the
+    // sparkline keys flipped from "1:*" to "2:*" and the buffers cleared.
     fetchMock = mockFetch({
       '/dashboard/stats': {
         status: 200,
@@ -106,24 +105,33 @@ describe('DashboardPage', () => {
     setAuthenticatedWithProject(1)
     renderWithProviders(<DashboardPage />)
 
-    // Project 1 stats arrive and the first sample lands in the sparkline
-    // buffers. The buffer-clear contract on key change is exhaustively
-    // covered by the useSparkHistory unit test (see
-    // `tests/hooks/use-spark-history.test.ts` "clears the buffer when the
-    // key changes" + "key change resets buffer even when numeric value is
-    // identical"); the integration claim here is that the page wires
-    // `selectedProjectId` into the hook keys so the unit-test behavior
-    // actually fires at this boundary.
+    // Project 1 data arrives.
     await waitFor(() => expect(screen.getByText('7 / 10')).toBeDefined())
 
-    // Switch to project 2 — the page rerenders, useSparkHistory keys flip
-    // from "1:*" to "2:*", and the four buffers clear synchronously inside
-    // the effect.
+    // Swap the fetch handler so the project-2 refetch returns distinct
+    // data. If the dashboard *failed* to refetch on project switch, the
+    // DOM would stay pinned on project-1's numbers and the waitFor
+    // below would time out.
+    restoreFetch(fetchMock)
+    fetchMock = mockFetch({
+      '/dashboard/stats': {
+        status: 200,
+        body: mockDashboardStats({
+          agents: { online: 2, total: 5 },
+          campaigns: { running: 1 },
+          tasks: { running: 1 },
+          cracked: { total: 11 },
+        }),
+      },
+    })
+
     useUiStore.setState({ selectedProjectId: 2 })
 
-    await waitFor(() => {
-      expect(useUiStore.getState().selectedProjectId).toBe(2)
-    })
+    // The refetch is the user-observable signal that the project switch
+    // propagated; "2 / 5" can only appear in the DOM if the dashboard
+    // requeried under the new project id.
+    await waitFor(() => expect(screen.getByText('2 / 5')).toBeDefined())
+    expect(useUiStore.getState().selectedProjectId).toBe(2)
   })
 
   it('renders stats from API', async () => {
@@ -294,26 +302,24 @@ describe('DashboardPage', () => {
       })
     })
 
-    it('hides the "Last updated" line when the live connection is open', async () => {
-      // On a live connection the ConnectionIndicator's "Live" carries
-      // the freshness signal; the counter would imply staleness when
-      // there is none ("live" + "47s ago" reads as a contradiction).
-      fetchMock = mockFetch({
-        '/dashboard/stats': { status: 200, body: mockDashboardStats() },
-      })
-      setAuthenticatedWithProject(1)
-
-      renderWithProviders(<DashboardPage />)
-
-      const ws = wsMock.instances[0]
-      if (!ws) return // env without the WS mock — fail-soft
-      ws.simulateOpen()
-
-      await waitFor(() => {
-        expect(screen.getByText('Live')).toBeDefined()
-      })
-      expect(screen.queryByTestId('dashboard-last-updated')).toBeNull()
-    })
+    // The negative branch of `showFreshnessLine` (line hides when
+    // `conn.status === 'open'`) was previously asserted by a test
+    // that fail-soft early-returned when no WS instance existed in
+    // the wsMock. Because the test render did not wrap DashboardPage
+    // in EventsProvider AND useEvents() bails before opening a
+    // socket when authClient has no session, the WS was never
+    // created and the assertion never ran — the test always passed
+    // without proving anything (Copilot review thread on
+    // dashboard.test.tsx:310 caught this).
+    //
+    // Removing rather than half-rewriting: forcing the test to
+    // actually drive a WS-open state requires stubbing
+    // authClient.useSession plus EventsProvider plumbing, a lot of
+    // surface for what is a single `if (conn.status !== 'open')`
+    // line in dashboard.tsx. The positive branch is covered by the
+    // "renders the 'Last updated' line when the live connection has
+    // not opened yet" test above; the open-state visual rendering
+    // is covered by ConnectionIndicator's own unit suite.
 
     it('renders kbd hints for R / 1-4 / Shift+P', () => {
       fetchMock = mockFetch({
