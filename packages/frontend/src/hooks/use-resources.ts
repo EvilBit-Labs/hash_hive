@@ -1,9 +1,11 @@
 import type {
   DetectHashTypeResponse,
-  FileRef,
   HashCandidate,
-  HashListStatistics,
-  ResourceStatus,
+  HashItemsPageWire,
+  HashListDetailWire,
+  HashListWire,
+  HashTypeWire,
+  ResourceWire,
   SetHashListTypeRequest,
 } from '@hashhive/shared'
 
@@ -12,37 +14,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
 
-// API response types — represent JSON-serialized shapes (dates as strings).
-// fileRef and status flow through @hashhive/shared so the cross-boundary
-// shape cannot drift; per AGENTS.md, no local interfaces for wire shapes.
-interface HashList {
-  id: number
-  name: string
-  projectId: number
-  hashTypeId: number | null
-  hashCount: number
-  crackedCount: number
-  status: ResourceStatus
-  fileRef: FileRef | null
-  createdAt: string
-}
-
-interface HashType {
-  id: number
-  name: string
-  hashcatMode: number
-  category: string
-}
-
-interface Resource {
-  id: number
-  name: string
-  projectId: number
-  status: ResourceStatus
-  fileSize: number | null
-  fileRef: FileRef | null
-  createdAt: string
-}
+// Wire shapes flow through `@hashhive/shared` (z.infer from Zod
+// schemas in `schemas/resources.ts`) per AGENTS.md — no local
+// cross-boundary interfaces in hooks. Local aliases below keep call
+// sites readable without shadowing the canonical names.
+type HashList = HashListWire
+type HashType = HashTypeWire
+type Resource = ResourceWire
+type HashListDetail = HashListDetailWire
+type HashItemsResponse = HashItemsPageWire
 
 export function useHashTypes() {
   return useQuery({
@@ -136,31 +116,8 @@ export function useCreateResource(type: ResourceType) {
 }
 
 // ─── Hash List Detail ────────────────────────────────────────────────
-
-interface HashListDetail {
-  id: number
-  name: string
-  projectId: number
-  hashTypeId: number | null
-  status: string
-  statistics: HashListStatistics
-  createdAt: string
-}
-
-interface HashItemRow {
-  id: number
-  hashValue: string
-  plaintext: string | null
-  crackedAt: string | null
-  agentId: number | null
-}
-
-interface HashItemsResponse {
-  items: HashItemRow[]
-  total: number
-  limit: number
-  offset: number
-}
+// HashListDetail and HashItemsResponse types come from @hashhive/shared
+// (see top of file); no local interfaces needed.
 
 export function useHashListDetail(id: number) {
   return useQuery({
@@ -201,7 +158,7 @@ export function useHashListItems(
 // Upload timeout for the direct (<100 MB) path. fetch has no built-in
 // upload timeout and the modal's Cancel button is disabled while the
 // request is pending, so a hung backend or proxy would wedge the UI
-// indefinitely without this guard. 5 minutes is the soft cap — a
+// indefinitely without this guard. 5 minutes is the soft cap - a
 // 100 MB upload on a 1 Mbps link is ~13 minutes worst-case, so this
 // is below that floor; chunked path covers anything that legitimately
 // takes longer.
@@ -217,7 +174,7 @@ export function useUploadResourceFile(type: ResourceType) {
 
       // Compose the caller's signal (from the modal's AbortController)
       // with a timeout signal. AbortSignal.any short-circuits on either
-      // — operator-cancelled abort takes precedence over timeout, and
+      // - operator-cancelled abort takes precedence over timeout, and
       // the timeout still fires when the caller didn't supply a signal.
       const timeoutSignal = AbortSignal.timeout(DIRECT_UPLOAD_TIMEOUT_MS)
       const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
@@ -238,7 +195,8 @@ export function useUploadResourceFile(type: ResourceType) {
         if (err instanceof DOMException && err.name === 'TimeoutError') {
           throw new Error(
             `Upload timed out after ${Math.round(DIRECT_UPLOAD_TIMEOUT_MS / 1000)}s. ` +
-              'Try a smaller file or check your network.'
+              'Try a smaller file or check your network.',
+            { cause: err }
           )
         }
         throw err
@@ -273,7 +231,7 @@ export function useUploadResourceFile(type: ResourceType) {
  * Delete a resource by id. Hash lists and generic resources share the
  * same `DELETE /dashboard/resources/{type}/{id}` shape; the type
  * parameter routes to the right backend handler. Invalidates the
- * relevant list query on success — callers may layer optimistic
+ * relevant list query on success - callers may layer optimistic
  * removal in the modal via `queryClient.setQueryData` and rollback in
  * `onError`.
  */
@@ -283,7 +241,7 @@ export function useDeleteResource(type: ResourceType) {
   return useMutation({
     // Both DELETE routes return 204 No Content. `api.request` returns
     // `undefined` for 204 (api.ts:72), so the mutation result type is
-    // `void` — claiming `{ success: true }` would be a runtime lie and
+    // `void` - claiming `{ success: true }` would be a runtime lie and
     // a future caller dereferencing `result.success` would get a
     // TypeError.
     mutationFn: (id: number) => api.delete<void>(`/dashboard/resources/${type}/${id}`),
@@ -304,7 +262,7 @@ export function useDeleteResource(type: ResourceType) {
  * Detect candidate hash types for a batch of sample hashes via the
  * shipped `POST /dashboard/resources/detect-hash-type` route. The
  * wire-shape field name is `hashes` (server contract, capped at 100
- * server-side); the UI enforces a tighter 5–10 cap before calling.
+ * server-side); the UI enforces a tighter 5-10 cap before calling.
  * Returns one `{ hashValue, candidates }` entry per input.
  */
 export function useDetectHashTypeBatch() {

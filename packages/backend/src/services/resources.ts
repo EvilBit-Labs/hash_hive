@@ -76,7 +76,7 @@ export class UploadTooLargeError extends Error {
  * dashboard spec's 404 declaration is reachable. Without this typed
  * channel, the bare `throw new Error('Resource N not found')` fell
  * through to the generic 500 `UPLOAD_PART_FAILED` / `UPLOAD_COMPLETE_FAILED`
- * envelope and the documented 404 was unreachable from the wire — a
+ * envelope and the documented 404 was unreachable from the wire - a
  * route-as-spec contract violation.
  */
 export class UploadResourceNotFoundError extends Error {
@@ -142,7 +142,7 @@ export async function listHashListsPaginated(
  * older driver versions and test mocks that don't surface `err.code`.
  *
  * When `expectedConstraint` is supplied, the constraint name on the
- * error must match — this prevents misclassifying an unrelated FK
+ * error must match - this prevents misclassifying an unrelated FK
  * violation (e.g., a trigger that references another table) as the
  * specific FK the caller is mapping to a 400. Drizzle/postgres-js
  * surfaces the constraint name on `err.constraint` for SQLSTATE 23503
@@ -166,7 +166,7 @@ export function isForeignKeyViolation(err: unknown, expectedConstraint?: string)
 
 /**
  * Shared cascade-delete flow for resource tables. Steps:
- *   1. Ownership check (404 if not in project) — handled by the caller via
+ *   1. Ownership check (404 if not in project) - handled by the caller via
  *      `lookup`.
  *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
  *      FK violation rolls back the children).
@@ -244,7 +244,7 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
   for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
     // postgres-js v3.4.x exposes the DELETE affected-row count on
     // `result.count` (it returns its own `Result` array with a `.count`
-    // property — NOT `rowCount`, which is the pg/node-pg convention).
+    // property - NOT `rowCount`, which is the pg/node-pg convention).
     // `rowCount` retained as a fallback for any future driver that
     // diverges; the MAX_ITERATIONS cap below bails on either reporting
     // bug. https://github.com/porsager/postgres
@@ -261,7 +261,7 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
   }
   logger.error(
     { hashListId, max: HASH_ITEMS_DELETE_MAX_ITERATIONS, chunkSize: HASH_ITEMS_DELETE_CHUNK },
-    'deleteHashItemsBatched hit max iterations — bailing to avoid unbounded transaction'
+    'deleteHashItemsBatched hit max iterations - bailing to avoid unbounded transaction'
   )
   throw new Error(
     `deleteHashItemsBatched(${hashListId}) exceeded ${HASH_ITEMS_DELETE_MAX_ITERATIONS} iterations`
@@ -405,11 +405,11 @@ export async function importHashList(hashListId: number, projectId: number) {
   const { QUEUE_NAMES } = await import('../config/queue.js')
   const qm = getQueueManager()
   if (!qm) {
-    return { error: 'Queue unavailable — cannot process hash list' }
+    return { error: 'Queue unavailable - cannot process hash list' }
   }
   const health = await qm.getHealth()
   if (health.status === 'disconnected') {
-    return { error: 'Queue unavailable — cannot process hash list' }
+    return { error: 'Queue unavailable - cannot process hash list' }
   }
 
   // Enqueue FIRST so the queue's success/failure is what gates the status
@@ -720,7 +720,7 @@ export async function initiateChunkedUpload(data: {
   const key = `${projectId}/${prefix}/${randomUUID()}`
   const ct = contentType ?? 'application/octet-stream'
 
-  // Initiate S3 multipart upload — clean up orphan DB record on failure
+  // Initiate S3 multipart upload - clean up orphan DB record on failure
   let s3UploadId: string
   try {
     s3UploadId = await createMultipartUpload(key, ct)

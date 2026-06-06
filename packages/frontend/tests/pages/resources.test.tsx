@@ -142,7 +142,7 @@ describe('ResourcesPage', () => {
     expect(screen.getByLabelText('Sample hashes')).toBeDefined()
   })
 
-  it('disables Detect until 5–10 samples are present', async () => {
+  it('disables Detect until 5-10 samples are present', async () => {
     fetchMock = setupResourceMocks()
     selectProject()
     renderWithProviders(<ResourcesPage />)

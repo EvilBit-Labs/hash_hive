@@ -215,9 +215,15 @@ export {
   detectHashTypeResponseSchema,
   fileRefSchema,
   hashCandidateSchema,
+  hashItemsPageWireSchema,
+  hashItemWireSchema,
+  hashListDetailWireSchema,
   hashListStatisticsSchema,
+  hashListWireSchema,
+  hashTypeWireSchema,
   resourceStatusSchema,
   resourceUpdateEventDataSchema,
+  resourceWireSchema,
   setHashListTypeRequestSchema,
 } from './resources.js'
 

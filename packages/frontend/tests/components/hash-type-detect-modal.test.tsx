@@ -8,7 +8,7 @@ import { renderWithProviders } from '../test-utils'
 
 // Uses fetch-mocking (matches resources.test.tsx pattern) rather than
 // mock.module, because mock.module replaces the entire hooks module
-// for every other test file in the same bun:test invocation —
+// for every other test file in the same bun:test invocation -
 // breaking unrelated tests that import the real use-resources hooks
 // (e.g., resources.test.tsx fixtures, campaign-create.test.tsx).
 

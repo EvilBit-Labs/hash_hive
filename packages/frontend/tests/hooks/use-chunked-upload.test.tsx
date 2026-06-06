@@ -15,7 +15,7 @@ mock.module('../../src/lib/chunked-upload/persistence', () => ({
   clearUploadState: mockClearUploadState,
 }))
 
-describe('useChunkedUpload — unmount cleanup (issue #163 review)', () => {
+describe('useChunkedUpload - unmount cleanup (issue #163 review)', () => {
   it('aborts the in-flight controller when the hook unmounts mid-upload', async () => {
     mockOrchestrate.mockReset()
     let capturedSignal: AbortSignal | undefined
@@ -35,7 +35,7 @@ describe('useChunkedUpload — unmount cleanup (issue #163 review)', () => {
     const { result, unmount } = renderHook(() => useChunkedUpload())
 
     const file = new File(['x'], 'x.bin', { type: 'application/octet-stream' })
-    // Fire-and-forget the upload — it never resolves until we let it.
+    // Fire-and-forget the upload - it never resolves until we let it.
     void result.current.start(file, 'wordlists', 'test')
     // Wait a tick for the start() to actually call orchestrateUpload
     // and stash the signal.
@@ -52,12 +52,12 @@ describe('useChunkedUpload — unmount cleanup (issue #163 review)', () => {
 
     // Resolve the hanging promise so the test runtime doesn't hold
     // the open handle. (The actual code path would catch the abort
-    // and dispatch RESET — but the dispatch lands on the unmounted
+    // and dispatch RESET - but the dispatch lands on the unmounted
     // reducer; either way the test runtime is unblocked here.)
     resolveOrchestrate?.(1)
   })
 
-  it('does NOT clear persisted resume state on unmount — only explicit cancel does', async () => {
+  it('does NOT clear persisted resume state on unmount - only explicit cancel does', async () => {
     mockClearUploadState.mockReset()
     mockOrchestrate.mockReset()
     mockOrchestrate.mockImplementationOnce(
@@ -71,7 +71,7 @@ describe('useChunkedUpload — unmount cleanup (issue #163 review)', () => {
 
     unmount()
 
-    // Resume token is preserved — the whole point of the persistence
+    // Resume token is preserved - the whole point of the persistence
     // layer is to survive tab/route churn. clearUploadState is only
     // called from the explicit cancel() path or on successful
     // completion.
@@ -90,7 +90,7 @@ describe('useChunkedUpload — unmount cleanup (issue #163 review)', () => {
     void result.current.start(file, 'wordlists', 'cancellable')
     await new Promise((r) => setTimeout(r, 10))
 
-    // Explicit cancel — operator chose to abandon the upload.
+    // Explicit cancel - operator chose to abandon the upload.
     result.current.cancel()
 
     expect(mockClearUploadState).toHaveBeenCalledWith('wordlists-cancellable-1')

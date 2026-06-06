@@ -1,5 +1,5 @@
 /**
- * Control API hash-list endpoints. Read-only at this layer — authoring
+ * Control API hash-list endpoints. Read-only at this layer - authoring
  * hash lists is a dashboard interactive flow (file upload via presigned
  * URL, hash-type detection on parse). Automation can list and inspect
  * existing lists.
@@ -47,7 +47,7 @@ const hashListPageSchema = z
   .openapi('ControlHashListPage')
 
 // Shared hash-list statistics shape (totalCount, crackedCount, crackRate, lastUpdated?)
-// — same payload the dashboard hashlist endpoints emit.
+// - same payload the dashboard hashlist endpoints emit.
 const hashListStatsSchema = hashListStatisticsSchema.openapi('ControlHashListStats')
 
 const listHashListsRoute = createRoute({
@@ -148,7 +148,7 @@ controlHashListRoutes.openapi(getHashListStatsRoute, async (c) => {
   }
 })
 
-// ─── PATCH /hash-lists/{id} — set hash type (agent-native parity) ───
+// ─── PATCH /hash-lists/{id} - set hash type (agent-native parity) ───
 //
 // Operator-facing PATCH set-hash-type exists on the dashboard surface;
 // this is the Control-API parallel so CLI/automation can perform the

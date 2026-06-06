@@ -21,7 +21,7 @@ interface HashTypeDetectModalProps {
 }
 
 /**
- * Page-level hash type detection. The textarea accepts 5–10 newline-
+ * Page-level hash type detection. The textarea accepts 5-10 newline-
  * separated samples, posts to the shipped batch endpoint (max 100
  * server-side), and renders per-candidate confidence. An optional list
  * picker turns "Use This Type" from a read-only identification into a
@@ -30,7 +30,7 @@ interface HashTypeDetectModalProps {
  *
  * The "Use This Type" button is disabled with a tooltip when no list
  * is selected, so the operator never wonders whether the click did
- * anything — the affordance state matches the available action.
+ * anything - the affordance state matches the available action.
  */
 export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps) {
   const [rawText, setRawText] = useState('')
@@ -80,11 +80,11 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     return `${sampleCount} sample${sampleCount === 1 ? '' : 's'} ready.`
   })()
 
-  // Flatten the wire shape — `results[]` is one entry per input hash; we
+  // Flatten the wire shape - `results[]` is one entry per input hash; we
   // collapse to a single deduped candidate list ordered by the highest
   // confidence seen across all input hashes. This matches how an
   // operator reads the table: "which hash type best explains my
-  // inputs?" — not "what did each input look like?"
+  // inputs?" - not "what did each input look like?"
   const flatCandidates = useMemo(() => {
     if (!detect.data) return []
     const seen = new Map<
@@ -204,7 +204,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
               disabled={inFlight}
               rows={6}
               className="border-surface-1 bg-base focus-visible:ring-primary mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
-              placeholder={`Paste ${MIN_SAMPLES}–${MAX_SAMPLES} hashes, one per line`}
+              placeholder={`Paste ${MIN_SAMPLES}-${MAX_SAMPLES} hashes, one per line`}
               aria-describedby="hash-type-samples-help"
             />
             <p id="hash-type-samples-help" className="text-muted-foreground mt-1.5 text-xs">
@@ -228,7 +228,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
               disabled={detect.isPending || setType.isPending}
               className="mt-1.5 w-full"
             >
-              <option value="">— Detect only (read-only) —</option>
+              <option value="">- Detect only (read-only) -</option>
               {availableLists.map((hl) => (
                 <option key={hl.id} value={hl.id}>
                   {hl.name}
@@ -289,11 +289,11 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                                 selectedListId === null
                                   ? 'Pick a hash list above to apply'
                                   : hashTypes.isLoading || !hashTypes.data
-                                    ? 'Loading hash type registry…'
+                                    ? 'Loading hash type registry...'
                                     : undefined
                               }
                             >
-                              {isApplying ? 'Applying…' : 'Use This Type'}
+                              {isApplying ? 'Applying...' : 'Use This Type'}
                             </Button>
                           </Td>
                         </TableRow>
@@ -311,7 +311,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
             Close
           </Button>
           <Button onClick={handleDetect} disabled={!inRange || inFlight}>
-            {detect.isPending ? 'Detecting…' : 'Detect'}
+            {detect.isPending ? 'Detecting...' : 'Detect'}
           </Button>
         </div>
       </div>

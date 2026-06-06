@@ -242,7 +242,7 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
       return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to create hash list')
     }
 
-    // Upload — rollback DB row on failure so the caller sees a clean error
+    // Upload - rollback DB row on failure so the caller sees a clean error
     // state rather than an orphaned uploading-status row.
     try {
       await uploadHashListFile(created.id, projectId, file)
@@ -410,7 +410,7 @@ resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   }
 })
 
-// ─── PATCH /hash-lists/{id} — set hash type (issue #163) ────────────
+// ─── PATCH /hash-lists/{id} - set hash type (issue #163) ────────────
 //
 // Used by the detect-hash-type modal's "Use This Type" action. Body
 // carries only `hashTypeId`; the project scope is derived from the
@@ -471,7 +471,7 @@ resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
     return c.json({ hashList: updated }, 200)
   } catch (err) {
     // FK violation on hash_type_id → unknown hash type. Map to 400
-    // rather than letting it bubble as a 500 — the client supplied a
+    // rather than letting it bubble as a 500 - the client supplied a
     // bad value, not a server fault. The route only updates
     // hash_type_id, so the only FK that can violate here is
     // hash_lists.hash_type_id → hash_types.id (the constraint name
@@ -606,7 +606,7 @@ resourceRoutes.openapi(importHashListRoute, async (c) => {
   return c.json(result, 200)
 })
 
-// Permissive at the boundary so a malformed `?limit=abc` doesn't 400 —
+// Permissive at the boundary so a malformed `?limit=abc` doesn't 400 -
 // `.catch(default)` swaps in the default on coercion/range failure, which
 // keeps NaN/Infinity out of Drizzle's `.limit()`/`.offset()`. Matches the
 // pattern used on `listResultsQuerySchema` elsewhere on the dashboard.

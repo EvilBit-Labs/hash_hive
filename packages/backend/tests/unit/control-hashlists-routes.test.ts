@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test'
 const IS_ISOLATED = process.env['CONTROL_HASHLISTS_TEST_ISOLATED'] === '1'
 
 if (!IS_ISOLATED) {
-  describe.skip('control-hashlists-routes (skipped — runs in isolated phase)', () => {
+  describe.skip('control-hashlists-routes (skipped - runs in isolated phase)', () => {
     it('runs only with CONTROL_HASHLISTS_TEST_ISOLATED=1', () => {
       expect(true).toBe(true)
     })
@@ -98,7 +98,7 @@ if (!IS_ISOLATED) {
     return app
   }
 
-  describe('Control API: PATCH /hash-lists/{id} — set hash type', () => {
+  describe('Control API: PATCH /hash-lists/{id} - set hash type', () => {
     beforeEach(() => {
       mockSetHashListType.mockReset()
       activeMembershipRoles = ['admin']
@@ -172,7 +172,7 @@ if (!IS_ISOLATED) {
       expect(body.detail).toBe('unknown hashTypeId')
     })
 
-    it('does NOT map unrelated FK violation to 400 — falls through to 500', async () => {
+    it('does NOT map unrelated FK violation to 400 - falls through to 500', async () => {
       mockSetHashListType.mockImplementation(async () => {
         const err = new Error('violates foreign key constraint "some_other_fk"')
         ;(err as Error & { code?: string; constraint?: string }).code = '23503'
@@ -213,6 +213,29 @@ if (!IS_ISOLATED) {
 
       expect(res.status).toBeGreaterThanOrEqual(400)
       expect(res.status).toBeLessThan(500)
+      expect(mockSetHashListType).not.toHaveBeenCalled()
+    })
+
+    it('rejects with 5xx when no project is selected (membership middleware throws)', async () => {
+      // Activates the `if (activeProjectId === null)` branch in the
+      // requireProjectMembership mock so the test file exercises the
+      // membership-throws path. Mirrors the real middleware behavior
+      // when the session has no scoped project. Without this case,
+      // the guard is dead code in the test surface.
+      activeProjectId = null
+
+      const app = makeApp()
+      const res = await app.request('/42', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      // controlErrorResponse returns 500 with the err.message in its
+      // detail field — the real helper maps to a problem-details
+      // envelope but the stub keeps it simple. The point is that the
+      // service is NOT reached when the middleware throws.
+      expect(res.status).toBe(500)
       expect(mockSetHashListType).not.toHaveBeenCalled()
     })
   })

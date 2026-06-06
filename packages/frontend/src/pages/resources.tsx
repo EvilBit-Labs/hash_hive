@@ -25,7 +25,7 @@ import { useUiStore } from '../stores/ui'
 // Format a file size from bytes. Hyphen for unknown / zero so empty
 // uploads or pre-upload rows render unambiguously rather than "0 B".
 function formatFileSize(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return '—'
+  if (!bytes || bytes <= 0) return '-'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let value = bytes
   let unit = 0
@@ -49,7 +49,7 @@ const TABS: readonly { id: Tab; label: string }[] = [
 
 // Delete-target snapshot driven by row clicks. Stored at the page level
 // so the confirmation modal (wired in U4) is a single instance shared
-// across tabs — opening it from a row sets the target; closing clears.
+// across tabs - opening it from a row sets the target; closing clears.
 interface DeleteTarget {
   type: UploadableTab
   id: number
@@ -158,7 +158,7 @@ export function ResourcesPage() {
 
 // Delete confirmation. Uses the shared ConfirmDialog primitive for the
 // shell. On confirm, the mutation runs against the right backend route
-// (hash-lists DELETE for hash lists, generic DELETE for the others —
+// (hash-lists DELETE for hash lists, generic DELETE for the others -
 // the hook routes by `type`). On error, the dialog stays open with an
 // inline ErrorBanner; the React-Query cache invalidation in the hook's
 // onSuccess handles the table refresh, so no optimistic cache write is
@@ -263,7 +263,13 @@ function HashListsTab({
           </TableHead>
           <TableBody>
             {hashLists.map((hl) => {
-              const pct = hl.hashCount > 0 ? (hl.crackedCount / hl.hashCount) * 100 : 0
+              // The list endpoint doesn't currently aggregate counts;
+              // the wire schema marks both fields optional. Default to
+              // 0 and render the progress bar empty until a stats sweep
+              // populates them on a future enhancement.
+              const hashCount = hl.hashCount ?? 0
+              const crackedCount = hl.crackedCount ?? 0
+              const pct = hashCount > 0 ? (crackedCount / hashCount) * 100 : 0
               return (
                 <TableRow key={hl.id}>
                   <Td className="text-foreground text-sm font-medium">
@@ -280,8 +286,8 @@ function HashListsTab({
                   <Td>
                     <StatusBadge status={hl.status} />
                   </Td>
-                  <Td className="font-mono text-xs tabular-nums">{hl.hashCount}</Td>
-                  <Td className="text-success font-mono text-xs tabular-nums">{hl.crackedCount}</Td>
+                  <Td className="font-mono text-xs tabular-nums">{hashCount}</Td>
+                  <Td className="text-success font-mono text-xs tabular-nums">{crackedCount}</Td>
                   <Td>
                     <div className="flex items-center gap-2">
                       <div className="bg-surface-1 h-1.5 w-20 rounded-full">

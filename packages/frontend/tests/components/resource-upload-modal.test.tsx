@@ -17,7 +17,7 @@ const mockUploadMutateAsync = mock((_args: { id: number; file: File; signal?: Ab
 )
 const mockDeleteMutateAsync = mock((_id: number) => Promise.resolve(undefined))
 
-// bun:test's mock.module merges — unmocked exports pass through to
+// bun:test's mock.module merges - unmocked exports pass through to
 // the real module. Only mock the hooks this file actively exercises.
 mock.module('../../src/hooks/use-resources', () => ({
   useCreateResource: () => ({
@@ -114,7 +114,7 @@ describe('ResourceUploadModal', () => {
       expect(call?.id).toBe(42)
       expect(call?.file).toBe(file)
       // AbortController is wired so direct-upload Cancel actually
-      // cancels — pin that the signal is non-null.
+      // cancels - pin that the signal is non-null.
       expect(call?.signal).toBeDefined()
       expect(onSuccess).toHaveBeenCalledWith(42)
       expect(onClose).toHaveBeenCalled()
@@ -188,13 +188,13 @@ describe('ResourceUploadModal', () => {
       <ResourceUploadModal type="wordlists" open={true} onClose={() => {}} onSuccess={() => {}} />
     )
     const cancel = screen.getByText('Cancel') as HTMLButtonElement
-    // Pin that Cancel is not unconditionally disabled — the regression
+    // Pin that Cancel is not unconditionally disabled - the regression
     // would re-introduce the wedged-modal bug where a hung direct
     // upload could not be cancelled.
     expect(cancel.disabled).toBe(false)
   })
 
-  it('dropzone is keyboard-operable — Enter opens the file picker', () => {
+  it('dropzone is keyboard-operable - Enter opens the file picker', () => {
     renderWithProviders(
       <ResourceUploadModal type="wordlists" open={true} onClose={() => {}} onSuccess={() => {}} />
     )

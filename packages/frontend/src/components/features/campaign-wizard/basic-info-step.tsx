@@ -21,10 +21,14 @@ export const basicInfoSchema = z.object({
 
 export type BasicInfoForm = z.infer<typeof basicInfoSchema>
 
+// Matches the `HashListWire.hashCount` shape from `@hashhive/shared`
+// (`?: number | undefined` — produced by `z.number().optional()`).
+// The list endpoint doesn't currently aggregate counts; the UI
+// renders a dash when the field is absent.
 interface HashListOption {
   id: number
   name: string
-  hashCount: number
+  hashCount?: number | undefined
 }
 
 interface BasicInfoStepProps {
@@ -95,7 +99,7 @@ export function BasicInfoStep({
               <option value="">Select a hash list...</option>
               {hashLists.map((hl) => (
                 <option key={hl.id} value={hl.id}>
-                  {hl.name} ({hl.hashCount} hashes)
+                  {hl.name} ({hl.hashCount ?? '-'} hashes)
                 </option>
               ))}
             </Select>

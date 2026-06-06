@@ -4,7 +4,7 @@
  * Extracted from the main `schemas/index.ts` barrel when that file
  * crossed the project's 800-line ceiling. All schemas re-export from
  * the barrel so consumers continue importing from `@hashhive/shared`
- * unchanged — this is a structural split, not a public-API change.
+ * unchanged - this is a structural split, not a public-API change.
  *
  * Per AGENTS.md: wire shapes live in `@hashhive/shared` as `z.infer`
  * from Zod schemas. Used by both backend route handlers (zValidator +
@@ -134,7 +134,7 @@ export const resourceStatusSchema = z.enum([
  * `uploadHashListFile` / `uploadResourceFile`, mirrored here so the
  * frontend can narrow the row's `fileRef` without `as` casts.
  *
- * `bucket` is the S3 (or compat) bucket name at upload time —
+ * `bucket` is the S3 (or compat) bucket name at upload time -
  * preserved in the row so a future bucket migration doesn't break old
  * download URL generation. `key` is the S3 object key, `size` is the
  * byte count (also surfaced at top-level `fileSize` for generic
@@ -149,14 +149,14 @@ export const fileRefSchema = z
     contentType: z.string(),
     size: z.number().int().nonnegative(),
     name: z.string(),
-    // ISO 8601 datetime — matches `hashListStatisticsSchema.lastUpdated`.
+    // ISO 8601 datetime - matches `hashListStatisticsSchema.lastUpdated`.
     uploadedAt: z.string().datetime(),
   })
   .openapi('FileRef')
 
 /**
  * Request body for `PATCH /api/v1/dashboard/resources/hash-lists/{id}`.
- * Sets the hash type on an existing hash list — used by the detect-
+ * Sets the hash type on an existing hash list - used by the detect-
  * hash-type modal's "Use This Type" action after the operator picks a
  * candidate. Project scope is derived from the authenticated session,
  * not the request body.
@@ -166,3 +166,114 @@ export const setHashListTypeRequestSchema = z
     hashTypeId: z.number().int().positive(),
   })
   .openapi('SetHashListTypeRequest')
+
+// ─── Frontend wire response shapes (JSON-serialized) ────────────────
+//
+// These represent the over-the-wire (JSON, dates-as-strings) shapes
+// the frontend hooks deserialize from the dashboard routes. The
+// backend route response schemas currently use `z.array(z.unknown())`
+// for these surfaces — these schemas are the source of truth on the
+// consumer side until the routes adopt them, and the frontend hooks
+// infer types from them so the AGENTS.md rule
+// "no local cross-boundary interfaces in packages/frontend/src/hooks/*"
+// is satisfied.
+
+/**
+ * Wire shape of a hash type catalog row returned from
+ * `GET /dashboard/resources/hash-types`. Mirrors the `hash_types`
+ * table's serialized projection.
+ */
+export const hashTypeWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    name: z.string(),
+    hashcatMode: z.number().int().nonnegative(),
+    category: z.string(),
+  })
+  .openapi('HashTypeWire')
+
+/**
+ * Wire shape of a hash list row returned from
+ * `GET /dashboard/resources/hash-lists`. `hashCount` and
+ * `crackedCount` are projected by the backend join with `hash_items`
+ * aggregates; they are omitted by listings that do not aggregate
+ * (the consumer should default-zero them).
+ */
+export const hashListWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    name: z.string(),
+    projectId: z.number().int().positive(),
+    hashTypeId: z.number().int().positive().nullable(),
+    hashCount: z.number().int().nonnegative().optional(),
+    crackedCount: z.number().int().nonnegative().optional(),
+    status: resourceStatusSchema,
+    fileRef: fileRefSchema.nullable(),
+    createdAt: z.string(),
+  })
+  .openapi('HashListWire')
+
+/**
+ * Wire shape of a generic resource row (wordlist / rulelist /
+ * masklist) returned from `GET /dashboard/resources/{type}`.
+ * `fileSize` is the row's top-level byte count column; the JSONB
+ * `fileRef.size` mirrors it after upload.
+ */
+export const resourceWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    name: z.string(),
+    projectId: z.number().int().positive(),
+    status: resourceStatusSchema,
+    fileSize: z.number().int().nonnegative().nullable(),
+    fileRef: fileRefSchema.nullable(),
+    createdAt: z.string(),
+  })
+  .openapi('ResourceWire')
+
+/**
+ * Wire shape of a hash list detail row returned from
+ * `GET /dashboard/resources/hash-lists/{id}`. Extends the list shape
+ * with the parsed statistics payload.
+ */
+export const hashListDetailWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    name: z.string(),
+    projectId: z.number().int().positive(),
+    hashTypeId: z.number().int().positive().nullable(),
+    status: resourceStatusSchema,
+    statistics: hashListStatisticsSchema,
+    createdAt: z.string(),
+  })
+  .openapi('HashListDetailWire')
+
+/**
+ * Wire shape of a hash item row returned from
+ * `GET /dashboard/resources/hash-lists/{id}/items`. Timestamps are
+ * ISO strings; `plaintext` and `crackedAt` are null when uncracked.
+ */
+export const hashItemWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    hashValue: z.string(),
+    plaintext: z.string().nullable(),
+    crackedAt: z.string().nullable(),
+    agentId: z.number().int().positive().nullable(),
+  })
+  .openapi('HashItemWire')
+
+/**
+ * Wire shape of the paginated hash items response returned from
+ * `GET /dashboard/resources/hash-lists/{id}/items`. Limit / offset
+ * are echoed back so the client can compute pagination state without
+ * tracking the request shape separately.
+ */
+export const hashItemsPageWireSchema = z
+  .object({
+    items: z.array(hashItemWireSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+  })
+  .openapi('HashItemsPageWire')

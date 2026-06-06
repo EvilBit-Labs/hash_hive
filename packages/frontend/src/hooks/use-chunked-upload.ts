@@ -116,7 +116,7 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
 
   // Unmount cleanup. If the consumer modal lives inside a tab subtree
   // (resources.tsx), switching tabs unmounts it without invoking the
-  // Cancel button's handler — orchestrateUpload would keep PUTting
+  // Cancel button's handler - orchestrateUpload would keep PUTting
   // chunks followed by dispatches landing on an unmounted reducer.
   // Abort the in-flight controller so the network stops.
   //
@@ -125,7 +125,7 @@ export function useChunkedUpload(options: UseChunkedUploadOptions = {}) {
   // persistence layer is to survive tab/route churn. Only explicit
   // Cancel (via the `cancel()` function above) or successful
   // completion clears it. Implicit unmount means "operator navigated
-  // away mid-upload" — they may come back and resume.
+  // away mid-upload" - they may come back and resume.
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {

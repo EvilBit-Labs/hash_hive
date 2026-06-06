@@ -15,7 +15,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 
-// Resource lifecycle status union — duplicated from
+// Resource lifecycle status union - duplicated from
 // `../schemas/resources.ts`'s `resourceStatusSchema` to avoid a
 // circular import (schemas/index.ts already imports from this file).
 // Keep the two lists in sync; the canonical source is the Zod

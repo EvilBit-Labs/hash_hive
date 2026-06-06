@@ -40,7 +40,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   // AbortController for the direct (<100 MB) upload path so the user
   // can cancel a wedged upload without waiting for the 5-minute
   // timeout. The chunked path owns its own controller inside
-  // useChunkedUpload — they're orthogonal.
+  // useChunkedUpload - they're orthogonal.
   const directUploadAbortRef = useRef<AbortController | null>(null)
 
   const createResource = useCreateResource(type)
@@ -93,7 +93,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   // the drop event fires; the browser's default for dragover is to
   // cancel the drop. dragLeave can fire on child boundaries inside the
   // dropzone (the inner <input> or <label>), so we only flip off when
-  // leaving the dropzone wrapper itself — keyed on currentTarget.
+  // leaving the dropzone wrapper itself - keyed on currentTarget.
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     if (!isUploading) setIsDragOver(true)
@@ -111,7 +111,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
     if (dropped) adoptFile(dropped)
   }
 
-  // Keyboard activation for the dropzone — Enter/Space opens the file
+  // Keyboard activation for the dropzone - Enter/Space opens the file
   // picker so keyboard-only operators have the same affordance as
   // mouse users dragging in.
   const handleDropzoneKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -330,7 +330,9 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
                     className="[&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full"
                     aria-label={`Uploading ${file?.name ?? 'file'}`}
                   />
-                  <p className="text-muted-foreground text-xs">Uploading {file?.name ?? 'file'}…</p>
+                  <p className="text-muted-foreground text-xs">
+                    Uploading {file?.name ?? 'file'}...
+                  </p>
                 </>
               )}
             </div>
