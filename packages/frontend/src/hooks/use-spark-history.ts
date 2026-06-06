@@ -37,7 +37,7 @@ export function useSparkHistory(
   key: string,
   value: number | undefined,
   capacity: number = DEFAULT_CAPACITY
-): SparkPoint[] {
+): ReadonlyArray<SparkPoint> {
   const bufferRef = useRef<SparkPoint[]>([])
   const keyRef = useRef<string>(key)
   const lastSampledAtRef = useRef<number>(0)

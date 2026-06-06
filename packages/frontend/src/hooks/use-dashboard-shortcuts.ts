@@ -22,19 +22,30 @@ function isTypingInField(target: EventTarget | null): boolean {
   return target.isContentEditable
 }
 
+function safeInvoke(label: string, fn: () => void): void {
+  // Synchronous throws inside a keydown listener vanish after
+  // preventDefault has already fired: the user sees nothing, and the
+  // bug is invisible until someone opens DevTools and notices the
+  // shortcut "feels broken". Surface the error so a stale `navigate`
+  // route or a consumer mistake at least leaves a trail.
+  try {
+    fn()
+  } catch (err) {
+    console.error(`useDashboardShortcuts ${label} handler threw`, err)
+  }
+}
+
 /**
- * Wires the dashboard's window-level keyboard accelerators:
- *
- * - `R` (no modifiers) — force-refetch the dashboard query
- * - `1` / `2` / `3` / `4` — jump to Agents / Campaigns / Tasks / Results
- * - `Shift+P` — focus the project picker
+ * Wires window-level keyboard accelerators for the dashboard page.
  *
  * Handlers are read through a ref so the consumer never has to memoize
  * the object; the listener mounts once for the lifetime of the page.
  *
  * Suppressed when the user is typing in an input, textarea, select, or
  * contenteditable surface, and when Ctrl/Meta/Alt is held (those
- * compounds belong to the browser or the OS).
+ * compounds belong to the browser or the OS). Current bindings live in
+ * the handler body and on the dashboard header's kbd hints; if you add
+ * a binding update both.
  */
 export function useDashboardShortcuts(handlers: DashboardShortcutHandlers): void {
   const handlersRef = useRef(handlers)
@@ -52,7 +63,7 @@ export function useDashboardShortcuts(handlers: DashboardShortcutHandlers): void
 
       if (shiftKey && (key === 'P' || key === 'p')) {
         event.preventDefault()
-        handlersRef.current.onProjectPicker()
+        safeInvoke('onProjectPicker', handlersRef.current.onProjectPicker)
         return
       }
 
@@ -62,14 +73,14 @@ export function useDashboardShortcuts(handlers: DashboardShortcutHandlers): void
 
       if (key === 'r' || key === 'R') {
         event.preventDefault()
-        handlersRef.current.onRefresh()
+        safeInvoke('onRefresh', handlersRef.current.onRefresh)
         return
       }
 
       const slot = NAVIGATION_KEYS[key]
       if (slot !== undefined) {
         event.preventDefault()
-        handlersRef.current.onNavigate(slot)
+        safeInvoke('onNavigate', () => handlersRef.current.onNavigate(slot))
       }
     }
 

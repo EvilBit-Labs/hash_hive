@@ -18,16 +18,15 @@ const SECOND_MS = 1_000
  * connection indicator), so this hook does not encode "stale" vocabulary.
  */
 export function useRelativeTime(updatedAtMs: number | null | undefined): string {
-  const [tick, setTick] = useState(0)
+  // Discard the tick value; only the setter matters. The interval's
+  // setTick call is what forces a re-render every second so the
+  // formatted string refreshes; the actual count is never read.
+  const [, setTick] = useState(0)
 
   useEffect(() => {
     const id = window.setInterval(() => setTick((t) => t + 1), SECOND_MS)
     return () => window.clearInterval(id)
   }, [])
-
-  // `tick` is intentionally referenced so React rerenders this hook on
-  // each interval fire; the value itself is opaque.
-  void tick
 
   if (!updatedAtMs) return 'never updated'
   return formatDistanceToNowStrict(updatedAtMs, { addSuffix: true })

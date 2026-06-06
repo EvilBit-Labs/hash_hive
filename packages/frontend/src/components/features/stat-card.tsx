@@ -62,8 +62,9 @@ interface StatCardProps {
    * Opt-in delight beat: when the numeric `value` increments by a small
    * amount (single-batch range), render a brief `+N` badge floating up
    * from the value and pulse a peach ring around the card surface.
-   * Skipped on initial mount, project-switch refetches (which route
-   * through `'?'`), and large jumps (`> CELEBRATE_MAX_DELTA`) that
+   * Skipped on initial mount, on transitions where either side of the
+   * comparison is non-numeric (any loading or unknown sentinel from
+   * the caller), and on large jumps (`> CELEBRATE_MAX_DELTA`) that
    * would feel like "+1234" noise rather than a single cracking
    * moment. Default false — only the Cracked hero opts in.
    */
@@ -111,9 +112,10 @@ export function StatCard({
     previousValueRef.current = value
 
     if (!celebrateOnIncrement) return
-    // `'?'` sentinel rules: transitions through unknown act as a natural
-    // reset and never produce a delta. This covers initial load, error
-    // states, and the project-switch refetch window.
+    // Any non-numeric previous or current value resets the delta
+    // (initial mount, loading placeholders, error sentinels, the
+    // project-switch refetch window where the caller routes the
+    // value through a non-number).
     if (typeof value !== 'number' || typeof previous !== 'number') return
 
     const diff = value - previous

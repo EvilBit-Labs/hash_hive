@@ -50,4 +50,29 @@ describe('useRelativeTime', () => {
       Date.now = originalNow
     }
   })
+
+  it('re-evaluates on each 1Hz tick so the string refreshes without a prop change', async () => {
+    // The whole point of the ticker is that the rendered string
+    // updates while `updatedAtMs` stays fixed. Pin a starting Date.now,
+    // render, advance Date.now between rerenders by walking real wall
+    // time, and assert the string steps forward. If a refactor drops
+    // the setTick call, this test catches the freeze.
+    const baseUpdatedMs = 1_700_000_000_000
+    let mockedNow = baseUpdatedMs + 10_000
+    const originalNow = Date.now
+    Date.now = () => mockedNow
+
+    try {
+      const { result } = renderHook(() => useRelativeTime(baseUpdatedMs))
+      expect(result.current).toBe('10 seconds ago')
+
+      // Walk forward by 2 seconds and wait long enough for at least
+      // two interval ticks to land.
+      mockedNow = baseUpdatedMs + 12_000
+      await new Promise((resolve) => setTimeout(resolve, 1_100))
+      expect(result.current).toBe('12 seconds ago')
+    } finally {
+      Date.now = originalNow
+    }
+  })
 })

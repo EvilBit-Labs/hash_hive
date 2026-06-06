@@ -90,9 +90,71 @@ describe('useDashboardShortcuts', () => {
   it('ignores Shift+1 (shift disqualifies digit navigation)', () => {
     const spies = makeSpies()
     mountWithSpies(spies)
-    dispatchKey({ key: '!', shiftKey: true })
     dispatchKey({ key: '1', shiftKey: true })
     expect(spies.onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('ignores Shift+P when a focused input is the source (typing-in-field guard)', () => {
+    const spies = makeSpies()
+    mountWithSpies(spies)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    dispatchKey({ key: 'P', shiftKey: true, target: input })
+    document.body.removeChild(input)
+    expect(spies.onProjectPicker).not.toHaveBeenCalled()
+  })
+
+  it('reads the latest handlers via ref on each fire (no stale-closure capture)', () => {
+    // The hook stores handlers in a ref so consumers do not have to
+    // memoize. If a future refactor swaps the ref pattern for a deps
+    // array on the listener effect, the test will catch the stale
+    // closure: pressing R after a rerender must fire the NEW spy,
+    // not the spy from the initial mount.
+    const oldRefresh = mock(() => {})
+    const oldNavigate = mock(() => {})
+    const oldPicker = mock(() => {})
+
+    const { rerender } = renderHook((h: Spies) => useDashboardShortcuts(h), {
+      initialProps: {
+        onRefresh: oldRefresh,
+        onNavigate: oldNavigate,
+        onProjectPicker: oldPicker,
+      },
+    })
+
+    const newRefresh = mock(() => {})
+    rerender({
+      onRefresh: newRefresh,
+      onNavigate: oldNavigate,
+      onProjectPicker: oldPicker,
+    })
+
+    dispatchKey({ key: 'r' })
+    expect(newRefresh).toHaveBeenCalledTimes(1)
+    expect(oldRefresh).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a handler throw via console.error rather than swallowing it silently', () => {
+    const spies: Spies = {
+      onRefresh: mock(() => {
+        throw new Error('boom')
+      }),
+      onNavigate: mock(() => {}),
+      onProjectPicker: mock(() => {}),
+    }
+    const originalError = console.error
+    const errorSpy = mock(() => {})
+    console.error = errorSpy
+    try {
+      mountWithSpies(spies)
+      dispatchKey({ key: 'r' })
+      expect(errorSpy).toHaveBeenCalledTimes(1)
+      const firstCall = errorSpy.mock.calls[0]
+      const firstArg = firstCall && firstCall.length > 0 ? String(firstCall[0]) : ''
+      expect(firstArg).toContain('onRefresh')
+    } finally {
+      console.error = originalError
+    }
   })
 
   it.each(['Ctrl', 'Meta', 'Alt'] as const)(

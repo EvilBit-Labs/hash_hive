@@ -171,21 +171,18 @@ export function DashboardPage() {
         ) : (
           <>
             {/*
-              Hero composition: Cracked (the operator-moment metric) sits on
-              the left of row 1, paired side-by-side with its crack-rate trend
-              chart. The two read as one editorial block ("here is the number,
-              here is its recent shape") rather than as a four-card grid plus
-              a trend below. Cracked spans 5 of 12 columns, the trend spans 7;
-              below `lg`, they stack vertically so the pairing still reads on
-              tablet/narrow.
+              Cracked + crack-rate trend form one editorial block on row 1:
+              "here is the number, here is its recent shape" rather than the
+              generic 4-card-grid-plus-trend layout. Per-card aria-live
+              regions on the value slot are scoped inside each StatCard,
+              so wrapping this grid in another aria-live would just nest
+              polite regions; intentionally omitted.
 
-              Per-card aria-live regions on the value slot are scoped inside
-              each StatCard, so wrapping this grid in another `aria-live`
-              would just nest polite regions; intentionally omitted.
-
-              Fallback value `'?'` (not `0` or empty string) is the consistent
-              post-load unknown indicator across all four cards: a failed
-              stats query does not silently render a real-looking `0`.
+              Fallback values are `'?'` rather than `0` or empty string so
+              a failed stats query does not silently render a real-looking
+              metric. Agents uses a whole-object guard (`stats ? ... : '?'`)
+              because it renders a composite `online / total` string; the
+              other three use field-level `?? '?'`.
             */}
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-12 lg:gap-4">
               <StatCard

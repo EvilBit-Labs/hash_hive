@@ -218,6 +218,27 @@ describe('StatCard', () => {
       expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
     })
 
+    it('celebrates at the ceiling (+20) but NOT one past it (+21)', async () => {
+      // Pin the CELEBRATE_MAX_DELTA cliff so a future tweak to the
+      // single-batch ceiling lands as an intentional test update,
+      // not a silent UX shift.
+      const { rerender } = renderWithMotion(
+        <StatCard title="Cracked" value={0} subtitle="Total" celebrateOnIncrement />
+      )
+      rerender(<StatCard title="Cracked" value={20} subtitle="Total" celebrateOnIncrement />)
+      const badge = await screen.findByTestId('stat-card-delta-badge')
+      expect(badge.textContent).toBe('+20')
+
+      cleanupAll()
+
+      const { rerender: rerender2 } = renderWithMotion(
+        <StatCard title="Cracked" value={0} subtitle="Total" celebrateOnIncrement />
+      )
+      rerender2(<StatCard title="Cracked" value={21} subtitle="Total" celebrateOnIncrement />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+
     it('does NOT celebrate when transitioning through the "?" unknown sentinel', async () => {
       // Project-switch case: 42 -> '?' (refetch window) -> 100. The
       // intermediate '?' resets the previous-value ref, so the eventual
