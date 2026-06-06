@@ -35,6 +35,7 @@ import type {
   detectHashTypeRequestSchema,
   detectHashTypeResponseSchema,
   engineDescriptorSchema,
+  fileRefSchema,
   hashCandidateSchema,
   hashListStatisticsSchema,
   inlineAttackRequestSchema,
@@ -60,6 +61,7 @@ import type {
   loginRequestSchema,
   meResponseSchema,
   requiredCapabilitiesSchema,
+  resourceStatusSchema,
   resourceUpdateEventDataSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
@@ -81,6 +83,7 @@ import type {
   selectUserSchema,
   selectWordListSchema,
   sessionUserSchema,
+  setHashListTypeRequestSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
   userRoleSchema,
@@ -238,6 +241,9 @@ export type CreateHashListRequest = z.infer<typeof createHashListRequestSchema>
 export type DetectHashTypeRequest = z.infer<typeof detectHashTypeRequestSchema>
 export type DetectHashTypeResponse = z.infer<typeof detectHashTypeResponseSchema>
 export type ResourceUpdateEventData = z.infer<typeof resourceUpdateEventDataSchema>
+export type FileRef = z.infer<typeof fileRefSchema>
+export type ResourceStatus = z.infer<typeof resourceStatusSchema>
+export type SetHashListTypeRequest = z.infer<typeof setHashListTypeRequestSchema>
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>

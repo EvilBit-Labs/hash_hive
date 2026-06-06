@@ -326,12 +326,33 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
 // can't drift.
 export type ResourceUpdatePayload = ResourceUpdateEventData
 
-export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePayload) {
+/**
+ * Caller-side shape for `emitResourceUpdate`: the discriminated union
+ * without the `projectId` field, which the helper injects from its
+ * own outer parameter. Keeps call sites concise (no projectId
+ * repetition) while the wire payload still carries projectId for
+ * defense-in-depth in subscribers (issue #163 Step 7).
+ *
+ * Derived from the canonical payload via `Omit` per branch so the
+ * discriminant ('action') is preserved and the shape follows the
+ * shared schema if it grows new branches.
+ */
+type ResourceUpdateInput =
+  | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_ready' }>, 'projectId'>
+  | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_failed' }>, 'projectId'>
+
+export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput) {
+  // Inject projectId into the inner payload for defense-in-depth: the
+  // outer frame envelope already carries projectId for WS-level scope
+  // filtering in useEvents, but inner-payload projectId lets routeEvent
+  // and any future per-row update path validate ownership without
+  // re-reading frame state (issue #163 Step 7).
+  const payload = { ...input, projectId } as ResourceUpdatePayload
   // The cast widens the typed payload to AppEvent.data's
   // `Record<string, unknown>`. AppEvent.data stays unstructured because
   // the WebSocket wire is untyped JSON anyway — subscribers re-narrow
   // via the `data.action` discriminator. Caller side stays typed via
-  // the `ResourceUpdatePayload` parameter; this cast is the producer-
+  // the `ResourceUpdateInputDerived` parameter; this cast is the producer-
   // side erasure that matches the wire's reality. A future refactor
   // could lift the discriminator into a per-type EventDataMap, but
   // touches every emit/subscriber call site.

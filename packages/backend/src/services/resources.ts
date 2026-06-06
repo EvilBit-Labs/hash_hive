@@ -320,6 +320,26 @@ export async function createHashList(data: {
   return hl ?? null
 }
 
+/**
+ * Update the `hashTypeId` on an existing hash list. Project-scoped:
+ * matches by `(id, projectId)` from the authenticated session and
+ * returns `null` on miss (the route translates to 404) so a wrong-
+ * project ID lookup cannot disclose existence. Mirrors the lookup
+ * pattern in `deleteHashList(id, projectId)`.
+ *
+ * The FK from `hash_lists.hash_type_id → hash_types.id` validates the
+ * target type at the database layer; a stale or missing hashTypeId
+ * surfaces as a Postgres FK violation and bubbles to the caller.
+ */
+export async function setHashListType(id: number, projectId: number, hashTypeId: number) {
+  const [updated] = await db
+    .update(hashLists)
+    .set({ hashTypeId, updatedAt: new Date() })
+    .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+    .returning()
+  return updated ?? null
+}
+
 export async function uploadHashListFile(
   hashListId: number,
   projectId: number,

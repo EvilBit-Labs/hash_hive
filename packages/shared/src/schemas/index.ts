@@ -277,19 +277,87 @@ export const detectHashTypeResponseSchema = z
  * Payload shape of `resource_update` events emitted by the hash-list
  * parser worker. Discriminated on `action` so subscribers can switch on
  * the terminal-state branch.
+ *
+ * `projectId` is carried in the inner payload as defense-in-depth: the
+ * outer WS frame envelope is already project-scope-filtered in
+ * `useEvents`, but inner-payload `projectId` lets `routeEvent` and any
+ * future per-row update path validate ownership without re-reading
+ * frame state. Hash list IDs are global integers, so a future caller
+ * that keys off `hashListId` alone could otherwise act on a wrong-
+ * project record if the outer filter ever drifted.
  */
 export const resourceUpdateEventDataSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('hash_list_ready'),
+    projectId: z.number().int().positive(),
     hashListId: z.number().int().positive(),
     statistics: hashListStatisticsSchema,
   }),
   z.object({
     action: z.literal('hash_list_failed'),
+    projectId: z.number().int().positive(),
     hashListId: z.number().int().positive(),
     error: z.string(),
   }),
 ])
+
+/**
+ * Canonical resource lifecycle status. `pending` is the initial state
+ * for generic resources (wordlist/rulelist/masklist rows before any
+ * file is attached); `uploading` covers in-flight direct or chunked
+ * upload; `uploaded` is the brief hash-list-only state after the file
+ * lands but before the parser worker picks it up; `processing` is the
+ * hash-list parsing phase; `ready` is the terminal success state;
+ * `failed` is the terminal error state. Generic resources flip
+ * `pending` → `uploading` → `ready` and skip the parse states.
+ */
+export const resourceStatusSchema = z.enum([
+  'pending',
+  'uploading',
+  'uploaded',
+  'processing',
+  'ready',
+  'failed',
+])
+
+/**
+ * JSONB shape of `file_ref` columns on hash_lists / word_lists /
+ * rule_lists / mask_lists. Source of truth for the storage handler in
+ * `uploadHashListFile` / `uploadResourceFile`, mirrored here so the
+ * frontend can narrow the row's `fileRef` without `as` casts.
+ *
+ * `bucket` is the S3 (or compat) bucket name at upload time —
+ * preserved in the row so a future bucket migration doesn't break old
+ * download URL generation. `key` is the S3 object key, `size` is the
+ * byte count (also surfaced at top-level `fileSize` for generic
+ * resources), `name` is the operator-supplied filename for display
+ * only (the key is the canonical storage path — see Q3 verification
+ * in the implementation plan), and `uploadedAt` is the ISO timestamp
+ * at upload completion.
+ */
+export const fileRefSchema = z
+  .object({
+    bucket: z.string(),
+    key: z.string(),
+    contentType: z.string(),
+    size: z.number().int().nonnegative(),
+    name: z.string(),
+    uploadedAt: z.string(),
+  })
+  .openapi('FileRef')
+
+/**
+ * Request body for `PATCH /api/v1/dashboard/resources/hash-lists/{id}`.
+ * Sets the hash type on an existing hash list — used by the detect-
+ * hash-type modal's "Use This Type" action after the operator picks a
+ * candidate. Project scope is derived from the authenticated session,
+ * not the request body.
+ */
+export const setHashListTypeRequestSchema = z
+  .object({
+    hashTypeId: z.number().int().positive(),
+  })
+  .openapi('SetHashListTypeRequest')
 
 /**
  * Canonical agent status values matching the persisted `agents.status` column.

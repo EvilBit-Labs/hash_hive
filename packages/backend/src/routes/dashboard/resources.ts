@@ -3,6 +3,7 @@ import {
   detectHashTypeRequestSchema,
   maskLists,
   ruleLists,
+  setHashListTypeRequestSchema,
   wordLists,
 } from '@hashhive/shared'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
@@ -31,6 +32,7 @@ import {
   listHashLists,
   listHashTypes,
   ResourceInUseError,
+  setHashListType,
   uploadHashListFile,
   UploadTooLargeError,
 } from '../../services/resources.js'
@@ -401,6 +403,76 @@ resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   } catch (err) {
     if (err instanceof ResourceInUseError) {
       return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
+    }
+    throw err
+  }
+})
+
+// ─── PATCH /hash-lists/{id} — set hash type (issue #163) ────────────
+//
+// Used by the detect-hash-type modal's "Use This Type" action. Body
+// carries only `hashTypeId`; the project scope is derived from the
+// authenticated session, never trusted from the request body. The
+// service layer matches on `(id, projectId)` and returns null on miss
+// so a cross-project ID lookup is indistinguishable from a deleted
+// row at the HTTP layer (404 without existence disclosure).
+
+const setHashListTypeRoute = createRoute({
+  method: 'patch',
+  path: '/hash-lists/{id}',
+  tags,
+  summary: 'Set the hash type on an existing hash list',
+  description:
+    "Updates the hash list's `hashTypeId`. Project ownership is enforced server-side from the session; cross-project IDs return 404.",
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: idParamSchema,
+    body: {
+      content: {
+        'application/json': { schema: setHashListTypeRequestSchema },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: 'Updated hash list',
+      content: {
+        'application/json': {
+          schema: z.object({ hashList: z.unknown() }),
+        },
+      },
+    },
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid hash list id')
+  }
+
+  const { hashTypeId } = c.req.valid('json')
+
+  try {
+    const updated = await setHashListType(id, projectId, hashTypeId)
+    if (!updated) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    }
+    return c.json({ hashList: updated }, 200)
+  } catch (err) {
+    // FK violation on hash_type_id → unknown hash type. Map to a 400
+    // rather than letting it bubble as a 500 — the client supplied a
+    // bad value, not a server fault.
+    if (err instanceof Error && /violates foreign key|fk_/i.test(err.message)) {
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Unknown hashTypeId')
     }
     throw err
   }

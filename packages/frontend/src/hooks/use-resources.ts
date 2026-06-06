@@ -1,11 +1,20 @@
-import type { HashCandidate, HashListStatistics } from '@hashhive/shared'
+import type {
+  DetectHashTypeResponse,
+  FileRef,
+  HashCandidate,
+  HashListStatistics,
+  ResourceStatus,
+  SetHashListTypeRequest,
+} from '@hashhive/shared'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
 
-// API response types — represent JSON-serialized shapes (dates as strings)
+// API response types — represent JSON-serialized shapes (dates as strings).
+// fileRef and status flow through @hashhive/shared so the cross-boundary
+// shape cannot drift; per AGENTS.md, no local interfaces for wire shapes.
 interface HashList {
   id: number
   name: string
@@ -13,6 +22,8 @@ interface HashList {
   hashTypeId: number | null
   hashCount: number
   crackedCount: number
+  status: ResourceStatus
+  fileRef: FileRef | null
   createdAt: string
 }
 
@@ -27,7 +38,9 @@ interface Resource {
   id: number
   name: string
   projectId: number
-  fileRef: Record<string, unknown> | null
+  status: ResourceStatus
+  fileSize: number | null
+  fileRef: FileRef | null
   createdAt: string
 }
 
@@ -208,6 +221,66 @@ export function useUploadResourceFile(type: ResourceType) {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: [type] })
+    },
+  })
+}
+
+// ─── Delete / detect-batch / set-hash-type (issue #163) ─────────────
+
+/**
+ * Delete a resource by id. Hash lists and generic resources share the
+ * same `DELETE /dashboard/resources/{type}/{id}` shape; the type
+ * parameter routes to the right backend handler. Invalidates the
+ * relevant list query on success — callers may layer optimistic
+ * removal in the modal via `queryClient.setQueryData` and rollback in
+ * `onError`.
+ */
+export function useDeleteResource(type: ResourceType) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: number) => api.delete<{ success: true }>(`/dashboard/resources/${type}/${id}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [type] })
+    },
+  })
+}
+
+/**
+ * Detect candidate hash types for a batch of sample hashes via the
+ * shipped `POST /dashboard/resources/detect-hash-type` route. The
+ * wire-shape field name is `hashes` (server contract, capped at 100
+ * server-side); the UI enforces a tighter 5–10 cap before calling.
+ * Returns one `{ hashValue, candidates }` entry per input.
+ */
+export function useDetectHashTypeBatch() {
+  return useMutation({
+    mutationFn: (hashes: string[]) =>
+      api.post<DetectHashTypeResponse>('/dashboard/resources/detect-hash-type', { hashes }),
+  })
+}
+
+/**
+ * Set the hash type on an existing hash list. Used by the detect-
+ * hash-type modal's "Use This Type" action. Project scope is
+ * enforced server-side from the session; the request body carries
+ * only `hashTypeId`. Invalidates `hash-list-detail` for the row and
+ * the project-wide `hash-lists` list query so the table reflects the
+ * new type without a refetch ping-pong.
+ */
+export function useSetHashListType(hashListId: number) {
+  const queryClient = useQueryClient()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
+
+  return useMutation({
+    mutationFn: (body: SetHashListTypeRequest) =>
+      api.patch<{ hashList: HashList }>(
+        `/dashboard/resources/hash-lists/${hashListId}`,
+        body as unknown as Record<string, unknown>
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['hash-list-detail', hashListId] })
+      void queryClient.invalidateQueries({ queryKey: ['hash-lists', selectedProjectId] })
     },
   })
 }
