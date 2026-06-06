@@ -179,6 +179,68 @@ describe('StatCard', () => {
     await waitFor(() => expect(screen.getByText('42')).toBeDefined())
   })
 
+  describe('celebrateOnIncrement (delight)', () => {
+    it('renders a "+N" delta badge when a celebrated value increments', async () => {
+      const { rerender } = renderWithMotion(
+        <StatCard title="Cracked" value={5} subtitle="Total" celebrateOnIncrement />
+      )
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+
+      rerender(<StatCard title="Cracked" value={8} subtitle="Total" celebrateOnIncrement />)
+      const badge = await screen.findByTestId('stat-card-delta-badge')
+      expect(badge.textContent).toBe('+3')
+    })
+
+    it('does NOT celebrate when celebrateOnIncrement is unset (default)', async () => {
+      const { rerender } = renderWithMotion(<StatCard title="Agents" value={3} subtitle="Online" />)
+      rerender(<StatCard title="Agents" value={5} subtitle="Online" />)
+      // Give the effect a tick to run.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+
+    it('does NOT celebrate on a decrement (delight is for the up-direction only)', async () => {
+      const { rerender } = renderWithMotion(
+        <StatCard title="Cracked" value={5} subtitle="Total" celebrateOnIncrement />
+      )
+      rerender(<StatCard title="Cracked" value={3} subtitle="Total" celebrateOnIncrement />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+
+    it('does NOT celebrate on a large jump (project switch / bulk import)', async () => {
+      const { rerender } = renderWithMotion(
+        <StatCard title="Cracked" value={42} subtitle="Total" celebrateOnIncrement />
+      )
+      // Delta of 1234 is unambiguously not a single cracking moment.
+      rerender(<StatCard title="Cracked" value={1276} subtitle="Total" celebrateOnIncrement />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+
+    it('does NOT celebrate when transitioning through the "?" unknown sentinel', async () => {
+      // Project-switch case: 42 -> '?' (refetch window) -> 100. The
+      // intermediate '?' resets the previous-value ref, so the eventual
+      // numeric value sees a non-number previous and short-circuits.
+      const { rerender } = renderWithMotion(
+        <StatCard title="Cracked" value={42} subtitle="Total" celebrateOnIncrement />
+      )
+      rerender(<StatCard title="Cracked" value={'?'} subtitle="Total" celebrateOnIncrement />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      rerender(<StatCard title="Cracked" value={100} subtitle="Total" celebrateOnIncrement />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+
+    it('does NOT celebrate on initial mount even with a numeric value', async () => {
+      renderWithMotion(
+        <StatCard title="Cracked" value={42} subtitle="Total" celebrateOnIncrement />
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByTestId('stat-card-delta-badge')).toBeNull()
+    })
+  })
+
   it('renders two cards side-by-side without crashing on shared sparkData (gradient id uniqueness)', () => {
     // Gradient id collision would surface as a recharts render error or as visual
     // bleed; happy-dom does not reliably expose SVG defs to querySelector, so the

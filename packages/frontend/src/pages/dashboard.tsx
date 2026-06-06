@@ -199,6 +199,7 @@ export function DashboardPage() {
                 emphasis="primary"
                 icon={Trophy}
                 className="lg:col-span-5"
+                celebrateOnIncrement
               />
               <CrackRateTrendChart
                 data={crackedSpark}

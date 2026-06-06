@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 
 import { AnimatePresence, motion } from 'motion/react'
-import { useId } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
@@ -58,7 +58,26 @@ interface StatCardProps {
   readonly icon?: LucideIcon
   /** Extra classes for the outer surface (e.g. `lg:col-span-5` from a bento parent grid). */
   readonly className?: string
+  /**
+   * Opt-in delight beat: when the numeric `value` increments by a small
+   * amount (single-batch range), render a brief `+N` badge floating up
+   * from the value and pulse a peach ring around the card surface.
+   * Skipped on initial mount, project-switch refetches (which route
+   * through `'?'`), and large jumps (`> CELEBRATE_MAX_DELTA`) that
+   * would feel like "+1234" noise rather than a single cracking
+   * moment. Default false — only the Cracked hero opts in.
+   */
+  readonly celebrateOnIncrement?: boolean
 }
+
+/**
+ * Single-batch ceiling for the delight beat. A hashcat worker may
+ * report a handful of cracks per heartbeat; anything larger almost
+ * certainly came from a project switch, an initial load, or a bulk
+ * import, and "+1234" on a hero card reads as a bug, not a moment.
+ */
+const CELEBRATE_MAX_DELTA = 20
+const CELEBRATE_DURATION_MS = 1_500
 
 const ANIMATE_FROM = { opacity: 0, y: 4 } as const
 const ANIMATE_TO = { opacity: 1, y: 0 } as const
@@ -75,10 +94,35 @@ export function StatCard({
   emphasis = 'secondary',
   icon: Icon,
   className,
+  celebrateOnIncrement = false,
 }: StatCardProps) {
   const navigate = useNavigate()
   const gradientId = `stat-spark-${useId().replace(/:/g, '')}`
   const isPrimary = emphasis === 'primary'
+
+  // Track the previous rendered value so we can detect a single-batch
+  // increment and fire the delight beat. The ref starts at the initial
+  // value so the first render is a no-op (no celebration on mount).
+  const previousValueRef = useRef<string | number>(value)
+  const [delta, setDelta] = useState<number | null>(null)
+
+  useEffect(() => {
+    const previous = previousValueRef.current
+    previousValueRef.current = value
+
+    if (!celebrateOnIncrement) return
+    // `'?'` sentinel rules: transitions through unknown act as a natural
+    // reset and never produce a delta. This covers initial load, error
+    // states, and the project-switch refetch window.
+    if (typeof value !== 'number' || typeof previous !== 'number') return
+
+    const diff = value - previous
+    if (diff <= 0 || diff > CELEBRATE_MAX_DELTA) return
+
+    setDelta(diff)
+    const id = setTimeout(() => setDelta(null), CELEBRATE_DURATION_MS)
+    return () => clearTimeout(id)
+  }, [value, celebrateOnIncrement])
 
   // Sparkline stroke: always the per-card accent, even on the primary card
   // (peach), so the trend line carries through visibly.
@@ -104,6 +148,28 @@ export function StatCard({
         >
           {value}
         </motion.span>
+      </AnimatePresence>
+      <AnimatePresence>
+        {delta !== null && (
+          <motion.span
+            data-testid="stat-card-delta-badge"
+            key={`delta-${delta}`}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: -28 }}
+            exit={{ opacity: 0, y: -40 }}
+            transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
+            className={cn(
+              'pointer-events-none absolute top-0 -right-3 translate-x-full',
+              'inline-flex items-center rounded-full px-2 py-0.5',
+              'font-mono text-xs leading-none font-bold tabular-nums',
+              'bg-[hsl(var(--ctp-peach))] text-[hsl(var(--background))]',
+              'shadow-[0_4px_12px_hsl(var(--ctp-peach)/0.35)]'
+            )}
+            aria-hidden="true"
+          >
+            +{delta}
+          </motion.span>
+        )}
       </AnimatePresence>
     </div>
   )
@@ -226,6 +292,30 @@ export function StatCard({
 
   const surface = cn(isPrimary ? primarySurface : secondarySurface, className)
 
+  // Surface ring pulse that overlays the card during a celebrated
+  // increment. Sits inside the card and stretches to the rounded
+  // border so the pulse traces the same shape as the surface itself.
+  // `pointer-events-none` keeps the click target on the underlying
+  // button. The opacity keyframes mean reduced-motion users still see
+  // a brief fade (no Y-movement, no scale) instead of a static ring.
+  const ringPulse = (
+    <AnimatePresence>
+      {delta !== null && (
+        <motion.span
+          aria-hidden="true"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: [0, 1, 0] }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.9, ease: 'easeOut' }}
+          className={cn(
+            'pointer-events-none absolute inset-0 rounded-md',
+            'ring-2 ring-[hsl(var(--ctp-peach))]'
+          )}
+        />
+      )}
+    </AnimatePresence>
+  )
+
   if (to) {
     return (
       <button
@@ -235,6 +325,7 @@ export function StatCard({
         className={cn('group w-full text-left', surface)}
       >
         {content}
+        {ringPulse}
       </button>
     )
   }
@@ -242,6 +333,7 @@ export function StatCard({
   return (
     <div data-testid="stat-card" className={surface}>
       {content}
+      {ringPulse}
     </div>
   )
 }
