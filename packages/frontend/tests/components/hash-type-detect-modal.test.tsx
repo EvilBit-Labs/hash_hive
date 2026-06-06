@@ -187,7 +187,7 @@ describe('HashTypeDetectModal', () => {
     })
 
     // Pick a list so the apply path is enabled.
-    const listPicker = (await screen.findByLabelText(/Apply to hash list/)) as HTMLSelectElement
+    const listPicker = (await screen.findByLabelText(/^Apply to$/)) as HTMLSelectElement
     fireEvent.change(listPicker, { target: { value: '7' } })
 
     const useButton = screen.getByRole('button', {

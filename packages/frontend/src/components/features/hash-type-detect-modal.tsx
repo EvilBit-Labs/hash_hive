@@ -179,45 +179,30 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
         role="dialog"
         aria-modal="true"
         aria-labelledby="hash-type-detect-title"
-        className="border-surface-0 bg-mantle w-full max-w-2xl rounded-lg border p-6 shadow-2xl"
+        className="border-surface-0 bg-mantle w-full max-w-3xl rounded-lg border p-6 shadow-2xl"
       >
-        <h3 id="hash-type-detect-title" className="mb-4 text-sm font-medium">
-          Detect Hash Type
-        </h3>
-
-        {submitError !== null && <ErrorBanner message={submitError} className="mb-4" />}
-
-        <div className="space-y-4">
-          <div>
-            <label
-              htmlFor="hash-type-samples"
-              className="text-muted-foreground text-xs font-medium"
+        {/* Header: title + apply target. The picker lives here (not
+            buried mid-form) so the operator's apply destination is
+            visible context throughout the flow — both before they
+            paste samples and while they're reading results. */}
+        <header className="border-surface-0/60 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b pb-5">
+          <div className="space-y-1">
+            <h3
+              id="hash-type-detect-title"
+              className="text-foreground text-base font-medium tracking-tight"
             >
-              Sample hashes (one per line)
-            </label>
-            <textarea
-              id="hash-type-samples"
-              aria-label="Sample hashes"
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              onKeyDown={handleTextareaKeyDown}
-              disabled={inFlight}
-              rows={6}
-              className="border-surface-1 bg-base focus-visible:ring-primary mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
-              placeholder={`Paste ${MIN_SAMPLES}-${MAX_SAMPLES} hashes, one per line`}
-              aria-describedby="hash-type-samples-help"
-            />
-            <p id="hash-type-samples-help" className="text-muted-foreground mt-1.5 text-xs">
-              {helperMessage}
+              Detect Hash Type
+            </h3>
+            <p className="text-muted-foreground text-xs">
+              Identify sample hashes and apply the chosen type to a hash list.
             </p>
           </div>
-
-          <div>
+          <div className="flex items-center gap-2">
             <label
               htmlFor="hash-type-target-list"
-              className="text-muted-foreground text-xs font-medium"
+              className="text-muted-foreground text-xs font-medium whitespace-nowrap"
             >
-              Apply to hash list (optional)
+              Apply to
             </label>
             <Select
               id="hash-type-target-list"
@@ -226,7 +211,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                 setSelectedListId(e.target.value === '' ? null : Number(e.target.value))
               }
               disabled={detect.isPending || setType.isPending}
-              className="mt-1.5 w-full"
+              className="min-w-[14rem]"
             >
               <option value="">- Detect only (read-only) -</option>
               {availableLists.map((hl) => (
@@ -236,13 +221,47 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
               ))}
             </Select>
           </div>
+        </header>
 
-          {detect.data && (
-            <div className="space-y-2">
-              <h4 className="text-xs font-medium">Results</h4>
-              {flatCandidates.length === 0 ? (
+        {submitError !== null && <ErrorBanner message={submitError} className="mt-4" />}
+
+        {/* Primary input: paste samples. Generous top padding (pt-5)
+            distinguishes this from the header band; tight internal
+            grouping (label → textarea → helper, 1.5/1.5 spacing)
+            reads as one unit. */}
+        <div className="pt-5">
+          <label htmlFor="hash-type-samples" className="text-muted-foreground text-xs font-medium">
+            Sample hashes <span className="text-overlay1">(one per line)</span>
+          </label>
+          <textarea
+            id="hash-type-samples"
+            aria-label="Sample hashes"
+            value={rawText}
+            onChange={(e) => setRawText(e.target.value)}
+            onKeyDown={handleTextareaKeyDown}
+            disabled={inFlight}
+            rows={6}
+            className="border-surface-1 bg-base focus-visible:ring-primary mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
+            placeholder={`Paste ${MIN_SAMPLES}-${MAX_SAMPLES} hashes, one per line`}
+            aria-describedby="hash-type-samples-help"
+          />
+          <p id="hash-type-samples-help" className="text-muted-foreground mt-1.5 text-xs">
+            {helperMessage}
+          </p>
+        </div>
+
+        {/* Results: phase transition from input to output. pt-6 marks
+            the change of context. Section header is the same weight as
+            labels above so the table itself carries the visual weight. */}
+        {detect.data && (
+          <section className="pt-6">
+            <h4 className="text-foreground text-xs font-medium">Results</h4>
+            {flatCandidates.length === 0 ? (
+              <div className="mt-2">
                 <EmptyState message="No hash types matched the samples provided. Try different samples or paste more hashes." />
-              ) : (
+              </div>
+            ) : (
+              <div className="mt-2">
                 <Table>
                   <TableHead>
                     <tr>
@@ -287,7 +306,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                               disabled={applyDisabled || hashTypes.isLoading || !hashTypes.data}
                               title={
                                 selectedListId === null
-                                  ? 'Pick a hash list above to apply'
+                                  ? 'Pick a hash list in the header to apply'
                                   : hashTypes.isLoading || !hashTypes.data
                                     ? 'Loading hash type registry...'
                                     : undefined
@@ -301,19 +320,22 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                     })}
                   </TableBody>
                 </Table>
-              )}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
+          </section>
+        )}
 
-        <div className="mt-6 flex justify-end gap-2">
+        {/* Footer: structural separator (border-t) marks the actions
+            row as distinct from the body. gap-2 keeps the two
+            buttons tight as siblings. */}
+        <footer className="border-surface-0/60 mt-6 flex justify-end gap-2 border-t pt-5">
           <Button variant="secondary" onClick={handleClose} disabled={inFlight}>
             Close
           </Button>
           <Button onClick={handleDetect} disabled={!inRange || inFlight}>
             {detect.isPending ? 'Detecting...' : 'Detect'}
           </Button>
-        </div>
+        </footer>
       </div>
     </div>
   )
