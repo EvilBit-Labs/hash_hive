@@ -274,10 +274,7 @@ export function useSetHashListType(hashListId: number) {
 
   return useMutation({
     mutationFn: (body: SetHashListTypeRequest) =>
-      api.patch<{ hashList: HashList }>(
-        `/dashboard/resources/hash-lists/${hashListId}`,
-        body as unknown as Record<string, unknown>
-      ),
+      api.patch<{ hashList: HashList }>(`/dashboard/resources/hash-lists/${hashListId}`, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['hash-list-detail', hashListId] })
       void queryClient.invalidateQueries({ queryKey: ['hash-lists', selectedProjectId] })

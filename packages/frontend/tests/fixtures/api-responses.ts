@@ -378,6 +378,8 @@ export function mockHashListsResponse(options: MockHashListsResponseOptions = {}
     hashTypeId: 1000,
     hashCount: 100 * (i + 1),
     crackedCount: 10 * (i + 1),
+    status: 'ready',
+    fileRef: null,
     createdAt: new Date().toISOString(),
     ...options.hashLists?.[i],
   }))
@@ -388,6 +390,8 @@ interface MockResource {
   id: number
   name: string
   projectId: number
+  status: string
+  fileSize: number | null
   fileRef: Record<string, unknown> | null
   createdAt: string
 }
@@ -403,6 +407,8 @@ export function mockResourcesResponse(options: MockResourcesResponseOptions = {}
     id: i + 1,
     name: `Resource ${i + 1}`,
     projectId: 1,
+    status: 'ready',
+    fileSize: null,
     fileRef: null,
     createdAt: new Date().toISOString(),
     ...options.resources?.[i],

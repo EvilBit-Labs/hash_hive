@@ -1,9 +1,10 @@
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 
 import { useCallback, useRef, useState } from 'react'
 
 import { useChunkedUpload } from '../../hooks/use-chunked-upload'
 import { useCreateResource, useUploadResourceFile } from '../../hooks/use-resources'
+import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { ErrorBanner } from '../ui/error-banner'
 import { Input } from '../ui/input'
@@ -30,6 +31,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const [name, setName] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const createResource = useCreateResource(type)
@@ -63,11 +65,50 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const label = TYPE_LABELS[type]
   const useChunkedPath = file !== null && file.size > CHUNKED_UPLOAD_THRESHOLD
 
+  const adoptFile = useCallback(
+    (selected: File | null) => {
+      setFile(selected)
+      if (selected && !name) {
+        setName(selected.name.replace(/\.[^.]+$/, ''))
+      }
+    },
+    [name]
+  )
+
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0] ?? null
-    setFile(selected)
-    if (selected && !name) {
-      setName(selected.name.replace(/\.[^.]+$/, ''))
+    adoptFile(e.target.files?.[0] ?? null)
+  }
+
+  // Drag-and-drop handlers. preventDefault on dragover is required so
+  // the drop event fires; the browser's default for dragover is to
+  // cancel the drop. dragLeave can fire on child boundaries inside the
+  // dropzone (the inner <input> or <label>), so we only flip off when
+  // leaving the dropzone wrapper itself — keyed on currentTarget.
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (!isUploading) setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget === e.target) setIsDragOver(false)
+  }
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    if (isUploading) return
+    const dropped = e.dataTransfer.files[0] ?? null
+    if (dropped) adoptFile(dropped)
+  }
+
+  // Keyboard activation for the dropzone — Enter/Space opens the file
+  // picker so keyboard-only operators have the same affordance as
+  // mouse users dragging in.
+  const handleDropzoneKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (isUploading) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      fileInputRef.current?.click()
     }
   }
 
@@ -150,34 +191,87 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             <label htmlFor="resource-file" className="text-muted-foreground text-xs font-medium">
               File
             </label>
-            <input
-              id="resource-file"
-              ref={fileInputRef}
-              type="file"
-              aria-label="Resource file"
-              onChange={handleFileChange}
-              disabled={isUploading}
-              className="text-muted-foreground file:bg-surface-0 file:text-foreground mt-1.5 w-full text-xs file:mr-3 file:rounded file:border-0 file:px-3 file:py-1.5 file:text-xs file:font-medium disabled:opacity-50"
-            />
+            <div
+              // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- dropzone: needs to be a div to accept drag events on its full bounding box without nested-button focus traps
+              role="button"
+              tabIndex={isUploading ? -1 : 0}
+              aria-label="Drop file here, or press Enter to browse"
+              aria-disabled={isUploading}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onKeyDown={handleDropzoneKeyDown}
+              onClick={() => !isUploading && fileInputRef.current?.click()}
+              className={cn(
+                'focus-visible:ring-primary mt-1.5 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed px-4 py-6 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none',
+                isDragOver
+                  ? 'border-primary bg-primary/5'
+                  : 'border-surface-1 hover:border-surface-0',
+                isUploading && 'cursor-not-allowed opacity-60'
+              )}
+            >
+              {file ? (
+                <>
+                  <p className="text-foreground text-xs font-medium">{file.name}</p>
+                  <p className="text-muted-foreground font-mono text-xs">
+                    {(file.size / (1024 * 1024)).toFixed(file.size < 10 * 1024 * 1024 ? 1 : 0)} MB
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-foreground text-xs font-medium">
+                    Drop a file here or click to browse
+                  </p>
+                  <p className="text-muted-foreground text-xs">Any file type, up to several GB</p>
+                </>
+              )}
+              <input
+                id="resource-file"
+                ref={fileInputRef}
+                type="file"
+                aria-label="Resource file"
+                onChange={handleFileChange}
+                disabled={isUploading}
+                className="sr-only"
+              />
+            </div>
           </div>
 
-          {displayProgress !== null && (
+          {isUploading && (
             <div className="space-y-1">
-              <div className="bg-surface-1 h-1.5 w-full rounded-full">
-                <div
-                  className="bg-primary h-full rounded-full transition-all"
-                  style={{ width: `${displayProgress}%` }}
-                />
-              </div>
-              <p className="text-muted-foreground text-xs">
-                {displayProgress}%
-                {chunkedProgress && (
-                  <span>
-                    {' '}
-                    - Part {chunkedProgress.currentPart} of {chunkedProgress.totalParts}
-                  </span>
-                )}
-              </p>
+              {/* Determinate progress for chunked path, indeterminate for
+                  direct path under the 100 MB threshold. `<progress>`
+                  without a `value` attribute renders the browser's
+                  indeterminate animation, which is automatically
+                  suppressed by user agents under
+                  `prefers-reduced-motion: reduce`. */}
+              {displayProgress !== null ? (
+                <>
+                  <progress
+                    className="[&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all"
+                    max={100}
+                    value={displayProgress}
+                    aria-label={`Uploading ${file?.name ?? 'file'}`}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    {displayProgress}%
+                    {chunkedProgress && (
+                      <span>
+                        {' '}
+                        - Part {chunkedProgress.currentPart} of {chunkedProgress.totalParts}
+                      </span>
+                    )}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <progress
+                    className="[&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full"
+                    aria-label={`Uploading ${file?.name ?? 'file'}`}
+                  />
+                  <p className="text-muted-foreground text-xs">Uploading {file?.name ?? 'file'}…</p>
+                </>
+              )}
             </div>
           )}
         </div>

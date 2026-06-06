@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 
 import { ResourcesPage } from '../../src/pages/resources'
 import { useUiStore } from '../../src/stores/ui'
-import {
-  mockHashListsResponse,
-  mockHashTypeGuessResponse,
-  mockResourcesResponse,
-} from '../fixtures/api-responses'
+import { mockHashListsResponse, mockResourcesResponse } from '../fixtures/api-responses'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
 import { cleanupAll, fireEvent, renderWithProviders, screen, waitFor } from '../test-utils'
 
@@ -64,11 +60,13 @@ describe('ResourcesPage', () => {
     selectProject()
     renderWithProviders(<ResourcesPage />)
 
-    expect(screen.getByText('Hash Lists')).toBeDefined()
-    expect(screen.getByText('Wordlists')).toBeDefined()
-    expect(screen.getByText('Rulelists')).toBeDefined()
-    expect(screen.getByText('Masklists')).toBeDefined()
-    expect(screen.getByText('Hash Detect')).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Hash Lists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Wordlists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Rulelists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Masklists' })).toBeDefined()
+    // Hash detection lives in a page-level button (issue #163), not a tab.
+    expect(screen.queryByRole('tab', { name: 'Hash Detect' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Detect Hash Type' })).toBeDefined()
   })
 
   it('renders hash lists table on default tab', async () => {
@@ -130,60 +128,41 @@ describe('ResourcesPage', () => {
     })
   })
 
-  it('renders hash detect tab with input and button', async () => {
+  it('opens the hash type detect modal from the page-level button', async () => {
     fetchMock = setupResourceMocks()
     selectProject()
     renderWithProviders(<ResourcesPage />)
 
-    const hashDetectTab = screen.getByText('Hash Detect')
-    fireEvent.click(hashDetectTab)
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined()
-    })
-
-    expect(screen.getByText('Detect Type')).toBeDefined()
-  })
-
-  it('calls guess hash type mutation and displays results', async () => {
-    const guessResponse = mockHashTypeGuessResponse({
-      candidates: [
-        { name: 'MD5', hashcatMode: 0, category: 'Raw Hash', confidence: 0.95 },
-        { name: 'NTLM', hashcatMode: 1000, category: 'OS', confidence: 0.75 },
-      ],
-      identified: true,
-    })
-
-    fetchMock = setupResourceMocks({
-      '/dashboard/hashes/guess-type': {
-        status: 200,
-        body: guessResponse,
-      },
-    })
-
-    selectProject()
-    renderWithProviders(<ResourcesPage />)
-
-    const hashDetectTab = screen.getByText('Hash Detect')
-    fireEvent.click(hashDetectTab)
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined()
-    })
-
-    const input = screen.getByPlaceholderText('Paste a hash value...') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '5f4dcc3b5aa765d61d8327deb882cf99' } })
-
-    const detectButton = screen.getByText('Detect Type')
+    const detectButton = screen.getByRole('button', { name: 'Detect Hash Type' })
     fireEvent.click(detectButton)
 
     await waitFor(() => {
-      expect(screen.getByText('MD5')).toBeDefined()
+      expect(screen.getByRole('dialog', { name: 'Detect Hash Type' })).toBeDefined()
+    })
+    expect(screen.getByLabelText('Sample hashes')).toBeDefined()
+  })
+
+  it('disables Detect until 5–10 samples are present', async () => {
+    fetchMock = setupResourceMocks()
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detect Hash Type' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Sample hashes')).toBeDefined()
     })
 
-    expect(screen.getByText('NTLM')).toBeDefined()
-    expect(screen.getByText('95%')).toBeDefined()
-    expect(screen.getByText('75%')).toBeDefined()
-    expect(screen.getByText(/Identified/)).toBeDefined()
+    const textarea = screen.getByLabelText('Sample hashes') as HTMLTextAreaElement
+    const detect = screen.getByRole('button', { name: 'Detect' }) as HTMLButtonElement
+    expect(detect.disabled).toBe(true)
+
+    fireEvent.change(textarea, { target: { value: 'h1\nh2\nh3\nh4\nh5' } })
+    expect(detect.disabled).toBe(false)
+
+    fireEvent.change(textarea, {
+      target: { value: 'h1\nh2\nh3\nh4\nh5\nh6\nh7\nh8\nh9\nh10\nh11' },
+    })
+    expect(detect.disabled).toBe(true)
   })
 })

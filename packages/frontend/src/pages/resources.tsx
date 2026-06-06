@@ -1,15 +1,18 @@
 import { type KeyboardEvent, useState } from 'react'
 import { Link } from 'react-router'
 
+import { HashTypeDetectModal } from '../components/features/hash-type-detect-modal'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { ResourceUploadModal } from '../components/features/resource-upload-modal'
+import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import { EmptyState } from '../components/ui/empty-state'
-import { Input } from '../components/ui/input'
+import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import {
-  useGuessHashType,
+  useDeleteResource,
   useHashLists,
   useMasklists,
   useRulelists,
@@ -19,21 +22,49 @@ import { Permission } from '../lib/permissions'
 import { cn } from '../lib/utils'
 import { useUiStore } from '../stores/ui'
 
-type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists' | 'hash-detect'
+// Format a file size from bytes. Hyphen for unknown / zero so empty
+// uploads or pre-upload rows render unambiguously rather than "0 B".
+function formatFileSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`
+}
 
-type UploadableTab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists'
+type Tab = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists'
+
+type UploadableTab = Tab
 
 const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'hash-lists', label: 'Hash Lists' },
   { id: 'wordlists', label: 'Wordlists' },
   { id: 'rulelists', label: 'Rulelists' },
   { id: 'masklists', label: 'Masklists' },
-  { id: 'hash-detect', label: 'Hash Detect' },
 ] as const
+
+// Delete-target snapshot driven by row clicks. Stored at the page level
+// so the confirmation modal (wired in U4) is a single instance shared
+// across tabs — opening it from a row sets the target; closing clears.
+interface DeleteTarget {
+  type: UploadableTab
+  id: number
+  name: string
+}
 
 export function ResourcesPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [activeTab, setActiveTab] = useState<Tab>('hash-lists')
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  const [detectOpen, setDetectOpen] = useState(false)
+
+  const handleDelete = (type: UploadableTab, id: number, name: string) => {
+    setDeleteTarget({ type, id, name })
+  }
 
   if (!selectedProjectId) {
     return (
@@ -75,7 +106,12 @@ export function ResourcesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader>Resources</PageHeader>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeader>Resources</PageHeader>
+        <Button variant="secondary" size="sm" onClick={() => setDetectOpen(true)}>
+          Detect Hash Type
+        </Button>
+      </div>
 
       <div
         role="tablist"
@@ -106,13 +142,60 @@ export function ResourcesPage() {
       </div>
 
       <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
-        {activeTab === 'hash-lists' && <HashListsTab />}
-        {activeTab === 'wordlists' && <ResourceListTab type="wordlists" />}
-        {activeTab === 'rulelists' && <ResourceListTab type="rulelists" />}
-        {activeTab === 'masklists' && <ResourceListTab type="masklists" />}
-        {activeTab === 'hash-detect' && <HashDetectTab />}
+        {activeTab === 'hash-lists' && <HashListsTab onDelete={handleDelete} />}
+        {activeTab === 'wordlists' && <ResourceListTab type="wordlists" onDelete={handleDelete} />}
+        {activeTab === 'rulelists' && <ResourceListTab type="rulelists" onDelete={handleDelete} />}
+        {activeTab === 'masklists' && <ResourceListTab type="masklists" onDelete={handleDelete} />}
       </div>
+
+      {deleteTarget !== null && (
+        <ResourceDeleteDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      )}
+      <HashTypeDetectModal open={detectOpen} onClose={() => setDetectOpen(false)} />
     </div>
+  )
+}
+
+// Delete confirmation. Uses the shared ConfirmDialog primitive for the
+// shell. On confirm, the mutation runs against the right backend route
+// (hash-lists DELETE for hash lists, generic DELETE for the others —
+// the hook routes by `type`). On error, the dialog stays open with an
+// inline ErrorBanner; the React-Query cache invalidation in the hook's
+// onSuccess handles the table refresh, so no optimistic cache write is
+// needed here.
+function ResourceDeleteDialog({ target, onClose }: { target: DeleteTarget; onClose: () => void }) {
+  const mutation = useDeleteResource(target.type)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const handleConfirm = () => {
+    setErrorMessage(null)
+    mutation.mutate(target.id, {
+      onSuccess: () => onClose(),
+      onError: (err) => {
+        setErrorMessage(err instanceof Error ? err.message : 'Delete failed. Try again.')
+      },
+    })
+  }
+
+  return (
+    <>
+      <ConfirmDialog
+        open
+        title={`Delete ${target.name}?`}
+        message={`This will permanently delete "${target.name}". This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        destructive
+        busy={mutation.isPending}
+        onConfirm={handleConfirm}
+        onCancel={onClose}
+      />
+      {errorMessage !== null && (
+        <div className="fixed inset-x-0 bottom-6 z-[60] mx-auto max-w-md px-4">
+          <ErrorBanner message={errorMessage} />
+        </div>
+      )}
+    </>
   )
 }
 
@@ -141,7 +224,11 @@ function UploadButton({ type }: { type: UploadableTab }) {
   )
 }
 
-function HashListsTab() {
+function HashListsTab({
+  onDelete,
+}: {
+  onDelete: (type: UploadableTab, id: number, name: string) => void
+}) {
   const { data, isLoading } = useHashLists()
 
   if (isLoading) return <EmptyState message="Loading..." />
@@ -163,10 +250,15 @@ function HashListsTab() {
           <TableHead>
             <tr>
               <Th>Name</Th>
+              <Th>Size</Th>
+              <Th>Status</Th>
               <Th>Hashes</Th>
               <Th>Cracked</Th>
               <Th>Progress</Th>
               <Th>Created</Th>
+              <Th>
+                <span className="sr-only">Actions</span>
+              </Th>
             </tr>
           </TableHead>
           <TableBody>
@@ -181,6 +273,12 @@ function HashListsTab() {
                     >
                       {hl.name}
                     </Link>
+                  </Td>
+                  <Td className="text-muted-foreground font-mono text-xs tabular-nums">
+                    {formatFileSize(hl.fileRef?.size)}
+                  </Td>
+                  <Td>
+                    <StatusBadge status={hl.status} />
                   </Td>
                   <Td className="font-mono text-xs tabular-nums">{hl.hashCount}</Td>
                   <Td className="text-success font-mono text-xs tabular-nums">{hl.crackedCount}</Td>
@@ -199,6 +297,18 @@ function HashListsTab() {
                   </Td>
                   <Td className="text-muted-foreground text-xs">
                     {new Date(hl.createdAt).toLocaleDateString()}
+                  </Td>
+                  <Td className="text-right">
+                    <PermissionGuard permission={Permission.RESOURCE_UPLOAD}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onDelete('hash-lists', hl.id, hl.name)}
+                        aria-label={`Delete ${hl.name}`}
+                      >
+                        Delete
+                      </Button>
+                    </PermissionGuard>
                   </Td>
                 </TableRow>
               )
@@ -219,7 +329,13 @@ function useResourcesByType(type: 'wordlists' | 'rulelists' | 'masklists') {
   return hookMap[type]
 }
 
-function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklists' }) {
+function ResourceListTab({
+  type,
+  onDelete,
+}: {
+  type: 'wordlists' | 'rulelists' | 'masklists'
+  onDelete: (type: UploadableTab, id: number, name: string) => void
+}) {
   const { data, isLoading } = useResourcesByType(type)
 
   if (isLoading) return <EmptyState message="Loading..." />
@@ -241,102 +357,43 @@ function ResourceListTab({ type }: { type: 'wordlists' | 'rulelists' | 'masklist
           <TableHead>
             <tr>
               <Th>Name</Th>
+              <Th>Size</Th>
+              <Th>Status</Th>
               <Th>Created</Th>
+              <Th>
+                <span className="sr-only">Actions</span>
+              </Th>
             </tr>
           </TableHead>
           <TableBody>
             {resources.map((r) => (
               <TableRow key={r.id}>
                 <Td className="text-foreground text-sm font-medium">{r.name}</Td>
+                <Td className="text-muted-foreground font-mono text-xs tabular-nums">
+                  {formatFileSize(r.fileSize ?? r.fileRef?.size)}
+                </Td>
+                <Td>
+                  <StatusBadge status={r.status} />
+                </Td>
                 <Td className="text-muted-foreground text-xs">
                   {new Date(r.createdAt).toLocaleDateString()}
+                </Td>
+                <Td className="text-right">
+                  <PermissionGuard permission={Permission.RESOURCE_UPLOAD}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onDelete(type, r.id, r.name)}
+                      aria-label={`Delete ${r.name}`}
+                    >
+                      Delete
+                    </Button>
+                  </PermissionGuard>
                 </Td>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      )}
-    </div>
-  )
-}
-
-function HashDetectTab() {
-  const [hashInput, setHashInput] = useState('')
-  const guessType = useGuessHashType()
-
-  const handleDetect = () => {
-    if (hashInput.trim()) {
-      guessType.mutate(hashInput.trim())
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          aria-label="Hash value for type detection"
-          placeholder="Paste a hash value..."
-          className="font-mono text-xs"
-          value={hashInput}
-          onChange={(e) => setHashInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleDetect()
-          }}
-        />
-        <Button
-          onClick={handleDetect}
-          disabled={guessType.isPending || !hashInput.trim()}
-          className="shrink-0"
-        >
-          {guessType.isPending ? 'Detecting...' : 'Detect Type'}
-        </Button>
-      </div>
-
-      {guessType.data && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-medium">
-            Results{' '}
-            <span className="text-muted-foreground">
-              ({guessType.data.identified ? 'Identified' : 'Candidates'})
-            </span>
-          </h3>
-          {guessType.data.candidates.length === 0 ? (
-            <EmptyState message="No matching hash types found." />
-          ) : (
-            <Table>
-              <TableHead>
-                <tr>
-                  <Th>Type</Th>
-                  <Th>Mode</Th>
-                  <Th>Category</Th>
-                  <Th>Confidence</Th>
-                </tr>
-              </TableHead>
-              <TableBody>
-                {guessType.data.candidates.map((c) => (
-                  <TableRow key={c.hashcatMode}>
-                    <Td className="text-foreground text-sm font-medium">{c.name}</Td>
-                    <Td className="font-mono text-xs">{c.hashcatMode}</Td>
-                    <Td className="text-muted-foreground text-xs">{c.category}</Td>
-                    <Td>
-                      <div className="flex items-center gap-2">
-                        <div className="bg-surface-1 h-1.5 w-20 rounded-full">
-                          <div
-                            className="bg-primary h-full rounded-full transition-all"
-                            style={{ width: `${Math.round(c.confidence * 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-muted-foreground font-mono text-xs">
-                          {Math.round(c.confidence * 100)}%
-                        </span>
-                      </div>
-                    </Td>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
       )}
     </div>
   )

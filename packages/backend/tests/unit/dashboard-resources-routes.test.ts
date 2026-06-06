@@ -182,6 +182,17 @@ if (!IS_ISOLATED) {
     importHashList: mockImportHashList,
     deleteHashList: mockDeleteHashList,
     getHashListById: mockGetHashListById,
+    // PATCH /hash-lists/{id} set-hash-type (issue #163). Mock returns
+    // null by default so the route maps to 404; tests that exercise
+    // the success path override per-call via `mockSetHashListType
+    // .mockImplementationOnce(...)`. Pinned via `satisfies` per the
+    // mirror-service-not-schema convention.
+    setHashListType: mock(
+      async () =>
+        null satisfies Awaited<
+          ReturnType<typeof import('../../src/services/resources.js').setHashListType>
+        >
+    ),
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
     // Real getHashItems returns `{items, total, limit, offset} | null`.
