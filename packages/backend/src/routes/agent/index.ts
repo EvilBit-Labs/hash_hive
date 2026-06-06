@@ -251,7 +251,7 @@ const downloadUrlResponseSchema = z
     // field as a URL rather than a free-form string. Every emit site
     // calls `getPresignedUrl` so a non-URL value would itself be a
     // service-layer bug; the schema simply locks the contract.
-    url: z.string().url(),
+    url: z.url(),
     expiresIn: z.number().int().positive(),
   })
   .openapi('AgentResourceDownloadUrl')

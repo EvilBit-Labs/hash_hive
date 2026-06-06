@@ -85,6 +85,17 @@ export async function seedTestData(databaseUrl: string): Promise<{
       VALUES (${userId}, ${secondaryProject['id']}, ${sql.array(['operator'])})
     `
 
+    // Seed one offline agent into the primary test project. The dashboard's
+    // onboarding hero swaps in when `agents.total === 0`, replacing the
+    // four StatCards that several e2e specs assert against (`zz-dashboard`
+    // expects `data-testid="stat-card"` × 4). One row, status='offline', is
+    // enough to keep the bento mounted across the e2e suite without
+    // implying the agent is actually serving work.
+    await sql`
+      INSERT INTO agents (name, project_id, status, auth_token_format)
+      VALUES ('E2E Seed Agent', ${projectId}, 'offline', 'plaintext')
+    `
+
     return { userId, projectId }
   } finally {
     await sql.end()

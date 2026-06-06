@@ -204,7 +204,11 @@ db-generate:
 db-migrate:
     {{ mise_exec }} bun --filter @hashhive/backend db:migrate
 
-# Seed admin user and default project
+# Seed dev admin user and default project (idempotent, safe to re-run).
+# Chains: drizzle-kit migrate -> seed-admin -> migrate-auth-accounts so a
+# fresh `docker compose up postgres` boots into a state where the web UI
+# can sign in immediately. Defaults: admin@hashhive.local / changeme123;
+# override via SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD.
 db-seed:
     {{ mise_exec }} bun --filter @hashhive/backend db:seed
 

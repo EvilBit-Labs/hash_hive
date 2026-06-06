@@ -51,7 +51,17 @@ services:
       -s3.config=/etc/seaweedfs/s3.json
       -dir=/data
     healthcheck:
-      test: ['CMD-SHELL', 'wget -q --spider http://localhost:9333/cluster/status || exit 1']
+      # SeaweedFS 4.27 binds the master HTTP UI (port 9333) to the
+      # container's docker-network interface, NOT to 0.0.0.0 or
+      # 127.0.0.1, so an in-container probe on `localhost:9333` always
+      # gets connection-refused even though the master is up and the
+      # host port-forward works. (Alpine's `localhost` resolves to ::1
+      # first too; IPv6 isn't bound either.) The S3 API on 8333 is
+      # bound to 127.0.0.1 and responds 403 to anonymous GET — that's
+      # the contract the bucket-init sidecar actually needs. `curl -sS`
+      # (no `-f`) treats any HTTP response as success, so this probe
+      # goes green as soon as the S3 server is accepting connections.
+      test: ['CMD-SHELL', 'curl -sS -o /dev/null --max-time 3 http://127.0.0.1:8333/ || exit 1']
       interval: 5s
       timeout: 5s
       retries: 10

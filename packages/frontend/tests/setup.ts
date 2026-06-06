@@ -4,7 +4,10 @@
  * Loaded via bun's --preload flag. Sets up a happy-dom window as the
  * global DOM environment for Testing Library to render into.
  */
+import { mock } from 'bun:test'
 import { Window } from 'happy-dom'
+import { cloneElement, createElement, isValidElement, type ReactNode } from 'react'
+import * as RechartsActual from 'recharts'
 
 const window = new Window({ url: 'http://localhost:3000' })
 
@@ -53,4 +56,40 @@ Object.assign(globalThis, {
   cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
   setTimeout: window.setTimeout.bind(window),
   clearTimeout: window.clearTimeout.bind(window),
+})
+
+// Recharts mock: happy-dom does not lay out parents with computed dimensions,
+// so ResponsiveContainer measures 0x0 and the SVG never renders. Replace it
+// with a fixed-size wrapper while preserving every other Recharts export.
+// The factory MUST spread the real module — partial-shape factories drop
+// AreaChart/Area/Tooltip/etc and downstream tests fail at module-init.
+// Hoisted above any SUT import per docs/solutions/conventions/bun-test-mock-module-import-order.md.
+//
+// Real ResponsiveContainer measures its parent and injects `width` / `height`
+// as numeric props on its single child. The mock mirrors that contract via
+// `cloneElement` so child charts (AreaChart, LineChart, etc.) receive the
+// same prop shape they do in production. Without this, a chart that branches
+// on missing-dimension props could pass tests and fail at runtime.
+mock.module('recharts', () => {
+  const MOCK_WIDTH = 500
+  const MOCK_HEIGHT = 200
+  return {
+    ...RechartsActual,
+    ResponsiveContainer: ({ children }: { children: ReactNode }) => {
+      const child = isValidElement(children)
+        ? cloneElement(children, { width: MOCK_WIDTH, height: MOCK_HEIGHT } as Record<
+            string,
+            unknown
+          >)
+        : children
+      return createElement(
+        'div',
+        {
+          style: { width: MOCK_WIDTH, height: MOCK_HEIGHT },
+          'data-testid': 'recharts-responsive-container',
+        },
+        child
+      )
+    },
+  }
 })

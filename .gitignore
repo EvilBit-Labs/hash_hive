@@ -79,3 +79,5 @@ todos/
 .vscode/mise-tools/python
 .vscode/mise-tools/bun
 .vscode/mise-tools/node
+.playwright-mcp/
+/.impeccable/

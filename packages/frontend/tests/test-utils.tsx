@@ -8,6 +8,7 @@ import type { ReactElement } from 'react'
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, type RenderOptions, render } from '@testing-library/react'
+import { MotionConfig } from 'motion/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
 import { resetAllStores } from './utils/store-reset'
@@ -103,4 +104,25 @@ export function cleanupAll() {
   resetAllStores()
 }
 
+/**
+ * Renders UI wrapped in `<MotionConfig reducedMotion="always">` plus the
+ * standard app providers (QueryClient + MemoryRouter), so motion animations
+ * resolve instantly and components depending on Router/Query context work.
+ */
+export function renderWithMotion(ui: ReactElement, options: RenderWithProvidersOptions = {}) {
+  const { initialRoute = '/', queryClient, ...renderOptions } = options
+  const qc = queryClient ?? createTestQueryClient()
+  return render(ui, {
+    wrapper: ({ children }: WrapperProps) => (
+      <MotionConfig reducedMotion="always">
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={[initialRoute]}>{children}</MemoryRouter>
+        </QueryClientProvider>
+      </MotionConfig>
+    ),
+    ...renderOptions,
+  })
+}
+
 export { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+export { renderHook } from '@testing-library/react'

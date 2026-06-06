@@ -123,7 +123,7 @@ export const selectCrackerBinarySchema = createSelectSchema(crackerBinaries)
 // ─── Custom API Schemas ─────────────────────────────────────────────
 
 export const loginRequestSchema = z.object({
-  email: z.string().email(),
+  email: z.email(),
   password: z.string().min(8),
 })
 
@@ -612,7 +612,7 @@ export const crackerCheckUpdateResponseSchema = z.discriminatedUnion('updateAvai
     updateAvailable: z.literal(true),
     engine: z.string(),
     latestVersion: z.string(),
-    downloadUrl: z.string().url(),
+    downloadUrl: z.url(),
     expiresIn: z.number().int().positive(),
   }),
 ])
