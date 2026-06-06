@@ -317,7 +317,7 @@ export const resourceStatusSchema = z.enum([
   'uploaded',
   'processing',
   'ready',
-  'failed',
+  'error',
 ])
 
 /**

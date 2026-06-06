@@ -3,7 +3,12 @@
  * All factories return plain objects matching backend response shapes.
  */
 
-import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared'
+import type {
+  CampaignActiveAgent,
+  CampaignTaskStats,
+  FileRef,
+  ResourceStatus,
+} from '@hashhive/shared'
 
 interface MockUser {
   id: number
@@ -361,6 +366,8 @@ interface MockHashList {
   hashTypeId: number | null
   hashCount: number
   crackedCount: number
+  status: ResourceStatus
+  fileRef: FileRef | null
   createdAt: string
 }
 
@@ -390,9 +397,9 @@ interface MockResource {
   id: number
   name: string
   projectId: number
-  status: string
+  status: ResourceStatus
   fileSize: number | null
-  fileRef: Record<string, unknown> | null
+  fileRef: FileRef | null
   createdAt: string
 }
 

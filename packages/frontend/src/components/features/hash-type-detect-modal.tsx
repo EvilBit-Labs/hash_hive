@@ -1,6 +1,11 @@
 import { type KeyboardEvent, useMemo, useState } from 'react'
 
-import { useDetectHashTypeBatch, useHashLists, useSetHashListType } from '../../hooks/use-resources'
+import {
+  useDetectHashTypeBatch,
+  useHashLists,
+  useHashTypes,
+  useSetHashListType,
+} from '../../hooks/use-resources'
 import { Button } from '../ui/button'
 import { EmptyState } from '../ui/empty-state'
 import { ErrorBanner } from '../ui/error-banner'
@@ -34,8 +39,25 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
   const [pendingApplyMode, setPendingApplyMode] = useState<number | null>(null)
 
   const hashLists = useHashLists()
+  const hashTypes = useHashTypes()
   const detect = useDetectHashTypeBatch()
   const setType = useSetHashListType(selectedListId ?? 0)
+
+  // Lookup table from hashcatMode → hash_types.id (the PK). The
+  // detect-hash-type response only exposes hashcatMode on candidates,
+  // but PATCH /hash-lists/{id} takes the hash_types PK (referenced
+  // by the hash_lists.hash_type_id FK). Without this lookup, "Use
+  // This Type" would send the mode as the id and either FK-violate
+  // (most cases) or silently set the wrong type (when serial id
+  // coincidentally equals mode). The hash_types list is small and
+  // already cached at the page level.
+  const hashTypeIdByMode = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const ht of hashTypes.data?.hashTypes ?? []) {
+      map.set(ht.hashcatMode, ht.id)
+    }
+    return map
+  }, [hashTypes.data])
 
   const samples = useMemo(
     () =>
@@ -108,10 +130,18 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     if (selectedListId === null) return
     const target = flatCandidates.find((c) => c.hashcatMode === hashcatMode)
     if (!target) return
+    const hashTypeId = hashTypeIdByMode.get(target.hashcatMode)
+    if (hashTypeId === undefined) {
+      setSubmitError(
+        `Hash type for mode ${target.hashcatMode} ("${target.name}") is not registered server-side. ` +
+          'Ask an admin to seed it before applying.'
+      )
+      return
+    }
     setPendingApplyMode(hashcatMode)
     setSubmitError(null)
     setType.mutate(
-      { hashTypeId: target.hashcatMode },
+      { hashTypeId },
       {
         onSuccess: () => {
           setPendingApplyMode(null)

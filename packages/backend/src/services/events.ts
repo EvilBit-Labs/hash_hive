@@ -333,9 +333,11 @@ export type ResourceUpdatePayload = ResourceUpdateEventData
  * repetition) while the wire payload still carries projectId for
  * defense-in-depth in subscribers (issue #163 Step 7).
  *
- * Derived from the canonical payload via `Omit` per branch so the
- * discriminant ('action') is preserved and the shape follows the
- * shared schema if it grows new branches.
+ * TypeScript's built-in `Omit` does NOT distribute over discriminated
+ * unions — it collapses to `{ action: 'X' | 'Y' }` and drops the
+ * branch-specific fields (`statistics`, `error`). Enumerate each
+ * branch with `Extract` + `Omit` so the discriminant is preserved
+ * and `statistics` / `error` stay reachable on the right branch.
  */
 type ResourceUpdateInput =
   | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_ready' }>, 'projectId'>
@@ -352,7 +354,7 @@ export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput
   // `Record<string, unknown>`. AppEvent.data stays unstructured because
   // the WebSocket wire is untyped JSON anyway — subscribers re-narrow
   // via the `data.action` discriminator. Caller side stays typed via
-  // the `ResourceUpdateInputDerived` parameter; this cast is the producer-
+  // the `ResourceUpdateInput` parameter; this cast is the producer-
   // side erasure that matches the wire's reality. A future refactor
   // could lift the discriminator into a per-type EventDataMap, but
   // touches every emit/subscriber call site.

@@ -3,6 +3,7 @@ import {
   detectHashTypeRequestSchema,
   maskLists,
   ruleLists,
+  selectHashListSchema,
   setHashListTypeRequestSchema,
   wordLists,
 } from '@hashhive/shared'
@@ -440,7 +441,7 @@ const setHashListTypeRoute = createRoute({
       description: 'Updated hash list',
       content: {
         'application/json': {
-          schema: z.object({ hashList: z.unknown() }),
+          schema: z.object({ hashList: selectHashListSchema }),
         },
       },
     },
