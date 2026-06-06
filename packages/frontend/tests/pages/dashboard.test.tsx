@@ -380,6 +380,43 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Results Page')).toBeDefined()
     })
 
+    it('renders the NoAgentsOnboarding hero when agents.total is 0 (first-run)', async () => {
+      fetchMock = mockFetch({
+        '/dashboard/stats': {
+          status: 200,
+          body: mockDashboardStats({ agents: { online: 0, total: 0 } }),
+        },
+      })
+      setAuthenticatedWithProject(1)
+
+      renderWithProviders(<DashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-no-agents-onboarding')).toBeDefined()
+      })
+      // The four stat cards must NOT render in the onboarding state.
+      expect(screen.queryAllByTestId('stat-card')).toHaveLength(0)
+      // System health stays — operator wants to know the backend is up.
+      expect(screen.getByText('System Health')).toBeDefined()
+    })
+
+    it('renders the live bento (not onboarding) when agents.total is at least 1', async () => {
+      fetchMock = mockFetch({
+        '/dashboard/stats': {
+          status: 200,
+          body: mockDashboardStats({ agents: { online: 0, total: 1 } }),
+        },
+      })
+      setAuthenticatedWithProject(1)
+
+      renderWithProviders(<DashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('stat-card')).toHaveLength(4)
+      })
+      expect(screen.queryByTestId('dashboard-no-agents-onboarding')).toBeNull()
+    })
+
     it('does NOT navigate when the "1" key fires from inside an input', async () => {
       const stats = mockDashboardStats({ agents: { online: 3, total: 5 } })
       fetchMock = mockFetch({ '/dashboard/stats': { status: 200, body: stats } })
