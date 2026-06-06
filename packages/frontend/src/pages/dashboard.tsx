@@ -176,7 +176,7 @@ export function DashboardPage() {
           <StatCard
             title="Cracked"
             value={stats?.cracked.total ?? '?'}
-            subtitle="Total hashes"
+            subtitle="in this project"
             loading={isLoading}
             to="/results"
             accent="--ctp-peach"
@@ -197,7 +197,7 @@ export function DashboardPage() {
           <StatCard
             title="Agents"
             value={stats ? `${stats.agents.online} / ${stats.agents.total}` : '?'}
-            subtitle="Online"
+            subtitle="online of registered"
             loading={isLoading}
             to="/agents"
             accent="--ctp-teal"
