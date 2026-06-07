@@ -1,4 +1,7 @@
 @import 'tailwindcss';
+/* Tailwind v4 does not auto-discover the legacy tailwind.config.ts. */
+/* Without @config, every custom color (bg-primary, border-surface-*, */
+/* ctp-*, success/warning/info) silently fails to generate. */
 @config '../tailwind.config.ts';
 
 /*

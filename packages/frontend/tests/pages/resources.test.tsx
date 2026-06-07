@@ -24,6 +24,19 @@ function setupResourceMocks(overrides: Record<string, { status?: number; body?: 
       body: mockHashListsResponse(),
       ...overrides['/dashboard/resources/hash-lists'],
     },
+    // The Hash Type column resolves names via the hash-types cache.
+    // Without this mock the column renders em-dash for every row and
+    // the new behavior is silently untested.
+    '/dashboard/resources/hash-types': {
+      status: 200,
+      body: {
+        hashTypes: [
+          { id: 101, name: 'MD5', hashcatMode: 0, category: 'Raw Hash' },
+          { id: 102, name: 'NTLM', hashcatMode: 1000, category: 'OS' },
+        ],
+      },
+      ...overrides['/dashboard/resources/hash-types'],
+    },
     '/dashboard/resources/wordlists': {
       status: 200,
       body: {
@@ -164,5 +177,88 @@ describe('ResourcesPage', () => {
       target: { value: 'h1\nh2\nh3\nh4\nh5\nh6\nh7\nh8\nh9\nh10\nh11' },
     })
     expect(detect.disabled).toBe(true)
+  })
+
+  it('Hash Type column resolves a known hashTypeId to the type name', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'NTLM Hashes', hashTypeId: 102, hashCount: 5, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('NTLM Hashes')).toBeDefined())
+    // The resolved name comes from the hash-types fixture (id 102 -> "NTLM").
+    expect(screen.getByText('NTLM')).toBeDefined()
+  })
+
+  it('Hash Type column shows em-dash when hashTypeId is null', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Untyped List', hashTypeId: null, hashCount: 0, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Untyped List')).toBeDefined())
+    // The Hash Type column for the untyped row should render the
+    // fallback em-dash; the same character is used as the file-size
+    // hyphen fallback, so we tighten the assertion to the row scope.
+    const row = screen.getByText('Untyped List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) expect(row.textContent).toContain('—')
+  })
+
+  it('Hash Type column shows em-dash when hashTypeId points at an unknown type', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Mystery List', hashTypeId: 999, hashCount: 0, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Mystery List')).toBeDefined())
+    // hashTypeId 999 has no matching entry in the hash-types fixture;
+    // the Map.get fallthrough must render em-dash, not undefined or
+    // a stale name.
+    const row = screen.getByText('Mystery List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) {
+      expect(row.textContent).toContain('—')
+      expect(row.textContent).not.toContain('NTLM')
+      expect(row.textContent).not.toContain('MD5')
+    }
+  })
+
+  it('renders 0 hashes / 0 cracked when count fields are undefined', async () => {
+    // The wire schema marks hashCount + crackedCount optional. A
+    // regression that swaps `?? 0` for `|| 0` would still pass the
+    // happy-path test (fixtures supply non-zero values) but would
+    // silently treat a real 0 cracked count as undefined. Lock the
+    // nullish-coalesce branch.
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Fresh List', hashCount: undefined, crackedCount: undefined }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Fresh List')).toBeDefined())
+    const row = screen.getByText('Fresh List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) {
+      // Both count cells render "0". The progress percent renders "0%".
+      expect(row.textContent).toContain('0')
+      expect(row.textContent).toContain('0%')
+      expect(row.textContent).not.toContain('NaN')
+    }
   })
 })

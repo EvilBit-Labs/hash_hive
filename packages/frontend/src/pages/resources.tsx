@@ -24,12 +24,11 @@ import { Permission } from '../lib/permissions'
 import { cn } from '../lib/utils'
 import { useUiStore } from '../stores/ui'
 
-// Hold the row pulse on the just-touched hash list long enough for
-// the operator's eye to land there after the modal closes, then
-// reset so the row settles back into the dense table rhythm. Matches
-// the Motion `ROW_PULSE_DURATION_S` below.
-const ROW_PULSE_MS = 1200
+// Row-pulse acknowledgment timing. Motion's `transition.duration` takes
+// seconds, the parent's clear-after-N timer takes ms; deriving the ms
+// value from the seconds value prevents the two from drifting.
 const ROW_PULSE_DURATION_S = 1.2
+const ROW_PULSE_MS = ROW_PULSE_DURATION_S * 1000
 
 // Brand-warm exponential ease-out (mirrors `--ease-out-expo` in
 // neighboring components). Cubic-bezier expressed as Motion expects.
@@ -46,8 +45,8 @@ const ROW_PULSE_VARS =
   '[--pulse-quiet:hsl(var(--primary)/0.1)] ' +
   '[--row-hover:hsl(var(--surface-0)/0.2)]'
 
-// Format a file size from bytes. Hyphen for unknown / zero so empty
-// uploads or pre-upload rows render unambiguously rather than "0 B".
+// Hyphen for unknown/zero so empty uploads and pre-upload rows don't
+// pretend to be "0 B".
 function formatFileSize(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return '-'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -206,13 +205,8 @@ export function ResourcesPage() {
   )
 }
 
-// Delete confirmation. Uses the shared ConfirmDialog primitive for the
-// shell. On confirm, the mutation runs against the right backend route
-// (hash-lists DELETE for hash lists, generic DELETE for the others -
-// the hook routes by `type`). On error, the dialog stays open with an
-// inline ErrorBanner; the React-Query cache invalidation in the hook's
-// onSuccess handles the table refresh, so no optimistic cache write is
-// needed here.
+// React-Query's onSuccess cache invalidation in `useDeleteResource`
+// refreshes the table, so no optimistic cache write is needed here.
 function ResourceDeleteDialog({ target, onClose }: { target: DeleteTarget; onClose: () => void }) {
   const mutation = useDeleteResource(target.type)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -340,13 +334,10 @@ function HashListsTab({
               const hashTypeName =
                 hl.hashTypeId !== null ? (hashTypeNameById.get(hl.hashTypeId) ?? null) : null
               const isJustApplied = hl.id === justAppliedListId
-              // Motion owns the acknowledgment pulse so every
-              // animated surface in the app uses the same library
-              // (the previous CSS keyframe broke in Safari because
-              // box-shadow doesn't paint on <tr> in WebKit). Colors
-              // dereference the className CSS vars; hover lives in
-              // whileHover so it doesn't fight an inline animate
-              // style.
+              // Animate backgroundColor (not box-shadow) on <tr>:
+              // WebKit ignores box-shadow on table rows. Hover lives
+              // in whileHover so it doesn't fight Motion's inline
+              // animate style.
               const pulseAnimate = isJustApplied
                 ? prefersReducedMotion
                   ? { backgroundColor: 'var(--pulse-quiet)' }

@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   useDetectHashTypeBatch,
@@ -16,17 +16,14 @@ import { Select } from '../ui/select'
 const MIN_SAMPLES = 5
 const MAX_SAMPLES = 10
 
-// Operator-facing keyboard hints. ⌘ on macOS, Ctrl elsewhere, evaluated
-// once at module load. SSR-safe via the typeof guard; defaults to the
-// non-Mac form so the first paint never claims a key the user doesn't
-// have. Matches the brand context's principle #4 ("Keyboard is a
-// first-class peer of mouse").
+// Detected once at module load. SSR-safe via the typeof guard; defaults
+// to the non-Mac form so the first paint never claims a key the user
+// doesn't have.
 const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)
 const SUBMIT_KEY_HINT = isMac ? '⌘ ⏎' : 'Ctrl ⏎'
 
-// Same shape as the dashboard's KBD_BASE_CLASS (dashboard.tsx:20) so
-// the kbd chip reads consistently across the app — small mono pill on
-// surface-0 with a subtle border.
+// Mirrors the dashboard's KBD_BASE_CLASS so kbd chips read consistently
+// across the app.
 const KBD_CHIP =
   'border-surface-1 bg-surface-0/80 text-foreground/85 ml-2 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border px-1 font-mono text-[10px] font-medium leading-none'
 
@@ -41,6 +38,12 @@ interface HashTypeDetectModalProps {
   onApplied?: (hashListId: number) => void
 }
 
+// Acknowledgment-breath duration on a successful PATCH before the modal
+// tears down. The animation's onAnimationComplete is what fires
+// handleClose, so Motion owns both the timing and the visual.
+const APPLY_ACK_S = 0.45
+const APPLY_ACK_EASE = [0.16, 1, 0.3, 1] as const
+
 /**
  * Page-level hash type detection. The textarea accepts 5-10 newline-
  * separated samples, posts to the shipped batch endpoint (max 100
@@ -53,24 +56,18 @@ interface HashTypeDetectModalProps {
  * is selected, so the operator never wonders whether the click did
  * anything - the affordance state matches the available action.
  */
-// Duration of the verdict's acknowledgment pulse on a successful PATCH
-// before the modal tears down. Long enough that the operator registers
-// the "✓ Applied" confirmation, short enough that it doesn't feel like
-// waiting. Drives a real Motion animation (subtle scale breath on the
-// verdict), not a setTimeout — the animation's onAnimationComplete is
-// what fires handleClose, so Motion owns both the timing and the
-// visual.
-const APPLY_ACK_S = 0.45
-// Brand-warm exponential ease (`--ease-out-expo` analog) used across
-// the app's animated surfaces.
-const APPLY_ACK_EASE = [0.16, 1, 0.3, 1] as const
-
 export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetectModalProps) {
   const [rawText, setRawText] = useState('')
   const [selectedListId, setSelectedListId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [pendingApplyMode, setPendingApplyMode] = useState<number | null>(null)
   const [appliedMode, setAppliedMode] = useState<number | null>(null)
+  // Guard against handleClose firing twice for one open instance: the
+  // verdict/runner-up animation's onAnimationComplete fires once per
+  // close, but a future AnimatePresence exit could trigger it again
+  // after the Esc/Close click already did. Reset when the modal opens
+  // fresh.
+  const hasClosedRef = useRef(false)
 
   const hashLists = useHashLists()
   const hashTypes = useHashTypes()
@@ -204,6 +201,8 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
   }
 
   const handleClose = () => {
+    if (hasClosedRef.current) return
+    hasClosedRef.current = true
     setRawText('')
     setSelectedListId(null)
     setSubmitError(null)
@@ -212,6 +211,13 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
     detect.reset()
     onClose()
   }
+
+  // Re-arm the idempotency guard each time the modal mounts open.
+  // Without this, a second open after the first close would inherit
+  // hasClosedRef.current = true and silently skip cleanup.
+  useEffect(() => {
+    if (open) hasClosedRef.current = false
+  }, [open])
 
   // Esc-to-close. The brand promises keyboard is a first-class peer of
   // mouse and the surfaced "Esc" hint on the Close button has to be
@@ -228,9 +234,8 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-    // handleClose is defined inline above; tracking `open` and
-    // `inFlight` is enough — the closure re-binds on each render
-    // anyway.
+    // handleClose re-binds each render (closure captures the latest
+    // state setters), so depending on `open` and `inFlight` is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inFlight])
 
@@ -247,10 +252,9 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
         aria-labelledby="hash-type-detect-title"
         className="w-full max-w-3xl rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
       >
-        {/* Header: title + apply target. The picker lives here (not
-            buried mid-form) so the operator's apply destination is
-            visible context throughout the flow — both before they
-            paste samples and while they're reading results. */}
+        {/* Apply-target picker in the header keeps the operator's
+            destination in view both before sampling and while reading
+            results. */}
         <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-surface-0/60 pb-5">
           <div className="space-y-1">
             <h3
@@ -291,10 +295,6 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
 
         {submitError !== null && <ErrorBanner message={submitError} className="mt-4" />}
 
-        {/* Primary input: paste samples. Generous top padding (pt-5)
-            distinguishes this from the header band; tight internal
-            grouping (label → textarea → helper, 1.5/1.5 spacing)
-            reads as one unit. */}
         <div className="pt-5">
           <label htmlFor="hash-type-samples" className="text-xs font-medium text-muted-foreground">
             Sample hashes <span className="text-overlay1">(one per line)</span>
@@ -316,14 +316,8 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
           </p>
         </div>
 
-        {/* Results: phase transition from input to output. The top
-            candidate lands as a verdict — large scale, peach accent,
-            primary apply button — so the operator's eye snaps to "the
-            answer." Remaining candidates collapse into a dense
-            runners-up list with ghost apply buttons. This is the
-            "dramatic ops theater" the brand context calls for, kept
-            inside the editorial color budget (one peach-tinted block,
-            not gradient noise). */}
+        {/* Top candidate lands as a verdict (large, peach, primary
+            apply); runners-up collapse into a dense list. */}
         {detect.data && (
           <section className="pt-6">
             <h4 className="text-xs font-medium text-foreground">Results</h4>
@@ -360,9 +354,6 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
           </section>
         )}
 
-        {/* Footer: structural separator (border-t) marks the actions
-            row as distinct from the body. gap-2 keeps the two
-            buttons tight as siblings. */}
         <footer className="mt-6 flex justify-end gap-2 border-t border-surface-0/60 pt-5">
           <Button variant="secondary" onClick={handleClose} disabled={inFlight}>
             Close
@@ -389,10 +380,6 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
 
 // ─── Verdict + RunnersUp ────────────────────────────────────────────
 //
-// Sub-components for the results section. Split out so the JSX in
-// the modal body stays readable; the two pieces share the apply-state
-// computation but have very different visual treatments.
-
 interface Candidate {
   name: string
   hashcatMode: number
