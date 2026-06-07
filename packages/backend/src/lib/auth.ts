@@ -10,6 +10,7 @@ import {
   getUserLastProjectId,
   getUserWithProjects,
 } from '../services/auth.js'
+import { getTrustedOrigins } from './trusted-origins.js'
 
 /**
  * Compute the initial `projectId` to attach to a new BetterAuth session
@@ -191,19 +192,9 @@ export const auth = betterAuth({
     },
   },
 
-  // In production (air-gapped Docker Compose), frontend and backend are same-origin
-  // behind a reverse proxy, so no cross-origin allowance is needed. In dev, allow
-  // localhost:3000 and any extras populated via `BETTER_AUTH_TRUSTED_ORIGINS`
-  // (comma-separated) — the Playwright E2E suite uses this to authorize its
-  // frontend on localhost:3400 without weakening the production policy.
-  trustedOrigins:
-    env.NODE_ENV === 'production'
-      ? []
-      : [
-          'http://localhost:3000',
-          ...(env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
-            .split(',')
-            .map((o) => o.trim())
-            .filter((o) => o.length > 0),
-        ],
+  // Production (air-gapped Docker Compose) serves frontend and backend
+  // behind one reverse proxy, so same-origin is the invariant. Dev and
+  // E2E need cross-port allowances; the shared helper is the only
+  // place that parses `BETTER_AUTH_TRUSTED_ORIGINS`.
+  trustedOrigins: [...getTrustedOrigins()],
 })

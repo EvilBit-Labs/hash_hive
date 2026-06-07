@@ -19,3 +19,8 @@ process.env['S3_SECRET_KEY'] = 'minioadmin'
 process.env['S3_BUCKET'] = 'hashhive-test'
 process.env['S3_REGION'] = 'us-east-1'
 process.env['BETTER_AUTH_SECRET'] = 'test-betterauth-secret-must-be-at-least-32-characters'
+// Production safety: BETTER_AUTH_TRUSTED_ORIGINS is intentionally set
+// to a hostile origin here. The trusted-origins helper must ignore it
+// when NODE_ENV='production' and return an empty list. The
+// `trusted-origins-prod` test pins that invariant.
+process.env['BETTER_AUTH_TRUSTED_ORIGINS'] = 'https://evil.example.com'
