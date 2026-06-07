@@ -169,3 +169,35 @@
     background-color: hsl(var(--surface-2));
   }
 }
+
+/*
+ * Operator-moment acknowledgments. These earn motion under
+ * principle #1 ("Theater earns its place") — the underlying data
+ * actually changed (a hash type was applied to a list), so the row
+ * briefly acknowledges where the action landed before settling.
+ *
+ * Compositor-friendly: background-color animates via box-shadow inset
+ * to avoid layout, and the keyframe lives long enough (1.2s) to be
+ * perceived without being chrome noise.
+ */
+@layer utilities {
+  @keyframes hh-row-pulse {
+    0% {
+      box-shadow: inset 0 0 0 9999px hsl(var(--primary) / 0.22);
+    }
+    100% {
+      box-shadow: inset 0 0 0 9999px hsl(var(--primary) / 0);
+    }
+  }
+
+  .row-pulse {
+    animation: hh-row-pulse 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row-pulse {
+      animation: none;
+      box-shadow: inset 0 0 0 9999px hsl(var(--primary) / 0.1);
+    }
+  }
+}

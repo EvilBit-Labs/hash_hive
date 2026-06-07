@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import { HashTypeDetectModal } from '../components/features/hash-type-detect-modal'
@@ -14,6 +14,7 @@ import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/
 import {
   useDeleteResource,
   useHashLists,
+  useHashTypes,
   useMasklists,
   useRulelists,
   useWordlists,
@@ -21,6 +22,12 @@ import {
 import { Permission } from '../lib/permissions'
 import { cn } from '../lib/utils'
 import { useUiStore } from '../stores/ui'
+
+// Hold the row-pulse class on the just-touched hash list long enough
+// for the operator's eye to land there after the modal closes, then
+// remove so the row settles back into the dense table rhythm. Matches
+// the CSS `hh-row-pulse` keyframe duration.
+const ROW_PULSE_MS = 1200
 
 // Format a file size from bytes. Hyphen for unknown / zero so empty
 // uploads or pre-upload rows render unambiguously rather than "0 B".
@@ -61,10 +68,30 @@ export function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<Tab>('hash-lists')
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [detectOpen, setDetectOpen] = useState(false)
+  // Hash list id that just had a type applied. The matching row in
+  // the Hash Lists tab gets a brief peach acknowledgment pulse so the
+  // operator sees where their commit landed; cleared after the
+  // animation duration.
+  const [justAppliedListId, setJustAppliedListId] = useState<number | null>(null)
 
   const handleDelete = (type: UploadableTab, id: number, name: string) => {
     setDeleteTarget({ type, id, name })
   }
+
+  const handleApplied = (hashListId: number) => {
+    setJustAppliedListId(hashListId)
+    // Snap to the hash-lists tab so the row the operator just touched
+    // is on screen. They came from the page-level Detect Hash Type
+    // button, so the destination tab is the same regardless of which
+    // tab they were on.
+    setActiveTab('hash-lists')
+  }
+
+  useEffect(() => {
+    if (justAppliedListId === null) return
+    const timeoutId = window.setTimeout(() => setJustAppliedListId(null), ROW_PULSE_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [justAppliedListId])
 
   if (!selectedProjectId) {
     return (
@@ -142,7 +169,9 @@ export function ResourcesPage() {
       </div>
 
       <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
-        {activeTab === 'hash-lists' && <HashListsTab onDelete={handleDelete} />}
+        {activeTab === 'hash-lists' && (
+          <HashListsTab onDelete={handleDelete} justAppliedListId={justAppliedListId} />
+        )}
         {activeTab === 'wordlists' && <ResourceListTab type="wordlists" onDelete={handleDelete} />}
         {activeTab === 'rulelists' && <ResourceListTab type="rulelists" onDelete={handleDelete} />}
         {activeTab === 'masklists' && <ResourceListTab type="masklists" onDelete={handleDelete} />}
@@ -151,7 +180,11 @@ export function ResourcesPage() {
       {deleteTarget !== null && (
         <ResourceDeleteDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
       )}
-      <HashTypeDetectModal open={detectOpen} onClose={() => setDetectOpen(false)} />
+      <HashTypeDetectModal
+        open={detectOpen}
+        onClose={() => setDetectOpen(false)}
+        onApplied={handleApplied}
+      />
     </div>
   )
 }
@@ -226,10 +259,25 @@ function UploadButton({ type }: { type: UploadableTab }) {
 
 function HashListsTab({
   onDelete,
+  justAppliedListId,
 }: {
   onDelete: (type: UploadableTab, id: number, name: string) => void
+  justAppliedListId: number | null
 }) {
   const { data, isLoading } = useHashLists()
+  const hashTypes = useHashTypes()
+
+  // hash_types.id → display name. The list endpoint returns
+  // hashTypeId only; without this resolution the column would force
+  // a per-row fetch. Map stays warm via React Query so the lookup is
+  // free across re-renders.
+  const hashTypeNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const ht of hashTypes.data?.hashTypes ?? []) {
+      map.set(ht.id, ht.name)
+    }
+    return map
+  }, [hashTypes.data])
 
   if (isLoading) return <EmptyState message="Loading..." />
 
@@ -250,6 +298,7 @@ function HashListsTab({
           <TableHead>
             <tr>
               <Th>Name</Th>
+              <Th>Hash Type</Th>
               <Th>Size</Th>
               <Th>Status</Th>
               <Th>Hashes</Th>
@@ -270,8 +319,11 @@ function HashListsTab({
               const hashCount = hl.hashCount ?? 0
               const crackedCount = hl.crackedCount ?? 0
               const pct = hashCount > 0 ? (crackedCount / hashCount) * 100 : 0
+              const hashTypeName =
+                hl.hashTypeId !== null ? (hashTypeNameById.get(hl.hashTypeId) ?? null) : null
+              const isJustApplied = hl.id === justAppliedListId
               return (
-                <TableRow key={hl.id}>
+                <TableRow key={hl.id} className={cn(isJustApplied && 'row-pulse')}>
                   <Td className="text-sm font-medium text-foreground">
                     <Link
                       to={`/resources/hash-lists/${hl.id}`}
@@ -279,6 +331,13 @@ function HashListsTab({
                     >
                       {hl.name}
                     </Link>
+                  </Td>
+                  <Td className="text-xs">
+                    {hashTypeName !== null ? (
+                      <span className="text-foreground">{hashTypeName}</span>
+                    ) : (
+                      <span className="text-overlay1">—</span>
+                    )}
                   </Td>
                   <Td className="font-mono text-xs text-muted-foreground tabular-nums">
                     {formatFileSize(hl.fileRef?.size)}

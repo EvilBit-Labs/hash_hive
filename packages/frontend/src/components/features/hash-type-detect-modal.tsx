@@ -32,6 +32,12 @@ const KBD_CHIP =
 interface HashTypeDetectModalProps {
   open: boolean
   onClose: () => void
+  /**
+   * Fired after a successful apply, before the modal closes. The page
+   * uses this to mark the affected row for an acknowledgment pulse so
+   * the operator sees where the commit landed.
+   */
+  onApplied?: (hashListId: number) => void
 }
 
 /**
@@ -46,11 +52,18 @@ interface HashTypeDetectModalProps {
  * is selected, so the operator never wonders whether the click did
  * anything - the affordance state matches the available action.
  */
-export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps) {
+// Hold the verdict button on "✓ Applied" for this long after a
+// successful PATCH before tearing down the modal. Long enough that the
+// operator registers the confirmation; short enough that it doesn't
+// feel like waiting.
+const APPLY_ACK_MS = 450
+
+export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetectModalProps) {
   const [rawText, setRawText] = useState('')
   const [selectedListId, setSelectedListId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [pendingApplyMode, setPendingApplyMode] = useState<number | null>(null)
+  const [appliedMode, setAppliedMode] = useState<number | null>(null)
 
   const hashLists = useHashLists()
   const hashTypes = useHashTypes()
@@ -159,12 +172,21 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     }
     setPendingApplyMode(hashcatMode)
     setSubmitError(null)
+    const appliedListId = selectedListId
     setType.mutate(
       { hashTypeId },
       {
         onSuccess: () => {
+          // Hold "✓ Applied" briefly so the operator registers the
+          // commit instead of seeing the modal vanish. The page-level
+          // pulse fires in parallel via onApplied; both timings land
+          // before the operator can pivot to the next task.
           setPendingApplyMode(null)
-          handleClose()
+          setAppliedMode(hashcatMode)
+          onApplied?.(appliedListId)
+          window.setTimeout(() => {
+            handleClose()
+          }, APPLY_ACK_MS)
         },
         onError: (err) => {
           setPendingApplyMode(null)
@@ -179,6 +201,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     setSelectedListId(null)
     setSubmitError(null)
     setPendingApplyMode(null)
+    setAppliedMode(null)
     detect.reset()
     onClose()
   }
@@ -308,6 +331,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                   selectedListId={selectedListId}
                   hashTypesReady={!hashTypes.isLoading && Boolean(hashTypes.data)}
                   pendingApplyMode={pendingApplyMode}
+                  appliedMode={appliedMode}
                   setTypePending={setType.isPending}
                   onApply={handleUseType}
                 />
@@ -317,6 +341,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                     selectedListId={selectedListId}
                     hashTypesReady={!hashTypes.isLoading && Boolean(hashTypes.data)}
                     pendingApplyMode={pendingApplyMode}
+                    appliedMode={appliedMode}
                     setTypePending={setType.isPending}
                     onApply={handleUseType}
                   />
@@ -371,6 +396,7 @@ interface VerdictProps {
   selectedListId: number | null
   hashTypesReady: boolean
   pendingApplyMode: number | null
+  appliedMode: number | null
   setTypePending: boolean
   onApply: (hashcatMode: number) => void
 }
@@ -396,14 +422,19 @@ function Verdict({
   selectedListId,
   hashTypesReady,
   pendingApplyMode,
+  appliedMode,
   setTypePending,
   onApply,
 }: VerdictProps) {
   const pct = Math.round(candidate.confidence * 100)
   const isApplying = pendingApplyMode === candidate.hashcatMode
+  const isApplied = appliedMode === candidate.hashcatMode
   const otherApplying = pendingApplyMode !== null && !isApplying
   const reason = applyDisabledReason(selectedListId, hashTypesReady)
-  const disabled = reason !== undefined || setTypePending || otherApplying
+  // Disable during the post-apply acknowledgment window so the operator
+  // can't re-click the button after it shows ✓ Applied. The modal is
+  // about to close anyway.
+  const disabled = reason !== undefined || setTypePending || otherApplying || isApplied
 
   return (
     <article
@@ -447,8 +478,9 @@ function Verdict({
           onClick={() => onApply(candidate.hashcatMode)}
           disabled={disabled}
           title={reason}
+          aria-live="polite"
         >
-          {isApplying ? 'Applying...' : 'Use This Type'}
+          {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
         </Button>
       </div>
     </article>
@@ -460,6 +492,7 @@ interface RunnersUpProps {
   selectedListId: number | null
   hashTypesReady: boolean
   pendingApplyMode: number | null
+  appliedMode: number | null
   setTypePending: boolean
   onApply: (hashcatMode: number) => void
 }
@@ -474,6 +507,7 @@ function RunnersUp({
   selectedListId,
   hashTypesReady,
   pendingApplyMode,
+  appliedMode,
   setTypePending,
   onApply,
 }: RunnersUpProps) {
@@ -484,9 +518,10 @@ function RunnersUp({
         {candidates.map((c) => {
           const pct = Math.round(c.confidence * 100)
           const isApplying = pendingApplyMode === c.hashcatMode
+          const isApplied = appliedMode === c.hashcatMode
           const otherApplying = pendingApplyMode !== null && !isApplying
           const reason = applyDisabledReason(selectedListId, hashTypesReady)
-          const disabled = reason !== undefined || setTypePending || otherApplying
+          const disabled = reason !== undefined || setTypePending || otherApplying || isApplied
           return (
             <li key={c.hashcatMode} className="flex items-center gap-4 px-4 py-2.5 text-xs">
               <div className="flex min-w-0 flex-1 items-baseline gap-3">
@@ -517,8 +552,9 @@ function RunnersUp({
                 disabled={disabled}
                 title={reason}
                 className="shrink-0"
+                aria-live="polite"
               >
-                {isApplying ? 'Applying...' : 'Use This Type'}
+                {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
               </Button>
             </li>
           )

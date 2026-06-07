@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, mock } from 'bun:test'
 
 import { HashTypeDetectModal } from '../../src/components/features/hash-type-detect-modal'
 import { useUiStore } from '../../src/stores/ui'
@@ -217,5 +217,53 @@ describe('HashTypeDetectModal', () => {
         expect(parsed.hashTypeId).toBe(102)
       }
     })
+  })
+
+  it('fires onApplied with the hash list id and surfaces ✓ Applied before close', async () => {
+    fetchMock = setupBaseMocks({
+      '/dashboard/resources/detect-hash-type': {
+        status: 200,
+        body: {
+          results: [
+            {
+              hashValue: 'h1',
+              candidates: [{ name: 'NTLM', hashcatMode: 1000, category: 'OS', confidence: 0.9 }],
+            },
+          ],
+        },
+      },
+      '/dashboard/resources/hash-lists/7': {
+        PATCH: { status: 200, body: { hashList: { id: 7, hashTypeId: 102 } } },
+      },
+    })
+    selectProject()
+    const onApplied = mock<(id: number) => void>(() => {})
+    renderWithProviders(<HashTypeDetectModal open onClose={() => {}} onApplied={onApplied} />)
+
+    fireEvent.change(screen.getByLabelText('Sample hashes'), {
+      target: { value: 'h1\nh2\nh3\nh4\nh5' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Detect' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('NTLM')).toBeDefined()
+    })
+
+    const listPicker = (await screen.findByLabelText(/^Apply to$/)) as HTMLSelectElement
+    fireEvent.change(listPicker, { target: { value: '7' } })
+
+    const useButton = screen.getByRole('button', { name: 'Use This Type' }) as HTMLButtonElement
+    await waitFor(() => {
+      expect(useButton.disabled).toBe(false)
+    })
+    fireEvent.click(useButton)
+
+    // After success, the button transiently reads "✓ Applied" while
+    // the modal holds the acknowledgment. onApplied carries the picked
+    // hash list id (7) so the page can pulse the matching row.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '✓ Applied' })).toBeDefined()
+    })
+    expect(onApplied).toHaveBeenCalledWith(7)
   })
 })
