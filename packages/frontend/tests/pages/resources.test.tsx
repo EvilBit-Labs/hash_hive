@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 
 import { ResourcesPage } from '../../src/pages/resources'
 import { useUiStore } from '../../src/stores/ui'
-import {
-  mockHashListsResponse,
-  mockHashTypeGuessResponse,
-  mockResourcesResponse,
-} from '../fixtures/api-responses'
+import { mockHashListsResponse, mockResourcesResponse } from '../fixtures/api-responses'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
 import { cleanupAll, fireEvent, renderWithProviders, screen, waitFor } from '../test-utils'
 
@@ -27,6 +23,19 @@ function setupResourceMocks(overrides: Record<string, { status?: number; body?: 
       status: 200,
       body: mockHashListsResponse(),
       ...overrides['/dashboard/resources/hash-lists'],
+    },
+    // The Hash Type column resolves names via the hash-types cache.
+    // Without this mock the column renders em-dash for every row and
+    // the new behavior is silently untested.
+    '/dashboard/resources/hash-types': {
+      status: 200,
+      body: {
+        hashTypes: [
+          { id: 101, name: 'MD5', hashcatMode: 0, category: 'Raw Hash' },
+          { id: 102, name: 'NTLM', hashcatMode: 1000, category: 'OS' },
+        ],
+      },
+      ...overrides['/dashboard/resources/hash-types'],
     },
     '/dashboard/resources/wordlists': {
       status: 200,
@@ -64,11 +73,13 @@ describe('ResourcesPage', () => {
     selectProject()
     renderWithProviders(<ResourcesPage />)
 
-    expect(screen.getByText('Hash Lists')).toBeDefined()
-    expect(screen.getByText('Wordlists')).toBeDefined()
-    expect(screen.getByText('Rulelists')).toBeDefined()
-    expect(screen.getByText('Masklists')).toBeDefined()
-    expect(screen.getByText('Hash Detect')).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Hash Lists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Wordlists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Rulelists' })).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Masklists' })).toBeDefined()
+    // Hash detection lives in a page-level button (issue #163), not a tab.
+    expect(screen.queryByRole('tab', { name: 'Hash Detect' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Detect Hash Type' })).toBeDefined()
   })
 
   it('renders hash lists table on default tab', async () => {
@@ -130,60 +141,126 @@ describe('ResourcesPage', () => {
     })
   })
 
-  it('renders hash detect tab with input and button', async () => {
+  it('opens the hash type detect modal from the page-level button', async () => {
     fetchMock = setupResourceMocks()
     selectProject()
     renderWithProviders(<ResourcesPage />)
 
-    const hashDetectTab = screen.getByText('Hash Detect')
-    fireEvent.click(hashDetectTab)
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined()
-    })
-
-    expect(screen.getByText('Detect Type')).toBeDefined()
-  })
-
-  it('calls guess hash type mutation and displays results', async () => {
-    const guessResponse = mockHashTypeGuessResponse({
-      candidates: [
-        { name: 'MD5', hashcatMode: 0, category: 'Raw Hash', confidence: 0.95 },
-        { name: 'NTLM', hashcatMode: 1000, category: 'OS', confidence: 0.75 },
-      ],
-      identified: true,
-    })
-
-    fetchMock = setupResourceMocks({
-      '/dashboard/hashes/guess-type': {
-        status: 200,
-        body: guessResponse,
-      },
-    })
-
-    selectProject()
-    renderWithProviders(<ResourcesPage />)
-
-    const hashDetectTab = screen.getByText('Hash Detect')
-    fireEvent.click(hashDetectTab)
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Paste a hash value...')).toBeDefined()
-    })
-
-    const input = screen.getByPlaceholderText('Paste a hash value...') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '5f4dcc3b5aa765d61d8327deb882cf99' } })
-
-    const detectButton = screen.getByText('Detect Type')
+    const detectButton = screen.getByRole('button', { name: 'Detect Hash Type' })
     fireEvent.click(detectButton)
 
     await waitFor(() => {
-      expect(screen.getByText('MD5')).toBeDefined()
+      expect(screen.getByRole('dialog', { name: 'Detect Hash Type' })).toBeDefined()
+    })
+    expect(screen.getByLabelText('Sample hashes')).toBeDefined()
+  })
+
+  it('disables Detect until 5-10 samples are present', async () => {
+    fetchMock = setupResourceMocks()
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detect Hash Type' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Sample hashes')).toBeDefined()
     })
 
+    const textarea = screen.getByLabelText('Sample hashes') as HTMLTextAreaElement
+    const detect = screen.getByRole('button', { name: 'Detect' }) as HTMLButtonElement
+    expect(detect.disabled).toBe(true)
+
+    fireEvent.change(textarea, { target: { value: 'h1\nh2\nh3\nh4\nh5' } })
+    expect(detect.disabled).toBe(false)
+
+    fireEvent.change(textarea, {
+      target: { value: 'h1\nh2\nh3\nh4\nh5\nh6\nh7\nh8\nh9\nh10\nh11' },
+    })
+    expect(detect.disabled).toBe(true)
+  })
+
+  it('Hash Type column resolves a known hashTypeId to the type name', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'NTLM Hashes', hashTypeId: 102, hashCount: 5, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('NTLM Hashes')).toBeDefined())
+    // The resolved name comes from the hash-types fixture (id 102 -> "NTLM").
     expect(screen.getByText('NTLM')).toBeDefined()
-    expect(screen.getByText('95%')).toBeDefined()
-    expect(screen.getByText('75%')).toBeDefined()
-    expect(screen.getByText(/Identified/)).toBeDefined()
+  })
+
+  it('Hash Type column shows fallback when hashTypeId is null', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Untyped List', hashTypeId: null, hashCount: 0, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Untyped List')).toBeDefined())
+    // The untyped row must not render any resolved hash type name;
+    // the assertion stays scoped to the row.
+    const row = screen.getByText('Untyped List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) {
+      expect(row.textContent).not.toContain('NTLM')
+      expect(row.textContent).not.toContain('MD5')
+    }
+  })
+
+  it('Hash Type column shows fallback when hashTypeId points at an unknown type', async () => {
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Mystery List', hashTypeId: 999, hashCount: 0, crackedCount: 0 }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Mystery List')).toBeDefined())
+    // hashTypeId 999 has no matching entry in the hash-types fixture;
+    // the Map.get fallthrough must render the placeholder, not a
+    // stale name or "undefined".
+    const row = screen.getByText('Mystery List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) {
+      expect(row.textContent).not.toContain('NTLM')
+      expect(row.textContent).not.toContain('MD5')
+      expect(row.textContent).not.toContain('undefined')
+    }
+  })
+
+  it('renders 0 hashes / 0 cracked when count fields are undefined', async () => {
+    // The wire schema marks hashCount + crackedCount optional. A
+    // regression that swaps `?? 0` for `|| 0` would still pass the
+    // happy-path test (fixtures supply non-zero values) but would
+    // silently treat a real 0 cracked count as undefined. Lock the
+    // nullish-coalesce branch.
+    const hashLists = mockHashListsResponse({
+      hashLists: [{ id: 1, name: 'Fresh List', hashCount: undefined, crackedCount: undefined }],
+    })
+    fetchMock = setupResourceMocks({
+      '/dashboard/resources/hash-lists': { status: 200, body: hashLists },
+    })
+    selectProject()
+    renderWithProviders(<ResourcesPage />)
+
+    await waitFor(() => expect(screen.getByText('Fresh List')).toBeDefined())
+    const row = screen.getByText('Fresh List').closest('tr')
+    expect(row).not.toBeNull()
+    if (row) {
+      // Both count cells render "0". The progress percent renders "0%".
+      expect(row.textContent).toContain('0')
+      expect(row.textContent).toContain('0%')
+      expect(row.textContent).not.toContain('NaN')
+    }
   })
 })

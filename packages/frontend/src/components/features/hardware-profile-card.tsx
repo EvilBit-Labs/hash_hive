@@ -69,8 +69,8 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
   // falling through to the unknown-shape disclosure.
   if (!profile || Object.keys(profile).length === 0) {
     return (
-      <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-        <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
+      <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+        <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
           Hardware
         </h3>
         <EmptyState message="No hardware profile reported yet." />
@@ -81,15 +81,15 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
   const known = isKnownShape(profile)
   if (!known) {
     return (
-      <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-        <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
+      <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+        <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
           Hardware
         </h3>
         <details>
-          <summary className="text-muted-foreground cursor-pointer text-xs">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
             Raw profile (unknown shape)
           </summary>
-          <pre className="text-muted-foreground mt-2 overflow-auto font-mono text-xs leading-relaxed">
+          <pre className="mt-2 overflow-auto font-mono text-xs leading-relaxed text-muted-foreground">
             {JSON.stringify(profile, null, 2)}
           </pre>
         </details>
@@ -109,14 +109,14 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
   const ramAvailable = ram?.availableMb ?? ram?.available
 
   return (
-    <div className="border-surface-0 bg-surface-0/40 space-y-4 rounded-md border p-4">
-      <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+    <div className="space-y-4 rounded-md border border-surface-0 bg-surface-0/40 p-4">
+      <h3 className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
         Hardware
       </h3>
 
       {os && (
         <section>
-          <h4 className="text-foreground mb-1.5 text-xs font-medium">OS</h4>
+          <h4 className="mb-1.5 text-xs font-medium text-foreground">OS</h4>
           <dl className="space-y-1 text-sm">
             <Row label="Name" value={os.name} />
             <Row label="Version" value={os.version} />
@@ -127,7 +127,7 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
 
       {cpu && (
         <section>
-          <h4 className="text-foreground mb-1.5 text-xs font-medium">CPU</h4>
+          <h4 className="mb-1.5 text-xs font-medium text-foreground">CPU</h4>
           <dl className="space-y-1 text-sm">
             <Row label="Model" value={cpu.model} />
             <Row label="Cores" value={cpu.cores} />
@@ -137,7 +137,7 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
 
       {ram && (
         <section>
-          <h4 className="text-foreground mb-1.5 text-xs font-medium">RAM</h4>
+          <h4 className="mb-1.5 text-xs font-medium text-foreground">RAM</h4>
           <dl className="space-y-1 text-sm">
             <Row label="Total" value={formatBytes(ramTotal)} />
             <Row label="Available" value={formatBytes(ramAvailable)} />
@@ -146,16 +146,16 @@ export function HardwareProfileCard({ profile }: HardwareProfileCardProps) {
       )}
 
       <section>
-        <h4 className="text-foreground mb-1.5 text-xs font-medium">GPUs ({gpus.length})</h4>
+        <h4 className="mb-1.5 text-xs font-medium text-foreground">GPUs ({gpus.length})</h4>
         {gpus.length === 0 ? (
-          <p className="text-muted-foreground text-xs">No GPUs reported.</p>
+          <p className="text-xs text-muted-foreground">No GPUs reported.</p>
         ) : (
           <ul className="space-y-2">
             {gpus.map((gpu, idx) => (
               <li
                 // oxlint-disable-next-line react/no-array-index-key -- agent-reported GPU profile has no stable id; model+idx is the strongest available key
                 key={`gpu-${idx}-${gpu.model ?? 'unknown'}`}
-                className="border-surface-0 bg-surface-1/30 rounded border p-2 text-sm"
+                className="rounded border border-surface-0 bg-surface-1/30 p-2 text-sm"
               >
                 <dl className="space-y-1">
                   <Row label="Model" value={gpu.model} />

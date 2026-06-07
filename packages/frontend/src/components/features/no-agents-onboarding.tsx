@@ -92,14 +92,14 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
             >
               Awaiting first agent
             </h2>
-            <p className="text-foreground/80 max-w-prose text-sm">
+            <p className="max-w-prose text-sm text-foreground/80">
               Your dashboard fills in as soon as a hashcat worker connects to this project. Run the
               command below on a worker machine to register it.
             </p>
           </div>
 
           <div className="relative">
-            <pre className="bg-surface-0/70 border-surface-1 text-foreground/90 overflow-x-auto rounded border p-4 pr-12 font-mono text-xs leading-relaxed">
+            <pre className="overflow-x-auto rounded border border-surface-1 bg-surface-0/70 p-4 pr-12 font-mono text-xs leading-relaxed text-foreground/90">
               <code>{command}</code>
             </pre>
             <button
@@ -108,20 +108,20 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
               aria-label={copied ? 'Command copied' : 'Copy command to clipboard'}
               className={cn(
                 'absolute top-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded',
-                'border-surface-1 bg-surface-0/95 hover:bg-surface-1 border transition-colors',
-                'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
+                'border border-surface-1 bg-surface-0/95 transition-colors hover:bg-surface-1',
+                'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
               )}
             >
               {copied ? (
-                <Check className="text-success h-3.5 w-3.5" />
+                <Check className="h-3.5 w-3.5 text-success" />
               ) : (
-                <Copy className="text-muted-foreground h-3.5 w-3.5" />
+                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
               )}
             </button>
           </div>
 
-          <p className="text-muted-foreground text-xs">
-            Replace <code className="text-foreground/90 font-mono">{'<AGENT_TOKEN>'}</code> with a
+          <p className="text-xs text-muted-foreground">
+            Replace <code className="font-mono text-foreground/90">{'<AGENT_TOKEN>'}</code> with a
             token from the{' '}
             <Link
               to="/agents"

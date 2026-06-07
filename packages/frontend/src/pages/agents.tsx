@@ -86,7 +86,7 @@ export function AgentsPage() {
                       <div className="flex items-center gap-2">
                         <TextLink
                           to={`/agents/${agent.id}`}
-                          className="text-foreground hover:text-primary text-sm"
+                          className="text-sm text-foreground hover:text-primary"
                         >
                           {agent.name}
                         </TextLink>
@@ -101,16 +101,16 @@ export function AgentsPage() {
                     <Td>
                       <StatusBadge status={agent.status} />
                     </Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {formatCurrentTask(agent.currentTask)}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {gpus === null ? '-' : `${gpus} GPU${gpus === 1 ? '' : 's'}`}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">{formatPrimaryEngine(engine)}</Td>
+                    <Td className="text-xs text-muted-foreground">{formatPrimaryEngine(engine)}</Td>
                   </TableRow>
                 )
               })}

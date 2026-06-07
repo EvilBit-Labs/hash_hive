@@ -1,12 +1,12 @@
 /**
- * Route-level contract tests for U5 — content-type-aware
+ * Route-level contract tests for U5 - content-type-aware
  * `POST /api/v1/dashboard/resources/hash-lists`. Covers both branches of
  * the dispatcher (multipart one-shot upload, legacy JSON create-empty)
  * because `tests/integration/hash-list-pipeline.test.ts` bypasses the
  * route and invokes the parser worker directly.
  *
  * Runs in an isolated test phase via the `RESOURCES_ROUTES_TEST_ISOLATED`
- * env gate because this file mocks `services/resources.js` wholesale —
+ * env gate because this file mocks `services/resources.js` wholesale -
  * the mock leaks process-wide and would clobber the un-mocked imports
  * `resources-delete.test.ts` and `hash-list-pipeline.test.ts` rely on.
  * Mirrors the dashboard-campaigns-routes isolation pattern.
@@ -16,11 +16,11 @@ import { describe, expect, it, mock } from 'bun:test'
 const IS_ISOLATED = process.env['RESOURCES_ROUTES_TEST_ISOLATED'] === '1'
 
 if (!IS_ISOLATED) {
-  describe('dashboard-resources-routes (skipped — runs in isolated phase)', () => {
+  describe('dashboard-resources-routes (skipped - runs in isolated phase)', () => {
     it('signals isolation phase is required', () => {
       // oxlint-disable-next-line no-console -- surface phase-gating drift in CI logs
       console.warn(
-        '[dashboard-resources-routes] skipped — set RESOURCES_ROUTES_TEST_ISOLATED=1 to run; the route suite did NOT execute in this phase.'
+        '[dashboard-resources-routes] skipped - set RESOURCES_ROUTES_TEST_ISOLATED=1 to run; the route suite did NOT execute in this phase.'
       )
       expect(process.env['RESOURCES_ROUTES_TEST_ISOLATED']).toBeUndefined()
     })
@@ -111,7 +111,7 @@ if (!IS_ISOLATED) {
     ...overrides,
   })
 
-  // Default behaviors — overridden per-test via mockResolvedValueOnce / mockReset.
+  // Default behaviors - overridden per-test via mockResolvedValueOnce / mockReset.
   const mockCreateHashList = mock(async (data: { projectId: number; name: string }) =>
     makeHashList({ name: data.name, projectId: data.projectId })
   )
@@ -119,8 +119,14 @@ if (!IS_ISOLATED) {
   const mockImportHashList = mock(async () => ({ status: 'processing' as const, queued: true }))
   const mockDeleteHashList = mock(async () => true)
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
+  // PATCH /hash-lists/{id} set-hash-type mock. Default: row not in
+  // project (null) → route maps to 404. Tests override per-case via
+  // mockSetHashListType.mockImplementationOnce(...).
+  const mockSetHashListType = mock(
+    async (_id: number, _projectId: number, _hashTypeId: number) => null as HashListRow | null
+  )
 
-  // Chunked-upload mocks — extracted so route-level tests can override
+  // Chunked-upload mocks - extracted so route-level tests can override
   // per-case (e.g., to throw UploadResourceNotFoundError and assert the
   // handler's 404 mapping). Return shapes mirror the production service
   // signatures (`uploadChunkPart → { etag }`, `completeChunkedUpload →
@@ -129,7 +135,7 @@ if (!IS_ISOLATED) {
   const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
   const mockCompleteChunkedUpload = mock(async () => ({ resourceId: 1 }))
 
-  // Surfaces used by the broader service surface — kept inert so the
+  // Surfaces used by the broader service surface - kept inert so the
   // route module's static imports resolve without exploding.
   const noop = mock(async () => undefined)
   const inertList = mock(async () => [])
@@ -158,8 +164,8 @@ if (!IS_ISOLATED) {
   // against the value imported from `../../src/services/resources.js`.
   // Bun's `mock.module(...)` below rewrites that import to point at this
   // mock class, so both sides end up referencing the SAME class identity
-  // at runtime and `instanceof` matches. The check would silently fail —
-  // and the handler would re-map the error to a generic 500 — if any
+  // at runtime and `instanceof` matches. The check would silently fail -
+  // and the handler would re-map the error to a generic 500 - if any
   // caller imported the real `UploadResourceNotFoundError` from a path
   // the mock doesn't replace. Keep the mock module mapping below and
   // this class shape in lockstep with the production class in
@@ -182,6 +188,25 @@ if (!IS_ISOLATED) {
     importHashList: mockImportHashList,
     deleteHashList: mockDeleteHashList,
     getHashListById: mockGetHashListById,
+    // PATCH /hash-lists/{id} set-hash-type (issue #163). Wires the
+    // outer-scope `mockSetHashListType` declared above so per-test
+    // mockImplementationOnce overrides reach the route. Default
+    // returns null → 404. Pinned via the mirror-service-not-schema
+    // convention's dynamic-factory pattern.
+    setHashListType: mockSetHashListType,
+    isForeignKeyViolation: (err: unknown, expectedConstraint?: string): boolean => {
+      // Mirror the real helper's behavior so route-level tests can
+      // simulate FK violations without standing up a real Postgres.
+      if (!(err instanceof Error)) return false
+      const code = 'code' in err ? ((err as { code?: string }).code ?? undefined) : undefined
+      const constraint =
+        'constraint' in err ? ((err as { constraint?: string }).constraint ?? undefined) : undefined
+      const isFkBySqlstate = code === '23503'
+      const isFkByMessage = !isFkBySqlstate && /foreign key|violates|reference/i.test(err.message)
+      if (!isFkBySqlstate && !isFkByMessage) return false
+      if (expectedConstraint === undefined) return true
+      return constraint === expectedConstraint
+    },
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
     // Real getHashItems returns `{items, total, limit, offset} | null`.
@@ -215,7 +240,7 @@ if (!IS_ISOLATED) {
     // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
     // dashboard route consumes this service from this test file's
     // surface, but `routes/agent/index.ts` imports the function at
-    // module-load time. Bun's `mock.module` MERGES — non-mocked
+    // module-load time. Bun's `mock.module` MERGES - non-mocked
     // exports pass through to the real module (per GOTCHAS.md "Shared
     // module cache"). However, the real `services/resources.ts` pulls
     // in DB / S3 modules that this test's mock graph doesn't provide,
@@ -237,7 +262,7 @@ if (!IS_ISOLATED) {
     completeChunkedUpload: mockCompleteChunkedUpload,
     abortChunkedUpload: noop,
     getChunkedUploadStatus: mock(async () => ({ parts: [] })),
-    // Error classes — the route imports these as values so we must
+    // Error classes - the route imports these as values so we must
     // re-export classes that `instanceof` will match against the
     // synthetic errors we throw from the upload mock below.
     UploadTooLargeError: UploadTooLargeErrorMock,
@@ -328,7 +353,7 @@ if (!IS_ISOLATED) {
     return makeHeaders({ 'content-type': 'application/json' })
   }
 
-  describe('POST /hash-lists — multipart branch (one-shot upload)', () => {
+  describe('POST /hash-lists - multipart branch (one-shot upload)', () => {
     it('happy path: creates row, uploads, enqueues, returns 202 with processing status', async () => {
       mockCreateHashList.mockReset()
       mockCreateHashList.mockImplementation(async (data) =>
@@ -486,7 +511,7 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(411)
       const json = (await res.json()) as { error?: { code?: string } }
       expect(json.error?.code).toBe('LENGTH_REQUIRED')
-      // Critical: rejected BEFORE the upload pipeline even started — chunked
+      // Critical: rejected BEFORE the upload pipeline even started - chunked
       // multipart bypasses the Content-Length guard, so we close that door.
       expect(mockCreateHashList).not.toHaveBeenCalled()
       expect(mockUploadHashListFile).not.toHaveBeenCalled()
@@ -506,7 +531,7 @@ if (!IS_ISOLATED) {
       const res = await app.request(HASH_LISTS_URL, {
         method: 'POST',
         headers: { ...multipartHeaders(boundary), 'content-length': '999999999' },
-        body: 'ignored — server rejects on header before reading',
+        body: 'ignored - server rejects on header before reading',
       })
 
       expect(res.status).toBe(413)
@@ -653,7 +678,7 @@ if (!IS_ISOLATED) {
     })
   })
 
-  describe('POST /hash-lists — JSON branch (legacy create-empty)', () => {
+  describe('POST /hash-lists - JSON branch (legacy create-empty)', () => {
     it('happy path: creates an empty hash list and returns 201', async () => {
       mockCreateHashList.mockReset()
       mockCreateHashList.mockImplementation(async (data) =>
@@ -708,7 +733,7 @@ if (!IS_ISOLATED) {
     // `PUT /upload/{id}/part/{n}` and `POST /upload/{id}/complete`
     // routes. The runtime contract is only correct if the handler
     // actually translates `UploadResourceNotFoundError` from the
-    // service layer into that 404 — otherwise the documented response
+    // service layer into that 404 - otherwise the documented response
     // is unreachable and route-as-spec lies about wire behavior.
     // These two tests pin the mapping.
 
@@ -731,7 +756,7 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(404)
       const json = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
-      // Pin the generic client message — the handler does NOT echo
+      // Pin the generic client message - the handler does NOT echo
       // err.message back, matching the uploadStatus 404 wording for
       // wire-response consistency. resourceId/resourceType are logged
       // server-side at debug level only.
@@ -759,6 +784,152 @@ if (!IS_ISOLATED) {
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
       // Same generic-message pin as the upload-part case above.
       expect(json.error?.message).toBe('Upload not found')
+    })
+  })
+
+  describe('PATCH /hash-lists/{id} - set hash type (issue #163)', () => {
+    const SET_TYPE_URL = '/api/v1/dashboard/resources/hash-lists/42'
+
+    it('happy path: returns 200 with the updated row when service resolves', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async (id, projectId, hashTypeId) =>
+        makeHashList({ id, projectId, hashTypeId })
+      )
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as {
+        hashList?: { id?: number; hashTypeId?: number }
+      }
+      expect(json.hashList?.id).toBe(42)
+      expect(json.hashList?.hashTypeId).toBe(1000)
+      // Service called with (id, projectId, hashTypeId) - pin the
+      // ordering so a future refactor that swaps argument positions
+      // gets caught at the route boundary.
+      expect(mockSetHashListType).toHaveBeenCalledTimes(1)
+      const callArgs = mockSetHashListType.mock.calls[0]
+      expect(callArgs?.[0]).toBe(42)
+      expect(callArgs?.[2]).toBe(1000)
+    })
+
+    it('returns 404 RESOURCE_NOT_FOUND when service returns null (cross-project or deleted)', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => null)
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+      // Generic message - no existence disclosure between cross-
+      // project miss and genuinely-deleted row.
+      expect(json.error?.message).toBe('Hash list not found')
+    })
+
+    it('returns 400 VALIDATION_ERROR for non-positive integer id', async () => {
+      mockSetHashListType.mockReset()
+      const res = await app.request('/api/v1/dashboard/resources/hash-lists/0', {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      // Service not invoked when the path-param guard rejects.
+      expect(mockSetHashListType).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 VALIDATION_ERROR for non-positive hashTypeId in body', async () => {
+      mockSetHashListType.mockReset()
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 0 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(mockSetHashListType).not.toHaveBeenCalled()
+    })
+
+    it('maps Postgres FK violation (SQLSTATE 23503) on the hash_type_id constraint to 400 "Unknown hashTypeId"', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        const err = new Error(
+          'insert or update on table "hash_lists" violates foreign key constraint "hash_lists_hash_type_id_hash_types_id_fk"'
+        )
+        // Drizzle/postgres-js surfaces SQLSTATE 23503 on err.code and
+        // the constraint name on err.constraint for FK violations.
+        ;(err as Error & { code?: string; constraint?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint?: string }).constraint =
+          'hash_lists_hash_type_id_hash_types_id_fk'
+        throw err
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 99999 }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(json.error?.message).toBe('Unknown hashTypeId')
+    })
+
+    it('does NOT map an unrelated FK violation to 400 - falls through to 5xx', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        // Simulate a different FK violation (e.g., a future trigger
+        // that references another table). The isForeignKeyViolation
+        // helper's constraint-name check must keep this as a 5xx so
+        // we don't tell the user "Unknown hashTypeId" when the real
+        // problem is elsewhere.
+        const err = new Error(
+          'insert or update on table "hash_lists" violates foreign key constraint "some_other_fk"'
+        )
+        ;(err as Error & { code?: string; constraint?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint?: string }).constraint = 'some_other_fk'
+        throw err
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      expect(res.status).toBeGreaterThanOrEqual(500)
+    })
+
+    it('rethrows non-FK errors as 5xx so transient infra failure surfaces, not as 400', async () => {
+      mockSetHashListType.mockReset()
+      mockSetHashListType.mockImplementation(async () => {
+        throw new Error('ECONNREFUSED - database unreachable')
+      })
+
+      const res = await app.request(SET_TYPE_URL, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ hashTypeId: 1000 }),
+      })
+
+      // Tighter than "not 400" - a regression that returns 200 with
+      // an empty body would have escaped the original assertion.
+      expect(res.status).toBeGreaterThanOrEqual(500)
     })
   })
 } // end IS_ISOLATED

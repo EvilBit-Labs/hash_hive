@@ -85,13 +85,13 @@ export function LoginPage() {
   }
 
   return (
-    <div className="bg-crust flex min-h-screen items-center justify-center">
-      <div className="border-surface-0/50 bg-mantle w-full max-w-sm space-y-6 rounded-lg border p-8">
+    <div className="flex min-h-screen items-center justify-center bg-crust">
+      <div className="w-full max-w-sm space-y-6 rounded-lg border border-surface-0/50 bg-mantle p-8">
         <div className="flex flex-col items-center gap-3">
           <img src={logoSvg} alt="" className="h-12 w-12" />
           <div className="text-center">
             <h1 className="text-xl font-semibold tracking-tight">HashHive</h1>
-            <p className="text-muted-foreground mt-1 text-xs">
+            <p className="mt-1 text-xs text-muted-foreground">
               Distributed hash cracking management
             </p>
           </div>
@@ -101,7 +101,7 @@ export function LoginPage() {
           {error && <ErrorBanner message={error} />}
 
           <div>
-            <label htmlFor="email" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="email" className="text-xs font-medium text-muted-foreground">
               Email
             </label>
             <Input
@@ -113,12 +113,12 @@ export function LoginPage() {
               {...register('email')}
             />
             {errors.email && (
-              <p className="text-destructive mt-1 text-xs">{errors.email.message}</p>
+              <p className="mt-1 text-xs text-destructive">{errors.email.message}</p>
             )}
           </div>
 
           <div>
-            <label htmlFor="password" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
               Password
             </label>
             <Input
@@ -129,7 +129,7 @@ export function LoginPage() {
               {...register('password')}
             />
             {errors.password && (
-              <p className="text-destructive mt-1 text-xs">{errors.password.message}</p>
+              <p className="mt-1 text-xs text-destructive">{errors.password.message}</p>
             )}
           </div>
 

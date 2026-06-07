@@ -285,7 +285,7 @@ export function CampaignsPage() {
                 const percentage = readCampaignPercentage(campaign.progress)
                 return (
                   <TableRow key={campaign.id}>
-                    <Td className="text-foreground text-sm font-medium">
+                    <Td className="text-sm font-medium text-foreground">
                       <Link
                         to={`/campaigns/${campaign.id}`}
                         className="hover:text-primary hover:underline"
@@ -305,14 +305,14 @@ export function CampaignsPage() {
                         size="thin"
                         ariaLabel={`${campaign.name} progress`}
                       />
-                      <span className="text-muted-foreground mt-1 block font-mono text-xs tabular-nums">
+                      <span className="mt-1 block font-mono text-xs text-muted-foreground tabular-nums">
                         {(percentage <= 1 ? percentage * 100 : percentage).toFixed(1)}%
                       </span>
                     </Td>
-                    <Td className="text-muted-foreground font-mono text-xs">
+                    <Td className="font-mono text-xs text-muted-foreground">
                       #{campaign.hashListId}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {new Date(campaign.createdAt).toLocaleDateString()}
                     </Td>
                     <Td>

@@ -62,7 +62,7 @@ export function AgentTasksSection({ tasks, isLoading, isError }: AgentTasksSecti
                   <Td className="text-sm">
                     <TextLink to={`/campaigns/${task.campaignId}`}>{task.campaignName}</TextLink>
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     Mode {task.attackMode} (#{task.attackId})
                   </Td>
                   <Td>

@@ -66,7 +66,7 @@ export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
                           aria-label={isOpen ? 'Collapse details' : 'Expand details'}
                           aria-expanded={isOpen}
                           onClick={() => toggleExpanded(err.id)}
-                          className="text-muted-foreground hover:bg-surface-0/60 hover:text-foreground rounded p-1"
+                          className="rounded p-1 text-muted-foreground hover:bg-surface-0/60 hover:text-foreground"
                         >
                           <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
                         </button>
@@ -76,10 +76,10 @@ export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
                       <SeverityBadge severity={err.severity} />
                     </Td>
                     <Td className="text-sm">{err.message}</Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {new Date(err.createdAt).toLocaleString()}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">
                       {err.taskId ? `#${err.taskId}` : '-'}
                     </Td>
                   </TableRow>
@@ -88,7 +88,7 @@ export function AgentErrorLog({ errors, isError }: AgentErrorLogProps) {
                       // oxlint-disable-next-line jsx-a11y/control-has-associated-label -- false positive: <tr> is a table row, not a control
                       <tr>
                         <td colSpan={5} className="bg-surface-0/30 px-4 py-3">
-                          <pre className="text-muted-foreground overflow-auto font-mono text-xs leading-relaxed">
+                          <pre className="overflow-auto font-mono text-xs leading-relaxed text-muted-foreground">
                             {JSON.stringify(context, null, 2)}
                           </pre>
                         </td>

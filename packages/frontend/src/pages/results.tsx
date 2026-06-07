@@ -77,15 +77,15 @@ export function ResultsPage() {
               <TableBody>
                 {data.results.map((r) => (
                   <TableRow key={r.id}>
-                    <Td className="text-muted-foreground max-w-[200px] truncate font-mono text-xs">
+                    <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
                       {r.hashValue}
                     </Td>
-                    <Td className="text-success font-mono text-xs font-medium">
+                    <Td className="font-mono text-xs font-medium text-success">
                       {r.plaintext ?? '-'}
                     </Td>
-                    <Td className="text-muted-foreground text-xs">{r.campaignName}</Td>
-                    <Td className="text-muted-foreground text-xs">{r.hashListName}</Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="text-xs text-muted-foreground">{r.campaignName}</Td>
+                    <Td className="text-xs text-muted-foreground">{r.hashListName}</Td>
+                    <Td className="text-xs text-muted-foreground">
                       {r.crackedAt ? new Date(r.crackedAt).toLocaleString() : '-'}
                     </Td>
                   </TableRow>

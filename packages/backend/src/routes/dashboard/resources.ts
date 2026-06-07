@@ -1,8 +1,10 @@
 import {
   createHashListRequestSchema,
   detectHashTypeRequestSchema,
+  hashListWireSchema,
   maskLists,
   ruleLists,
+  setHashListTypeRequestSchema,
   wordLists,
 } from '@hashhive/shared'
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
@@ -28,9 +30,11 @@ import {
   getHashListStats,
   getResourcePresignedUrl,
   importHashList,
+  isForeignKeyViolation,
   listHashLists,
   listHashTypes,
   ResourceInUseError,
+  setHashListType,
   uploadHashListFile,
   UploadTooLargeError,
 } from '../../services/resources.js'
@@ -238,7 +242,7 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
       return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to create hash list')
     }
 
-    // Upload — rollback DB row on failure so the caller sees a clean error
+    // Upload - rollback DB row on failure so the caller sees a clean error
     // state rather than an orphaned uploading-status row.
     try {
       await uploadHashListFile(created.id, projectId, file)
@@ -406,6 +410,97 @@ resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   }
 })
 
+// ─── PATCH /hash-lists/{id} - set hash type (issue #163) ────────────
+//
+// Used by the detect-hash-type modal's "Use This Type" action. Body
+// carries only `hashTypeId`; the project scope is derived from the
+// authenticated session, never trusted from the request body. The
+// service layer matches on `(id, projectId)` and returns null on miss
+// so a cross-project ID lookup is indistinguishable from a deleted
+// row at the HTTP layer (404 without existence disclosure).
+
+const setHashListTypeRoute = createRoute({
+  method: 'patch',
+  path: '/hash-lists/{id}',
+  tags,
+  summary: 'Set the hash type on an existing hash list',
+  description:
+    "Updates the hash list's `hashTypeId`. Project ownership is enforced server-side from the session; cross-project IDs return 404.",
+  security,
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: idParamSchema,
+    body: {
+      content: {
+        'application/json': { schema: setHashListTypeRequestSchema },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: 'Updated hash list',
+      content: {
+        'application/json': {
+          schema: z.object({ hashList: hashListWireSchema }),
+        },
+      },
+    },
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
+  const { projectId } = c.get('scopedUser')!
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid hash list id')
+  }
+
+  const { hashTypeId } = c.req.valid('json')
+
+  try {
+    const updated = await setHashListType(id, projectId, hashTypeId)
+    if (!updated) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    }
+    // Project the DB row into the wire shape so the response matches
+    // the OpenAPI declaration (hashListWireSchema) the frontend types
+    // off of. DB-only fields (source, statistics, updatedAt) stay
+    // server-side.
+    const wire = hashListWireSchema.parse({
+      id: updated.id,
+      name: updated.name,
+      projectId: updated.projectId,
+      hashTypeId: updated.hashTypeId,
+      status: updated.status,
+      fileRef: updated.fileRef ?? null,
+      createdAt: updated.createdAt.toISOString(),
+    })
+    return c.json({ hashList: wire }, 200)
+  } catch (err) {
+    // FK violation on hash_type_id → unknown hash type. Map to 400
+    // rather than letting it bubble as a 500 - the client supplied a
+    // bad value, not a server fault. The route only updates
+    // hash_type_id, so the only FK that can violate here is
+    // hash_lists.hash_type_id → hash_types.id (the constraint name
+    // is verified inside the helper).
+    if (isForeignKeyViolation(err, 'hash_lists_hash_type_id_hash_types_id_fk')) {
+      return dashboardError(c, 400, 'VALIDATION_ERROR', 'Unknown hashTypeId')
+    }
+    // Non-FK errors: log with route context before rethrow so the
+    // generic 500 envelope from Hono's default handler isn't a black
+    // hole for ops triage. Matches the pattern used by the upload
+    // route's logger.error above.
+    logger.error({ hashListId: id, projectId, hashTypeId, err }, 'setHashListType failed')
+    throw err
+  }
+})
+
 const uploadHashListRoute = createRoute({
   method: 'post',
   path: '/hash-lists/{id}/upload',
@@ -524,7 +619,7 @@ resourceRoutes.openapi(importHashListRoute, async (c) => {
   return c.json(result, 200)
 })
 
-// Permissive at the boundary so a malformed `?limit=abc` doesn't 400 —
+// Permissive at the boundary so a malformed `?limit=abc` doesn't 400 -
 // `.catch(default)` swaps in the default on coercion/range failure, which
 // keeps NaN/Infinity out of Drizzle's `.limit()`/`.offset()`. Matches the
 // pattern used on `listResultsQuerySchema` elsewhere on the dashboard.

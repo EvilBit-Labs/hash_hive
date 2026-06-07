@@ -1,5 +1,16 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// E2E runs on a distinct port lane from `just dev` (3000 / 4000) so a
+// developer can leave the dev backend running and still get clean
+// runs. `VITE_API_PROXY_TARGET` makes the Vite dev server proxy to the
+// E2E backend instead of the dev one; `PORT` keeps the E2E frontend
+// off the dev frontend's port. global-setup binds the spawned test
+// backend to E2E_BACKEND_PORT.
+const E2E_FRONTEND_PORT = process.env['E2E_FRONTEND_PORT'] ?? '3400'
+const E2E_BACKEND_PORT = process.env['E2E_BACKEND_PORT'] ?? '4400'
+const E2E_BASE_URL = `http://localhost:${E2E_FRONTEND_PORT}`
+const E2E_BACKEND_URL = `http://localhost:${E2E_BACKEND_PORT}`
+
 export default defineConfig({
   testDir: './e2e',
   // demo-capture is a recipe for regenerating docs/feature_demo/operator-console-login.gif,
@@ -34,7 +45,7 @@ export default defineConfig({
     timeout: 10_000,
   },
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: E2E_BASE_URL,
     trace: 'on-first-retry',
   },
   projects: [
@@ -45,7 +56,15 @@ export default defineConfig({
   ],
   webServer: {
     command: 'bun run dev',
-    url: 'http://localhost:3000',
+    url: E2E_BASE_URL,
+    // `env` propagates to the spawned Vite process so its config picks
+    // up the E2E port + proxy target. global-setup likewise spawns the
+    // backend on E2E_BACKEND_PORT. reuseExistingServer is fine in
+    // local mode — nothing else normally listens on 3400.
+    env: {
+      PORT: E2E_FRONTEND_PORT,
+      VITE_API_PROXY_TARGET: E2E_BACKEND_URL,
+    },
     reuseExistingServer: !process.env['CI'],
   },
 })

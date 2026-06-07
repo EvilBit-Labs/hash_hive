@@ -76,7 +76,7 @@ export class UploadTooLargeError extends Error {
  * dashboard spec's 404 declaration is reachable. Without this typed
  * channel, the bare `throw new Error('Resource N not found')` fell
  * through to the generic 500 `UPLOAD_PART_FAILED` / `UPLOAD_COMPLETE_FAILED`
- * envelope and the documented 404 was unreachable from the wire — a
+ * envelope and the documented 404 was unreachable from the wire - a
  * route-as-spec contract violation.
  */
 export class UploadResourceNotFoundError extends Error {
@@ -137,20 +137,36 @@ export async function listHashListsPaginated(
 }
 
 /**
- * Detect a Postgres foreign-key-violation either by SQLSTATE 23503 (the
- * canonical, locale-stable signal) or by a regex against `err.message`
- * (fallback for older PG / test mocks that don't surface the code).
+ * Detect a Postgres foreign-key-violation. SQLSTATE 23503 is the
+ * canonical, locale-stable signal; the message regex is a fallback for
+ * older driver versions and test mocks that don't surface `err.code`.
+ *
+ * When `expectedConstraint` is supplied, the constraint name on the
+ * error must match - this prevents misclassifying an unrelated FK
+ * violation (e.g., a trigger that references another table) as the
+ * specific FK the caller is mapping to a 400. Drizzle/postgres-js
+ * surfaces the constraint name on `err.constraint` for SQLSTATE 23503
+ * violations.
  */
-function isForeignKeyViolation(err: unknown): boolean {
+export function isForeignKeyViolation(err: unknown, expectedConstraint?: string): boolean {
   if (!(err instanceof Error)) return false
   const code = 'code' in err ? (err as { code?: string }).code : undefined
-  if (code === '23503') return true
-  return /foreign key|violates|reference/i.test(err.message)
+  const constraint = 'constraint' in err ? (err as { constraint?: string }).constraint : undefined
+  const isFkBySqlstate = code === '23503'
+  const isFkByMessage = !isFkBySqlstate && /foreign key|violates|reference/i.test(err.message)
+  if (!isFkBySqlstate && !isFkByMessage) return false
+  // No expected constraint: any FK violation counts (backward-compatible).
+  if (expectedConstraint === undefined) return true
+  // Expected constraint: require an exact match. If the error didn't
+  // surface a constraint name (older driver, mock), be conservative
+  // and return false so the caller falls through to the generic 500
+  // rather than silently misclassifying.
+  return constraint === expectedConstraint
 }
 
 /**
  * Shared cascade-delete flow for resource tables. Steps:
- *   1. Ownership check (404 if not in project) — handled by the caller via
+ *   1. Ownership check (404 if not in project) - handled by the caller via
  *      `lookup`.
  *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
  *      FK violation rolls back the children).
@@ -228,7 +244,7 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
   for (let iter = 0; iter < HASH_ITEMS_DELETE_MAX_ITERATIONS; iter++) {
     // postgres-js v3.4.x exposes the DELETE affected-row count on
     // `result.count` (it returns its own `Result` array with a `.count`
-    // property — NOT `rowCount`, which is the pg/node-pg convention).
+    // property - NOT `rowCount`, which is the pg/node-pg convention).
     // `rowCount` retained as a fallback for any future driver that
     // diverges; the MAX_ITERATIONS cap below bails on either reporting
     // bug. https://github.com/porsager/postgres
@@ -245,7 +261,7 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
   }
   logger.error(
     { hashListId, max: HASH_ITEMS_DELETE_MAX_ITERATIONS, chunkSize: HASH_ITEMS_DELETE_CHUNK },
-    'deleteHashItemsBatched hit max iterations — bailing to avoid unbounded transaction'
+    'deleteHashItemsBatched hit max iterations - bailing to avoid unbounded transaction'
   )
   throw new Error(
     `deleteHashItemsBatched(${hashListId}) exceeded ${HASH_ITEMS_DELETE_MAX_ITERATIONS} iterations`
@@ -320,6 +336,26 @@ export async function createHashList(data: {
   return hl ?? null
 }
 
+/**
+ * Update the `hashTypeId` on an existing hash list. Project-scoped:
+ * matches by `(id, projectId)` from the authenticated session and
+ * returns `null` on miss (the route translates to 404) so a wrong-
+ * project ID lookup cannot disclose existence. Mirrors the lookup
+ * pattern in `deleteHashList(id, projectId)`.
+ *
+ * The FK from `hash_lists.hash_type_id → hash_types.id` validates the
+ * target type at the database layer; a stale or missing hashTypeId
+ * surfaces as a Postgres FK violation and bubbles to the caller.
+ */
+export async function setHashListType(id: number, projectId: number, hashTypeId: number) {
+  const [updated] = await db
+    .update(hashLists)
+    .set({ hashTypeId, updatedAt: new Date() })
+    .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+    .returning()
+  return updated ?? null
+}
+
 export async function uploadHashListFile(
   hashListId: number,
   projectId: number,
@@ -369,11 +405,11 @@ export async function importHashList(hashListId: number, projectId: number) {
   const { QUEUE_NAMES } = await import('../config/queue.js')
   const qm = getQueueManager()
   if (!qm) {
-    return { error: 'Queue unavailable — cannot process hash list' }
+    return { error: 'Queue unavailable - cannot process hash list' }
   }
   const health = await qm.getHealth()
   if (health.status === 'disconnected') {
-    return { error: 'Queue unavailable — cannot process hash list' }
+    return { error: 'Queue unavailable - cannot process hash list' }
   }
 
   // Enqueue FIRST so the queue's success/failure is what gates the status
@@ -684,7 +720,7 @@ export async function initiateChunkedUpload(data: {
   const key = `${projectId}/${prefix}/${randomUUID()}`
   const ct = contentType ?? 'application/octet-stream'
 
-  // Initiate S3 multipart upload — clean up orphan DB record on failure
+  // Initiate S3 multipart upload - clean up orphan DB record on failure
   let s3UploadId: string
   try {
     s3UploadId = await createMultipartUpload(key, ct)

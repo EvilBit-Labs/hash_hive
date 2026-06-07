@@ -29,9 +29,9 @@ export class ErrorBoundary extends Component<Props, State> {
   override render() {
     if (this.state.hasError) {
       return (
-        <div className="bg-crust flex min-h-screen items-center justify-center">
-          <div className="border-surface-0/50 bg-mantle w-full max-w-sm space-y-4 rounded-lg border p-8 text-center">
-            <p className="text-surface-2 font-mono text-4xl font-bold">!</p>
+        <div className="flex min-h-screen items-center justify-center bg-crust">
+          <div className="w-full max-w-sm space-y-4 rounded-lg border border-surface-0/50 bg-mantle p-8 text-center">
+            <p className="font-mono text-4xl font-bold text-surface-2">!</p>
             <h1 className="text-lg font-semibold">Something went wrong</h1>
             <ErrorBanner message="An unexpected error occurred. Please try again." />
             <Button

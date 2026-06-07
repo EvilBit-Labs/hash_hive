@@ -15,6 +15,14 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 
+// Resource lifecycle status union - duplicated from
+// `../schemas/resources.ts`'s `resourceStatusSchema` to avoid a
+// circular import (schemas/index.ts already imports from this file).
+// Keep the two lists in sync; the canonical source is the Zod
+// `resourceStatusSchema` and the test suite asserts producer values
+// against that enum.
+type ResourceStatusLiteral = 'pending' | 'uploading' | 'uploaded' | 'processing' | 'ready' | 'error'
+
 // ─── Identity & Access ──────────────────────────────────────────────
 
 export const users = pgTable('users', {
@@ -298,7 +306,10 @@ export const hashLists = pgTable(
     source: varchar('source', { length: 50 }).notNull().default('upload'),
     fileRef: jsonb('file_ref').default({}),
     statistics: jsonb('statistics').default({}),
-    status: varchar('status', { length: 20 }).notNull().default('uploading'),
+    status: varchar('status', { length: 20 })
+      .$type<ResourceStatusLiteral>()
+      .notNull()
+      .default('uploading'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -343,7 +354,10 @@ export const wordLists = pgTable('word_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  status: varchar('status', { length: 20 })
+    .$type<ResourceStatusLiteral>()
+    .notNull()
+    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -357,7 +371,10 @@ export const ruleLists = pgTable('rule_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  status: varchar('status', { length: 20 })
+    .$type<ResourceStatusLiteral>()
+    .notNull()
+    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -371,7 +388,10 @@ export const maskLists = pgTable('mask_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  status: varchar('status', { length: 20 })
+    .$type<ResourceStatusLiteral>()
+    .notNull()
+    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

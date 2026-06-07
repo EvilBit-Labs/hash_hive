@@ -31,7 +31,7 @@ export function SelectProjectPage() {
 
   if (isPending) {
     return (
-      <div className="bg-crust flex h-screen items-center justify-center">
+      <div className="flex h-screen items-center justify-center bg-crust">
         <EmptyState message="Loading..." />
       </div>
     )
@@ -60,13 +60,13 @@ export function SelectProjectPage() {
   }
 
   return (
-    <div className="bg-crust flex min-h-screen items-center justify-center">
-      <div className="border-surface-0/50 bg-mantle w-full max-w-md space-y-6 rounded-lg border p-8">
+    <div className="flex min-h-screen items-center justify-center bg-crust">
+      <div className="w-full max-w-md space-y-6 rounded-lg border border-surface-0/50 bg-mantle p-8">
         <div className="flex flex-col items-center gap-3">
           <img src={logoSvg} alt="" className="h-10 w-10" />
           <div className="text-center">
             <h1 className="text-xl font-semibold tracking-tight">Select Project</h1>
-            <p className="text-muted-foreground mt-1 text-xs">Choose a project to continue</p>
+            <p className="mt-1 text-xs text-muted-foreground">Choose a project to continue</p>
           </div>
         </div>
 
@@ -86,10 +86,10 @@ export function SelectProjectPage() {
                   type="button"
                   disabled={selectProject.isPending}
                   onClick={() => handleSelect(project.projectId)}
-                  className="border-surface-0 bg-background hover:border-primary/30 hover:bg-surface-0/40 w-full rounded-md border px-4 py-3 text-left transition-all disabled:opacity-50"
+                  className="w-full rounded-md border border-surface-0 bg-background px-4 py-3 text-left transition-all hover:border-primary/30 hover:bg-surface-0/40 disabled:opacity-50"
                 >
-                  <div className="text-foreground text-sm font-medium">{project.projectName}</div>
-                  <div className="text-muted-foreground mt-0.5 text-xs">
+                  <div className="text-sm font-medium text-foreground">{project.projectName}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
                     {project.roles.join(', ')}
                   </div>
                 </button>
@@ -98,7 +98,7 @@ export function SelectProjectPage() {
 
             <label
               htmlFor="remember-last-project"
-              className="text-muted-foreground flex cursor-pointer items-center gap-2 text-xs"
+              className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
             >
               <input
                 id="remember-last-project"
@@ -106,7 +106,7 @@ export function SelectProjectPage() {
                 aria-label="Remember this project on next sign-in"
                 checked={rememberLastProject}
                 onChange={(e) => setRememberLastProject(e.target.checked)}
-                className="border-surface-0 h-3.5 w-3.5 rounded"
+                className="h-3.5 w-3.5 rounded border-surface-0"
               />
               Remember this project on next sign-in
             </label>

@@ -179,4 +179,39 @@ describe('requireSameOrigin: dashboard CSRF middleware (S-H4)', () => {
     })
     expect(res.status).not.toBe(403)
   })
+
+  it('POST / passes in dev when Origin matches a BETTER_AUTH_TRUSTED_ORIGINS extra', async () => {
+    // preload.ts sets BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:3400
+    // (the Playwright E2E suite's frontend lane). The dev-allowance
+    // branch must accept that origin so the suite can authenticate.
+    const res = await app.request(PROJECTS, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        host: SAME_ORIGIN_HOST,
+        origin: 'http://localhost:3400',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'Bravo', slug: 'bravo' }),
+    })
+    expect(res.status).not.toBe(403)
+  })
+
+  it('POST / accepts a Referer with a path when its host is in the dev allowlist', async () => {
+    // Regression guard: a browser falling back to Referer (no Origin)
+    // sends the full URL including the path. Comparing the raw URL
+    // string to an origin allowlist would silently miss this; the
+    // helper parses to `host` before comparing.
+    const res = await app.request(PROJECTS, {
+      method: 'POST',
+      headers: {
+        cookie: ADMIN_COOKIE,
+        host: SAME_ORIGIN_HOST,
+        referer: 'http://localhost:3400/login?next=/',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'Bravo', slug: 'bravo' }),
+    })
+    expect(res.status).not.toBe(403)
+  })
 })

@@ -21,10 +21,14 @@ export const basicInfoSchema = z.object({
 
 export type BasicInfoForm = z.infer<typeof basicInfoSchema>
 
+// Matches the `HashListWire.hashCount` shape from `@hashhive/shared`
+// (`?: number | undefined` — produced by `z.number().optional()`).
+// The list endpoint doesn't currently aggregate counts; the UI
+// renders a dash when the field is absent.
 interface HashListOption {
   id: number
   name: string
-  hashCount: number
+  hashCount?: number | undefined
 }
 
 interface BasicInfoStepProps {
@@ -51,30 +55,30 @@ export function BasicInfoStep({
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label htmlFor="name" className="text-muted-foreground text-xs font-medium">
+        <label htmlFor="name" className="text-xs font-medium text-muted-foreground">
           Campaign Name
         </label>
         <Input id="name" className="mt-1.5" {...form.register('name')} />
         {form.formState.errors.name && (
-          <p className="text-destructive mt-1 text-xs">{form.formState.errors.name.message}</p>
+          <p className="mt-1 text-xs text-destructive">{form.formState.errors.name.message}</p>
         )}
       </div>
 
       <div>
-        <label htmlFor="description" className="text-muted-foreground text-xs font-medium">
+        <label htmlFor="description" className="text-xs font-medium text-muted-foreground">
           Description
         </label>
         <textarea
           id="description"
           rows={3}
-          className="border-surface-0 bg-background text-foreground focus:border-primary focus:ring-primary/40 mt-1.5 w-full rounded border px-3 py-2 text-sm focus:ring-1"
+          className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
           {...form.register('description')}
         />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label htmlFor="priority" className="text-muted-foreground text-xs font-medium">
+          <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
             Priority (1-10)
           </label>
           <Input
@@ -87,7 +91,7 @@ export function BasicInfoStep({
           />
         </div>
         <div>
-          <label htmlFor="hashListId" className="text-muted-foreground text-xs font-medium">
+          <label htmlFor="hashListId" className="text-xs font-medium text-muted-foreground">
             Hash List
           </label>
           <div className="mt-1.5 flex gap-2">
@@ -95,7 +99,7 @@ export function BasicInfoStep({
               <option value="">Select a hash list...</option>
               {hashLists.map((hl) => (
                 <option key={hl.id} value={hl.id}>
-                  {hl.name} ({hl.hashCount} hashes)
+                  {hl.name} ({hl.hashCount ?? '-'} hashes)
                 </option>
               ))}
             </Select>
@@ -110,7 +114,7 @@ export function BasicInfoStep({
             </Button>
           </div>
           {form.formState.errors.hashListId && (
-            <p className="text-destructive mt-1 text-xs">
+            <p className="mt-1 text-xs text-destructive">
               {form.formState.errors.hashListId.message}
             </p>
           )}

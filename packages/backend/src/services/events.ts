@@ -26,7 +26,7 @@ import { logger } from '../config/logger.js'
 // ─── Event Types ────────────────────────────────────────────────────
 
 /**
- * Project-scoped event types — `emit()` filters delivery by the client's
+ * Project-scoped event types - `emit()` filters delivery by the client's
  * subscribed project IDs.
  */
 export type ProjectEventType =
@@ -38,7 +38,7 @@ export type ProjectEventType =
   | 'resource_update'
 
 /**
- * System-wide event types — `broadcastSystemEvent()` bypasses project
+ * System-wide event types - `broadcastSystemEvent()` bypasses project
  * scoping and delivers to every subscribed client. Reserved for events
  * that affect every operator regardless of which project they have
  * selected (system health, future global maintenance notices, etc.).
@@ -54,7 +54,7 @@ export type EventType = ProjectEventType | SystemEventType
  * will never falsely match a system event.
  *
  * Typed as the literal `0` so AppEvent's discriminated union can refuse
- * mismatched (type, projectId) pairs at compile time — see AppEvent
+ * mismatched (type, projectId) pairs at compile time - see AppEvent
  * below.
  */
 export const SYSTEM_EVENT_PROJECT_ID = 0 as const
@@ -63,8 +63,8 @@ export type SystemEventProjectId = typeof SYSTEM_EVENT_PROJECT_ID
 /**
  * Discriminated union over event scope. Project events carry a real
  * project id; system events carry the sentinel literal. The realistic
- * mistake — a system event leaking into a project channel with a real
- * project id, e.g. `{ type: 'system_health', projectId: 42 }` — is
+ * mistake - a system event leaking into a project channel with a real
+ * project id, e.g. `{ type: 'system_health', projectId: 42 }` - is
  * rejected at compile time because the system arm types `projectId` as
  * the literal `0`.
  *
@@ -154,13 +154,13 @@ const THROTTLE_MS = 250 // Max 4 events/sec per type+project
 // Throttle map maintenance: how often to prune entries that no longer
 // matter (background pulse) and what age qualifies an entry for pruning.
 // Both are 60s so the worst-case dwell of an inactive throttle key is
-// ~120s — short enough for a few hundred KB cap, long enough to absorb
+// ~120s - short enough for a few hundred KB cap, long enough to absorb
 // bursts without thrashing.
 const THROTTLE_PRUNE_INTERVAL_MS = 60_000
 const THROTTLE_ENTRY_MAX_AGE_MS = 60_000
 
 // Periodically prune stale entries to prevent unbounded growth.
-// `.unref()` so the timer doesn't keep the event loop alive on its own —
+// `.unref()` so the timer doesn't keep the event loop alive on its own -
 // a Node process with no other pending work (test teardown, graceful
 // shutdown) can exit cleanly instead of waiting for the next pulse.
 const pruneInterval = setInterval(() => {
@@ -176,7 +176,7 @@ pruneInterval.unref()
 /**
  * Test-only: clears the module-level client registry and throttle map
  * so each test starts from a clean slate. Production callers must not
- * use this — clearing the client map mid-broadcast would drop active
+ * use this - clearing the client map mid-broadcast would drop active
  * WS subscribers.
  */
 export function __resetEventsForTesting(): void {
@@ -326,12 +326,42 @@ export function emitCrackResult(projectId: number, hashListId: number, count: nu
 // can't drift.
 export type ResourceUpdatePayload = ResourceUpdateEventData
 
-export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePayload) {
+/**
+ * Caller-side shape for `emitResourceUpdate`: the discriminated union
+ * without the `projectId` field, which the helper injects from its
+ * own outer parameter. Keeps call sites concise (no projectId
+ * repetition) while the wire payload still carries projectId for
+ * defense-in-depth in subscribers (issue #163 Step 7).
+ *
+ * TypeScript's built-in `Omit` does NOT distribute over discriminated
+ * unions - it collapses to `{ action: 'X' | 'Y' }` and drops the
+ * branch-specific fields (`statistics`, `error`). Enumerate each
+ * branch with `Extract` + `Omit` so the discriminant is preserved
+ * and `statistics` / `error` stay reachable on the right branch.
+ */
+type ResourceUpdateInput =
+  | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_ready' }>, 'projectId'>
+  | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_failed' }>, 'projectId'>
+
+export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput): void {
+  // Inject projectId into the inner payload for defense-in-depth: the
+  // outer frame envelope already carries projectId for WS-level scope
+  // filtering in useEvents, but inner-payload projectId lets routeEvent
+  // and any future per-row update path validate ownership without
+  // re-reading frame state (issue #163 Step 7).
+  //
+  // Per-branch narrow on `input.action` so each spread satisfies the
+  // discriminated union without an `as ResourceUpdatePayload` cast.
+  // A blanket cast here would silently keep compiling if the schema
+  // gains a third branch with a new required field - narrowing forces
+  // every new branch to land here too.
+  const payload: ResourceUpdatePayload =
+    input.action === 'hash_list_ready' ? { ...input, projectId } : { ...input, projectId }
   // The cast widens the typed payload to AppEvent.data's
   // `Record<string, unknown>`. AppEvent.data stays unstructured because
-  // the WebSocket wire is untyped JSON anyway — subscribers re-narrow
+  // the WebSocket wire is untyped JSON anyway - subscribers re-narrow
   // via the `data.action` discriminator. Caller side stays typed via
-  // the `ResourceUpdatePayload` parameter; this cast is the producer-
+  // the `ResourceUpdateInput` parameter; this cast is the producer-
   // side erasure that matches the wire's reality. A future refactor
   // could lift the discriminator into a per-type EventDataMap, but
   // touches every emit/subscriber call site.
@@ -352,7 +382,7 @@ export function emitResourceUpdate(projectId: number, payload: ResourceUpdatePay
  * receive it.
  *
  * No throttle: system events are infrequent by design (cadence is
- * controlled by the producer — e.g. health monitor's 30s interval —
+ * controlled by the producer - e.g. health monitor's 30s interval -
  * and only fires on transitions, not every tick). Throttling here
  * would silently swallow simultaneous transitions (multiple components
  * flipping on the same tick).
@@ -365,7 +395,7 @@ export function broadcastSystemEvent(type: SystemEventType, data: Record<string,
     // (the natural pattern for project-scoped events) won't accidentally
     // match system events. Consumers that explicitly want system events
     // can match on `event.type` from the SystemEventType union, which is
-    // the documented contract — projectId is implementation detail.
+    // the documented contract - projectId is implementation detail.
     projectId: SYSTEM_EVENT_PROJECT_ID,
     data,
     timestamp: new Date().toISOString(),

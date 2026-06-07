@@ -5,12 +5,16 @@ import { cn } from '../../lib/utils'
 const BASE =
   'inline-flex items-center justify-center rounded font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50'
 
+// Variant affordance ladder. Every variant reads as a tappable control
+// at rest; hover bumps the contrast further. Ghost has no rest-state
+// background to avoid stacking against hovered table rows (the row's
+// surface-0/20 hover tint would double under the button); the border
+// alone carries its affordance.
 const VARIANTS = {
   primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-  secondary:
-    'border border-surface-0 text-muted-foreground hover:bg-surface-0/60 hover:text-foreground',
+  secondary: 'border border-surface-1 text-foreground hover:bg-surface-0/60 hover:border-surface-2',
   destructive: 'border border-destructive/30 text-destructive hover:bg-destructive/10',
-  ghost: 'text-muted-foreground hover:bg-surface-0/60 hover:text-foreground',
+  ghost: 'border border-surface-1/60 text-foreground hover:bg-surface-0/60 hover:border-surface-1',
 } as const
 
 const SIZES = {

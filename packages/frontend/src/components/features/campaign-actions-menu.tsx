@@ -153,9 +153,9 @@ export function CampaignActionsMenu({ status, onAction, disabled }: CampaignActi
         aria-expanded={open}
         disabled={disabled}
         className={cn(
-          'border-surface-0 inline-flex items-center rounded border px-2 py-1 text-xs',
-          'text-muted-foreground hover:bg-surface-0/60 hover:text-foreground transition-colors',
-          'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+          'inline-flex items-center rounded border border-surface-0 px-2 py-1 text-xs',
+          'text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground',
+          'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
           'disabled:opacity-50'
         )}
         onClick={() => setOpen((prev) => !prev)}
@@ -173,7 +173,7 @@ export function CampaignActionsMenu({ status, onAction, disabled }: CampaignActi
           aria-label="Campaign actions"
           onKeyDown={handleMenuKeyDown}
           className={cn(
-            'border-surface-0 absolute right-0 z-20 mt-1 w-40 origin-top-right rounded-md border',
+            'absolute right-0 z-20 mt-1 w-40 origin-top-right rounded-md border border-surface-0',
             'bg-mantle py-1 shadow-lg ring-1 ring-black/5'
           )}
         >
@@ -192,7 +192,7 @@ export function CampaignActionsMenu({ status, onAction, disabled }: CampaignActi
                 onClick={() => selectItem(item)}
                 className={cn(
                   'block w-full px-3 py-1.5 text-left text-xs',
-                  'hover:bg-surface-0/60 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                  'transition-colors hover:bg-surface-0/60 disabled:cursor-not-allowed disabled:opacity-40',
                   'focus:bg-surface-0/60 focus:outline-none',
                   item.destructive ? 'text-destructive hover:text-destructive' : 'text-foreground'
                 )}

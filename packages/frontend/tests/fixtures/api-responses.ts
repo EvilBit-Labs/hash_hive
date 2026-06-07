@@ -3,7 +3,12 @@
  * All factories return plain objects matching backend response shapes.
  */
 
-import type { CampaignActiveAgent, CampaignTaskStats } from '@hashhive/shared'
+import type {
+  CampaignActiveAgent,
+  CampaignTaskStats,
+  FileRef,
+  ResourceStatus,
+} from '@hashhive/shared'
 
 interface MockUser {
   id: number
@@ -361,6 +366,8 @@ interface MockHashList {
   hashTypeId: number | null
   hashCount: number
   crackedCount: number
+  status: ResourceStatus
+  fileRef: FileRef | null
   createdAt: string
 }
 
@@ -378,6 +385,8 @@ export function mockHashListsResponse(options: MockHashListsResponseOptions = {}
     hashTypeId: 1000,
     hashCount: 100 * (i + 1),
     crackedCount: 10 * (i + 1),
+    status: 'ready',
+    fileRef: null,
     createdAt: new Date().toISOString(),
     ...options.hashLists?.[i],
   }))
@@ -388,7 +397,9 @@ interface MockResource {
   id: number
   name: string
   projectId: number
-  fileRef: Record<string, unknown> | null
+  status: ResourceStatus
+  fileSize: number | null
+  fileRef: FileRef | null
   createdAt: string
 }
 
@@ -403,6 +414,8 @@ export function mockResourcesResponse(options: MockResourcesResponseOptions = {}
     id: i + 1,
     name: `Resource ${i + 1}`,
     projectId: 1,
+    status: 'ready',
+    fileSize: null,
     fileRef: null,
     createdAt: new Date().toISOString(),
     ...options.resources?.[i],

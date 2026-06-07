@@ -44,6 +44,11 @@ const envSchema = z.object({
   // BetterAuth (generate with: openssl rand -base64 32)
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.url().optional(),
+  // Comma-separated extra origins to add to BetterAuth's trustedOrigins
+  // beyond the dev defaults. Used by the Playwright E2E suite to allow
+  // the test frontend (localhost:3400) without weakening the production
+  // empty-list policy.
+  BETTER_AUTH_TRUSTED_ORIGINS: z.string().optional(),
 
   // System health monitoring (issue #109)
   HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),

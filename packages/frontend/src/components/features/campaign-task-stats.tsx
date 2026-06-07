@@ -32,10 +32,10 @@ export function CampaignTaskStats({ stats }: CampaignTaskStatsProps) {
       {TILES.map((tile) => (
         <div
           key={tile.key}
-          className="border-surface-0 bg-surface-0/40 rounded-md border p-3"
+          className="rounded-md border border-surface-0 bg-surface-0/40 p-3"
           data-testid={`task-stat-${tile.key}`}
         >
-          <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+          <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
             {tile.label}
           </p>
           <p className={cn('mt-1 font-mono text-lg font-bold tabular-nums', tile.toneClass)}>

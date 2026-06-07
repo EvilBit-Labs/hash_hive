@@ -63,7 +63,7 @@ export function ProgressBar({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={ariaLabel ?? label}
-        className={cn('bg-surface-1 w-full rounded-full', trackHeight)}
+        className={cn('w-full rounded-full bg-surface-1', trackHeight)}
       >
         <div
           className={cn('h-full rounded-full transition-all', TONE_CLASSES[tone])}
@@ -71,7 +71,7 @@ export function ProgressBar({
         />
       </div>
       {label && (
-        <p className="text-muted-foreground mt-1 font-mono text-xs tabular-nums">{label}</p>
+        <p className="mt-1 font-mono text-xs text-muted-foreground tabular-nums">{label}</p>
       )}
     </div>
   )

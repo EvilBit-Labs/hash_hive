@@ -166,19 +166,19 @@ export function AttackTemplatesPage() {
         <PermissionGuard permission={Permission.TEMPLATE_MANAGE}>
           <form
             onSubmit={handleSubmit}
-            className="border-surface-0 bg-surface-0/30 space-y-3 rounded-md border p-4"
+            className="space-y-3 rounded-md border border-surface-0 bg-surface-0/30 p-4"
           >
             <h3 className="text-sm font-medium">
               {editingTemplate ? 'Edit Template' : 'New Template'}
             </h3>
 
             <div>
-              <label htmlFor="tpl-name" className="text-muted-foreground text-xs font-medium">
+              <label htmlFor="tpl-name" className="text-xs font-medium text-muted-foreground">
                 Name
               </label>
               <Input id="tpl-name" className="mt-1.5" {...form.register('name')} />
               {form.formState.errors.name && (
-                <p className="text-destructive mt-1 text-xs">
+                <p className="mt-1 text-xs text-destructive">
                   {form.formState.errors.name.message}
                 </p>
               )}
@@ -187,20 +187,20 @@ export function AttackTemplatesPage() {
             <div>
               <label
                 htmlFor="tpl-description"
-                className="text-muted-foreground text-xs font-medium"
+                className="text-xs font-medium text-muted-foreground"
               >
                 Description
               </label>
               <textarea
                 id="tpl-description"
                 rows={2}
-                className="border-surface-0 bg-background text-foreground focus:border-primary focus:ring-primary/40 mt-1.5 w-full rounded border px-3 py-2 text-sm focus:ring-1"
+                className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
                 {...form.register('description')}
               />
             </div>
 
             <div>
-              <label htmlFor="tpl-mode" className="text-muted-foreground text-xs font-medium">
+              <label htmlFor="tpl-mode" className="text-xs font-medium text-muted-foreground">
                 Hashcat Mode
               </label>
               <Input
@@ -210,7 +210,7 @@ export function AttackTemplatesPage() {
                 {...form.register('mode', { valueAsNumber: true })}
               />
               {form.formState.errors.mode && (
-                <p className="text-destructive mt-1 text-xs">
+                <p className="mt-1 text-xs text-destructive">
                   {form.formState.errors.mode.message}
                 </p>
               )}
@@ -218,7 +218,7 @@ export function AttackTemplatesPage() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label htmlFor="tpl-wordlist" className="text-muted-foreground text-xs font-medium">
+                <label htmlFor="tpl-wordlist" className="text-xs font-medium text-muted-foreground">
                   Wordlist
                 </label>
                 <Select
@@ -237,7 +237,7 @@ export function AttackTemplatesPage() {
                 </Select>
               </div>
               <div>
-                <label htmlFor="tpl-rulelist" className="text-muted-foreground text-xs font-medium">
+                <label htmlFor="tpl-rulelist" className="text-xs font-medium text-muted-foreground">
                   Rulelist
                 </label>
                 <Select
@@ -256,7 +256,7 @@ export function AttackTemplatesPage() {
                 </Select>
               </div>
               <div>
-                <label htmlFor="tpl-masklist" className="text-muted-foreground text-xs font-medium">
+                <label htmlFor="tpl-masklist" className="text-xs font-medium text-muted-foreground">
                   Masklist
                 </label>
                 <Select
@@ -277,7 +277,7 @@ export function AttackTemplatesPage() {
             </div>
 
             <div>
-              <label htmlFor="tpl-tags" className="text-muted-foreground text-xs font-medium">
+              <label htmlFor="tpl-tags" className="text-xs font-medium text-muted-foreground">
                 Tags (comma-separated)
               </label>
               <Input
@@ -345,21 +345,21 @@ export function AttackTemplatesPage() {
             <TableBody>
               {data.templates.map((template) => (
                 <TableRow key={template.id}>
-                  <Td className="text-foreground text-sm font-medium">{template.name}</Td>
-                  <Td className="text-muted-foreground font-mono text-xs">{template.mode}</Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-sm font-medium text-foreground">{template.name}</Td>
+                  <Td className="font-mono text-xs text-muted-foreground">{template.mode}</Td>
+                  <Td className="text-xs text-muted-foreground">
                     {resolveResourceName(template.wordlistId, wordlistNames)}
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {resolveResourceName(template.rulelistId, rulelistNames)}
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {resolveResourceName(template.masklistId, masklistNames)}
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {template.tags.length > 0 ? template.tags.join(', ') : '-'}
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {new Date(template.createdAt).toLocaleDateString()}
                   </Td>
                   <Td>
@@ -367,14 +367,14 @@ export function AttackTemplatesPage() {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="text-primary hover:text-primary/80 text-xs"
+                          className="text-xs text-primary hover:text-primary/80"
                           onClick={() => openEditForm(template)}
                         >
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="text-destructive hover:text-destructive/80 text-xs"
+                          className="text-xs text-destructive hover:text-destructive/80"
                           onClick={() => handleDelete(template.id)}
                         >
                           Delete

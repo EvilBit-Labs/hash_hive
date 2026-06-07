@@ -13,6 +13,15 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-destructive/15 text-destructive border-destructive/20',
   draft: 'bg-ctp-mauve/15 text-ctp-mauve border-ctp-mauve/20',
   benchmarked: 'bg-ctp-teal/15 text-ctp-teal border-ctp-teal/20',
+  // Resource lifecycle states (issue #163). `uploading` and `uploaded`
+  // share the in-flight blue; `processing` is the parsing intermediate
+  // state for hash lists (animated dot via the `running` pulse below
+  // would be ideal but the badge already gates pulse on `status ===
+  // 'running'`; we use warning amber as a non-pulsing parsing cue).
+  uploading: 'bg-info/15 text-info border-info/20',
+  uploaded: 'bg-info/15 text-info border-info/20',
+  processing: 'bg-warning/15 text-warning border-warning/20',
+  ready: 'bg-success/15 text-success border-success/20',
 }
 
 interface StatusBadgeProps {
@@ -31,7 +40,8 @@ export function StatusBadge({ status }: StatusBadgeProps) {
       <span
         className={cn(
           'h-1.5 w-1.5 rounded-full',
-          status === 'running' && 'animate-pulse-gentle',
+          (status === 'running' || status === 'processing' || status === 'uploading') &&
+            'animate-pulse-gentle',
           // Dot inherits text color via currentColor
           'bg-current'
         )}

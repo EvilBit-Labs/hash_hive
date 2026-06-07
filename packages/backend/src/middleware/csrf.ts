@@ -32,11 +32,9 @@ import { createMiddleware } from 'hono/factory'
 
 import type { AppEnv } from '../types.js'
 
-import { env } from '../config/env.js'
+import { getTrustedHosts } from '../lib/trusted-origins.js'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-
-const DEV_TRUSTED_ORIGINS = ['http://localhost:3000']
 
 interface RequestHeaders {
   header: (k: string) => string | undefined
@@ -81,11 +79,11 @@ function isSameOriginRequest(req: RequestHeaders, opts: { strict: boolean }): bo
 
   if (host && sourceHost === host) return true
 
-  // Dev allowance: Vite dev server runs on a different port than the
-  // backend, so same-origin would always fail. Only loosen in dev.
-  if (env.NODE_ENV !== 'production' && DEV_TRUSTED_ORIGINS.includes(sourceUrl)) {
-    return true
-  }
+  // Dev/E2E allowance: Vite runs on a different port than the backend,
+  // so same-origin would always fail. Host comparison (not full URL)
+  // handles the case where the browser falls back to Referer, which
+  // can include a path. Production returns `[]` and skips this branch.
+  if (getTrustedHosts().includes(sourceHost)) return true
 
   return false
 }

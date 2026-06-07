@@ -35,8 +35,14 @@ import type {
   detectHashTypeRequestSchema,
   detectHashTypeResponseSchema,
   engineDescriptorSchema,
+  fileRefSchema,
   hashCandidateSchema,
+  hashItemsPageWireSchema,
+  hashItemWireSchema,
+  hashListDetailWireSchema,
   hashListStatisticsSchema,
+  hashListWireSchema,
+  hashTypeWireSchema,
   inlineAttackRequestSchema,
   insertAgentBenchmarkSchema,
   insertAgentErrorSchema,
@@ -60,7 +66,9 @@ import type {
   loginRequestSchema,
   meResponseSchema,
   requiredCapabilitiesSchema,
+  resourceStatusSchema,
   resourceUpdateEventDataSchema,
+  resourceWireSchema,
   selectAgentBenchmarkSchema,
   selectAgentErrorSchema,
   selectAgentSchema,
@@ -81,6 +89,7 @@ import type {
   selectUserSchema,
   selectWordListSchema,
   sessionUserSchema,
+  setHashListTypeRequestSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
   userRoleSchema,
@@ -238,6 +247,15 @@ export type CreateHashListRequest = z.infer<typeof createHashListRequestSchema>
 export type DetectHashTypeRequest = z.infer<typeof detectHashTypeRequestSchema>
 export type DetectHashTypeResponse = z.infer<typeof detectHashTypeResponseSchema>
 export type ResourceUpdateEventData = z.infer<typeof resourceUpdateEventDataSchema>
+export type FileRef = z.infer<typeof fileRefSchema>
+export type ResourceStatus = z.infer<typeof resourceStatusSchema>
+export type HashListWire = z.infer<typeof hashListWireSchema>
+export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
+export type ResourceWire = z.infer<typeof resourceWireSchema>
+export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
+export type HashItemWire = z.infer<typeof hashItemWireSchema>
+export type HashItemsPageWire = z.infer<typeof hashItemsPageWireSchema>
+export type SetHashListTypeRequest = z.infer<typeof setHashListTypeRequestSchema>
 export type AgentHeartbeat = z.infer<typeof agentHeartbeatSchema>
 export type AgentHeartbeatError = z.infer<typeof agentHeartbeatErrorSchema>
 export type AgentHeartbeatCurrentTask = z.infer<typeof agentHeartbeatCurrentTaskSchema>

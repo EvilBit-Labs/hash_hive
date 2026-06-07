@@ -3,7 +3,6 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
-import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { auth } from '../../lib/auth.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
@@ -155,37 +154,11 @@ projectRoutes.openapi(createProjectRoute, async (c) => {
 
 // ─── POST /projects/select — set session.projectId ──────────────────
 //
-// CSRF defense-in-depth: this is a cookie-authenticated, state-changing
-// endpoint. BetterAuth's session cookie is SameSite=Lax by default and
-// CORS is locked down to known origins, but we add a same-origin
-// Origin/Referer check here as belt-and-suspenders.
-
-function isSameOriginRequest(c: {
-  req: { raw: Request; header: (k: string) => string | undefined }
-}): boolean {
-  const origin = c.req.header('origin')
-  const referer = c.req.header('referer')
-  const host = c.req.header('host')
-
-  if (!origin && !referer) return true
-
-  const sourceUrl = origin ?? referer
-  if (!sourceUrl) return true
-
-  try {
-    const sourceHost = new URL(sourceUrl).host
-    if (
-      env.NODE_ENV !== 'production' &&
-      sourceHost === 'localhost:3000' &&
-      host?.startsWith('localhost')
-    ) {
-      return true
-    }
-    return sourceHost === host
-  } catch {
-    return false
-  }
-}
+// CSRF same-origin defense lives in `middleware/csrf.ts:requireSameOrigin`,
+// mounted globally on `/api/v1/dashboard/projects/*` in `src/index.ts`,
+// so every cookie-authenticated unsafe-method request through this
+// route is already filtered by the time it reaches the handler. No
+// inline same-origin check needed here.
 
 const selectProjectRoute = createRoute({
   method: 'post',
@@ -214,20 +187,6 @@ const selectProjectRoute = createRoute({
 projectRoutes.openapi(selectProjectRoute, async (c) => {
   const { userId } = c.get('currentUser')
   const requestId = c.get('requestId')
-
-  if (!isSameOriginRequest(c)) {
-    logger.warn(
-      {
-        userId,
-        requestId,
-        origin: c.req.header('origin'),
-        referer: c.req.header('referer'),
-        host: c.req.header('host'),
-      },
-      'projects/select: cross-origin request rejected'
-    )
-    return dashboardError(c, 403, 'CSRF_ORIGIN_MISMATCH', 'Cross-origin request rejected')
-  }
 
   const { projectId } = c.req.valid('json')
 

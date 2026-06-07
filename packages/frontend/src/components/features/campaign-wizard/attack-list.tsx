@@ -25,20 +25,20 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
         <div
           // oxlint-disable-next-line react/no-array-index-key -- attacks have no stable ID before creation
           key={i}
-          className="border-surface-0 bg-surface-0/30 flex items-center justify-between rounded-md border p-3"
+          className="flex items-center justify-between rounded-md border border-surface-0 bg-surface-0/30 p-3"
         >
           <div className="text-xs">
             <span className="font-mono font-medium">
               #{i} {attackModeLabel(attack.mode)}
             </span>
             {attack.wordlistId && (
-              <span className="text-muted-foreground ml-2">Wordlist #{attack.wordlistId}</span>
+              <span className="ml-2 text-muted-foreground">Wordlist #{attack.wordlistId}</span>
             )}
             {attack.rulelistId && (
-              <span className="text-muted-foreground ml-2">Rulelist #{attack.rulelistId}</span>
+              <span className="ml-2 text-muted-foreground">Rulelist #{attack.rulelistId}</span>
             )}
             {attack.dependencies.length > 0 && (
-              <span className="text-muted-foreground ml-2">
+              <span className="ml-2 text-muted-foreground">
                 Deps: [{attack.dependencies.join(', ')}]
               </span>
             )}
@@ -48,7 +48,7 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
               type="button"
               onClick={() => onEdit(i)}
               className={cn(
-                'hover:text-foreground text-xs',
+                'text-xs hover:text-foreground',
                 editingIndex === i ? 'text-primary' : 'text-muted-foreground'
               )}
             >
@@ -57,7 +57,7 @@ export function AttackList({ attacks, editingIndex, onEdit, onRemove }: AttackLi
             <button
               type="button"
               onClick={() => onRemove(i)}
-              className="text-destructive hover:text-destructive/80 text-xs"
+              className="text-xs text-destructive hover:text-destructive/80"
             >
               Remove
             </button>
