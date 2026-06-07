@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 
 import {
   useDetectHashTypeBatch,
@@ -6,6 +6,7 @@ import {
   useHashTypes,
   useSetHashListType,
 } from '../../hooks/use-resources'
+import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { EmptyState } from '../ui/empty-state'
 import { ErrorBanner } from '../ui/error-banner'
@@ -13,6 +14,20 @@ import { Select } from '../ui/select'
 
 const MIN_SAMPLES = 5
 const MAX_SAMPLES = 10
+
+// Operator-facing keyboard hints. ⌘ on macOS, Ctrl elsewhere, evaluated
+// once at module load. SSR-safe via the typeof guard; defaults to the
+// non-Mac form so the first paint never claims a key the user doesn't
+// have. Matches the brand context's principle #4 ("Keyboard is a
+// first-class peer of mouse").
+const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)
+const SUBMIT_KEY_HINT = isMac ? '⌘ ⏎' : 'Ctrl ⏎'
+
+// Same shape as the dashboard's KBD_BASE_CLASS (dashboard.tsx:20) so
+// the kbd chip reads consistently across the app — small mono pill on
+// surface-0 with a subtle border.
+const KBD_CHIP =
+  'border-surface-1 bg-surface-0/80 text-foreground/85 ml-2 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border px-1 font-mono text-[10px] font-medium leading-none'
 
 interface HashTypeDetectModalProps {
   open: boolean
@@ -168,6 +183,27 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
     onClose()
   }
 
+  // Esc-to-close. The brand promises keyboard is a first-class peer of
+  // mouse and the surfaced "Esc" hint on the Close button has to be
+  // honored — this isn't a native <dialog>, so we wire the handler
+  // here. Skipped when an apply mutation is in flight so the operator
+  // can't accidentally orphan a pending PATCH.
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && !inFlight) {
+        e.preventDefault()
+        handleClose()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+    // handleClose is defined inline above; tracking `open` and
+    // `inFlight` is enough — the closure re-binds on each render
+    // anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, inFlight])
+
   if (!open) return null
 
   const availableLists = hashLists.data?.hashLists ?? []
@@ -213,7 +249,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
               disabled={detect.isPending || setType.isPending}
               className="min-w-[14rem]"
             >
-              <option value="">- Detect only (read-only) -</option>
+              <option value="">Pick a list to apply...</option>
               {availableLists.map((hl) => (
                 <option key={hl.id} value={hl.id}>
                   {hl.name}
@@ -296,9 +332,20 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
         <footer className="border-surface-0/60 mt-6 flex justify-end gap-2 border-t pt-5">
           <Button variant="secondary" onClick={handleClose} disabled={inFlight}>
             Close
+            <kbd className={KBD_CHIP} aria-hidden="true">
+              Esc
+            </kbd>
           </Button>
           <Button onClick={handleDetect} disabled={!inRange || inFlight}>
             {detect.isPending ? 'Detecting...' : 'Detect'}
+            <kbd
+              // Stays dim when the button itself is disabled so the kbd
+              // chip doesn't look freshly clickable on an inert button.
+              className={cn(KBD_CHIP, (!inRange || inFlight) && 'opacity-50')}
+              aria-hidden="true"
+            >
+              {SUBMIT_KEY_HINT}
+            </kbd>
           </Button>
         </footer>
       </div>
@@ -332,8 +379,8 @@ function applyDisabledReason(
   selectedListId: number | null,
   hashTypesReady: boolean
 ): string | undefined {
-  if (selectedListId === null) return 'Pick a hash list in the header to apply'
-  if (!hashTypesReady) return 'Loading hash type registry...'
+  if (selectedListId === null) return 'Pick a hash list above to enable'
+  if (!hashTypesReady) return 'Loading hash types...'
   return undefined
 }
 
