@@ -3,6 +3,13 @@ import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { defineConfig } from 'vite'
 
+// Port + proxy target both read from env so the same config drives
+// regular `just dev` (3000 → 4000) AND the Playwright E2E suite, which
+// runs on a distinct port lane (3400 → 4400) so it can coexist with a
+// running dev backend instead of silently colliding on 4000.
+const DEV_FRONTEND_PORT = Number(process.env['PORT'] ?? 3000)
+const DEV_BACKEND_PROXY_TARGET = process.env['VITE_API_PROXY_TARGET'] ?? 'http://localhost:4000'
+
 export default defineConfig({
   plugins: [tailwindcss(), react()],
   resolve: {
@@ -11,10 +18,10 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: DEV_FRONTEND_PORT,
     proxy: {
       '/api': {
-        target: 'http://localhost:4000',
+        target: DEV_BACKEND_PROXY_TARGET,
         changeOrigin: true,
         ws: true,
       },

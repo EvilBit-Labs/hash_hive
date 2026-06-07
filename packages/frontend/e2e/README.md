@@ -48,8 +48,8 @@ When using docker compose mode:
 3. Creates the `hashhive` S3 bucket in MinIO
 4. Runs Drizzle migrations against `postgresql://hashhive:hashhive@localhost:5432/hashhive`
 5. Seeds test data (user + project + membership)
-6. Starts the backend Hono server on port 4000
-7. Vite dev server starts via Playwright's `webServer` config on port 3000
+6. Starts the backend Hono server on port 4400 (overridable via `E2E_BACKEND_PORT`)
+7. Vite dev server starts via Playwright's `webServer` config on port 3400 (overridable via `E2E_FRONTEND_PORT`) with `VITE_API_PROXY_TARGET` pointing at the backend so it doesn't collide with the dev pair on 3000/4000
 
 Teardown runs `docker compose down -v` to stop services and remove volumes.
 
@@ -88,8 +88,7 @@ The E2E suite uses Playwright's `globalSetup` / `globalTeardown` hooks to manage
 ## Troubleshooting
 
 - **Docker not running**: Both modes require a running Docker daemon
-- **Port 4000 in use**: Stop any running backend dev server before running E2E tests
-- **Port 3000 in use**: Stop any running frontend dev server, or set `reuseExistingServer: true`
+- **Port 4400 / 3400 in use**: The E2E lane is distinct from the dev pair on 4000/3000 so `just dev` and `just test-e2e` can run side by side. If something else is on 4400 or 3400, override with `E2E_BACKEND_PORT=4401 E2E_FRONTEND_PORT=3401 bun run test:e2e`.
 - **Container startup slow**: First run pulls Docker images; subsequent runs use cached images
 - **Migrations fail**: Ensure `@hashhive/shared` is built (`bun run build` from root)
 - **MinIO bucket errors**: The setup automatically creates the `hashhive` bucket; if it already exists, it is reused

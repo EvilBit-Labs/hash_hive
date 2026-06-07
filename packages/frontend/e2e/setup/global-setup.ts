@@ -17,6 +17,15 @@ const S3_SECRET_KEY = 'minioadmin'
 const BETTER_AUTH_SECRET = 'e2e-test-betterauth-secret-must-be-at-least-32-characters'
 const BACKEND_CWD = resolve(__dirname, '../../../backend')
 
+// E2E backend listens on a port distinct from the dev backend (4000) so
+// the suite can run alongside `just dev` without colliding. Kept in
+// sync with `E2E_BACKEND_PORT` in playwright.config.ts — both default
+// to 4400, both honor the env var override.
+const E2E_BACKEND_PORT = process.env['E2E_BACKEND_PORT'] ?? '4400'
+const E2E_BACKEND_URL = `http://localhost:${E2E_BACKEND_PORT}`
+const E2E_FRONTEND_PORT = process.env['E2E_FRONTEND_PORT'] ?? '3400'
+const E2E_FRONTEND_URL = `http://localhost:${E2E_FRONTEND_PORT}`
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -94,7 +103,11 @@ function buildBackendEnv(databaseUrl: string, redisUrl: string, s3Endpoint: stri
     S3_SECRET_KEY: S3_SECRET_KEY,
     S3_BUCKET: S3_BUCKET,
     BETTER_AUTH_SECRET: BETTER_AUTH_SECRET,
-    BETTER_AUTH_URL: 'http://localhost:4000',
+    BETTER_AUTH_URL: E2E_BACKEND_URL,
+    // Authorize the E2E frontend's origin so BetterAuth's same-origin
+    // check accepts /api/auth/* and /projects/select from localhost:3400
+    // (or whatever E2E_FRONTEND_PORT is set to).
+    BETTER_AUTH_TRUSTED_ORIGINS: E2E_FRONTEND_URL,
   }
 }
 
@@ -133,7 +146,7 @@ function startBackend(databaseUrl: string, redisUrl: string, s3Endpoint: string)
     cwd: BACKEND_CWD,
     env: {
       ...buildBackendEnv(databaseUrl, redisUrl, s3Endpoint),
-      PORT: '4000',
+      PORT: E2E_BACKEND_PORT,
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       LOG_PRETTY: 'false',
@@ -216,7 +229,7 @@ async function setupWithDockerCompose(composeFile: string): Promise<DockerCompos
   // Start backend
   console.log('[E2E] Starting backend server...')
   const backendProcess = startBackend(databaseUrl, redisUrl, s3Endpoint)
-  await waitForServer('http://localhost:4000/health')
+  await waitForServer(`${E2E_BACKEND_URL}/health`)
   console.log('[E2E] Backend server ready')
 
   return { mode: 'docker-compose', composeFile, backendProcess }
@@ -276,7 +289,7 @@ async function setupWithTestcontainers(): Promise<TestContainersState> {
   // Start backend
   console.log('[E2E] Starting backend server...')
   const backendProcess = startBackend(databaseUrl, redisUrl, s3Endpoint)
-  await waitForServer('http://localhost:4000/health')
+  await waitForServer(`${E2E_BACKEND_URL}/health`)
   console.log('[E2E] Backend server ready')
 
   return { mode: 'testcontainers', pgContainer, redisContainer, minioContainer, backendProcess }
@@ -295,7 +308,7 @@ async function globalSetup(_config: FullConfig): Promise<void> {
   globalThis.__e2eState = state
 
   // Set env vars for Playwright tests (used by webServer proxy)
-  process.env['E2E_BACKEND_URL'] = 'http://localhost:4000'
+  process.env['E2E_BACKEND_URL'] = E2E_BACKEND_URL
 }
 
 export default globalSetup

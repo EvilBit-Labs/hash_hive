@@ -160,6 +160,24 @@ projectRoutes.openapi(createProjectRoute, async (c) => {
 // CORS is locked down to known origins, but we add a same-origin
 // Origin/Referer check here as belt-and-suspenders.
 
+// Extra dev-mode origin allowlist from BETTER_AUTH_TRUSTED_ORIGINS
+// (comma-separated). Mirrors the lists in middleware/csrf.ts and
+// lib/auth.ts so the Playwright E2E suite (localhost:3400 by default)
+// can pass this check without weakening prod, which keeps the list
+// empty.
+const DEV_EXTRA_TRUSTED_HOSTS = (env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter((o) => o.length > 0)
+  .map((o) => {
+    try {
+      return new URL(o).host
+    } catch {
+      return ''
+    }
+  })
+  .filter((h) => h.length > 0)
+
 function isSameOriginRequest(c: {
   req: { raw: Request; header: (k: string) => string | undefined }
 }): boolean {
@@ -174,12 +192,9 @@ function isSameOriginRequest(c: {
 
   try {
     const sourceHost = new URL(sourceUrl).host
-    if (
-      env.NODE_ENV !== 'production' &&
-      sourceHost === 'localhost:3000' &&
-      host?.startsWith('localhost')
-    ) {
-      return true
+    if (env.NODE_ENV !== 'production' && host?.startsWith('localhost')) {
+      if (sourceHost === 'localhost:3000') return true
+      if (DEV_EXTRA_TRUSTED_HOSTS.includes(sourceHost)) return true
     }
     return sourceHost === host
   } catch {

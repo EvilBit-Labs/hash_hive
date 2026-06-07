@@ -36,7 +36,18 @@ import { env } from '../config/env.js'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const DEV_TRUSTED_ORIGINS = ['http://localhost:3000']
+// Dev-mode origin allowlist. Localhost:3000 is the canonical `just dev`
+// frontend; extras come from BETTER_AUTH_TRUSTED_ORIGINS so the
+// Playwright E2E suite (localhost:3400 by default) can pass the
+// same-origin check without weakening prod, which always sets an
+// empty list.
+const DEV_TRUSTED_ORIGINS = [
+  'http://localhost:3000',
+  ...(env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0),
+]
 
 interface RequestHeaders {
   header: (k: string) => string | undefined

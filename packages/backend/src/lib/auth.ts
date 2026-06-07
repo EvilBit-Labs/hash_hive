@@ -192,6 +192,18 @@ export const auth = betterAuth({
   },
 
   // In production (air-gapped Docker Compose), frontend and backend are same-origin
-  // behind a reverse proxy, so no cross-origin allowance is needed. In dev, allow localhost.
-  trustedOrigins: env.NODE_ENV === 'production' ? [] : ['http://localhost:3000'],
+  // behind a reverse proxy, so no cross-origin allowance is needed. In dev, allow
+  // localhost:3000 and any extras populated via `BETTER_AUTH_TRUSTED_ORIGINS`
+  // (comma-separated) — the Playwright E2E suite uses this to authorize its
+  // frontend on localhost:3400 without weakening the production policy.
+  trustedOrigins:
+    env.NODE_ENV === 'production'
+      ? []
+      : [
+          'http://localhost:3000',
+          ...(env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
+            .split(',')
+            .map((o) => o.trim())
+            .filter((o) => o.length > 0),
+        ],
 })
