@@ -3,6 +3,7 @@ import type { FullConfig } from '@playwright/test'
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -50,6 +51,37 @@ type E2EGlobalState = TestContainersState | DockerComposeState
 declare global {
   // oxlint-disable-next-line no-var -- required for Playwright global state
   var __e2eState: E2EGlobalState | undefined
+}
+
+/**
+ * Pre-flight port-ownership probe. Attempts to bind a throwaway listener
+ * on the given port and immediately closes. Throws if the port is
+ * already taken — this is the failure the prior PORT=4000 bug hid:
+ * `spawn` doesn't fail synchronously on EADDRINUSE, and `waitForServer`
+ * sees ANY 2xx at /health (including a squatter's). Failing loud here
+ * is the only way to keep the suite from authenticating against the
+ * wrong backend.
+ */
+function assertPortFree(port: number, label: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `${label} port ${port} is already in use. Stop the conflicting process, ` +
+              `or override with E2E_BACKEND_PORT / E2E_FRONTEND_PORT.`
+          )
+        )
+      } else {
+        reject(err)
+      }
+    })
+    server.once('listening', () => {
+      server.close((closeErr) => (closeErr ? reject(closeErr) : resolve()))
+    })
+    server.listen(port, '127.0.0.1')
+  })
 }
 
 async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
@@ -142,7 +174,7 @@ function runAuthMigration(databaseUrl: string, redisUrl: string, s3Endpoint: str
 }
 
 function startBackend(databaseUrl: string, redisUrl: string, s3Endpoint: string): ChildProcess {
-  return spawn('bun', ['run', 'src/index.ts'], {
+  const proc = spawn('bun', ['run', 'src/index.ts'], {
     cwd: BACKEND_CWD,
     env: {
       ...buildBackendEnv(databaseUrl, redisUrl, s3Endpoint),
@@ -153,6 +185,25 @@ function startBackend(databaseUrl: string, redisUrl: string, s3Endpoint: string)
     },
     stdio: 'inherit',
   })
+  // Make startup failure loud. Without these listeners, a backend that
+  // exits during the waitForServer window (e.g., EADDRINUSE losing a
+  // race to a squatter) leaves waitForServer polling a different
+  // process's /health and silently authenticating the suite against
+  // the wrong DB. assertPortFree above is the primary guard; these
+  // handlers cover the case where something binds the port between
+  // the probe and the spawn.
+  proc.on('error', (err) => {
+    throw new Error(`[E2E] backend spawn failed: ${err.message}`)
+  })
+  proc.on('exit', (code, signal) => {
+    // Code 0 only happens at orderly teardown (signal SIGTERM/SIGINT
+    // from globalTeardown). A non-zero / non-signal exit during the
+    // run is a startup failure we want to surface immediately.
+    if (code !== null && code !== 0) {
+      throw new Error(`[E2E] backend exited unexpectedly: code=${code} signal=${signal ?? 'null'}`)
+    }
+  })
+  return proc
 }
 
 async function waitForDockerComposeReady(composeFile: string): Promise<void> {
@@ -226,8 +277,10 @@ async function setupWithDockerCompose(composeFile: string): Promise<DockerCompos
   // Migrate user credentials to BetterAuth ba_accounts table
   runAuthMigration(databaseUrl, redisUrl, s3Endpoint)
 
-  // Start backend
+  // Start backend (assert port is free first so a squatting process
+  // can't silently hand us the wrong /health response)
   console.log('[E2E] Starting backend server...')
+  await assertPortFree(Number(E2E_BACKEND_PORT), 'E2E backend')
   const backendProcess = startBackend(databaseUrl, redisUrl, s3Endpoint)
   await waitForServer(`${E2E_BACKEND_URL}/health`)
   console.log('[E2E] Backend server ready')
@@ -286,8 +339,10 @@ async function setupWithTestcontainers(): Promise<TestContainersState> {
   // Migrate user credentials to BetterAuth ba_accounts table
   runAuthMigration(databaseUrl, redisUrl, s3Endpoint)
 
-  // Start backend
+  // Start backend (assert port is free first so a squatting process
+  // can't silently hand us the wrong /health response)
   console.log('[E2E] Starting backend server...')
+  await assertPortFree(Number(E2E_BACKEND_PORT), 'E2E backend')
   const backendProcess = startBackend(databaseUrl, redisUrl, s3Endpoint)
   await waitForServer(`${E2E_BACKEND_URL}/health`)
   console.log('[E2E] Backend server ready')

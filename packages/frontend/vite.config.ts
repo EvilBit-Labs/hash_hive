@@ -7,7 +7,16 @@ import { defineConfig } from 'vite'
 // regular `just dev` (3000 → 4000) AND the Playwright E2E suite, which
 // runs on a distinct port lane (3400 → 4400) so it can coexist with a
 // running dev backend instead of silently colliding on 4000.
-const DEV_FRONTEND_PORT = Number(process.env['PORT'] ?? 3000)
+function parsePort(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw === '') return fallback
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`${name} must be an integer in [1, 65535]; got ${JSON.stringify(raw)}`)
+  }
+  return n
+}
+
+const DEV_FRONTEND_PORT = parsePort(process.env['PORT'], 3000, 'PORT')
 const DEV_BACKEND_PROXY_TARGET = process.env['VITE_API_PROXY_TARGET'] ?? 'http://localhost:4000'
 
 export default defineConfig({
