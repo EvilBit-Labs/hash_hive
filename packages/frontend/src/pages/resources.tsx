@@ -196,11 +196,13 @@ export function ResourcesPage() {
       {deleteTarget !== null && (
         <ResourceDeleteDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
       )}
-      <HashTypeDetectModal
-        open={detectOpen}
-        onClose={() => setDetectOpen(false)}
-        onApplied={handleApplied}
-      />
+      {/* Lazy-mount: the detect modal pulls /hash-lists and /hash-types
+          via React Query the moment it's rendered. Mounting only when
+          the operator clicks "Detect Hash Type" defers those fetches
+          until they're actually needed. */}
+      {detectOpen && (
+        <HashTypeDetectModal open onClose={() => setDetectOpen(false)} onApplied={handleApplied} />
+      )}
     </div>
   )
 }
@@ -363,7 +365,7 @@ function HashListsTab({
                     {hashTypeName !== null ? (
                       <span className="text-foreground">{hashTypeName}</span>
                     ) : (
-                      <span className="text-overlay1">—</span>
+                      <span className="text-overlay1">-</span>
                     )}
                   </Td>
                   <Td className="font-mono text-xs text-muted-foreground tabular-nums">

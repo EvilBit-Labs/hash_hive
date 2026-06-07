@@ -1,8 +1,8 @@
 /**
- * Control API hash-list endpoints. Read-only at this layer - authoring
- * hash lists is a dashboard interactive flow (file upload via presigned
- * URL, hash-type detection on parse). Automation can list and inspect
- * existing lists.
+ * Control API hash-list endpoints. Authoring (file upload, hash-type
+ * detection on parse) is a dashboard interactive flow; automation here
+ * can list, inspect, and update the hash type on existing lists via
+ * `PATCH /{id}` (agent-native parity with the dashboard surface).
  */
 
 import {

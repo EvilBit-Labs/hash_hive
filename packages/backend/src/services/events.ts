@@ -343,7 +343,7 @@ type ResourceUpdateInput =
   | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_ready' }>, 'projectId'>
   | Omit<Extract<ResourceUpdatePayload, { action: 'hash_list_failed' }>, 'projectId'>
 
-export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput) {
+export function emitResourceUpdate(projectId: number, input: ResourceUpdateInput): void {
   // Inject projectId into the inner payload for defense-in-depth: the
   // outer frame envelope already carries projectId for WS-level scope
   // filtering in useEvents, but inner-payload projectId lets routeEvent

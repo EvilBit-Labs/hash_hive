@@ -98,12 +98,21 @@ export function useCreateHashList() {
 
 type ResourceType = 'hash-lists' | 'wordlists' | 'rulelists' | 'masklists'
 
+// Create-response shape: `hash-lists` returns a HashList-shaped row
+// (no `fileSize`), generic resources return a Resource row. The
+// frontend caller only reads `item.id`, but the union is exposed so
+// future callers narrowing on `type` get the right field set.
+type CreatedResource = HashList | Resource
+
 export function useCreateResource(type: ResourceType) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (data: { name: string }): Promise<{ item: Resource }> => {
-      const raw = await api.post<Record<string, Resource>>(`/dashboard/resources/${type}`, data)
+    mutationFn: async (data: { name: string }): Promise<{ item: CreatedResource }> => {
+      const raw = await api.post<Record<string, CreatedResource>>(
+        `/dashboard/resources/${type}`,
+        data
+      )
       // Hash lists return { hashList }, generic resources return { item }
       const item = raw['item'] ?? raw['hashList']
       if (!item) throw new Error('Unexpected response shape from create resource')
@@ -155,13 +164,13 @@ export function useHashListItems(
   })
 }
 
-// Upload timeout for the direct (<100 MB) path. fetch has no built-in
-// upload timeout and the modal's Cancel button is disabled while the
-// request is pending, so a hung backend or proxy would wedge the UI
-// indefinitely without this guard. 5 minutes is the soft cap - a
-// 100 MB upload on a 1 Mbps link is ~13 minutes worst-case, so this
-// is below that floor; chunked path covers anything that legitimately
-// takes longer.
+// Upload timeout for the direct path. fetch has no built-in upload
+// timeout, so a hung backend or proxy would wedge the request
+// indefinitely without this guard. The direct path is capped at the
+// backend's MAX_DIRECT_UPLOAD_BYTES (10 MB), and 5 minutes is well
+// above the worst-case time to push 10 MB over a 1 Mbps link; the
+// modal's Cancel button also aborts via AbortController, so this is
+// a backstop for the no-user-interaction case.
 const DIRECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000
 
 export function useUploadResourceFile(type: ResourceType) {

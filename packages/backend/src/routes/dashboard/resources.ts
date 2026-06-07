@@ -1,9 +1,9 @@
 import {
   createHashListRequestSchema,
   detectHashTypeRequestSchema,
+  hashListWireSchema,
   maskLists,
   ruleLists,
-  selectHashListSchema,
   setHashListTypeRequestSchema,
   wordLists,
 } from '@hashhive/shared'
@@ -442,7 +442,7 @@ const setHashListTypeRoute = createRoute({
       description: 'Updated hash list',
       content: {
         'application/json': {
-          schema: z.object({ hashList: selectHashListSchema }),
+          schema: z.object({ hashList: hashListWireSchema }),
         },
       },
     },
@@ -468,7 +468,20 @@ resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
     if (!updated) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
-    return c.json({ hashList: updated }, 200)
+    // Project the DB row into the wire shape so the response matches
+    // the OpenAPI declaration (hashListWireSchema) the frontend types
+    // off of. DB-only fields (source, statistics, updatedAt) stay
+    // server-side.
+    const wire = hashListWireSchema.parse({
+      id: updated.id,
+      name: updated.name,
+      projectId: updated.projectId,
+      hashTypeId: updated.hashTypeId,
+      status: updated.status,
+      fileRef: updated.fileRef ?? null,
+      createdAt: updated.createdAt.toISOString(),
+    })
+    return c.json({ hashList: wire }, 200)
   } catch (err) {
     // FK violation on hash_type_id → unknown hash type. Map to 400
     // rather than letting it bubble as a 500 - the client supplied a

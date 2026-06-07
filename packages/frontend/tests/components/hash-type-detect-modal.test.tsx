@@ -219,7 +219,7 @@ describe('HashTypeDetectModal', () => {
     })
   })
 
-  it('fires onApplied with the hash list id and surfaces ✓ Applied before close', async () => {
+  it('fires onApplied with the hash list id and surfaces Applied before close', async () => {
     fetchMock = setupBaseMocks({
       '/dashboard/resources/detect-hash-type': {
         status: 200,
@@ -258,11 +258,11 @@ describe('HashTypeDetectModal', () => {
     })
     fireEvent.click(useButton)
 
-    // After success, the button transiently reads "✓ Applied" while
+    // After success, the button transiently reads "Applied" while
     // the modal holds the acknowledgment. onApplied carries the picked
     // hash list id (7) so the page can pulse the matching row.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '✓ Applied' })).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Applied' })).toBeDefined()
     })
     expect(onApplied).toHaveBeenCalledWith(7)
   })
@@ -298,11 +298,11 @@ describe('HashTypeDetectModal', () => {
     await waitFor(() => expect(useButton.disabled).toBe(false))
     fireEvent.click(useButton)
 
-    // Once the verdict shows "✓ Applied", the button must be disabled
+    // Once the verdict shows "Applied", the button must be disabled
     // so a rapid second click can't fire a duplicate PATCH while the
     // Motion-driven hold runs and the modal closes.
     const ackButton = await waitFor(
-      () => screen.getByRole('button', { name: '✓ Applied' }) as HTMLButtonElement
+      () => screen.getByRole('button', { name: 'Applied' }) as HTMLButtonElement
     )
     expect(ackButton.disabled).toBe(true)
 

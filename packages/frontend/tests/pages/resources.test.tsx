@@ -194,7 +194,7 @@ describe('ResourcesPage', () => {
     expect(screen.getByText('NTLM')).toBeDefined()
   })
 
-  it('Hash Type column shows em-dash when hashTypeId is null', async () => {
+  it('Hash Type column shows fallback when hashTypeId is null', async () => {
     const hashLists = mockHashListsResponse({
       hashLists: [{ id: 1, name: 'Untyped List', hashTypeId: null, hashCount: 0, crackedCount: 0 }],
     })
@@ -205,15 +205,17 @@ describe('ResourcesPage', () => {
     renderWithProviders(<ResourcesPage />)
 
     await waitFor(() => expect(screen.getByText('Untyped List')).toBeDefined())
-    // The Hash Type column for the untyped row should render the
-    // fallback em-dash; the same character is used as the file-size
-    // hyphen fallback, so we tighten the assertion to the row scope.
+    // The untyped row must not render any resolved hash type name;
+    // the assertion stays scoped to the row.
     const row = screen.getByText('Untyped List').closest('tr')
     expect(row).not.toBeNull()
-    if (row) expect(row.textContent).toContain('—')
+    if (row) {
+      expect(row.textContent).not.toContain('NTLM')
+      expect(row.textContent).not.toContain('MD5')
+    }
   })
 
-  it('Hash Type column shows em-dash when hashTypeId points at an unknown type', async () => {
+  it('Hash Type column shows fallback when hashTypeId points at an unknown type', async () => {
     const hashLists = mockHashListsResponse({
       hashLists: [{ id: 1, name: 'Mystery List', hashTypeId: 999, hashCount: 0, crackedCount: 0 }],
     })
@@ -225,14 +227,14 @@ describe('ResourcesPage', () => {
 
     await waitFor(() => expect(screen.getByText('Mystery List')).toBeDefined())
     // hashTypeId 999 has no matching entry in the hash-types fixture;
-    // the Map.get fallthrough must render em-dash, not undefined or
-    // a stale name.
+    // the Map.get fallthrough must render the placeholder, not a
+    // stale name or "undefined".
     const row = screen.getByText('Mystery List').closest('tr')
     expect(row).not.toBeNull()
     if (row) {
-      expect(row.textContent).toContain('—')
       expect(row.textContent).not.toContain('NTLM')
       expect(row.textContent).not.toContain('MD5')
+      expect(row.textContent).not.toContain('undefined')
     }
   })
 

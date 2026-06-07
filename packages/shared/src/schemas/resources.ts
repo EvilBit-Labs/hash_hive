@@ -134,23 +134,29 @@ export const resourceStatusSchema = z.enum([
  * `uploadHashListFile` / `uploadResourceFile`, mirrored here so the
  * frontend can narrow the row's `fileRef` without `as` casts.
  *
- * `bucket` is the S3 (or compat) bucket name at upload time -
- * preserved in the row so a future bucket migration doesn't break old
- * download URL generation. `key` is the S3 object key, `size` is the
- * byte count (also surfaced at top-level `fileSize` for generic
- * resources), `name` is the operator-supplied filename for display
- * only (the key is the canonical storage path), and `uploadedAt` is
- * the ISO timestamp at upload completion.
+ * The column has three observable states:
+ *   1. `{}` (the DB column default) before any upload starts.
+ *   2. `{ bucket, key, contentType }` after `initiateChunkedUpload`
+ *      but before the upload completes (in-progress).
+ *   3. The full set including `size`, `name`, `uploadedAt` after
+ *      upload completion.
+ *
+ * `bucket` is the S3 (or compat) bucket name at upload time so a
+ * future bucket migration doesn't break old download URL generation.
+ * `key` is the S3 object key. `size` is the byte count (also surfaced
+ * at top-level `fileSize` for generic resources). `name` is the
+ * operator-supplied filename for display only. `uploadedAt` is the
+ * ISO timestamp at completion.
  */
 export const fileRefSchema = z
   .object({
-    bucket: z.string().min(1),
-    key: z.string().min(1),
-    contentType: z.string(),
-    size: z.number().int().nonnegative(),
-    name: z.string(),
+    bucket: z.string().min(1).optional(),
+    key: z.string().min(1).optional(),
+    contentType: z.string().optional(),
+    size: z.number().int().nonnegative().optional(),
+    name: z.string().optional(),
     // ISO 8601 datetime - matches `hashListStatisticsSchema.lastUpdated`.
-    uploadedAt: z.string().datetime(),
+    uploadedAt: z.string().datetime().optional(),
   })
   .openapi('FileRef')
 
@@ -194,10 +200,11 @@ export const hashTypeWireSchema = z
 
 /**
  * Wire shape of a hash list row returned from
- * `GET /dashboard/resources/hash-lists`. `hashCount` and
- * `crackedCount` are projected by the backend join with `hash_items`
- * aggregates; they are omitted by listings that do not aggregate
- * (the consumer should default-zero them).
+ * `GET /dashboard/resources/hash-lists`. The current `listHashLists`
+ * service selects directly from `hash_lists` with no `hash_items`
+ * join, so `hashCount` and `crackedCount` are not projected today;
+ * the fields remain optional so a future aggregating sweep can
+ * surface them without an API break. Consumers default-zero them.
  */
 export const hashListWireSchema = z
   .object({

@@ -20,12 +20,12 @@ const MAX_SAMPLES = 10
 // to the non-Mac form so the first paint never claims a key the user
 // doesn't have.
 const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)
-const SUBMIT_KEY_HINT = isMac ? '⌘ ⏎' : 'Ctrl ⏎'
+const SUBMIT_KEY_HINT = isMac ? 'Cmd+Enter' : 'Ctrl+Enter'
 
 // Mirrors the dashboard's KBD_BASE_CLASS so kbd chips read consistently
 // across the app.
 const KBD_CHIP =
-  'border-surface-1 bg-surface-0/80 text-foreground/85 ml-2 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border px-1 font-mono text-[10px] font-medium leading-none'
+  'border-surface-1 bg-surface-0/80 text-foreground/85 ml-2 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border px-1 font-mono text-[0.625rem] font-medium leading-none'
 
 interface HashTypeDetectModalProps {
   open: boolean
@@ -281,7 +281,7 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
                 setSelectedListId(e.target.value === '' ? null : Number(e.target.value))
               }
               disabled={detect.isPending || setType.isPending}
-              className="min-w-[14rem]"
+              className="min-w-56"
             >
               <option value="">Pick a list to apply...</option>
               {availableLists.map((hl) => (
@@ -436,7 +436,7 @@ function Verdict({
   const otherApplying = pendingApplyMode !== null && !isApplying
   const reason = applyDisabledReason(selectedListId, hashTypesReady)
   // Disable during the post-apply acknowledgment window so the operator
-  // can't re-click the button after it shows ✓ Applied. The modal is
+  // can't re-click the button after it reads "Applied". The modal is
   // about to close anyway.
   const disabled = reason !== undefined || setTypePending || otherApplying || isApplied
 
@@ -458,7 +458,7 @@ function Verdict({
         <div className="min-w-0">
           <h5 className="text-4xl font-medium tracking-tight text-foreground">{candidate.name}</h5>
           <p className="mt-2 font-mono text-xs text-muted-foreground">
-            Mode {candidate.hashcatMode} · {candidate.category}
+            Mode {candidate.hashcatMode} - {candidate.category}
           </p>
         </div>
         <div className="shrink-0 text-right">
@@ -493,7 +493,7 @@ function Verdict({
           title={reason}
           aria-live="polite"
         >
-          {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
+          {isApplied ? 'Applied' : isApplying ? 'Applying...' : 'Use This Type'}
         </Button>
       </div>
     </motion.article>
@@ -577,7 +577,7 @@ function RunnersUp({
                 className="shrink-0"
                 aria-live="polite"
               >
-                {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
+                {isApplied ? 'Applied' : isApplying ? 'Applying...' : 'Use This Type'}
               </Button>
             </motion.li>
           )

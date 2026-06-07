@@ -1,6 +1,6 @@
 import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useChunkedUpload } from '../../hooks/use-chunked-upload'
 import {
@@ -22,7 +22,12 @@ const TYPE_LABELS: Record<ResourceType, string> = {
   masklists: 'Masklist',
 }
 
-const CHUNKED_UPLOAD_THRESHOLD = 100 * 1024 * 1024 // 100 MB
+// Must match the backend's MAX_DIRECT_UPLOAD_BYTES in
+// packages/backend/src/services/resources.ts. Files over this size
+// take the chunked path; files at or under it take the direct
+// create-then-upload path. Drifting above the backend cap would 413
+// every file in the gap and bounce them through the rollback flow.
+const CHUNKED_UPLOAD_THRESHOLD = 10 * 1024 * 1024 // 10 MB
 
 interface ResourceUploadModalProps {
   type: ResourceType
@@ -37,11 +42,26 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const [error, setError] = useState<string | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  // AbortController for the direct (<100 MB) upload path so the user
-  // can cancel a wedged upload without waiting for the 5-minute
-  // timeout. The chunked path owns its own controller inside
-  // useChunkedUpload - they're orthogonal.
+  // AbortController for the direct upload path so the user can cancel
+  // a wedged upload without waiting for the 5-minute timeout. The
+  // chunked path owns its own controller inside useChunkedUpload.
   const directUploadAbortRef = useRef<AbortController | null>(null)
+
+  // Belt-and-suspenders cleanup: handleClose() aborts the direct
+  // upload, but a parent that unmounts the modal without routing
+  // through handleClose (tab switch, navigation, hot reload) would
+  // otherwise leave the request alive and any setError / setName
+  // calls in the in-flight handler would warn about updating an
+  // unmounted component. The chunked path owns its own unmount
+  // cleanup inside useChunkedUpload; this matches that.
+  useEffect(() => {
+    return () => {
+      if (directUploadAbortRef.current) {
+        directUploadAbortRef.current.abort()
+        directUploadAbortRef.current = null
+      }
+    }
+  }, [])
 
   const createResource = useCreateResource(type)
   const uploadFile = useUploadResourceFile(type)
@@ -132,7 +152,8 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
       return
     }
 
-    // Direct (<100 MB) path: two-step create-then-upload. If the
+    // Direct path (file <= CHUNKED_UPLOAD_THRESHOLD): two-step
+    // create-then-upload. If the
     // upload step fails after the row is created we must roll back
     // the row, otherwise repeated retries multiply orphans. The
     // chunked path's backend handler already rolls back on multipart
@@ -300,11 +321,10 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
 
           {isUploading && (
             <div className="space-y-1">
-              {/* Determinate progress for chunked path, indeterminate for
-                  direct path under the 100 MB threshold. `<progress>`
-                  without a `value` attribute renders the browser's
-                  indeterminate animation, which is automatically
-                  suppressed by user agents under
+              {/* Determinate progress for chunked path, indeterminate
+                  for direct path. `<progress>` without a `value`
+                  attribute renders the browser's indeterminate
+                  animation, automatically suppressed under
                   `prefers-reduced-motion: reduce`. */}
               {displayProgress !== null ? (
                 <>

@@ -1,19 +1,25 @@
 import { cleanup, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 
-import { useChunkedUpload } from '../../src/hooks/use-chunked-upload'
-
 afterEach(cleanup)
 
 const mockOrchestrate = mock(async (_args: { signal?: AbortSignal }) => 1)
 const mockClearUploadState = mock((_id: string) => {})
 
+// Install module mocks BEFORE pulling in `useChunkedUpload` so the
+// hook's static `import { orchestrateUpload }` / `import { clearUploadState }`
+// statements resolve to the mocks rather than the real engine /
+// persistence modules. Static `import` statements are hoisted by the
+// JS module loader, so the only way to guarantee mocks-before-import
+// in a single file is a dynamic await import().
 mock.module('../../src/lib/chunked-upload/engine', () => ({
   orchestrateUpload: mockOrchestrate,
 }))
 mock.module('../../src/lib/chunked-upload/persistence', () => ({
   clearUploadState: mockClearUploadState,
 }))
+
+const { useChunkedUpload } = await import('../../src/hooks/use-chunked-upload')
 
 describe('useChunkedUpload - unmount cleanup (issue #163 review)', () => {
   it('aborts the in-flight controller when the hook unmounts mid-upload', async () => {
