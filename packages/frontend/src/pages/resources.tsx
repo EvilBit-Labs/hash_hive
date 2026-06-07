@@ -35,12 +35,16 @@ const ROW_PULSE_DURATION_S = 1.2
 // neighboring components). Cubic-bezier expressed as Motion expects.
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
 
-// Peach-tinted background at the same alpha as the previous CSS
-// keyframe (~22% primary), fading to transparent. Resolves the
-// --primary HSL token at runtime so it tracks future theme changes.
-const ROW_PULSE_KEYFRAMES = ['hsl(var(--primary) / 0.22)', 'hsl(var(--primary) / 0)'] as const
-const ROW_PULSE_REDUCED = 'hsl(var(--primary) / 0.1)' as const
-const ROW_TRANSPARENT = 'hsla(0, 0%, 0%, 0)' as const
+// Pulse + hover color tokens live on the motion.tr className as
+// inline arbitrary CSS variables (per motion.dev's React + Tailwind
+// pattern: theme references stay declarative on the element, Motion
+// dereferences via var() in animate/whileHover). The colors track
+// theme changes because they resolve --primary / --surface-0 at
+// render time.
+const ROW_PULSE_VARS =
+  '[--pulse-on:hsl(var(--primary)/0.22)] ' +
+  '[--pulse-quiet:hsl(var(--primary)/0.1)] ' +
+  '[--row-hover:hsl(var(--surface-0)/0.2)]'
 
 // Format a file size from bytes. Hyphen for unknown / zero so empty
 // uploads or pre-upload rows render unambiguously rather than "0 B".
@@ -336,24 +340,24 @@ function HashListsTab({
               const hashTypeName =
                 hl.hashTypeId !== null ? (hashTypeNameById.get(hl.hashTypeId) ?? null) : null
               const isJustApplied = hl.id === justAppliedListId
-              // Motion drives the acknowledgment pulse so the
-              // animation has the same cross-browser fallbacks as
-              // every other animated surface in the app (the previous
-              // hand-rolled CSS keyframe broke in Safari because
-              // box-shadow doesn't paint on <tr> in WebKit). Hover
-              // moves into Motion's control too, so the inline
-              // backgroundColor style doesn't fight Tailwind's
-              // `hover:bg-surface-0/20`.
+              // Motion owns the acknowledgment pulse so every
+              // animated surface in the app uses the same library
+              // (the previous CSS keyframe broke in Safari because
+              // box-shadow doesn't paint on <tr> in WebKit). Colors
+              // dereference the className CSS vars; hover lives in
+              // whileHover so it doesn't fight an inline animate
+              // style.
               const pulseAnimate = isJustApplied
                 ? prefersReducedMotion
-                  ? { backgroundColor: ROW_PULSE_REDUCED }
-                  : { backgroundColor: [...ROW_PULSE_KEYFRAMES] }
-                : { backgroundColor: ROW_TRANSPARENT }
+                  ? { backgroundColor: 'var(--pulse-quiet)' }
+                  : { backgroundColor: ['var(--pulse-on)', 'transparent'] }
+                : { backgroundColor: 'transparent' }
               return (
                 <motion.tr
                   key={hl.id}
+                  className={ROW_PULSE_VARS}
                   animate={pulseAnimate}
-                  whileHover={{ backgroundColor: 'hsl(var(--surface-0) / 0.2)' }}
+                  whileHover={{ backgroundColor: 'var(--row-hover)' }}
                   transition={{ duration: ROW_PULSE_DURATION_S, ease: [...EASE_OUT_EXPO] }}
                 >
                   <Td className="text-sm font-medium text-foreground">
