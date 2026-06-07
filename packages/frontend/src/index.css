@@ -169,37 +169,3 @@
     background-color: hsl(var(--surface-2));
   }
 }
-
-/*
- * Operator-moment acknowledgments. These earn motion under
- * principle #1 ("Theater earns its place") — the underlying data
- * actually changed (a hash type was applied to a list), so the row
- * briefly acknowledges where the action landed before settling.
- *
- * Uses background-color, not box-shadow: Safari/WebKit silently
- * ignores box-shadow on <tr> elements (it only paints on <table> /
- * <tbody>), so an inset-shadow flood doesn't render in Safari. The
- * background-color path works in every modern browser, including
- * Safari, and table-row honors background painting consistently.
- */
-@layer utilities {
-  @keyframes hh-row-pulse {
-    0% {
-      background-color: hsl(var(--primary) / 0.22);
-    }
-    100% {
-      background-color: hsl(var(--primary) / 0);
-    }
-  }
-
-  .row-pulse {
-    animation: hh-row-pulse 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .row-pulse {
-      animation: none;
-      background-color: hsl(var(--primary) / 0.1);
-    }
-  }
-}

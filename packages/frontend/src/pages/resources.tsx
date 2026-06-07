@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from 'motion/react'
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
@@ -23,11 +24,23 @@ import { Permission } from '../lib/permissions'
 import { cn } from '../lib/utils'
 import { useUiStore } from '../stores/ui'
 
-// Hold the row-pulse class on the just-touched hash list long enough
-// for the operator's eye to land there after the modal closes, then
-// remove so the row settles back into the dense table rhythm. Matches
-// the CSS `hh-row-pulse` keyframe duration.
+// Hold the row pulse on the just-touched hash list long enough for
+// the operator's eye to land there after the modal closes, then
+// reset so the row settles back into the dense table rhythm. Matches
+// the Motion `ROW_PULSE_DURATION_S` below.
 const ROW_PULSE_MS = 1200
+const ROW_PULSE_DURATION_S = 1.2
+
+// Brand-warm exponential ease-out (mirrors `--ease-out-expo` in
+// neighboring components). Cubic-bezier expressed as Motion expects.
+const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
+
+// Peach-tinted background at the same alpha as the previous CSS
+// keyframe (~22% primary), fading to transparent. Resolves the
+// --primary HSL token at runtime so it tracks future theme changes.
+const ROW_PULSE_KEYFRAMES = ['hsl(var(--primary) / 0.22)', 'hsl(var(--primary) / 0)'] as const
+const ROW_PULSE_REDUCED = 'hsl(var(--primary) / 0.1)' as const
+const ROW_TRANSPARENT = 'hsla(0, 0%, 0%, 0)' as const
 
 // Format a file size from bytes. Hyphen for unknown / zero so empty
 // uploads or pre-upload rows render unambiguously rather than "0 B".
@@ -266,6 +279,7 @@ function HashListsTab({
 }) {
   const { data, isLoading } = useHashLists()
   const hashTypes = useHashTypes()
+  const prefersReducedMotion = useReducedMotion()
 
   // hash_types.id → display name. The list endpoint returns
   // hashTypeId only; without this resolution the column would force
@@ -322,8 +336,26 @@ function HashListsTab({
               const hashTypeName =
                 hl.hashTypeId !== null ? (hashTypeNameById.get(hl.hashTypeId) ?? null) : null
               const isJustApplied = hl.id === justAppliedListId
+              // Motion drives the acknowledgment pulse so the
+              // animation has the same cross-browser fallbacks as
+              // every other animated surface in the app (the previous
+              // hand-rolled CSS keyframe broke in Safari because
+              // box-shadow doesn't paint on <tr> in WebKit). Hover
+              // moves into Motion's control too, so the inline
+              // backgroundColor style doesn't fight Tailwind's
+              // `hover:bg-surface-0/20`.
+              const pulseAnimate = isJustApplied
+                ? prefersReducedMotion
+                  ? { backgroundColor: ROW_PULSE_REDUCED }
+                  : { backgroundColor: [...ROW_PULSE_KEYFRAMES] }
+                : { backgroundColor: ROW_TRANSPARENT }
               return (
-                <TableRow key={hl.id} className={cn(isJustApplied && 'row-pulse')}>
+                <motion.tr
+                  key={hl.id}
+                  animate={pulseAnimate}
+                  whileHover={{ backgroundColor: 'hsl(var(--surface-0) / 0.2)' }}
+                  transition={{ duration: ROW_PULSE_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+                >
                   <Td className="text-sm font-medium text-foreground">
                     <Link
                       to={`/resources/hash-lists/${hl.id}`}
@@ -375,7 +407,7 @@ function HashListsTab({
                       </Button>
                     </PermissionGuard>
                   </Td>
-                </TableRow>
+                </motion.tr>
               )
             })}
           </TableBody>
