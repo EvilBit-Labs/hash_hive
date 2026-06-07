@@ -59,7 +59,10 @@ function escapeCsv(val: string | null | undefined): string {
   if (CSV_FORMULA_TRIGGER_REGEX.test(str)) {
     str = `'${str}`
   }
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+  // Quote-wrap on any RFC 4180 special: comma, double-quote, LF, or CR.
+  // Bare CR splits the row in spreadsheet parsers; double the inner
+  // double-quotes per RFC 4180.
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`
   }
   return str
@@ -193,14 +196,23 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
 
   // Resolve attackModeName from the shared static map (cheap JS lookup;
   // hashcat attack modes are a small stable set, no SQL JOIN needed).
-  const results = rawResults.map((row) => {
-    return Object.assign(row, { attackModeName: resolveAttackModeName(row.attackMode) })
-  })
+  // Spread, not Object.assign — project's immutability rule applies
+  // even to intermediate DB-row objects.
+  // oxlint-disable-next-line oxc/no-map-spread -- immutability over perf nudge here; rawResults are local Drizzle rows that we don't want to mutate in case anything downstream caches them
+  const results = rawResults.map((row) => ({
+    ...row,
+    attackModeName: resolveAttackModeName(row.attackMode),
+  }))
 
   return c.json(
     {
       results,
-      total: countResult[0]?.count ?? 0,
+      // postgres-js returns count(*) as a string; Drizzle's `sql<number>`
+      // is a compile-time cast that does NOT convert at runtime. Without
+      // this wrapper `total` would ship as a string (e.g., "42") and
+      // violate listResultsResponseSchema's `total: number`. Same as
+      // dashboard/stats.ts.
+      total: Number(countResult[0]?.count ?? 0),
       limit,
       offset,
     },

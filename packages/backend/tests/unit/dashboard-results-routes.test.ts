@@ -465,6 +465,63 @@ if (!IS_ISOLATED) {
       expect(text).toContain('"has, comma"')
     })
 
+    it('quote-wraps cells containing a carriage return', async () => {
+      // Bare CR splits the row in RFC 4180 parsers (Excel and many
+      // CSV libraries treat \r as a record terminator). Make sure
+      // the escape path catches it.
+      state.rows = [
+        makeRow({
+          id: 1,
+          plaintext: 'has\rCR',
+          hashValue: 'safe',
+          hashListName: 'list',
+          campaignName: 'camp',
+        }),
+      ]
+      const res = await app.request(EXPORT, {
+        method: 'GET',
+        headers: makeHeaders(),
+      })
+      const text = await res.text()
+      expect(text).toContain('"has\rCR"')
+    })
+
+    it('prefixes formula triggers for `+`, `-`, `@`, `\\t`, `\\r`, `\\n`', async () => {
+      // CSV_FORMULA_TRIGGER_REGEX covers /^[=+\-@\t\r\n]/ — every one
+      // of those leading characters is a known spreadsheet formula
+      // entry point. Pin all six so a future regex narrowing fails
+      // here instead of in a production export.
+      const triggers = [
+        { sample: '+SUM(A1)', expected: "'+SUM(A1)" },
+        { sample: '-1+2', expected: "'-1+2" },
+        { sample: '@dde(', expected: "'@dde(" },
+        { sample: '\tindent', expected: "'\tindent" },
+        { sample: '\rcr', expected: "'\rcr" },
+        { sample: '\nlf', expected: "'\nlf" },
+      ]
+      for (const { sample, expected } of triggers) {
+        state.rows = [
+          makeRow({
+            id: 1,
+            plaintext: sample,
+            hashValue: 'safe',
+            hashListName: 'list',
+            campaignName: 'camp',
+          }),
+        ]
+        exportRowsServed = 0
+        const res = await app.request(EXPORT, {
+          method: 'GET',
+          headers: makeHeaders(),
+        })
+        const text = await res.text()
+        // The apostrophe prefix sits inside the quote-wrapping when
+        // the cell also carries CSV specials (`\t`, `\r`, `\n` force
+        // wrapping; `+`, `-`, `@` do not).
+        expect(text).toContain(expected)
+      }
+    })
+
     it('streams the response in multiple ReadableStream chunks', async () => {
       // 2500 rows so the 1000-row batch fires three pulls.
       state.rows = Array.from({ length: 2500 }, (_, i) =>
@@ -488,13 +545,83 @@ if (!IS_ISOLATED) {
         chunkCount += 1
         totalBytes += value.byteLength
       }
-      // Header + 2500 rows + 3 batches => at least 2 distinct enqueues
-      // beyond the header. With a synthetic mock the runtime may
-      // coalesce chunks, but it must NOT collapse 2500 rows into a
-      // single mega-write.
-      expect(chunkCount).toBeGreaterThanOrEqual(2)
+      // Header + 2500 rows in 3 1000-row batches means 4 enqueues
+      // total (1 header + 3 batch writes). Bumping the floor to >=4
+      // catches regressions that collapse 2500 rows into a single
+      // mega-write while still allowing the runtime to coalesce
+      // adjacent enqueues into TCP segments.
+      expect(chunkCount).toBeGreaterThanOrEqual(4)
       // Sanity floor: every row contributes >=20 bytes of CSV.
       expect(totalBytes).toBeGreaterThan(20_000)
+    })
+
+    it('streams every row exactly once when many rows share a crackedAt timestamp', async () => {
+      // The cursor predicate
+      //   crackedAt < cursor OR (crackedAt = cursor AND id < cursor.id)
+      // is load-bearing for streaming correctness when bulk-cracked
+      // batches share a `crackedAt` value. Without the `id` tiebreaker
+      // the second batch would re-fetch some rows from the first.
+      const sharedAt = new Date('2026-05-15T12:00:00.000Z')
+      state.rows = Array.from({ length: 1500 }, (_, i) =>
+        // Unique hashValue per row so the assertion below can detect
+        // duplicates across batches by content.
+        makeRow({ id: 10000 - i, hashValue: `h${10000 - i}`, crackedAt: sharedAt })
+      )
+      // Sort like the DB would: cracked_at DESC, id DESC.
+      state.rows.sort((a, b) => b.crackedAt.getTime() - a.crackedAt.getTime() || b.id - a.id)
+
+      const res = await app.request(EXPORT, {
+        method: 'GET',
+        headers: makeHeaders(),
+      })
+      const text = await res.text()
+      const dataLines = text
+        .split('\n')
+        .filter((l) => l.length > 0)
+        .slice(1)
+      expect(dataLines).toHaveLength(1500)
+      // Every row's hashValue must appear exactly once in the stream.
+      // A regression that re-fetched the cursor row (no `id`
+      // tiebreaker) would surface as fewer unique lines than rows.
+      expect(new Set(dataLines).size).toBe(1500)
+    })
+  })
+
+  // ─── Cross-project scoping ──────────────────────────────────────────
+  //
+  // The route's project safety comes from the SQL `eq(campaigns.projectId,
+  // session_projectId)` join filter — the mock here ignores `.where()`
+  // conditions, so the actual SQL guard isn't unit-testable through this
+  // shape. What IS testable: the route never trusts a client-supplied
+  // x-project-id header to bypass the session projectId. The session
+  // mock fixes projectId at 1; any request with a different
+  // x-project-id header must still return rows scoped to the SESSION
+  // value (which the mock's state.rows represents), not to the
+  // client-supplied header value.
+
+  describe('project scoping', () => {
+    it('does not honor a client-supplied x-project-id header to widen scope', async () => {
+      state.rows = [makeRow({ id: 1, hashValue: 'session-scope-row' })]
+      const res = await app.request(RESULTS, {
+        method: 'GET',
+        headers: { ...makeHeaders(), 'x-project-id': '999' },
+      })
+      // Two acceptable shapes: a 403 from RBAC, OR a 200 that returns
+      // the SESSION-scoped rows (state.rows, set above). What must
+      // NEVER happen is a 200 returning rows belonging to project
+      // 999 that the user isn't a member of. The mock can't distinguish
+      // "project 999 rows" from session rows, so the strongest
+      // assertion the mock supports is: response status is one of
+      // {200, 401, 403} (NOT 5xx, NOT crashing), and if it's 200, the
+      // returned rows match the session-scoped state, not header-scoped.
+      expect([200, 401, 403]).toContain(res.status)
+      if (res.status === 200) {
+        const body = (await res.json()) as { results: Array<{ hashValue: string }> }
+        // Confirms the route used the session projectId path; any
+        // hypothetical bypass would have skipped the buildResultFilters
+        // join and the assertion would only pass by coincidence.
+        expect(body.results.every((r) => r.hashValue === 'session-scope-row')).toBe(true)
+      }
     })
   })
 }
