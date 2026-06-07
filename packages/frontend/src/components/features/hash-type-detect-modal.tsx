@@ -1,3 +1,4 @@
+import { motion } from 'motion/react'
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 
 import {
@@ -52,11 +53,17 @@ interface HashTypeDetectModalProps {
  * is selected, so the operator never wonders whether the click did
  * anything - the affordance state matches the available action.
  */
-// Hold the verdict button on "✓ Applied" for this long after a
-// successful PATCH before tearing down the modal. Long enough that the
-// operator registers the confirmation; short enough that it doesn't
-// feel like waiting.
-const APPLY_ACK_MS = 450
+// Duration of the verdict's acknowledgment pulse on a successful PATCH
+// before the modal tears down. Long enough that the operator registers
+// the "✓ Applied" confirmation, short enough that it doesn't feel like
+// waiting. Drives a real Motion animation (subtle scale breath on the
+// verdict), not a setTimeout — the animation's onAnimationComplete is
+// what fires handleClose, so Motion owns both the timing and the
+// visual.
+const APPLY_ACK_S = 0.45
+// Brand-warm exponential ease (`--ease-out-expo` analog) used across
+// the app's animated surfaces.
+const APPLY_ACK_EASE = [0.16, 1, 0.3, 1] as const
 
 export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetectModalProps) {
   const [rawText, setRawText] = useState('')
@@ -177,16 +184,16 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
       { hashTypeId },
       {
         onSuccess: () => {
-          // Hold "✓ Applied" briefly so the operator registers the
-          // commit instead of seeing the modal vanish. The page-level
-          // pulse fires in parallel via onApplied; both timings land
-          // before the operator can pivot to the next task.
+          // The verdict (or runner-up row) Motion-animates a subtle
+          // scale breath when appliedMode is set; its
+          // onAnimationComplete fires handleClose. No setTimeout —
+          // Motion owns the hold duration AND the visual that earns
+          // the hold. The page-level row pulse fires in parallel via
+          // onApplied so the operator sees the destination while the
+          // verdict acknowledges the commit.
           setPendingApplyMode(null)
           setAppliedMode(hashcatMode)
           onApplied?.(appliedListId)
-          window.setTimeout(() => {
-            handleClose()
-          }, APPLY_ACK_MS)
         },
         onError: (err) => {
           setPendingApplyMode(null)
@@ -334,6 +341,7 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
                   appliedMode={appliedMode}
                   setTypePending={setType.isPending}
                   onApply={handleUseType}
+                  onAckComplete={handleClose}
                 />
                 {flatCandidates.length > 1 && (
                   <RunnersUp
@@ -344,6 +352,7 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
                     appliedMode={appliedMode}
                     setTypePending={setType.isPending}
                     onApply={handleUseType}
+                    onAckComplete={handleClose}
                   />
                 )}
               </>
@@ -399,6 +408,13 @@ interface VerdictProps {
   appliedMode: number | null
   setTypePending: boolean
   onApply: (hashcatMode: number) => void
+  /**
+   * Fired when the verdict's apply-acknowledgment animation completes.
+   * The modal uses this to drive its own teardown so timing is owned
+   * by Motion (not a setTimeout) and the visual breath earns the
+   * hold.
+   */
+  onAckComplete: () => void
 }
 
 function applyDisabledReason(
@@ -425,6 +441,7 @@ function Verdict({
   appliedMode,
   setTypePending,
   onApply,
+  onAckComplete,
 }: VerdictProps) {
   const pct = Math.round(candidate.confidence * 100)
   const isApplying = pendingApplyMode === candidate.hashcatMode
@@ -437,9 +454,18 @@ function Verdict({
   const disabled = reason !== undefined || setTypePending || otherApplying || isApplied
 
   return (
-    <article
+    <motion.article
       className="mt-3 rounded-lg border border-primary/15 bg-primary/5 p-5"
       aria-label="Top match"
+      // Subtle breath: the verdict gently expands then settles when
+      // the operator's commit lands. Compositor-only (scale), so it
+      // stays smooth on dim labs at 2 AM. Idle state pins scale: 1 so
+      // the article never drifts on subsequent re-renders.
+      animate={isApplied ? { scale: [1, 1.015, 1] } : { scale: 1 }}
+      transition={{ duration: APPLY_ACK_S, ease: [...APPLY_ACK_EASE] }}
+      onAnimationComplete={() => {
+        if (isApplied) onAckComplete()
+      }}
     >
       <div className="flex items-baseline justify-between gap-6">
         <div className="min-w-0">
@@ -483,7 +509,7 @@ function Verdict({
           {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
         </Button>
       </div>
-    </article>
+    </motion.article>
   )
 }
 
@@ -495,6 +521,7 @@ interface RunnersUpProps {
   appliedMode: number | null
   setTypePending: boolean
   onApply: (hashcatMode: number) => void
+  onAckComplete: () => void
 }
 
 /**
@@ -510,6 +537,7 @@ function RunnersUp({
   appliedMode,
   setTypePending,
   onApply,
+  onAckComplete,
 }: RunnersUpProps) {
   return (
     <div className="mt-5">
@@ -523,7 +551,15 @@ function RunnersUp({
           const reason = applyDisabledReason(selectedListId, hashTypesReady)
           const disabled = reason !== undefined || setTypePending || otherApplying || isApplied
           return (
-            <li key={c.hashcatMode} className="flex items-center gap-4 px-4 py-2.5 text-xs">
+            <motion.li
+              key={c.hashcatMode}
+              className="flex items-center gap-4 px-4 py-2.5 text-xs"
+              animate={isApplied ? { scale: [1, 1.015, 1] } : { scale: 1 }}
+              transition={{ duration: APPLY_ACK_S, ease: [...APPLY_ACK_EASE] }}
+              onAnimationComplete={() => {
+                if (isApplied) onAckComplete()
+              }}
+            >
               <div className="flex min-w-0 flex-1 items-baseline gap-3">
                 <span className="text-sm font-medium text-foreground">{c.name}</span>
                 <span className="font-mono text-muted-foreground">{c.hashcatMode}</span>
@@ -556,7 +592,7 @@ function RunnersUp({
               >
                 {isApplied ? '✓ Applied' : isApplying ? 'Applying...' : 'Use This Type'}
               </Button>
-            </li>
+            </motion.li>
           )
         })}
       </ul>
