@@ -69,7 +69,7 @@ export function AttackDagEditor({
   return (
     <div className="w-3/5 space-y-2">
       <h3 className="text-sm font-medium">Dependency Graph</h3>
-      <p className="text-muted-foreground text-xs">
+      <p className="text-xs text-muted-foreground">
         Drag edges between attacks to set dependencies. Arrow from A -&gt; B means B depends on A.
       </p>
       {!isValid && (
@@ -78,7 +78,7 @@ export function AttackDagEditor({
           className="text-xs"
         />
       )}
-      <div className="border-surface-0 bg-crust h-[400px] rounded-md border">
+      <div className="h-[400px] rounded-md border border-surface-0 bg-crust">
         {attacks.length > 0 ? (
           <ReactFlow
             nodes={nodes}
@@ -96,7 +96,7 @@ export function AttackDagEditor({
             <Controls />
           </ReactFlow>
         ) : (
-          <div className="text-muted-foreground flex h-full items-center justify-center text-xs">
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             Add attacks to see the dependency graph
           </div>
         )}

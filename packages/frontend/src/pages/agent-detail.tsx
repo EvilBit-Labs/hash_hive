@@ -88,14 +88,14 @@ export function AgentDetailPage() {
           <PageHeader>{agent.name}</PageHeader>
           <StatusBadge status={agent.status} />
         </div>
-        <p className="text-muted-foreground text-xs">
+        <p className="text-xs text-muted-foreground">
           Last seen: {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-          <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
+        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+          <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
             Details
           </h3>
           <dl className="space-y-2 text-sm">

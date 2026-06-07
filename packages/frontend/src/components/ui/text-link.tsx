@@ -17,7 +17,7 @@ export function TextLink({ to, children, className, back, ...props }: TextLinkPr
     <Link
       to={to}
       className={cn(
-        'text-primary hover:text-primary/80 inline-flex items-center gap-1.5 text-xs font-medium',
+        'inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80',
         className
       )}
       {...props}

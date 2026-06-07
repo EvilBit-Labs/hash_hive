@@ -116,7 +116,7 @@ export function ResourcesPage() {
       <div
         role="tablist"
         aria-label="Resource types"
-        className="border-surface-0/50 flex gap-1 border-b"
+        className="flex gap-1 border-b border-surface-0/50"
       >
         {TABS.map((tab) => (
           <button
@@ -133,7 +133,7 @@ export function ResourcesPage() {
               'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
               activeTab === tab.id
                 ? 'border-primary text-primary'
-                : 'text-muted-foreground hover:text-foreground border-transparent'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
             )}
           >
             {tab.label}
@@ -272,7 +272,7 @@ function HashListsTab({
               const pct = hashCount > 0 ? (crackedCount / hashCount) * 100 : 0
               return (
                 <TableRow key={hl.id}>
-                  <Td className="text-foreground text-sm font-medium">
+                  <Td className="text-sm font-medium text-foreground">
                     <Link
                       to={`/resources/hash-lists/${hl.id}`}
                       className="hover:text-primary hover:underline"
@@ -280,28 +280,28 @@ function HashListsTab({
                       {hl.name}
                     </Link>
                   </Td>
-                  <Td className="text-muted-foreground font-mono text-xs tabular-nums">
+                  <Td className="font-mono text-xs text-muted-foreground tabular-nums">
                     {formatFileSize(hl.fileRef?.size)}
                   </Td>
                   <Td>
                     <StatusBadge status={hl.status} />
                   </Td>
                   <Td className="font-mono text-xs tabular-nums">{hashCount}</Td>
-                  <Td className="text-success font-mono text-xs tabular-nums">{crackedCount}</Td>
+                  <Td className="font-mono text-xs text-success tabular-nums">{crackedCount}</Td>
                   <Td>
                     <div className="flex items-center gap-2">
-                      <div className="bg-surface-1 h-1.5 w-20 rounded-full">
+                      <div className="h-1.5 w-20 rounded-full bg-surface-1">
                         <div
-                          className="bg-primary h-full rounded-full transition-all"
+                          className="h-full rounded-full bg-primary transition-all"
                           style={{ width: `${Math.min(pct, 100)}%` }}
                         />
                       </div>
-                      <span className="text-muted-foreground font-mono text-xs">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {pct.toFixed(0)}%
                       </span>
                     </div>
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {new Date(hl.createdAt).toLocaleDateString()}
                   </Td>
                   <Td className="text-right">
@@ -374,14 +374,14 @@ function ResourceListTab({
           <TableBody>
             {resources.map((r) => (
               <TableRow key={r.id}>
-                <Td className="text-foreground text-sm font-medium">{r.name}</Td>
-                <Td className="text-muted-foreground font-mono text-xs tabular-nums">
+                <Td className="text-sm font-medium text-foreground">{r.name}</Td>
+                <Td className="font-mono text-xs text-muted-foreground tabular-nums">
                   {formatFileSize(r.fileSize ?? r.fileRef?.size)}
                 </Td>
                 <Td>
                   <StatusBadge status={r.status} />
                 </Td>
-                <Td className="text-muted-foreground text-xs">
+                <Td className="text-xs text-muted-foreground">
                   {new Date(r.createdAt).toLocaleDateString()}
                 </Td>
                 <Td className="text-right">

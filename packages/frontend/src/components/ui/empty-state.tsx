@@ -12,11 +12,11 @@ export function EmptyState({ message, action, className }: EmptyStateProps) {
   if (action) {
     return (
       <div className={cn('space-y-3', className)}>
-        <p className="text-muted-foreground text-sm">{message}</p>
+        <p className="text-sm text-muted-foreground">{message}</p>
         {action}
       </div>
     )
   }
 
-  return <p className={cn('text-muted-foreground text-sm', className)}>{message}</p>
+  return <p className={cn('text-sm text-muted-foreground', className)}>{message}</p>
 }

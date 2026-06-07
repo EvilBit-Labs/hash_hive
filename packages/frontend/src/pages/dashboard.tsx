@@ -44,7 +44,7 @@ function FreshnessLine({ dataUpdatedAt, isFetching, isStale }: FreshnessLineProp
       )}
     >
       <span>Last updated {lastUpdatedLabel}</span>
-      {isFetching && <span className="text-muted-foreground/70 ml-2">refreshing...</span>}
+      {isFetching && <span className="ml-2 text-muted-foreground/70">refreshing...</span>}
     </p>
   )
 }
@@ -157,7 +157,7 @@ export function DashboardPage() {
                   or not the hints are visible. Hidden under md so the
                   mobile header stays compact (no keyboard, no need). */}
               <ul
-                className="text-muted-foreground hidden items-center gap-3 text-xs md:flex"
+                className="hidden items-center gap-3 text-xs text-muted-foreground md:flex"
                 aria-hidden="true"
               >
                 <li className="flex items-center gap-1.5">

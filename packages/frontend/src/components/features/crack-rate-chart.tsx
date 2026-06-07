@@ -35,9 +35,9 @@ export function DashboardTooltip({ active, payload }: TooltipContentProps) {
     return null
   }
   return (
-    <div className="bg-surface-0 border-surface-1 rounded-md border px-2 py-1 text-xs">
-      <span className="text-ctp-peach font-mono tabular-nums">{raw}</span>
-      <span className="text-muted-foreground ml-1">cracked</span>
+    <div className="rounded-md border border-surface-1 bg-surface-0 px-2 py-1 text-xs">
+      <span className="font-mono text-ctp-peach tabular-nums">{raw}</span>
+      <span className="ml-1 text-muted-foreground">cracked</span>
     </div>
   )
 }
@@ -55,7 +55,7 @@ function formatElapsedFromFirst(sampledAtMs: number, firstSampledAtMs: number): 
 export function CrackRateTrendChart({ data, loading, className }: CrackRateTrendChartProps) {
   const headingId = useId()
   const gradientId = `crack-rate-fill-${useId().replace(/:/g, '')}`
-  const sectionClass = cn('bg-surface-0/40 border-surface-0 rounded-md border p-4', className)
+  const sectionClass = cn('rounded-md border border-surface-0 bg-surface-0/40 p-4', className)
 
   if (loading) {
     return (

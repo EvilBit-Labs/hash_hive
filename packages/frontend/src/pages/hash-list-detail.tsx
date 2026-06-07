@@ -100,14 +100,14 @@ export function HashListDetailPage() {
           className="text-success"
         />
         <StatCard label="Remaining" value={remaining.toLocaleString()} />
-        <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-          <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+        <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+          <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
             Progress
           </p>
           <p className="mt-2 font-mono text-2xl font-bold tabular-nums">{percentage.toFixed(1)}%</p>
-          <div className="bg-surface-1 mt-2 h-1.5 w-full rounded-full">
+          <div className="mt-2 h-1.5 w-full rounded-full bg-surface-1">
             <div
-              className="bg-primary h-full rounded-full transition-all"
+              className="h-full rounded-full bg-primary transition-all"
               style={{ width: `${Math.min(percentage, 100)}%` }}
             />
           </div>
@@ -164,11 +164,11 @@ export function HashListDetailPage() {
                     <Td>
                       <StatusBadge status={item.crackedAt ? 'cracked' : 'uncracked'} />
                     </Td>
-                    <Td className="text-success font-mono text-xs">{item.plaintext ?? '-'}</Td>
-                    <Td className="text-muted-foreground text-xs">
+                    <Td className="font-mono text-xs text-success">{item.plaintext ?? '-'}</Td>
+                    <Td className="text-xs text-muted-foreground">
                       {item.crackedAt ? new Date(item.crackedAt).toLocaleString() : '-'}
                     </Td>
-                    <Td className="text-muted-foreground font-mono text-xs">
+                    <Td className="font-mono text-xs text-muted-foreground">
                       {item.agentId ? `#${item.agentId}` : '-'}
                     </Td>
                   </TableRow>
@@ -177,7 +177,7 @@ export function HashListDetailPage() {
             </Table>
 
             {/* Pagination */}
-            <div className="text-muted-foreground flex items-center justify-between text-xs">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>
                 Showing {offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of{' '}
                 {total.toLocaleString()}
@@ -218,8 +218,8 @@ function StatCard({
   className?: string
 }) {
   return (
-    <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-      <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">{label}</p>
+    <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+      <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
       <p className={`mt-2 font-mono text-2xl font-bold tabular-nums ${className ?? ''}`}>{value}</p>
     </div>
   )

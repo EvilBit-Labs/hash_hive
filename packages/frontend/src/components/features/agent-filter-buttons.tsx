@@ -20,7 +20,7 @@ export function AgentFilterButtons({ value, onChange }: AgentFilterButtonsProps)
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a div with role="group" preserves inline flex layout; fieldset adds default block styling that breaks the segmented control look
       role="group"
       aria-label="Filter agents by status"
-      className="border-surface-0 bg-surface-0/30 inline-flex items-center gap-1 rounded-md border p-1"
+      className="inline-flex items-center gap-1 rounded-md border border-surface-0 bg-surface-0/30 p-1"
     >
       {FILTERS.map((filter) => {
         const isActive = filter.value === value

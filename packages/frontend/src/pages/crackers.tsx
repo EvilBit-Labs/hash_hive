@@ -116,7 +116,7 @@ function CrackersAdminView() {
             </Button>
           ))}
         </div>
-        <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <input
             type="checkbox"
             aria-label="Include inactive cracker binaries"
@@ -128,7 +128,7 @@ function CrackersAdminView() {
       </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground text-xs">Loading...</p>
+        <p className="text-xs text-muted-foreground">Loading...</p>
       ) : !binaries || binaries.length === 0 ? (
         <EmptyState
           message="No cracker binaries registered yet."

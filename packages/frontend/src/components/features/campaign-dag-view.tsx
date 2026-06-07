@@ -223,7 +223,7 @@ export function CampaignDagView({ attacks, height }: CampaignDagViewProps) {
     <div
       data-testid="campaign-dag-view"
       style={{ height: resolvedHeight }}
-      className="border-surface-0 bg-surface-0/20 overflow-hidden rounded-md border"
+      className="overflow-hidden rounded-md border border-surface-0 bg-surface-0/20"
     >
       <ReactFlow
         nodes={nodes}

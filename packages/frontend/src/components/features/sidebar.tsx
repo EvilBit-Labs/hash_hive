@@ -112,7 +112,7 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-4">
         <img src={logoSvg} alt="" className="h-7 w-7" />
-        <span className="text-foreground text-base font-semibold tracking-tight">HashHive</span>
+        <span className="text-base font-semibold tracking-tight text-foreground">HashHive</span>
       </div>
 
       {/* Project selector */}
@@ -161,15 +161,15 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
       </nav>
 
       {/* Footer */}
-      <div className="border-surface-0/50 space-y-2 border-t px-3 py-3">
+      <div className="space-y-2 border-t border-surface-0/50 px-3 py-3">
         <ConnectionIndicator />
         <div className="flex items-center justify-between">
-          <span className="text-muted-foreground max-w-[130px] truncate text-xs">
+          <span className="max-w-[130px] truncate text-xs text-muted-foreground">
             {session?.user.email}
           </span>
           <button
             type="button"
-            className="text-muted-foreground hover:text-foreground text-xs transition-colors"
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => {
               void logout()
             }}
@@ -189,7 +189,7 @@ export function Sidebar() {
   if (!sidebarOpen) return null
 
   return (
-    <aside className="border-surface-0/50 bg-mantle hidden h-screen w-56 flex-col border-r md:flex">
+    <aside className="hidden h-screen w-56 flex-col border-r border-surface-0/50 bg-mantle md:flex">
       <SidebarContent />
     </aside>
   )
@@ -233,17 +233,17 @@ export function MobileSidebar() {
       <button
         type="button"
         aria-label="Close navigation menu"
-        className="bg-crust/80 absolute inset-0"
+        className="absolute inset-0 bg-crust/80"
         onClick={() => setMobileSidebar(false)}
       />
 
       {/* Drawer */}
-      <aside className="bg-mantle relative flex h-full w-64 flex-col shadow-2xl">
+      <aside className="relative flex h-full w-64 flex-col bg-mantle shadow-2xl">
         {/* Close button */}
         <button
           type="button"
           aria-label="Close navigation menu"
-          className="text-muted-foreground hover:bg-surface-0/60 hover:text-foreground absolute top-3 right-2 flex h-9 w-9 items-center justify-center rounded transition-colors"
+          className="absolute top-3 right-2 flex h-9 w-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
           onClick={() => setMobileSidebar(false)}
         >
           <X className="h-4 w-4" aria-hidden="true" />

@@ -12,7 +12,7 @@ export function AppLayout() {
 
   return (
     <EventsProvider>
-      <div className="bg-background flex h-screen">
+      <div className="flex h-screen bg-background">
         {/* Desktop sidebar - hidden below md */}
         <Sidebar />
 
@@ -28,17 +28,17 @@ export function AppLayout() {
           <ConnectionBanner />
 
           {/* Mobile header - visible below md */}
-          <header className="border-surface-0/50 bg-mantle flex items-center gap-3 border-b px-4 py-3 md:hidden">
+          <header className="flex items-center gap-3 border-b border-surface-0/50 bg-mantle px-4 py-3 md:hidden">
             <button
               type="button"
               aria-label="Open navigation menu"
-              className="text-muted-foreground hover:bg-surface-0/60 hover:text-foreground flex h-9 w-9 items-center justify-center rounded transition-colors"
+              className="flex h-9 w-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
               onClick={() => setMobileSidebar(true)}
             >
               <Menu className="h-4 w-4" aria-hidden="true" />
             </button>
             <img src={logoSvg} alt="" className="h-6 w-6" />
-            <span className="text-foreground text-sm font-semibold tracking-tight">HashHive</span>
+            <span className="text-sm font-semibold tracking-tight text-foreground">HashHive</span>
             <div className="ml-auto">
               <ConnectionIndicator />
             </div>

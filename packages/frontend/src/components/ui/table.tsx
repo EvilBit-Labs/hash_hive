@@ -4,7 +4,7 @@ import { cn } from '../../lib/utils'
 
 export function Table({ className, children, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('border-surface-0 overflow-x-auto rounded-md border', className)} {...props}>
+    <div className={cn('overflow-x-auto rounded-md border border-surface-0', className)} {...props}>
       <table className="w-full text-left text-sm">{children}</table>
     </div>
   )
@@ -16,7 +16,7 @@ export function TableHead({
   ...props
 }: HTMLAttributes<HTMLTableSectionElement>) {
   return (
-    <thead className={cn('border-surface-0 bg-surface-0/30 border-b', className)} {...props}>
+    <thead className={cn('border-b border-surface-0 bg-surface-0/30', className)} {...props}>
       {children}
     </thead>
   )
@@ -28,7 +28,7 @@ export function TableBody({
   ...props
 }: HTMLAttributes<HTMLTableSectionElement>) {
   return (
-    <tbody className={cn('divide-surface-0/50 divide-y', className)} {...props}>
+    <tbody className={cn('divide-y divide-surface-0/50', className)} {...props}>
       {children}
     </tbody>
   )
@@ -36,7 +36,7 @@ export function TableBody({
 
 export function TableRow({ className, children, ...props }: HTMLAttributes<HTMLTableRowElement>) {
   return (
-    <tr className={cn('hover:bg-surface-0/20 transition-colors', className)} {...props}>
+    <tr className={cn('transition-colors hover:bg-surface-0/20', className)} {...props}>
       {children}
     </tr>
   )
@@ -46,7 +46,7 @@ export function Th({ className, children, ...props }: ThHTMLAttributes<HTMLTable
   return (
     <th
       className={cn(
-        'text-muted-foreground px-4 py-2.5 text-xs font-medium tracking-wider uppercase',
+        'px-4 py-2.5 text-xs font-medium tracking-wider text-muted-foreground uppercase',
         className
       )}
       {...props}

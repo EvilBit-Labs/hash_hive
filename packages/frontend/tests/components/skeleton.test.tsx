@@ -17,7 +17,7 @@ describe('Skeleton', () => {
   })
 
   it('merges a custom className with defaults without duplicating conflicting utilities', () => {
-    render(<Skeleton data-testid="sk" className="bg-mantle h-10 w-full" />)
+    render(<Skeleton data-testid="sk" className="h-10 w-full bg-mantle" />)
     const el = screen.getByTestId('sk')
     expect(el.className).toContain('h-10')
     expect(el.className).toContain('w-full')

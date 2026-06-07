@@ -206,7 +206,7 @@ export function ConnectionBanner({ status }: ConnectionBannerProps = {}) {
         </div>
         <div className="min-w-0 flex-1">
           <p className={cn('text-sm font-semibold', titleColor)}>{title}</p>
-          <p className="text-foreground/80 text-xs">{description}</p>
+          <p className="text-xs text-foreground/80">{description}</p>
         </div>
         <button
           type="button"
@@ -214,8 +214,8 @@ export function ConnectionBanner({ status }: ConnectionBannerProps = {}) {
           className={cn(
             'inline-flex h-9 shrink-0 items-center justify-center rounded-md border px-4 text-xs font-medium',
             'border-foreground/25 text-foreground transition-colors',
-            'hover:bg-foreground/5 hover:border-foreground/40',
-            'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
+            'hover:border-foreground/40 hover:bg-foreground/5',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
           )}
         >
           Reload page

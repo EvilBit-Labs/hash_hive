@@ -212,7 +212,7 @@ export function CampaignDetailPage() {
         </div>
 
         {campaign.description && (
-          <p className="text-muted-foreground text-sm">{campaign.description}</p>
+          <p className="text-sm text-muted-foreground">{campaign.description}</p>
         )}
       </div>
 
@@ -223,7 +223,7 @@ export function CampaignDetailPage() {
           <h3 id="progress-heading" className="text-sm font-medium">
             Progress
           </h3>
-          <p className="text-muted-foreground font-mono text-xs tabular-nums">
+          <p className="font-mono text-xs text-muted-foreground tabular-nums">
             ETA: <span data-testid="campaign-eta">{eta}</span>
           </p>
         </div>
@@ -276,10 +276,10 @@ export function CampaignDetailPage() {
                   <Td>
                     <StatusBadge status={attack.status} />
                   </Td>
-                  <Td className="text-muted-foreground text-xs">
+                  <Td className="text-xs text-muted-foreground">
                     {attack.wordlistId ? `#${attack.wordlistId}` : '-'}
                   </Td>
-                  <Td className="text-muted-foreground font-mono text-xs">
+                  <Td className="font-mono text-xs text-muted-foreground">
                     {attack.dependencies?.length ? attack.dependencies.join(', ') : 'None'}
                   </Td>
                 </TableRow>
@@ -289,7 +289,7 @@ export function CampaignDetailPage() {
         )}
       </section>
 
-      <div className="border-surface-0/50 text-muted-foreground space-y-1 border-t pt-4 text-xs">
+      <div className="space-y-1 border-t border-surface-0/50 pt-4 text-xs text-muted-foreground">
         <p>Created {new Date(campaign.createdAt).toLocaleString()}</p>
         {campaign.startedAt && <p>Started {new Date(campaign.startedAt).toLocaleString()}</p>}
         {campaign.completedAt && <p>Completed {new Date(campaign.completedAt).toLocaleString()}</p>}

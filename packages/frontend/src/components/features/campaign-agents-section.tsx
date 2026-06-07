@@ -49,7 +49,7 @@ export function CampaignAgentsSection({ agents }: CampaignAgentsSectionProps) {
           return (
             <TableRow key={`${agent.agentId}-${agent.taskId}`}>
               <Td className="text-sm">{agent.agentName}</Td>
-              <Td className="text-muted-foreground font-mono text-xs">
+              <Td className="font-mono text-xs text-muted-foreground">
                 Attack #{agent.attackId} - mode {agent.attackMode}
               </Td>
               <Td className="min-w-[120px]">
@@ -59,7 +59,7 @@ export function CampaignAgentsSection({ agents }: CampaignAgentsSectionProps) {
                   ariaLabel={`${agent.agentName} task progress`}
                 />
               </Td>
-              <Td className="text-muted-foreground font-mono text-xs">
+              <Td className="font-mono text-xs text-muted-foreground">
                 {formatSpeed(agent.speedHs)}
               </Td>
             </TableRow>

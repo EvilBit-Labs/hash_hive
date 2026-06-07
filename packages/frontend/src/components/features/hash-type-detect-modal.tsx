@@ -209,34 +209,34 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
   const availableLists = hashLists.data?.hashLists ?? []
 
   return (
-    <div className="bg-crust/80 fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80 p-4">
       <div
         // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom modal: native <dialog> doesn't support the design system's surface tokens
         role="dialog"
         aria-modal="true"
         aria-labelledby="hash-type-detect-title"
-        className="border-surface-0 bg-mantle w-full max-w-3xl rounded-lg border p-6 shadow-2xl"
+        className="w-full max-w-3xl rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
       >
         {/* Header: title + apply target. The picker lives here (not
             buried mid-form) so the operator's apply destination is
             visible context throughout the flow — both before they
             paste samples and while they're reading results. */}
-        <header className="border-surface-0/60 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b pb-5">
+        <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-surface-0/60 pb-5">
           <div className="space-y-1">
             <h3
               id="hash-type-detect-title"
-              className="text-foreground text-base font-medium tracking-tight"
+              className="text-base font-medium tracking-tight text-foreground"
             >
               Detect Hash Type
             </h3>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-xs text-muted-foreground">
               Identify sample hashes and apply the chosen type to a hash list.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <label
               htmlFor="hash-type-target-list"
-              className="text-muted-foreground text-xs font-medium whitespace-nowrap"
+              className="text-xs font-medium whitespace-nowrap text-muted-foreground"
             >
               Apply to
             </label>
@@ -266,7 +266,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
             grouping (label → textarea → helper, 1.5/1.5 spacing)
             reads as one unit. */}
         <div className="pt-5">
-          <label htmlFor="hash-type-samples" className="text-muted-foreground text-xs font-medium">
+          <label htmlFor="hash-type-samples" className="text-xs font-medium text-muted-foreground">
             Sample hashes <span className="text-overlay1">(one per line)</span>
           </label>
           <textarea
@@ -277,11 +277,11 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
             onKeyDown={handleTextareaKeyDown}
             disabled={inFlight}
             rows={6}
-            className="border-surface-1 bg-base focus-visible:ring-primary mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
+            className="bg-base mt-1.5 w-full rounded-md border border-surface-1 px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none disabled:opacity-50"
             placeholder={`Paste ${MIN_SAMPLES}-${MAX_SAMPLES} hashes, one per line`}
             aria-describedby="hash-type-samples-help"
           />
-          <p id="hash-type-samples-help" className="text-muted-foreground mt-1.5 text-xs">
+          <p id="hash-type-samples-help" className="mt-1.5 text-xs text-muted-foreground">
             {helperMessage}
           </p>
         </div>
@@ -296,7 +296,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
             not gradient noise). */}
         {detect.data && (
           <section className="pt-6">
-            <h4 className="text-foreground text-xs font-medium">Results</h4>
+            <h4 className="text-xs font-medium text-foreground">Results</h4>
             {flatCandidates.length === 0 ? (
               <div className="mt-2">
                 <EmptyState message="No hash types matched the samples provided. Try different samples or paste more hashes." />
@@ -329,7 +329,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
         {/* Footer: structural separator (border-t) marks the actions
             row as distinct from the body. gap-2 keeps the two
             buttons tight as siblings. */}
-        <footer className="border-surface-0/60 mt-6 flex justify-end gap-2 border-t pt-5">
+        <footer className="mt-6 flex justify-end gap-2 border-t border-surface-0/60 pt-5">
           <Button variant="secondary" onClick={handleClose} disabled={inFlight}>
             Close
             <kbd className={KBD_CHIP} aria-hidden="true">
@@ -407,24 +407,24 @@ function Verdict({
 
   return (
     <article
-      className="border-primary/15 bg-primary/5 mt-3 rounded-lg border p-5"
+      className="mt-3 rounded-lg border border-primary/15 bg-primary/5 p-5"
       aria-label="Top match"
     >
       <div className="flex items-baseline justify-between gap-6">
         <div className="min-w-0">
-          <h5 className="text-foreground text-4xl font-medium tracking-tight">{candidate.name}</h5>
-          <p className="text-muted-foreground mt-2 font-mono text-xs">
+          <h5 className="text-4xl font-medium tracking-tight text-foreground">{candidate.name}</h5>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">
             Mode {candidate.hashcatMode} · {candidate.category}
           </p>
         </div>
         <div className="shrink-0 text-right">
           <div
-            className="text-primary text-4xl font-medium tabular-nums"
+            className="text-4xl font-medium text-primary tabular-nums"
             aria-label={`Confidence ${pct} percent`}
           >
             {pct}%
           </div>
-          <p className="text-muted-foreground mt-2 text-xs tracking-wide uppercase">Confidence</p>
+          <p className="mt-2 text-xs tracking-wide text-muted-foreground uppercase">Confidence</p>
         </div>
       </div>
       <div
@@ -434,10 +434,10 @@ function Verdict({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={`${candidate.name} confidence`}
-        className="bg-surface-1/60 mt-5 h-2 w-full overflow-hidden rounded-full"
+        className="mt-5 h-2 w-full overflow-hidden rounded-full bg-surface-1/60"
       >
         <div
-          className="bg-primary h-full rounded-full transition-all"
+          className="h-full rounded-full bg-primary transition-all"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -479,8 +479,8 @@ function RunnersUp({
 }: RunnersUpProps) {
   return (
     <div className="mt-5">
-      <p className="text-muted-foreground mb-2 text-xs font-medium">Other candidates</p>
-      <ul className="border-surface-0/60 divide-surface-0/60 divide-y rounded-md border">
+      <p className="mb-2 text-xs font-medium text-muted-foreground">Other candidates</p>
+      <ul className="divide-y divide-surface-0/60 rounded-md border border-surface-0/60">
         {candidates.map((c) => {
           const pct = Math.round(c.confidence * 100)
           const isApplying = pendingApplyMode === c.hashcatMode
@@ -490,9 +490,9 @@ function RunnersUp({
           return (
             <li key={c.hashcatMode} className="flex items-center gap-4 px-4 py-2.5 text-xs">
               <div className="flex min-w-0 flex-1 items-baseline gap-3">
-                <span className="text-foreground text-sm font-medium">{c.name}</span>
-                <span className="text-muted-foreground font-mono">{c.hashcatMode}</span>
-                <span className="text-muted-foreground truncate">{c.category}</span>
+                <span className="text-sm font-medium text-foreground">{c.name}</span>
+                <span className="font-mono text-muted-foreground">{c.hashcatMode}</span>
+                <span className="truncate text-muted-foreground">{c.category}</span>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <div
@@ -502,11 +502,11 @@ function RunnersUp({
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-label={`${c.name} confidence`}
-                  className="bg-surface-1 h-1.5 w-16 overflow-hidden rounded-full"
+                  className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-1"
                 >
-                  <div className="bg-primary/70 h-full rounded-full" style={{ width: `${pct}%` }} />
+                  <div className="h-full rounded-full bg-primary/70" style={{ width: `${pct}%` }} />
                 </div>
-                <span className="text-muted-foreground w-9 text-right font-mono tabular-nums">
+                <span className="w-9 text-right font-mono text-muted-foreground tabular-nums">
                   {pct}%
                 </span>
               </div>

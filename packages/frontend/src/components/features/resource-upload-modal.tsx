@@ -219,13 +219,13 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
   const displayProgress = chunkedProgress ? chunkedProgress.percentage : null
 
   return (
-    <div className="bg-crust/80 fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80">
       <div
         // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom modal: native <dialog> doesn't support the design system's surface tokens
         role="dialog"
         aria-modal="true"
         aria-labelledby="resource-upload-title"
-        className="border-surface-0 bg-mantle w-full max-w-md rounded-lg border p-6 shadow-2xl"
+        className="w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
       >
         <h3 id="resource-upload-title" className="mb-4 text-sm font-medium">
           Upload New {label}
@@ -235,7 +235,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
 
         <div className="space-y-4">
           <div>
-            <label htmlFor="resource-name" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="resource-name" className="text-xs font-medium text-muted-foreground">
               Name
             </label>
             <Input
@@ -249,7 +249,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
           </div>
 
           <div>
-            <label htmlFor="resource-file" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="resource-file" className="text-xs font-medium text-muted-foreground">
               File
             </label>
             <div
@@ -264,7 +264,7 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
               onKeyDown={handleDropzoneKeyDown}
               onClick={() => !isUploading && fileInputRef.current?.click()}
               className={cn(
-                'focus-visible:ring-primary mt-1.5 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed px-4 py-6 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none',
+                'mt-1.5 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed px-4 py-6 text-center transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none',
                 isDragOver
                   ? 'border-primary bg-primary/5'
                   : 'border-surface-1 hover:border-surface-0',
@@ -273,17 +273,17 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
             >
               {file ? (
                 <>
-                  <p className="text-foreground text-xs font-medium">{file.name}</p>
-                  <p className="text-muted-foreground font-mono text-xs">
+                  <p className="text-xs font-medium text-foreground">{file.name}</p>
+                  <p className="font-mono text-xs text-muted-foreground">
                     {(file.size / (1024 * 1024)).toFixed(file.size < 10 * 1024 * 1024 ? 1 : 0)} MB
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-foreground text-xs font-medium">
+                  <p className="text-xs font-medium text-foreground">
                     Drop a file here or click to browse
                   </p>
-                  <p className="text-muted-foreground text-xs">Any file type, up to several GB</p>
+                  <p className="text-xs text-muted-foreground">Any file type, up to several GB</p>
                 </>
               )}
               <input
@@ -309,12 +309,12 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
               {displayProgress !== null ? (
                 <>
                   <progress
-                    className="[&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all"
+                    className="h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary [&::-webkit-progress-value]:transition-all"
                     max={100}
                     value={displayProgress}
                     aria-label={`Uploading ${file?.name ?? 'file'}`}
                   />
-                  <p className="text-muted-foreground text-xs">
+                  <p className="text-xs text-muted-foreground">
                     {displayProgress}%
                     {chunkedProgress && (
                       <span>
@@ -327,10 +327,10 @@ export function ResourceUploadModal({ type, open, onClose, onSuccess }: Resource
               ) : (
                 <>
                   <progress
-                    className="[&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full"
+                    className="h-1.5 w-full overflow-hidden rounded-full [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-surface-1 [&::-webkit-progress-value]:bg-primary"
                     aria-label={`Uploading ${file?.name ?? 'file'}`}
                   />
-                  <p className="text-muted-foreground text-xs">
+                  <p className="text-xs text-muted-foreground">
                     Uploading {file?.name ?? 'file'}...
                   </p>
                 </>

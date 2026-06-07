@@ -58,22 +58,22 @@ function ApiKeySection() {
   }
 
   return (
-    <section className="border-border bg-card space-y-3 rounded-md border p-4">
+    <section className="space-y-3 rounded-md border border-border bg-card p-4">
       <header className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Control API Key</h2>
-        <span className="text-muted-foreground text-xs">For automation, CI, and CLI tools</span>
+        <span className="text-xs text-muted-foreground">For automation, CI, and CLI tools</span>
       </header>
 
       {queryErrorMessage && <ErrorBanner message={queryErrorMessage} />}
       {actionError && <ErrorBanner message={actionError} />}
 
       {isLoading ? (
-        <p className="text-muted-foreground text-xs">Loading...</p>
+        <p className="text-xs text-muted-foreground">Loading...</p>
       ) : queryErrorMessage ? (
         // Don't fall through to "no key" when the metadata read failed —
         // showing the Generate button could clobber an existing key the
         // user just couldn't load.
-        <p className="text-muted-foreground text-xs">
+        <p className="text-xs text-muted-foreground">
           Reload the page to retry, or contact an administrator if the problem persists.
         </p>
       ) : rawToken ? (
@@ -119,9 +119,9 @@ function ApiKeySection() {
 function NoKeyView({ busy, onIssue }: { busy: boolean; onIssue: () => void }) {
   return (
     <div className="space-y-2">
-      <p className="text-muted-foreground text-xs">
+      <p className="text-xs text-muted-foreground">
         You do not have an active API key. Generate one to authenticate against
-        <code className="bg-muted mx-1 rounded px-1">/api/v1/control/*</code> for scripted access.
+        <code className="mx-1 rounded bg-muted px-1">/api/v1/control/*</code> for scripted access.
       </p>
       <Button onClick={onIssue} disabled={busy}>
         {busy ? 'Generating...' : 'Generate API Key'}
@@ -153,7 +153,7 @@ function ExistingKeyView({
         <dt className="text-muted-foreground">Last used</dt>
         <dd>{formatLastUsed(lastUsedAt)}</dd>
       </dl>
-      <p className="text-muted-foreground text-xs">
+      <p className="text-xs text-muted-foreground">
         The raw token is only shown once at issue time. If you've lost it, rotate to generate a new
         one.
       </p>
@@ -195,7 +195,7 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
       </p>
       <div className="flex items-center gap-2">
         {/* select-all on click so the manual-copy fallback is one gesture */}
-        <code className="bg-muted flex-1 overflow-x-auto rounded px-2 py-1 font-mono text-xs select-all">
+        <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs select-all">
           {token}
         </code>
         <Button onClick={handleCopy} variant="secondary" className="text-xs">
@@ -203,7 +203,7 @@ function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
         </Button>
       </div>
       {copyError && <p className="text-xs text-amber-700 dark:text-amber-300">{copyError}</p>}
-      <p className="text-muted-foreground text-xs">
+      <p className="text-xs text-muted-foreground">
         Store it in a password manager or your tool's secret store. Treat it like a password; anyone
         with this token can act as you against the Control API.
       </p>

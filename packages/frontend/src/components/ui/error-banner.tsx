@@ -9,7 +9,7 @@ export function ErrorBanner({ message, className }: ErrorBannerProps) {
   return (
     <div
       className={cn(
-        'border-destructive/20 bg-destructive/10 text-destructive rounded border px-3 py-2 text-sm',
+        'rounded border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive',
         className
       )}
       role="alert"

@@ -165,13 +165,13 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
   const showProgress = progress !== null
 
   return (
-    <div className="bg-crust/80 fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80">
       <div
         // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom modal: native <dialog> doesn't support the design system's surface tokens
         role="dialog"
         aria-modal="true"
         aria-labelledby="cracker-upload-title"
-        className="border-surface-0 bg-mantle w-full max-w-md rounded-lg border p-6 shadow-2xl"
+        className="w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
       >
         <h3 id="cracker-upload-title" className="mb-4 text-sm font-medium">
           Upload Cracker Binary
@@ -181,7 +181,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
 
         <div className="space-y-4">
           <div>
-            <label htmlFor="cracker-engine" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="cracker-engine" className="text-xs font-medium text-muted-foreground">
               Engine
             </label>
             <select
@@ -189,7 +189,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
               value={engine}
               onChange={(e) => setEngine(e.target.value as KnownEngineName)}
               disabled={isUploading}
-              className="border-surface-0 bg-background mt-1.5 w-full rounded border px-3 py-1.5 text-xs"
+              className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-1.5 text-xs"
             >
               {KNOWN_ENGINES.map((value) => (
                 <option key={value} value={value}>
@@ -200,7 +200,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
           </div>
 
           <div>
-            <label htmlFor="cracker-version" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="cracker-version" className="text-xs font-medium text-muted-foreground">
               Version
             </label>
             <Input
@@ -214,7 +214,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
           </div>
 
           <div>
-            <label htmlFor="cracker-platform" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="cracker-platform" className="text-xs font-medium text-muted-foreground">
               Platform
             </label>
             <select
@@ -222,7 +222,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
               value={platform}
               onChange={(e) => setPlatform(e.target.value as KnownPlatformName)}
               disabled={isUploading}
-              className="border-surface-0 bg-background mt-1.5 w-full rounded border px-3 py-1.5 text-xs"
+              className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-1.5 text-xs"
             >
               {KNOWN_PLATFORMS.map((value) => (
                 <option key={value} value={value}>
@@ -233,7 +233,7 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
           </div>
 
           <div>
-            <label htmlFor="cracker-file" className="text-muted-foreground text-xs font-medium">
+            <label htmlFor="cracker-file" className="text-xs font-medium text-muted-foreground">
               File
             </label>
             <input
@@ -243,19 +243,19 @@ export function CrackerUploadModal({ open, onClose, onSuccess }: CrackerUploadMo
               aria-label="Cracker binary file"
               onChange={handleFileChange}
               disabled={isUploading}
-              className="text-muted-foreground file:bg-surface-0 file:text-foreground mt-1.5 w-full text-xs file:mr-3 file:rounded file:border-0 file:px-3 file:py-1.5 file:text-xs file:font-medium disabled:opacity-50"
+              className="mt-1.5 w-full text-xs text-muted-foreground file:mr-3 file:rounded file:border-0 file:bg-surface-0 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground disabled:opacity-50"
             />
           </div>
 
           {showProgress && (
             <div className="space-y-1">
-              <div className="bg-surface-1 h-1.5 w-full rounded-full">
+              <div className="h-1.5 w-full rounded-full bg-surface-1">
                 <div
-                  className="bg-primary h-full rounded-full transition-all"
+                  className="h-full rounded-full bg-primary transition-all"
                   style={{ width: `${progress.percentage}%` }}
                 />
               </div>
-              <p className="text-muted-foreground text-xs">
+              <p className="text-xs text-muted-foreground">
                 {progress.percentage}% - Part {progress.partNumber} of {progress.totalParts}
               </p>
             </div>

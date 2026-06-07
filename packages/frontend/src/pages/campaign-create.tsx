@@ -525,7 +525,7 @@ export function CampaignCreatePage() {
                 </div>
                 <div className="space-y-3">
                   <div>
-                    <label htmlFor="mode" className="text-muted-foreground text-xs font-medium">
+                    <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
                       Attack Mode
                     </label>
                     <Select id="mode" className="mt-1.5" {...attackForm.register('mode')}>
@@ -539,7 +539,7 @@ export function CampaignCreatePage() {
                   <div>
                     <label
                       htmlFor="hashTypeId"
-                      className="text-muted-foreground text-xs font-medium"
+                      className="text-xs font-medium text-muted-foreground"
                     >
                       Hash Type
                     </label>
@@ -579,7 +579,7 @@ export function CampaignCreatePage() {
                     <div key={field.id}>
                       <label
                         htmlFor={field.id}
-                        className="text-muted-foreground text-xs font-medium"
+                        className="text-xs font-medium text-muted-foreground"
                       >
                         {field.label}
                       </label>
@@ -607,7 +607,7 @@ export function CampaignCreatePage() {
                   <div>
                     <label
                       htmlFor="advancedConfiguration"
-                      className="text-muted-foreground text-xs font-medium"
+                      className="text-xs font-medium text-muted-foreground"
                     >
                       Advanced Configuration (JSON, optional)
                     </label>
@@ -615,11 +615,11 @@ export function CampaignCreatePage() {
                       id="advancedConfiguration"
                       rows={3}
                       placeholder='{"workload-profile": 3}'
-                      className="border-surface-0 bg-background text-foreground focus:border-primary focus:ring-primary/40 mt-1.5 w-full rounded border px-3 py-2 font-mono text-xs focus:ring-1"
+                      className="mt-1.5 w-full rounded border border-surface-0 bg-background px-3 py-2 font-mono text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/40"
                       {...attackForm.register('advancedConfiguration')}
                     />
                     {attackForm.formState.errors.advancedConfiguration?.['message'] && (
-                      <p className="text-destructive mt-1 text-xs">
+                      <p className="mt-1 text-xs text-destructive">
                         {String(attackForm.formState.errors.advancedConfiguration['message'])}
                       </p>
                     )}
@@ -679,8 +679,8 @@ export function CampaignCreatePage() {
 
       {wizard.step === 2 && (
         <div className="space-y-4">
-          <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-            <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
+          <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+            <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
               Campaign Summary
             </h3>
             <dl className="space-y-2 text-sm">
@@ -712,11 +712,11 @@ export function CampaignCreatePage() {
           </div>
 
           {wizard.attacks.length > 0 && (
-            <div className="border-surface-0 bg-surface-0/40 rounded-md border p-4">
-              <h3 className="text-muted-foreground mb-3 text-xs font-medium tracking-wider uppercase">
+            <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
+              <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
                 DAG Preview
               </h3>
-              <div className="bg-crust h-[300px] rounded">
+              <div className="h-[300px] rounded bg-crust">
                 <ReactFlow
                   nodes={buildNodes(wizard.attacks)}
                   edges={buildEdges(wizard.attacks)}

@@ -86,7 +86,7 @@ export function TemplatePickerOverlay({
       <button
         type="button"
         aria-label="Close template picker"
-        className="bg-crust/80 absolute inset-0"
+        className="absolute inset-0 bg-crust/80"
         onClick={onClose}
         tabIndex={-1}
       />
@@ -96,7 +96,7 @@ export function TemplatePickerOverlay({
         role="dialog"
         aria-modal="true"
         aria-labelledby="template-picker-title"
-        className="border-surface-0 bg-mantle relative z-10 w-full max-w-md rounded-lg border p-4 shadow-2xl"
+        className="relative z-10 w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-4 shadow-2xl"
       >
         <div className="mb-3 flex items-center justify-between">
           <h3 id="template-picker-title" className="text-sm font-medium">
@@ -105,7 +105,7 @@ export function TemplatePickerOverlay({
           <button
             ref={cancelRef}
             type="button"
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background text-xs focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:outline-none"
+            className="text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background focus-visible:outline-none"
             onClick={onClose}
           >
             Cancel
@@ -114,18 +114,18 @@ export function TemplatePickerOverlay({
         {error && <ErrorBanner message={error} className="mb-2 text-xs" />}
         <div className="max-h-64 space-y-1.5 overflow-y-auto">
           {templates.length === 0 ? (
-            <p className="text-muted-foreground py-4 text-center text-xs">
+            <p className="py-4 text-center text-xs text-muted-foreground">
               No templates available.
             </p>
           ) : (
             templates.map((template) => (
               <div
                 key={template.id}
-                className="border-surface-0 bg-surface-0/30 flex items-center justify-between rounded border px-3 py-2"
+                className="flex items-center justify-between rounded border border-surface-0 bg-surface-0/30 px-3 py-2"
               >
                 <div className="text-xs">
                   <span className="font-medium">{template.name}</span>
-                  <span className="text-muted-foreground ml-2 font-mono">Mode {template.mode}</span>
+                  <span className="ml-2 font-mono text-muted-foreground">Mode {template.mode}</span>
                 </div>
                 <Button
                   size="sm"

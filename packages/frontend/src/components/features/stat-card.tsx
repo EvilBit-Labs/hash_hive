@@ -145,7 +145,7 @@ export function StatCard({
             'inline-block font-mono leading-none font-bold tabular-nums',
             isPrimary
               ? 'text-5xl tracking-tight text-[hsl(var(--ctp-peach))]'
-              : 'text-foreground text-2xl'
+              : 'text-2xl text-foreground'
           )}
         >
           {value}
@@ -262,7 +262,7 @@ export function StatCard({
         {title}
       </p>
       {valueSlot}
-      <p className="text-muted-foreground mt-1 text-xs">{subtitle}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
       {sparklineSlot}
     </>
   )
@@ -286,10 +286,10 @@ export function StatCard({
   // side-stripe accent — the per-domain hue carries via the sparkline,
   // not the card chrome.
   const secondarySurface = cn(
-    'bg-surface-0/40 border-surface-0 relative rounded-md border p-5',
+    'relative rounded-md border border-surface-0 bg-surface-0/40 p-5',
     'transition-colors',
-    'hover:bg-surface-0/70 hover:border-surface-1',
-    'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
+    'hover:border-surface-1 hover:bg-surface-0/70',
+    'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
   )
 
   const surface = cn(isPrimary ? primarySurface : secondarySurface, className)
