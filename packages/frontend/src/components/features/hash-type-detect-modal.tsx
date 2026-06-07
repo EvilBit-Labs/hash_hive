@@ -10,7 +10,6 @@ import { Button } from '../ui/button'
 import { EmptyState } from '../ui/empty-state'
 import { ErrorBanner } from '../ui/error-banner'
 import { Select } from '../ui/select'
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../ui/table'
 
 const MIN_SAMPLES = 5
 const MAX_SAMPLES = 10
@@ -104,6 +103,7 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
         }
       }
     }
+    // oxlint-disable-next-line unicorn/no-array-sort -- Array.from already returns a fresh array; the in-place sort is safe and tsconfig 'lib' doesn't include es2023's toSorted
     return Array.from(seen.values()).sort((a, b) => b.confidence - a.confidence)
   }, [detect.data])
 
@@ -250,9 +250,14 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
           </p>
         </div>
 
-        {/* Results: phase transition from input to output. pt-6 marks
-            the change of context. Section header is the same weight as
-            labels above so the table itself carries the visual weight. */}
+        {/* Results: phase transition from input to output. The top
+            candidate lands as a verdict — large scale, peach accent,
+            primary apply button — so the operator's eye snaps to "the
+            answer." Remaining candidates collapse into a dense
+            runners-up list with ghost apply buttons. This is the
+            "dramatic ops theater" the brand context calls for, kept
+            inside the editorial color budget (one peach-tinted block,
+            not gradient noise). */}
         {detect.data && (
           <section className="pt-6">
             <h4 className="text-foreground text-xs font-medium">Results</h4>
@@ -261,66 +266,26 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
                 <EmptyState message="No hash types matched the samples provided. Try different samples or paste more hashes." />
               </div>
             ) : (
-              <div className="mt-2">
-                <Table>
-                  <TableHead>
-                    <tr>
-                      <Th>Type</Th>
-                      <Th>Mode</Th>
-                      <Th>Category</Th>
-                      <Th>Confidence</Th>
-                      <Th>
-                        <span className="sr-only">Apply</span>
-                      </Th>
-                    </tr>
-                  </TableHead>
-                  <TableBody>
-                    {flatCandidates.map((c) => {
-                      const isApplying = pendingApplyMode === c.hashcatMode
-                      const otherApplying = pendingApplyMode !== null && !isApplying
-                      const applyDisabled =
-                        selectedListId === null || setType.isPending || otherApplying
-                      return (
-                        <TableRow key={c.hashcatMode}>
-                          <Td className="text-foreground text-sm font-medium">{c.name}</Td>
-                          <Td className="font-mono text-xs">{c.hashcatMode}</Td>
-                          <Td className="text-muted-foreground text-xs">{c.category}</Td>
-                          <Td>
-                            <div className="flex items-center gap-2">
-                              <div className="bg-surface-1 h-1.5 w-20 rounded-full">
-                                <div
-                                  className="bg-primary h-full rounded-full transition-all"
-                                  style={{ width: `${Math.round(c.confidence * 100)}%` }}
-                                />
-                              </div>
-                              <span className="text-muted-foreground font-mono text-xs">
-                                {Math.round(c.confidence * 100)}%
-                              </span>
-                            </div>
-                          </Td>
-                          <Td className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleUseType(c.hashcatMode)}
-                              disabled={applyDisabled || hashTypes.isLoading || !hashTypes.data}
-                              title={
-                                selectedListId === null
-                                  ? 'Pick a hash list in the header to apply'
-                                  : hashTypes.isLoading || !hashTypes.data
-                                    ? 'Loading hash type registry...'
-                                    : undefined
-                              }
-                            >
-                              {isApplying ? 'Applying...' : 'Use This Type'}
-                            </Button>
-                          </Td>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+              <>
+                <Verdict
+                  candidate={flatCandidates[0]!}
+                  selectedListId={selectedListId}
+                  hashTypesReady={!hashTypes.isLoading && Boolean(hashTypes.data)}
+                  pendingApplyMode={pendingApplyMode}
+                  setTypePending={setType.isPending}
+                  onApply={handleUseType}
+                />
+                {flatCandidates.length > 1 && (
+                  <RunnersUp
+                    candidates={flatCandidates.slice(1)}
+                    selectedListId={selectedListId}
+                    hashTypesReady={!hashTypes.isLoading && Boolean(hashTypes.data)}
+                    pendingApplyMode={pendingApplyMode}
+                    setTypePending={setType.isPending}
+                    onApply={handleUseType}
+                  />
+                )}
+              </>
             )}
           </section>
         )}
@@ -337,6 +302,181 @@ export function HashTypeDetectModal({ open, onClose }: HashTypeDetectModalProps)
           </Button>
         </footer>
       </div>
+    </div>
+  )
+}
+
+// ─── Verdict + RunnersUp ────────────────────────────────────────────
+//
+// Sub-components for the results section. Split out so the JSX in
+// the modal body stays readable; the two pieces share the apply-state
+// computation but have very different visual treatments.
+
+interface Candidate {
+  name: string
+  hashcatMode: number
+  category: string
+  confidence: number
+}
+
+interface VerdictProps {
+  candidate: Candidate
+  selectedListId: number | null
+  hashTypesReady: boolean
+  pendingApplyMode: number | null
+  setTypePending: boolean
+  onApply: (hashcatMode: number) => void
+}
+
+function applyDisabledReason(
+  selectedListId: number | null,
+  hashTypesReady: boolean
+): string | undefined {
+  if (selectedListId === null) return 'Pick a hash list in the header to apply'
+  if (!hashTypesReady) return 'Loading hash type registry...'
+  return undefined
+}
+
+/**
+ * Top candidate, rendered as the lead. Three signals carry the
+ * verdict treatment: scale (text-4xl vs text-sm), color (peach accent
+ * on a subtle peach-tinted surface), and weight (primary button vs
+ * ghost). Mode + category sit underneath in monospace as supporting
+ * micro-type so the operator can verify the answer at a glance.
+ */
+function Verdict({
+  candidate,
+  selectedListId,
+  hashTypesReady,
+  pendingApplyMode,
+  setTypePending,
+  onApply,
+}: VerdictProps) {
+  const pct = Math.round(candidate.confidence * 100)
+  const isApplying = pendingApplyMode === candidate.hashcatMode
+  const otherApplying = pendingApplyMode !== null && !isApplying
+  const reason = applyDisabledReason(selectedListId, hashTypesReady)
+  const disabled = reason !== undefined || setTypePending || otherApplying
+
+  return (
+    <article
+      className="border-primary/15 bg-primary/5 mt-3 rounded-lg border p-5"
+      aria-label="Top match"
+    >
+      <div className="flex items-baseline justify-between gap-6">
+        <div className="min-w-0">
+          <h5 className="text-foreground text-4xl font-medium tracking-tight">{candidate.name}</h5>
+          <p className="text-muted-foreground mt-2 font-mono text-xs">
+            Mode {candidate.hashcatMode} · {candidate.category}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <div
+            className="text-primary text-4xl font-medium tabular-nums"
+            aria-label={`Confidence ${pct} percent`}
+          >
+            {pct}%
+          </div>
+          <p className="text-muted-foreground mt-2 text-xs tracking-wide uppercase">Confidence</p>
+        </div>
+      </div>
+      <div
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- styled bar: native <progress> doesn't respect the brand's peach/surface tokens or the rounded-full geometry; div with ARIA role is the documented escape hatch
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${candidate.name} confidence`}
+        className="bg-surface-1/60 mt-5 h-2 w-full overflow-hidden rounded-full"
+      >
+        <div
+          className="bg-primary h-full rounded-full transition-all"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="mt-5 flex justify-end">
+        <Button
+          variant="primary"
+          onClick={() => onApply(candidate.hashcatMode)}
+          disabled={disabled}
+          title={reason}
+        >
+          {isApplying ? 'Applying...' : 'Use This Type'}
+        </Button>
+      </div>
+    </article>
+  )
+}
+
+interface RunnersUpProps {
+  candidates: readonly Candidate[]
+  selectedListId: number | null
+  hashTypesReady: boolean
+  pendingApplyMode: number | null
+  setTypePending: boolean
+  onApply: (hashcatMode: number) => void
+}
+
+/**
+ * Remaining candidates after the lead. Dense, single-row layout —
+ * everything visually subordinate to the Verdict above. Ghost apply
+ * buttons reinforce that these are the runners-up, not the answer.
+ */
+function RunnersUp({
+  candidates,
+  selectedListId,
+  hashTypesReady,
+  pendingApplyMode,
+  setTypePending,
+  onApply,
+}: RunnersUpProps) {
+  return (
+    <div className="mt-5">
+      <p className="text-muted-foreground mb-2 text-xs font-medium">Other candidates</p>
+      <ul className="border-surface-0/60 divide-surface-0/60 divide-y rounded-md border">
+        {candidates.map((c) => {
+          const pct = Math.round(c.confidence * 100)
+          const isApplying = pendingApplyMode === c.hashcatMode
+          const otherApplying = pendingApplyMode !== null && !isApplying
+          const reason = applyDisabledReason(selectedListId, hashTypesReady)
+          const disabled = reason !== undefined || setTypePending || otherApplying
+          return (
+            <li key={c.hashcatMode} className="flex items-center gap-4 px-4 py-2.5 text-xs">
+              <div className="flex min-w-0 flex-1 items-baseline gap-3">
+                <span className="text-foreground text-sm font-medium">{c.name}</span>
+                <span className="text-muted-foreground font-mono">{c.hashcatMode}</span>
+                <span className="text-muted-foreground truncate">{c.category}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <div
+                  // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- styled bar: native <progress> doesn't respect the brand's peach/surface tokens or the rounded-full geometry; div with ARIA role is the documented escape hatch
+                  role="progressbar"
+                  aria-valuenow={pct}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`${c.name} confidence`}
+                  className="bg-surface-1 h-1.5 w-16 overflow-hidden rounded-full"
+                >
+                  <div className="bg-primary/70 h-full rounded-full" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-muted-foreground w-9 text-right font-mono tabular-nums">
+                  {pct}%
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onApply(c.hashcatMode)}
+                disabled={disabled}
+                title={reason}
+                className="shrink-0"
+              >
+                {isApplying ? 'Applying...' : 'Use This Type'}
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
