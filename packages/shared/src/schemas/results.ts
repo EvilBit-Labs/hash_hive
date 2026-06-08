@@ -7,9 +7,10 @@ import { z } from 'zod'
  * display name. Stable across hashcat 5/6/7 — modes are part of the public
  * CLI contract.
  *
- * `as const satisfies ...` preserves the literal key/value types so
- * consumers get an exhaustive `keyof` over supported modes while still
- * documenting that the runtime shape is a numeric-keyed string map.
+ * Typed as `Partial<Record<number, string>>` via the `satisfies` clause so
+ * the runtime invariant ("unknown numeric keys return undefined") is
+ * reflected in the type system — without this, lookup expressions would
+ * type as `string` and the `?? null` fallback would read as dead code.
  */
 export const HASHCAT_ATTACK_MODE_NAMES = {
   0: 'Dictionary',
@@ -18,18 +19,19 @@ export const HASHCAT_ATTACK_MODE_NAMES = {
   6: 'Hybrid Wordlist + Mask',
   7: 'Hybrid Mask + Wordlist',
   9: 'Association',
-} as const satisfies Readonly<Record<number, string>>
+} as const satisfies Readonly<Partial<Record<number, string>>>
 
-const ATTACK_MODE_NAME_VALUES = [
-  'Dictionary',
-  'Combination',
-  'Mask',
-  'Hybrid Wordlist + Mask',
-  'Hybrid Mask + Wordlist',
-  'Association',
-] as const
+// Single source of truth: `AttackModeName` is derived from the map's
+// value types, and the runtime tuple is computed via `Object.values`.
+// Adding/renaming a mode in `HASHCAT_ATTACK_MODE_NAMES` propagates to
+// both the type and the Zod enum below with no parallel literal list.
+export type AttackModeName =
+  (typeof HASHCAT_ATTACK_MODE_NAMES)[keyof typeof HASHCAT_ATTACK_MODE_NAMES]
 
-export type AttackModeName = (typeof ATTACK_MODE_NAME_VALUES)[number]
+const ATTACK_MODE_NAME_VALUES = Object.values(HASHCAT_ATTACK_MODE_NAMES) as [
+  AttackModeName,
+  ...AttackModeName[],
+]
 
 /**
  * Resolve a hashcat attack-mode integer to its display name. Returns `null`
@@ -39,8 +41,7 @@ export type AttackModeName = (typeof ATTACK_MODE_NAME_VALUES)[number]
  */
 export function resolveAttackModeName(mode: number | null): AttackModeName | null {
   if (mode === null) return null
-  const lookup = HASHCAT_ATTACK_MODE_NAMES as Readonly<Record<number, AttackModeName>>
-  return lookup[mode] ?? null
+  return HASHCAT_ATTACK_MODE_NAMES[mode as keyof typeof HASHCAT_ATTACK_MODE_NAMES] ?? null
 }
 
 /**

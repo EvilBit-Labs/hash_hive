@@ -62,17 +62,25 @@ function escapeCsv(val: string | null | undefined): string {
   return str
 }
 
-// Coerce + clamp pagination at the schema boundary so handlers stay thin.
-// Permissive: invalid values fall back to defaults rather than 400 — matches
-// the rest of the dashboard surface, and keeps NaN/Infinity from leaking
-// into Drizzle's `.limit()`/`.offset()`.
+// Permissive filter inputs across the dashboard surface: invalid values
+// fall back to "no filter" rather than 400, and `coerce` keeps
+// NaN/Infinity out of Drizzle's `.limit()`/`.offset()`. Each `.catch()`
+// wrapper needs an `.openapi(...)` hint or the spec generator throws.
+function isoDateTimeFilterQuery() {
+  return z
+    .string()
+    .datetime()
+    .optional()
+    .catch(undefined)
+    .openapi({ type: 'string', format: 'date-time' })
+}
+
 const resultsFilterShape = {
   campaignId: coercedOptionalPositiveIntegerQuery(),
   hashListId: coercedOptionalPositiveIntegerQuery(),
   q: z.string().min(1).optional(),
-  // ISO 8601 datetime, both boundaries inclusive.
-  startDate: z.string().datetime().optional(),
-  endDate: z.string().datetime().optional(),
+  startDate: isoDateTimeFilterQuery(),
+  endDate: isoDateTimeFilterQuery(),
 }
 
 const listResultsQuerySchema = z.object({
@@ -339,19 +347,24 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   // spec, so the closure variables below need no synchronization.
   let cursor: { crackedAt: Date; id: number } | null = null
   let headerSent = false
+  // The runtime stops invoking `pull` after `cancel()`, but an
+  // in-flight `await fetchCsvBatch(...)` from a previous tick can still
+  // resolve and try to `controller.enqueue(...)` on a now-closed
+  // controller (which throws). This flag short-circuits that path.
+  let cancelled = false
 
   // Work lives in `pull` so bytes flow lazily — running I/O in `start`
-  // would await before the first byte ships. Client disconnect is
-  // handled by the runtime: it stops invoking `pull`, and the in-flight
-  // batch resolves and is discarded.
+  // would await before the first byte ships.
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
+        if (cancelled) return
         if (!headerSent) {
           controller.enqueue(encoder.encode(CSV_HEADER_LINE))
           headerSent = true
         }
         const batch = await fetchCsvBatch(baseConditions, cursor)
+        if (cancelled) return
         if (batch.length === 0) {
           if (!cursor) {
             logger.info(
@@ -378,12 +391,28 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
           controller.close()
         }
       } catch (err) {
+        if (cancelled) return
         logger.error(
           { err, projectId, cursor, headerSent },
           'results/export: pull failed mid-stream, client will receive truncated CSV'
         )
         controller.error(err)
       }
+    },
+    cancel(reason) {
+      // Client disconnect or explicit cancel — mark the cancelled flag
+      // so any in-flight `pull` that races to enqueue after we close
+      // bails out instead of throwing on a closed controller.
+      cancelled = true
+      logger.info(
+        {
+          projectId,
+          cursor,
+          headerSent,
+          reason: reason instanceof Error ? reason.message : reason,
+        },
+        'results/export: stream cancelled by consumer'
+      )
     },
   })
 

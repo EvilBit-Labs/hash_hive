@@ -461,6 +461,21 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { results: unknown[] }
       expect(body.results).toEqual([])
     })
+
+    it('falls through to no-filter on malformed startDate / endDate (no 400)', async () => {
+      // Matches the dashboard surface convention: invalid filter input
+      // is "no filter", not a validation error. Same posture as
+      // `coercedOptionalPositiveIntegerQuery` on numeric filters.
+      state.rows = [makeRow({ id: 1 })]
+      const url = `${RESULTS}?startDate=not-a-date&endDate=2026-13-99`
+      const res = await app.request(url, {
+        method: 'GET',
+        headers: makeHeaders(),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { results: unknown[] }
+      expect(body.results).toHaveLength(1)
+    })
   })
 
   // ─── CSV export: content + streaming ────────────────────────────────
