@@ -96,7 +96,6 @@ import type {
   workRangeSchema,
   // Results API wire schemas (issue #164)
   crackedResultRowSchema,
-  listResultsQuerySchema,
   listResultsResponseSchema,
 } from '../schemas/index.js'
 
@@ -255,7 +254,6 @@ export type FileRef = z.infer<typeof fileRefSchema>
 export type ResourceStatus = z.infer<typeof resourceStatusSchema>
 export type HashListWire = z.infer<typeof hashListWireSchema>
 export type CrackedResultRow = z.infer<typeof crackedResultRowSchema>
-export type ListResultsQuery = z.infer<typeof listResultsQuerySchema>
 export type ListResultsResponse = z.infer<typeof listResultsResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>

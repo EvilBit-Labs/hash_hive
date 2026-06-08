@@ -233,10 +233,10 @@ export {
 export {
   crackedResultRowSchema,
   HASHCAT_ATTACK_MODE_NAMES,
-  listResultsQuerySchema,
   listResultsResponseSchema,
   resolveAttackModeName,
 } from './results.js'
+export type { AttackModeName } from './results.js'
 
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
