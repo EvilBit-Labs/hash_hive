@@ -1,9 +1,17 @@
-import { attacks, campaigns, hashItems, hashLists } from '@hashhive/shared'
+import {
+  attacks,
+  campaigns,
+  hashItems,
+  hashLists,
+  listResultsResponseSchema,
+  resolveAttackModeName,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, desc, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
+import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
@@ -13,19 +21,21 @@ import {
 } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
-  sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
+  sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
-resultsRoutes.use('*', requireSession)
-resultsRoutes.use('/', requireProjectAccess())
-resultsRoutes.use('/export', requireProjectAccess())
+// `*` covers both paths today and any future endpoint added to this
+// router, so a new mount can't silently bypass project membership.
+resultsRoutes.use('*', requireSession, requireProjectAccess())
 
 const RESULTS_LIST_MAX_LIMIT = 100
 const RESULTS_LIST_DEFAULT_LIMIT = 50
+
+const CSV_STREAM_BATCH_SIZE = 1000
 
 // Characters that trigger spreadsheet formula evaluation in Excel, Google
 // Sheets, and LibreOffice Calc when they appear at the start of a cell.
@@ -36,32 +46,41 @@ const RESULTS_LIST_DEFAULT_LIMIT = 50
 // spreadsheet apps treat it as literal text. `\n` and `\r` are included
 // because Excel/Sheets strip leading whitespace (including newlines that
 // the CSV reader preserved inside a quoted cell) before evaluating
-// formula triggers, so a quoted value like `"\n=HYPERLINK(...)"` would
-// otherwise evaluate as a formula. See OWASP "CSV Injection".
+// formula triggers. See OWASP "CSV Injection".
 const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r\n]/
 
 function escapeCsv(val: string | null | undefined): string {
   if (val == null) return ''
-  let str = String(val)
+  let str = val
   if (CSV_FORMULA_TRIGGER_REGEX.test(str)) {
     str = `'${str}`
   }
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+  // Bare CR splits the row in spreadsheet parsers; double inner quotes per RFC 4180.
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`
   }
   return str
 }
 
-// Coerce + clamp pagination at the schema boundary so handlers stay thin.
-// Permissive: invalid values fall back to defaults rather than 400 — matches
-// the rest of the dashboard surface, and keeps NaN/Infinity from leaking
-// into Drizzle's `.limit()`/`.offset()`. Annotated via `coercedIntegerQuery`
-// / `coercedOptionalPositiveIntegerQuery` so the OpenAPI generator can
-// emit a serializable schema (see openapi/coerced-query.ts).
+// Permissive filter inputs across the dashboard surface: invalid values
+// fall back to "no filter" rather than 400, and `coerce` keeps
+// NaN/Infinity out of Drizzle's `.limit()`/`.offset()`. Each `.catch()`
+// wrapper needs an `.openapi(...)` hint or the spec generator throws.
+function isoDateTimeFilterQuery() {
+  return z
+    .string()
+    .datetime()
+    .optional()
+    .catch(undefined)
+    .openapi({ type: 'string', format: 'date-time' })
+}
+
 const resultsFilterShape = {
   campaignId: coercedOptionalPositiveIntegerQuery(),
   hashListId: coercedOptionalPositiveIntegerQuery(),
   q: z.string().min(1).optional(),
+  startDate: isoDateTimeFilterQuery(),
+  endDate: isoDateTimeFilterQuery(),
 }
 
 const listResultsQuerySchema = z.object({
@@ -76,17 +95,18 @@ const listResultsQuerySchema = z.object({
 
 const exportResultsQuerySchema = z.object(resultsFilterShape)
 
-type ResultsFilterInput = {
-  campaignId: number | undefined
-  hashListId: number | undefined
-  q: string | undefined
-}
+type ResultsFilterInput = z.infer<typeof exportResultsQuerySchema>
 
-// Build filter conditions from validated query params + session projectId
 function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
-  const { campaignId, hashListId, q: search } = filters
+  const { campaignId, hashListId, q: search, startDate, endDate } = filters
 
-  const conditions = [eq(campaigns.projectId, projectId), isNotNull(hashItems.crackedAt)]
+  // Scope via `hashLists.projectId`, NOT `campaigns.projectId`:
+  // `hash_items.campaign_id` is nullable (FK uses ON DELETE SET NULL),
+  // so a campaigns join would silently drop cracked rows whose
+  // campaign has been deleted. `hashItems.hashListId` is NOT NULL and
+  // `hashLists.projectId` is NOT NULL — same rationale as
+  // `dashboard/stats.ts`.
+  const conditions = [eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt)]
 
   if (campaignId) {
     conditions.push(eq(hashItems.campaignId, campaignId))
@@ -100,39 +120,45 @@ function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
       sql`(${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\' OR ${hashItems.plaintext} ILIKE ${`%${escaped}%`} ESCAPE '\\')`
     )
   }
+  if (startDate) {
+    conditions.push(gte(hashItems.crackedAt, new Date(startDate)))
+  }
+  if (endDate) {
+    conditions.push(lte(hashItems.crackedAt, new Date(endDate)))
+  }
 
   return conditions
 }
 
-// ─── Response shapes ────────────────────────────────────────────────
+// Dedupe unknown-mode warnings per process; an outdated dashboard build
+// running against newer agents would otherwise log every row.
+const UNKNOWN_ATTACK_MODES_LOGGED = new Set<number>()
 
-const resultRowSchema = z
-  .object({
-    id: z.number().int(),
-    hashValue: z.string(),
-    plaintext: z.string().nullable(),
-    crackedAt: z.string().nullable(),
-    hashListId: z.number().int(),
-    hashListName: z.string(),
-    campaignId: z.number().int().nullable(),
-    campaignName: z.string().nullable(),
-    attackId: z.number().int().nullable(),
-    attackMode: z.number().int().nullable(),
-    agentId: z.number().int().nullable(),
-  })
-  .passthrough()
-  .openapi('CrackedResultRow')
+function resolveAttackModeNameWithTelemetry(mode: number | null): string | null {
+  const name = resolveAttackModeName(mode)
+  if (name === null && mode !== null && !UNKNOWN_ATTACK_MODES_LOGGED.has(mode)) {
+    UNKNOWN_ATTACK_MODES_LOGGED.add(mode)
+    logger.warn(
+      { mode },
+      'results: unknown hashcat attack mode encountered — dashboard build may be older than agent'
+    )
+  }
+  return name
+}
 
-const listResultsResponseSchema = z
-  .object({
-    results: z.array(resultRowSchema),
-    total: z.number().int().nonnegative(),
-    limit: z.number().int(),
-    offset: z.number().int(),
-  })
-  .openapi('CrackedResultList')
-
-// ─── GET /results — paginated cracked results with attribution ──────
+function getScopedProjectId(c: {
+  get: (key: 'scopedUser') => { projectId: number } | undefined
+}): { ok: true; projectId: number } | { ok: false } {
+  const scoped = c.get('scopedUser')
+  if (!scoped) {
+    logger.error(
+      {},
+      'results: scopedUser middleware did not run before handler — middleware order regression'
+    )
+    return { ok: false }
+  }
+  return { ok: true, projectId: scoped.projectId }
+}
 
 const listResultsRoute = createRoute({
   method: 'get',
@@ -152,12 +178,22 @@ const listResultsRoute = createRoute({
 })
 
 resultsRoutes.openapi(listResultsRoute, async (c) => {
-  const { projectId } = c.get('scopedUser')!
+  const scope = getScopedProjectId(c)
+  if (!scope.ok) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
+  }
+  const { projectId } = scope
 
-  const { limit, offset, campaignId, hashListId, q } = c.req.valid('query')
-  const conditions = buildResultFilters(projectId, { campaignId, hashListId, q })
+  const { limit, offset, campaignId, hashListId, q, startDate, endDate } = c.req.valid('query')
+  const conditions = buildResultFilters(projectId, {
+    campaignId,
+    hashListId,
+    q,
+    startDate,
+    endDate,
+  })
 
-  const [results, countResult] = await Promise.all([
+  const [rawResults, countResult] = await Promise.all([
     db
       .select({
         id: hashItems.id,
@@ -173,8 +209,11 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
         agentId: hashItems.agentId,
       })
       .from(hashItems)
-      .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      // Campaign join is LEFT so historical rows (campaign deleted →
+      // hashItems.campaignId is null) still appear with null campaign
+      // fields rather than being silently filtered out.
+      .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
       .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
       .where(and(...conditions))
       .orderBy(desc(hashItems.crackedAt))
@@ -183,14 +222,34 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
     db
       .select({ count: sql<number>`count(*)` })
       .from(hashItems)
-      .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
       .where(and(...conditions)),
   ])
+
+  const rawCount = countResult[0]?.count
+  if (rawCount == null) {
+    logger.warn(
+      { projectId },
+      'results/list: count query returned no rows — driver invariant violated, defaulting total to 0'
+    )
+  }
+
+  // Project immutability rule applies to intermediate Drizzle rows; cost
+  // is one shallow spread per row, capped at RESULTS_LIST_MAX_LIMIT (100).
+  // oxlint-disable-next-line oxc/no-map-spread
+  const results = rawResults.map((row) => ({
+    ...row,
+    attackModeName: resolveAttackModeNameWithTelemetry(row.attackMode),
+  }))
 
   return c.json(
     {
       results,
-      total: Number(countResult[0]?.count ?? 0),
+      // postgres-js returns count(*) as a string; Drizzle's `sql<number>`
+      // is a compile-time cast that does NOT convert at runtime. Without
+      // this wrapper `total` would ship as a string. Same as
+      // dashboard/stats.ts.
+      total: Number(rawCount ?? 0),
       limit,
       offset,
     },
@@ -198,18 +257,17 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
   )
 })
 
-// ─── GET /results/export — CSV export of cracked results ────────────
-
 const exportResultsRoute = createRoute({
   method: 'get',
   path: '/export',
   tags: ['Results'],
-  summary: 'Stream a CSV export of cracked results (capped at 10,000 rows)',
+  summary:
+    'Stream a CSV export of cracked results. Streams all matching rows with no row cap; backpressure is handled via ReadableStream.',
   security: [{ SessionCookie: [] }],
   request: { query: exportResultsQuerySchema },
   responses: {
     200: {
-      description: 'CSV file with one row per cracked hash, capped at 10,000 rows.',
+      description: 'CSV file with one row per cracked hash; streamed via ReadableStream.',
       content: { 'text/csv': { schema: z.string() } },
     },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
@@ -217,50 +275,172 @@ const exportResultsRoute = createRoute({
   },
 })
 
-resultsRoutes.openapi(exportResultsRoute, async (c) => {
-  const { projectId } = c.get('scopedUser')!
+/**
+ * Fetch one batch of cracked rows for the streaming export. Uses keyset
+ * pagination on `(crackedAt DESC, id DESC)` so batches never re-fetch a
+ * row across the cursor boundary even when many rows share a `crackedAt`
+ * value (the `id` tiebreaker is load-bearing).
+ *
+ * Drizzle's query-builder operator set is single-column, so the
+ * row-value comparison `(cracked_at, id) < (cursor.crackedAt, cursor.id)`
+ * is expressed as the equivalent boolean expansion:
+ *   `crackedAt < cursor.crackedAt OR (crackedAt = cursor.crackedAt AND id < cursor.id)`.
+ */
+async function fetchCsvBatch(
+  baseConditions: ReturnType<typeof buildResultFilters>,
+  cursor: { crackedAt: Date; id: number } | null
+) {
+  const cursorPredicate = cursor
+    ? [
+        or(
+          lt(hashItems.crackedAt, cursor.crackedAt),
+          and(eq(hashItems.crackedAt, cursor.crackedAt), lt(hashItems.id, cursor.id))
+        ),
+      ]
+    : []
 
-  const { campaignId, hashListId, q } = c.req.valid('query')
-  const conditions = buildResultFilters(projectId, { campaignId, hashListId, q })
-
-  const results = await db
-    .select({
-      hashValue: hashItems.hashValue,
-      plaintext: hashItems.plaintext,
-      crackedAt: hashItems.crackedAt,
-      hashListName: hashLists.name,
-      campaignName: campaigns.name,
-      attackMode: attacks.mode,
-    })
-    .from(hashItems)
-    .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
-    .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-    .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
-    .where(and(...conditions))
-    .orderBy(desc(hashItems.crackedAt))
-    .limit(10_000) // Cap CSV export
-
-  // Build CSV
-  const csvHeader = 'hash_value,plaintext,campaign,attack_mode,hash_list,cracked_at\n'
-  const csvRows = results.map((r) =>
-    [
-      escapeCsv(r.hashValue),
-      escapeCsv(r.plaintext),
-      escapeCsv(r.campaignName),
-      r.attackMode != null ? String(r.attackMode) : '',
-      escapeCsv(r.hashListName),
-      r.crackedAt ? new Date(r.crackedAt).toISOString() : '',
-    ].join(',')
+  return (
+    db
+      .select({
+        id: hashItems.id,
+        hashValue: hashItems.hashValue,
+        plaintext: hashItems.plaintext,
+        crackedAt: hashItems.crackedAt,
+        hashListName: hashLists.name,
+        campaignName: campaigns.name,
+        attackMode: attacks.mode,
+      })
+      .from(hashItems)
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      // Left-join campaigns so deleted-campaign rows still export (same
+      // rationale as the list query — hash_items.campaign_id is nullable).
+      .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+      .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
+      .where(and(...baseConditions, ...cursorPredicate))
+      .orderBy(desc(hashItems.crackedAt), desc(hashItems.id))
+      .limit(CSV_STREAM_BATCH_SIZE)
   )
+}
 
-  const csv = csvHeader + csvRows.join('\n')
+type CsvBatchRow = Awaited<ReturnType<typeof fetchCsvBatch>>[number]
+
+// Header + per-row projection co-located so reordering one breaks the
+// other at compile time. A bare string + map() lets the two drift
+// silently and ship a CSV with mislabeled columns.
+const CSV_COLUMNS: ReadonlyArray<{ header: string; project: (r: CsvBatchRow) => string }> = [
+  { header: 'hash_value', project: (r) => escapeCsv(r.hashValue) },
+  { header: 'plaintext', project: (r) => escapeCsv(r.plaintext) },
+  { header: 'campaign', project: (r) => escapeCsv(r.campaignName) },
+  { header: 'attack', project: (r) => escapeCsv(resolveAttackModeNameWithTelemetry(r.attackMode)) },
+  { header: 'hash_list', project: (r) => escapeCsv(r.hashListName) },
+  { header: 'cracked_at', project: (r) => (r.crackedAt ? r.crackedAt.toISOString() : '') },
+]
+
+const CSV_HEADER_LINE = `${CSV_COLUMNS.map((c) => c.header).join(',')}\n`
+
+function encodeBatchAsCsv(batch: readonly CsvBatchRow[]): string {
+  return batch.map((r) => CSV_COLUMNS.map((c) => c.project(r)).join(',')).join('\n')
+}
+
+resultsRoutes.openapi(exportResultsRoute, async (c) => {
+  const scope = getScopedProjectId(c)
+  if (!scope.ok) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
+  }
+  const { projectId } = scope
+
+  const { campaignId, hashListId, q, startDate, endDate } = c.req.valid('query')
+  const filters: ResultsFilterInput = { campaignId, hashListId, q, startDate, endDate }
+  // Build conditions once at handler entry — each pull only composes the
+  // cursor predicate on top.
+  const baseConditions = buildResultFilters(projectId, filters)
+
+  const encoder = new TextEncoder()
+  // `pull` is contractually single-threaded by the ReadableStream
+  // spec, so the closure variables below need no synchronization.
+  let cursor: { crackedAt: Date; id: number } | null = null
+  let headerSent = false
+  // The runtime stops invoking `pull` after `cancel()`, but an
+  // in-flight `await fetchCsvBatch(...)` from a previous tick can still
+  // resolve and try to `controller.enqueue(...)` on a now-closed
+  // controller (which throws). This flag short-circuits that path.
+  let cancelled = false
+
+  // Work lives in `pull` so bytes flow lazily — running I/O in `start`
+  // would await before the first byte ships.
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (cancelled) return
+        if (!headerSent) {
+          controller.enqueue(encoder.encode(CSV_HEADER_LINE))
+          headerSent = true
+        }
+        const batch = await fetchCsvBatch(baseConditions, cursor)
+        if (cancelled) return
+        if (batch.length === 0) {
+          if (!cursor) {
+            logger.info(
+              { projectId, filters },
+              'results/export: filter produced zero rows, returning header-only CSV'
+            )
+          }
+          controller.close()
+          return
+        }
+        controller.enqueue(encoder.encode(`${encodeBatchAsCsv(batch)}\n`))
+        const last = batch[batch.length - 1]!
+        if (last.crackedAt !== null) {
+          cursor = { crackedAt: last.crackedAt, id: last.id }
+        } else {
+          // Defensive: `crackedAt IS NOT NULL` is in the WHERE clause,
+          // so this branch should be unreachable. If it fires, the
+          // CSV is silently truncated — log loudly so ops can detect
+          // it, then close rather than spin.
+          logger.error(
+            { projectId, lastId: last.id, batchSize: batch.length },
+            'results/export: null crackedAt in cursor row — filter invariant violated, truncating stream'
+          )
+          controller.close()
+        }
+      } catch (err) {
+        if (cancelled) return
+        logger.error(
+          { err, projectId, cursor, headerSent },
+          'results/export: pull failed mid-stream, client will receive truncated CSV'
+        )
+        controller.error(err)
+      }
+    },
+    cancel(reason) {
+      // Client disconnect or explicit cancel — mark the cancelled flag
+      // so any in-flight `pull` that races to enqueue after we close
+      // bails out instead of throwing on a closed controller.
+      cancelled = true
+      logger.info(
+        {
+          projectId,
+          cursor,
+          headerSent,
+          reason: reason instanceof Error ? reason.message : reason,
+        },
+        'results/export: stream cancelled by consumer'
+      )
+    },
+  })
+
+  // Strip `:` for Windows-safe filenames; slice to seconds (drop millis).
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
 
-  return new Response(csv, {
+  return new Response(stream, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="results-${timestamp}.csv"`,
+      // Long-running streams: tell intermediaries not to buffer the
+      // response, and clients not to cache.
+      'X-Accel-Buffering': 'no',
+      'Cache-Control': 'no-store',
     },
   })
 })

@@ -227,6 +227,17 @@ export {
   setHashListTypeRequestSchema,
 } from './resources.js'
 
+// Results API wire shapes + hashcat attack-mode lookup live in
+// schemas/results.ts; re-exported here so consumers keep importing
+// from `@hashhive/shared` unchanged.
+export {
+  crackedResultRowSchema,
+  HASHCAT_ATTACK_MODE_NAMES,
+  listResultsResponseSchema,
+  resolveAttackModeName,
+} from './results.js'
+export type { AttackModeName } from './results.js'
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
