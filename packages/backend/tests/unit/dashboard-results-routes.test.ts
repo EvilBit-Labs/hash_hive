@@ -191,7 +191,12 @@ if (!IS_ISOLATED) {
         const isExportBatch = !isCount && !isListRows
 
         if (isCount) {
-          return makeChain(() => [{ count: state.rows.length }])
+          // postgres-js returns `count(*)` as a STRING at runtime;
+          // mirror that so the route's `Number(rawCount ?? 0)` cast
+          // is actually exercised (a regression that drops the cast
+          // would otherwise pass these tests because plain
+          // `state.rows.length` is already a number).
+          return makeChain(() => [{ count: String(state.rows.length) }])
         }
         if (isExportBatch) {
           return makeChain(() => {

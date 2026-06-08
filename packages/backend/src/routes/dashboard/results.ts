@@ -100,7 +100,13 @@ type ResultsFilterInput = z.infer<typeof exportResultsQuerySchema>
 function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
 
-  const conditions = [eq(campaigns.projectId, projectId), isNotNull(hashItems.crackedAt)]
+  // Scope via `hashLists.projectId`, NOT `campaigns.projectId`:
+  // `hash_items.campaign_id` is nullable (FK uses ON DELETE SET NULL),
+  // so a campaigns join would silently drop cracked rows whose
+  // campaign has been deleted. `hashItems.hashListId` is NOT NULL and
+  // `hashLists.projectId` is NOT NULL — same rationale as
+  // `dashboard/stats.ts`.
+  const conditions = [eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt)]
 
   if (campaignId) {
     conditions.push(eq(hashItems.campaignId, campaignId))
@@ -203,8 +209,11 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
         agentId: hashItems.agentId,
       })
       .from(hashItems)
-      .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      // Campaign join is LEFT so historical rows (campaign deleted →
+      // hashItems.campaignId is null) still appear with null campaign
+      // fields rather than being silently filtered out.
+      .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
       .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
       .where(and(...conditions))
       .orderBy(desc(hashItems.crackedAt))
@@ -213,7 +222,7 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
     db
       .select({ count: sql<number>`count(*)` })
       .from(hashItems)
-      .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
       .where(and(...conditions)),
   ])
 
@@ -290,23 +299,27 @@ async function fetchCsvBatch(
       ]
     : []
 
-  return db
-    .select({
-      id: hashItems.id,
-      hashValue: hashItems.hashValue,
-      plaintext: hashItems.plaintext,
-      crackedAt: hashItems.crackedAt,
-      hashListName: hashLists.name,
-      campaignName: campaigns.name,
-      attackMode: attacks.mode,
-    })
-    .from(hashItems)
-    .innerJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
-    .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-    .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
-    .where(and(...baseConditions, ...cursorPredicate))
-    .orderBy(desc(hashItems.crackedAt), desc(hashItems.id))
-    .limit(CSV_STREAM_BATCH_SIZE)
+  return (
+    db
+      .select({
+        id: hashItems.id,
+        hashValue: hashItems.hashValue,
+        plaintext: hashItems.plaintext,
+        crackedAt: hashItems.crackedAt,
+        hashListName: hashLists.name,
+        campaignName: campaigns.name,
+        attackMode: attacks.mode,
+      })
+      .from(hashItems)
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      // Left-join campaigns so deleted-campaign rows still export (same
+      // rationale as the list query — hash_items.campaign_id is nullable).
+      .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+      .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
+      .where(and(...baseConditions, ...cursorPredicate))
+      .orderBy(desc(hashItems.crackedAt), desc(hashItems.id))
+      .limit(CSV_STREAM_BATCH_SIZE)
+  )
 }
 
 type CsvBatchRow = Awaited<ReturnType<typeof fetchCsvBatch>>[number]
