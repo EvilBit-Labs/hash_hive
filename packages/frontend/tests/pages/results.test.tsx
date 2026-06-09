@@ -104,7 +104,7 @@ describe('ResultsPage', () => {
     renderWithProviders(<ResultsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('No cracked results found.')).toBeDefined()
+      expect(screen.getByText('No cracks in the current filter.')).toBeDefined()
     })
   })
 
@@ -278,9 +278,12 @@ describe('ResultsPage', () => {
     renderWithProviders(<ResultsPage />)
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDefined()
+      // The button's accessible name now includes the Kbd shortcut chip
+      // ("Export CSV E"); match with a partial regex so future shortcut
+      // changes don't break the assertion.
+      expect(screen.getByRole('button', { name: /Export CSV/ })).toBeDefined()
     })
-    const exportButton = screen.getByRole('button', { name: 'Export CSV' }) as HTMLButtonElement
+    const exportButton = screen.getByRole('button', { name: /Export CSV/ }) as HTMLButtonElement
     expect(exportButton.disabled).toBe(false)
   })
 

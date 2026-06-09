@@ -68,11 +68,14 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
   }, [rows])
 
   if (isLoading && rows.length === 0) {
-    return <EmptyState message="Loading results..." />
+    // Initial load — the page chrome (header, LiveIndicator, filters)
+    // already communicates "we're working on it." Echoing "Loading..."
+    // here adds nothing the operator doesn't already see.
+    return null
   }
 
   if (!isLoading && rows.length === 0) {
-    return <EmptyState message="No cracked results found." />
+    return <EmptyState message="No cracks in the current filter." />
   }
 
   const showCampaign = columns !== 'no-campaign'

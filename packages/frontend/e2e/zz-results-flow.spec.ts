@@ -8,7 +8,7 @@ const TEST_PASSWORD = 'TestPassword123!'
 // projects, and one offline agent — no campaigns and no cracked results.
 // The spec must tolerate this baseline and skip download-related assertions
 // when the table is empty.
-const RESULTS_EMPTY_COPY = 'No cracked results found.'
+const RESULTS_EMPTY_COPY = 'No cracks in the current filter.'
 
 /**
  * Shared login + project-select prelude. Mirrors the pattern in
@@ -47,11 +47,11 @@ test.describe.serial('Results flow E2E (U11)', () => {
     // PageHeader is the canonical mount marker.
     await expect(page.getByRole('heading', { name: 'Cracked Results' })).toBeVisible()
 
-    // Wait for the loading affordance to clear so we can branch on the
-    // empty-state vs. populated-table assertion below. Either text resolves
-    // the wait — the table swaps "Loading results..." for either "No cracked
-    // results found." or actual <tr> rows once useResults settles.
-    await expect(page.getByText(/Loading results\.\.\./i)).toHaveCount(0, { timeout: 15_000 })
+    // ResultsTable now renders null during initial load and the parent
+    // page chrome (LiveIndicator, filters) carries the affordance. Wait
+    // for the LiveIndicator label to render — it always mounts once the
+    // page itself paints.
+    await expect(page.getByText('Live').first()).toBeVisible({ timeout: 15_000 })
 
     // The campaign filter is a native <select>. Read its options; only assert
     // the URL-update behavior when there is at least one real campaign to pick.

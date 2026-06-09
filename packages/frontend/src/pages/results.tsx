@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 
@@ -15,6 +16,7 @@ import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
 import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
+import { useKeyboardShortcut } from '../hooks/use-keyboard-shortcut'
 import { useResults } from '../hooks/use-results'
 import { useUiStore } from '../stores/ui'
 
@@ -152,6 +154,16 @@ export function ResultsPage() {
 
   const { data, isLoading, isError, error } = useResults(queryFilters)
 
+  // Power-user shortcut: `r` invalidates the results query, forcing
+  // an immediate refetch. No visible Kbd chip — the LiveIndicator
+  // already telegraphs that polling is active; refresh is a quiet
+  // operator-grade affordance for impatient runs.
+  const queryClient = useQueryClient()
+  const refreshResults = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['results'] })
+  }, [queryClient])
+  useKeyboardShortcut('r', refreshResults)
+
   if (!selectedProjectId) {
     return (
       <div className="space-y-4">
@@ -180,8 +192,12 @@ export function ResultsPage() {
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ResultsFilters filters={filters} onFiltersChange={handleFiltersChange} />
-          <ExportButton filters={exportFilters} />
+          <ResultsFilters
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            searchShortcutKey="/"
+          />
+          <ExportButton filters={exportFilters} shortcutKey="E" />
         </div>
       </div>
 

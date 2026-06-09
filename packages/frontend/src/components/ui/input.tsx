@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes } from 'react'
+import type { InputHTMLAttributes, Ref } from 'react'
 
 import { cn } from '../../lib/utils'
 
@@ -10,8 +10,10 @@ type TextInputType = 'text' | 'email' | 'password' | 'number' | 'search' | 'tel'
 
 interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
   readonly type?: TextInputType
+  /** React 19 ref-as-prop. Lets callers focus the input from outside (kbd shortcuts). */
+  readonly ref?: Ref<HTMLInputElement>
 }
 
-export function Input({ className, ...props }: InputProps) {
-  return <input className={cn(BASE, className)} {...props} />
+export function Input({ className, ref, ...props }: InputProps) {
+  return <input ref={ref} className={cn(BASE, className)} {...props} />
 }

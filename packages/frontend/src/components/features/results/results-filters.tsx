@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useCampaigns } from '../../../hooks/use-dashboard'
 import { useDebounce } from '../../../hooks/use-debounce'
 import { useHashLists } from '../../../hooks/use-hash-lists'
+import { useKeyboardShortcut } from '../../../hooks/use-keyboard-shortcut'
 import { Input } from '../../ui/input'
+import { Kbd } from '../../ui/kbd'
 import { Select } from '../../ui/select'
 
 export type DateRangeFilter = '24h' | '7d' | '30d' | 'all'
@@ -18,6 +20,13 @@ export interface ResultsFiltersValue {
 interface ResultsFiltersProps {
   readonly filters: ResultsFiltersValue
   readonly onFiltersChange: (next: ResultsFiltersValue) => void
+  /**
+   * Optional keyboard shortcut that focuses the search input from
+   * anywhere on the page (modulo editable-element targets). Rendered
+   * as a visible Kbd chip inside the input so operators discover it
+   * at a glance.
+   */
+  readonly searchShortcutKey?: string
 }
 
 interface CampaignOption {
@@ -47,9 +56,27 @@ const SEARCH_DEBOUNCE_MS = 300
  * Filter changes are emitted via `onFiltersChange`; the parent owns
  * URL-state persistence and `offset=0` reset semantics.
  */
-export function ResultsFilters({ filters, onFiltersChange }: ResultsFiltersProps) {
+export function ResultsFilters({
+  filters,
+  onFiltersChange,
+  searchShortcutKey,
+}: ResultsFiltersProps) {
   const [hashListMenuOpened, setHashListMenuOpened] = useState(false)
   const hashListEnabled = hashListMenuOpened || filters.hashListId !== undefined
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  const focusSearch = useCallback((event: KeyboardEvent) => {
+    if (!searchInputRef.current) return
+    // Prevent the `/` from landing as the first character once the
+    // input takes focus.
+    event.preventDefault()
+    searchInputRef.current.focus()
+    searchInputRef.current.select()
+  }, [])
+
+  useKeyboardShortcut(searchShortcutKey ?? '', focusSearch, {
+    disabled: !searchShortcutKey,
+  })
 
   // Local input state lets us debounce the URL/query write without
   // making the input feel laggy. Seed from `filters.q` so deep-links
@@ -147,13 +174,24 @@ export function ResultsFilters({ filters, onFiltersChange }: ResultsFiltersProps
         ))}
       </Select>
 
-      <Input
-        aria-label="Search hashes or plaintexts"
-        placeholder="Search hashes or plaintexts..."
-        className="w-auto px-3 py-1.5 text-xs"
-        value={searchInput}
-        onChange={(e) => setSearchInput(e.target.value)}
-      />
+      <div className="relative inline-block">
+        <Input
+          ref={searchInputRef}
+          aria-label="Search hashes or plaintexts"
+          placeholder="Search hashes or plaintexts..."
+          className="w-auto px-3 py-1.5 pr-7 text-xs"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+        {searchShortcutKey && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2"
+          >
+            <Kbd>{searchShortcutKey}</Kbd>
+          </span>
+        )}
+      </div>
     </div>
   )
 }

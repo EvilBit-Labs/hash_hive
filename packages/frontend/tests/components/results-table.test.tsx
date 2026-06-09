@@ -195,20 +195,20 @@ describe('ResultsTable', () => {
   })
 
   describe('loading and empty states', () => {
-    it('renders the loading empty state when isLoading=true and rows is empty', () => {
-      renderWithProviders(<ResultsTable rows={[]} isLoading={true} />)
-      expect(screen.getByText('Loading results...')).toBeDefined()
+    it('renders nothing during initial load (parent page chrome carries the loading affordance)', () => {
+      const { container } = renderWithProviders(<ResultsTable rows={[]} isLoading={true} />)
+      expect(container.textContent ?? '').toBe('')
     })
 
     it('renders the empty state when isLoading=false and rows is empty', () => {
       renderWithProviders(<ResultsTable rows={[]} isLoading={false} />)
-      expect(screen.getByText('No cracked results found.')).toBeDefined()
+      expect(screen.getByText('No cracks in the current filter.')).toBeDefined()
     })
 
     it('still renders the table when isLoading=true but rows is non-empty (refetch state)', () => {
       renderWithProviders(<ResultsTable rows={[makeRow()]} isLoading={true} />)
-      // Not the loading empty state — the table is mounted.
-      expect(screen.queryByText('Loading results...')).toBeNull()
+      // Refetch state — the table is mounted, not the empty state.
+      expect(screen.queryByText('No cracks in the current filter.')).toBeNull()
       expect(screen.getAllByRole('columnheader')).toHaveLength(6)
     })
   })

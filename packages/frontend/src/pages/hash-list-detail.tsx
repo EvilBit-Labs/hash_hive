@@ -33,8 +33,7 @@ const VIEW_OPTIONS = [
   { value: 'uncracked', label: 'Uncracked' },
 ] as const
 
-const UNCRACKED_PLACEHOLDER =
-  'Uncracked listing is coming in the next release. For now, see the Cracked tab.'
+const UNCRACKED_PLACEHOLDER = 'Uncracked listing ships next release.'
 
 export function HashListDetailPage() {
   const { id } = useParams<{ id: string }>()

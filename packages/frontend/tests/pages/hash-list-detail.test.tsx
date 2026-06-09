@@ -197,11 +197,7 @@ describe('HashListDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uncracked' }))
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          'Uncracked listing is coming in the next release. For now, see the Cracked tab.'
-        )
-      ).toBeDefined()
+      expect(screen.getByText('Uncracked listing ships next release.')).toBeDefined()
     })
   })
 
