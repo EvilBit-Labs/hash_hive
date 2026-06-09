@@ -155,8 +155,17 @@ describe('ResultsTable', () => {
       renderWithProviders(
         <ResultsTable rows={[makeRow({ attackModeName: 'Mask' })]} isLoading={false} />
       )
-      const cell = screen.getByText('Mask')
-      expect(cell.getAttribute('title')).toBe('Mask')
+      const td = screen.getByText('Mask').closest('td')
+      expect(td?.getAttribute('title')).toBe('Mask')
+    })
+
+    it('applies a Catppuccin accent class per attack mode', () => {
+      renderWithProviders(
+        <ResultsTable rows={[makeRow({ attackModeName: 'Mask' })]} isLoading={false} />
+      )
+      const label = screen.getByText('Mask')
+      // Mask maps to lavender; the bullet dot inherits via bg-current.
+      expect(label.className).toContain('text-ctp-lavender')
     })
 
     it('renders an em dash when attackModeName is null', () => {

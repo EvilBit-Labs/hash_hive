@@ -2,6 +2,8 @@ import type { CrackedResultRow } from '@hashhive/shared'
 
 import { Link } from 'react-router'
 
+import { attackModeColorClass } from '../../../lib/attack-mode-color'
+import { cn } from '../../../lib/utils'
 import { EmptyState } from '../../ui/empty-state'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../../ui/table'
 
@@ -83,8 +85,23 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
                 )}
               </Td>
             )}
-            <Td className="text-xs text-muted-foreground" title={row.attackModeName ?? undefined}>
-              {row.attackModeName ?? PLACEHOLDER}
+            <Td className="text-xs" title={row.attackModeName ?? undefined}>
+              {row.attackModeName === null ? (
+                <span className="text-muted-foreground">{PLACEHOLDER}</span>
+              ) : (
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5',
+                    attackModeColorClass(row.attackModeName)
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-1.5 w-1.5 rounded-full bg-current"
+                  />
+                  {row.attackModeName}
+                </span>
+              )}
             </Td>
             {showHashList && (
               <Td className="text-xs text-muted-foreground">
