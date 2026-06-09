@@ -97,6 +97,9 @@ import type {
   // Results API wire schemas (issue #164)
   crackedResultRowSchema,
   listResultsResponseSchema,
+  // Hash-lists listing schemas (issue #165 / U2)
+  hashListListResponseSchema,
+  hashListSummarySchema,
 } from '../schemas/index.js'
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -255,6 +258,8 @@ export type ResourceStatus = z.infer<typeof resourceStatusSchema>
 export type HashListWire = z.infer<typeof hashListWireSchema>
 export type CrackedResultRow = z.infer<typeof crackedResultRowSchema>
 export type ListResultsResponse = z.infer<typeof listResultsResponseSchema>
+export type HashListSummary = z.infer<typeof hashListSummarySchema>
+export type HashListListResponse = z.infer<typeof hashListListResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
