@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 import { type ExportResultsFilters, useExportResults } from '../../../hooks/use-export-results'
 import { useUiStore } from '../../../stores/ui'
 import { Button } from '../../ui/button'
@@ -7,19 +9,31 @@ interface ExportButtonProps {
   readonly label?: string
 }
 
+const SUCCESS_ACK_MS = 1500
+
 /**
  * CSV export trigger backed by `useExportResults`. Disabled while
  * pending (so a second click cannot fire a parallel download) and
- * when no project is selected (the underlying query is scoped the
- * same way). On failure the mutation's error message renders inline
- * below the button so the operator sees something other than the
- * spinner reverting to "Export CSV".
+ * when no project is selected. On success, the label flips to
+ * "Exported" for ~1.5s before reverting — the peak-end-rule
+ * acknowledgment .impeccable.md asks for on completed operator
+ * actions. On failure the mutation's error message renders inline
+ * below the button.
  */
 export function ExportButton({ filters, label = 'Export CSV' }: ExportButtonProps) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const exportMutation = useExportResults()
+  const [justSucceeded, setJustSucceeded] = useState(false)
+
+  useEffect(() => {
+    if (!exportMutation.isSuccess) return
+    setJustSucceeded(true)
+    const t = setTimeout(() => setJustSucceeded(false), SUCCESS_ACK_MS)
+    return () => clearTimeout(t)
+  }, [exportMutation.isSuccess, exportMutation.submittedAt])
 
   const isDisabled = selectedProjectId === null || exportMutation.isPending
+  const buttonLabel = exportMutation.isPending ? 'Exporting...' : justSucceeded ? 'Exported' : label
   const errorMessage =
     exportMutation.isError && exportMutation.error instanceof Error
       ? exportMutation.error.message
@@ -35,7 +49,7 @@ export function ExportButton({ filters, label = 'Export CSV' }: ExportButtonProp
         disabled={isDisabled}
         onClick={() => exportMutation.mutate(filters)}
       >
-        {exportMutation.isPending ? 'Exporting...' : label}
+        {buttonLabel}
       </Button>
       {errorMessage && (
         <span role="alert" className="text-xs text-destructive">

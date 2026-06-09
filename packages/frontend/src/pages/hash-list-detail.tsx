@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ExportButton } from '../components/features/results/export-button'
+import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
@@ -210,14 +211,17 @@ export function HashListDetailPage() {
 
       {view === 'cracked' && (
         <div className="space-y-3">
-          <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-            Cracked{' '}
-            <span className="font-semibold text-foreground">
-              {summaryCracked.toLocaleString('en-US')}
-            </span>{' '}
-            / {summaryTotal.toLocaleString('en-US')}
-            {summaryTotal > 0 && <> ({((summaryCracked / summaryTotal) * 100).toFixed(1)}%)</>}
-          </p>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
+              Cracked{' '}
+              <span className="font-semibold text-foreground">
+                {summaryCracked.toLocaleString('en-US')}
+              </span>{' '}
+              / {summaryTotal.toLocaleString('en-US')}
+              {summaryTotal > 0 && <> ({((summaryCracked / summaryTotal) * 100).toFixed(1)}%)</>}
+            </p>
+            <LiveIndicator />
+          </div>
           {resultsQuery.isError && (
             <ErrorBanner
               message={

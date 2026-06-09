@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router'
 import type { ExportResultsFilters } from '../hooks/use-export-results'
 
 import { ExportButton } from '../components/features/results/export-button'
+import { LiveIndicator } from '../components/features/results/live-indicator'
 import {
   type DateRangeFilter,
   ResultsFilters,
@@ -172,6 +173,7 @@ export function ResultsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-baseline gap-3">
           <PageHeader>Cracked Results</PageHeader>
+          <LiveIndicator />
           <span data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
             <span className="font-semibold text-foreground">{total.toLocaleString('en-US')}</span>{' '}
             in the current filter

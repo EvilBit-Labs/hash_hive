@@ -7,6 +7,7 @@ import { CampaignAgentsSection } from '../components/features/campaign-agents-se
 import { CampaignTaskStats } from '../components/features/campaign-task-stats'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { PriorityBadge } from '../components/features/priority-badge'
+import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
@@ -100,19 +101,22 @@ function CampaignResultsPanel({
 
   return (
     <div aria-live="polite" className="space-y-4">
-      <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-        Cracked{' '}
-        <span className="font-semibold text-foreground">
-          {resultsTotal.toLocaleString('en-US')}
-        </span>
-        {totalHashes !== undefined && (
-          <>
-            {' '}
-            / {totalHashes.toLocaleString('en-US')}
-            {crackRate !== null && <> ({crackRate}%)</>}
-          </>
-        )}
-      </p>
+      <div className="flex flex-wrap items-baseline gap-3">
+        <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
+          Cracked{' '}
+          <span className="font-semibold text-foreground">
+            {resultsTotal.toLocaleString('en-US')}
+          </span>
+          {totalHashes !== undefined && (
+            <>
+              {' '}
+              / {totalHashes.toLocaleString('en-US')}
+              {crackRate !== null && <> ({crackRate}%)</>}
+            </>
+          )}
+        </p>
+        <LiveIndicator />
+      </div>
 
       {isError && (
         <ErrorBanner
