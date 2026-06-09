@@ -62,7 +62,7 @@ export function ExportButton({ filters, label = 'Export CSV', shortcutKey }: Exp
       <Button variant="secondary" size="sm" disabled={isDisabled} onClick={triggerExport}>
         <span className="inline-flex items-center gap-1.5">
           {buttonLabel}
-          {shortcutKey && !exportMutation.isPending && !justSucceeded && <Kbd>{shortcutKey}</Kbd>}
+          {shortcutKey && !isDisabled && !justSucceeded && <Kbd>{shortcutKey}</Kbd>}
         </span>
       </Button>
       {errorMessage && (

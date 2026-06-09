@@ -31,4 +31,14 @@ describe('CrackRatePercent', () => {
     expect(screen.getByText('(42.4%)')).toBeDefined()
     cleanupAll()
   })
+
+  it('renders a neutral hyphen for NaN, Infinity, and negative inputs', () => {
+    const { rerender } = render(<CrackRatePercent value={Number.NaN} />)
+    expect(screen.getByText('(-%)')).toBeDefined()
+    rerender(<CrackRatePercent value={Number.POSITIVE_INFINITY} />)
+    expect(screen.getByText('(-%)')).toBeDefined()
+    rerender(<CrackRatePercent value={-5} />)
+    expect(screen.getByText('(-%)')).toBeDefined()
+    cleanupAll()
+  })
 })

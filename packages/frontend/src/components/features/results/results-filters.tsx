@@ -4,6 +4,7 @@ import { useCampaigns } from '../../../hooks/use-dashboard'
 import { useDebounce } from '../../../hooks/use-debounce'
 import { useHashLists } from '../../../hooks/use-hash-lists'
 import { useKeyboardShortcut } from '../../../hooks/use-keyboard-shortcut'
+import { cn } from '../../../lib/utils'
 import { Input } from '../../ui/input'
 import { Kbd } from '../../ui/kbd'
 import { Select } from '../../ui/select'
@@ -179,7 +180,7 @@ export function ResultsFilters({
           ref={searchInputRef}
           aria-label="Search hashes or plaintexts"
           placeholder="Search hashes or plaintexts..."
-          className="w-auto px-3 py-1.5 pr-7 text-xs"
+          className={cn('w-auto py-1.5 pl-3 text-xs', searchShortcutKey ? 'pr-7' : 'pr-3')}
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />

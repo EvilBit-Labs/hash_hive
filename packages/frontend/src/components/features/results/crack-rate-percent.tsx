@@ -25,7 +25,8 @@ const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
  */
 export function CrackRatePercent({ value, className }: CrackRatePercentProps) {
   const prefersReducedMotion = useReducedMotion()
-  const isComplete = value >= MILESTONE_THRESHOLD
+  const isFiniteRate = Number.isFinite(value)
+  const isComplete = isFiniteRate && value >= MILESTONE_THRESHOLD
   const wasCompleteRef = useRef(isComplete)
   const [crossedKey, setCrossedKey] = useState(0)
 
@@ -36,10 +37,18 @@ export function CrackRatePercent({ value, className }: CrackRatePercentProps) {
     wasCompleteRef.current = isComplete
   }, [isComplete])
 
-  const formatted = value.toFixed(1)
   const baseClass = cn('tabular-nums', className)
   const completeClass = cn('font-semibold text-primary', baseClass)
   const mutedClass = cn('text-muted-foreground', baseClass)
+
+  // NaN / Infinity / negative inputs render as a neutral hyphen so a
+  // race between cracked and hash counts doesn't surface "NaN%" or
+  // "Infinity%" to the operator.
+  if (!isFiniteRate || value < 0) {
+    return <span className={mutedClass}>(-%)</span>
+  }
+
+  const formatted = value.toFixed(1)
 
   if (!isComplete) {
     return <span className={mutedClass}>({formatted}%)</span>
