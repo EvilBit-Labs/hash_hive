@@ -1,11 +1,12 @@
 import { useState } from 'react'
 
-import { Button, buttonVariants } from '../components/ui/button'
+import { ExportButton } from '../components/features/results/export-button'
+import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
 import { Input } from '../components/ui/input'
 import { PageHeader } from '../components/ui/page-header'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
-import { useResults, useResultsExportUrl } from '../hooks/use-results'
+import { useResults } from '../hooks/use-results'
 import { useUiStore } from '../stores/ui'
 
 export function ResultsPage() {
@@ -19,7 +20,6 @@ export function ResultsPage() {
     limit,
     offset,
   })
-  const exportUrl = useResultsExportUrl(search ? { search } : {})
 
   if (!selectedProjectId) {
     return (
@@ -49,11 +49,7 @@ export function ResultsPage() {
               setOffset(0)
             }}
           />
-          {exportUrl && (
-            <a href={exportUrl} download className={buttonVariants('secondary', 'sm')}>
-              Export CSV
-            </a>
-          )}
+          <ExportButton filters={search ? { search } : {}} />
         </div>
       </div>
 
