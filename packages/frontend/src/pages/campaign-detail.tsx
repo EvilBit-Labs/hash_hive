@@ -9,6 +9,7 @@ import { PermissionGuard } from '../components/features/permission-guard'
 import { PriorityBadge } from '../components/features/priority-badge'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
+import { TickingNumber } from '../components/features/results/ticking-number'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
@@ -104,9 +105,9 @@ function CampaignResultsPanel({
       <div className="flex flex-wrap items-baseline gap-3">
         <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
           Cracked{' '}
-          <span className="font-semibold text-foreground">
+          <TickingNumber value={resultsTotal} className="font-semibold text-foreground">
             {resultsTotal.toLocaleString('en-US')}
-          </span>
+          </TickingNumber>
           {totalHashes !== undefined && (
             <>
               {' '}

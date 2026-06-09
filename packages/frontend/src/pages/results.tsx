@@ -12,6 +12,7 @@ import {
   type ResultsFiltersValue,
 } from '../components/features/results/results-filters'
 import { ResultsTable } from '../components/features/results/results-table'
+import { TickingNumber } from '../components/features/results/ticking-number'
 import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
 import { ErrorBanner } from '../components/ui/error-banner'
@@ -187,7 +188,9 @@ export function ResultsPage() {
           <PageHeader>Cracked Results</PageHeader>
           <LiveIndicator />
           <span data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-            <span className="font-semibold text-foreground">{total.toLocaleString('en-US')}</span>{' '}
+            <TickingNumber value={total} className="font-semibold text-foreground">
+              {total.toLocaleString('en-US')}
+            </TickingNumber>{' '}
             in the current filter
           </span>
         </div>
