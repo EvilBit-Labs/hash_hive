@@ -1,5 +1,7 @@
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+
+import { cn } from '../../../lib/utils'
 
 interface TickingNumberProps {
   /** Current value to render. Numerical formatting is the caller's job. */
@@ -10,32 +12,55 @@ interface TickingNumberProps {
   readonly className?: string
 }
 
-const TICK_DURATION_S = 0.5
+const TICK_DURATION_S = 0.6
+const DELTA_VISIBLE_MS = 2500
+const DELTA_DISMISS_DURATION_S = 0.35
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
 
+// Plausible delta range for a 30s poll on a single project. A bigger
+// jump almost certainly means a filter change (or a project switch
+// the cache didn't catch up on), so we skip the +N badge in that case.
+const MAX_PLAUSIBLE_DELTA = 200
+
+// Color tokens live on className as inline CSS variables; Motion
+// dereferences them via `var()` in animate so theme changes track
+// without remounting the component.
+const TICK_VARS =
+  '[--tick-flash:hsl(var(--primary))] ' +
+  '[--tick-base:hsl(var(--foreground))] ' +
+  '[--delta-bg:hsl(var(--primary)/0.18)] ' +
+  '[--delta-fg:hsl(var(--primary))]'
+
 /**
- * Wraps a numeric figure so it briefly acknowledges when its value
- * goes UP between renders — the inline counterpart to the
- * ResultsTable row pulse. Filter changes (which often drop the value
- * to zero before refilling) are excluded by the `prev > 0` guard,
- * so the tick only fires on poll-driven crack arrivals.
+ * Inline-stats counterpart to the ResultsTable row pulse. When the
+ * value goes UP between renders (a 30s poll lands new cracks), the
+ * figure briefly flashes peach + scales up, then settles back to the
+ * foreground color. A `+N` chip slides in next to the figure for
+ * 2.5s carrying the delta — the operator's "yes, N cracks just
+ * landed" peak-end acknowledgment.
  *
- * The pulse is opacity + a tiny scale lift (0.97 -> 1) — Motion-only,
- * no chrome motion, no Tailwind transition classes (those would
- * conflict with Motion's timing per CLAUDE.md). Reduced-motion users
- * see the figure update without animation.
+ * The `prev > 0` guard excludes filter changes (which often drop to
+ * zero before refilling); the MAX_PLAUSIBLE_DELTA guard excludes
+ * project switches / huge filter widenings where a +N badge would
+ * be noise. Reduced-motion users see a static figure update with
+ * no badge.
  */
 export function TickingNumber({ value, children, className }: TickingNumberProps) {
   const prefersReducedMotion = useReducedMotion()
   const prevValueRef = useRef(value)
   const [tickKey, setTickKey] = useState(0)
+  const [delta, setDelta] = useState<number | null>(null)
 
   useEffect(() => {
     const prev = prevValueRef.current
-    if (prev > 0 && value > prev) {
-      setTickKey((k) => k + 1)
-    }
     prevValueRef.current = value
+    if (prev <= 0 || value <= prev) return
+    const d = value - prev
+    if (d > MAX_PLAUSIBLE_DELTA) return
+    setTickKey((k) => k + 1)
+    setDelta(d)
+    const t = window.setTimeout(() => setDelta(null), DELTA_VISIBLE_MS)
+    return () => window.clearTimeout(t)
   }, [value])
 
   if (prefersReducedMotion) {
@@ -43,14 +68,34 @@ export function TickingNumber({ value, children, className }: TickingNumberProps
   }
 
   return (
-    <motion.span
-      key={tickKey}
-      initial={tickKey === 0 ? false : { opacity: 0.55, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: TICK_DURATION_S, ease: [...EASE_OUT_EXPO] }}
-      className={className}
-    >
-      {children}
-    </motion.span>
+    <span className={cn('inline-flex items-baseline gap-1.5', TICK_VARS)}>
+      <motion.span
+        key={tickKey}
+        initial={tickKey === 0 ? false : { opacity: 0.4, scale: 0.92, color: 'var(--tick-flash)' }}
+        animate={{ opacity: 1, scale: 1, color: 'var(--tick-base)' }}
+        transition={{ duration: TICK_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+        className={className}
+      >
+        {children}
+      </motion.span>
+      <AnimatePresence>
+        {delta !== null && (
+          <motion.span
+            key={`delta-${tickKey}`}
+            initial={{ opacity: 0, y: -4, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -2, transition: { duration: DELTA_DISMISS_DURATION_S } }}
+            transition={{ duration: TICK_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+            style={{
+              backgroundColor: 'var(--delta-bg)',
+              color: 'var(--delta-fg)',
+            }}
+            className="inline-flex items-center rounded-sm px-1 font-mono text-[10px] leading-tight font-medium tabular-nums"
+          >
+            +{delta}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </span>
   )
 }

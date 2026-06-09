@@ -7,6 +7,7 @@ import { CampaignAgentsSection } from '../components/features/campaign-agents-se
 import { CampaignTaskStats } from '../components/features/campaign-task-stats'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { PriorityBadge } from '../components/features/priority-badge'
+import { CrackRatePercent } from '../components/features/results/crack-rate-percent'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
 import { TickingNumber } from '../components/features/results/ticking-number'
@@ -96,9 +97,7 @@ function CampaignResultsPanel({
   const rangeEnd = Math.min(offset + RESULTS_PAGE_SIZE, resultsTotal)
 
   const crackRate =
-    totalHashes !== undefined && totalHashes > 0
-      ? ((resultsTotal / totalHashes) * 100).toFixed(1)
-      : null
+    totalHashes !== undefined && totalHashes > 0 ? (resultsTotal / totalHashes) * 100 : null
 
   return (
     <div aria-live="polite" className="space-y-4">
@@ -112,7 +111,12 @@ function CampaignResultsPanel({
             <>
               {' '}
               / {totalHashes.toLocaleString('en-US')}
-              {crackRate !== null && <> ({crackRate}%)</>}
+              {crackRate !== null && (
+                <>
+                  {' '}
+                  <CrackRatePercent value={crackRate} />
+                </>
+              )}
             </>
           )}
         </p>

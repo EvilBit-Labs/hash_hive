@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router'
 
+import { CrackRatePercent } from '../components/features/results/crack-rate-percent'
 import { ExportButton } from '../components/features/results/export-button'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
@@ -218,7 +219,12 @@ export function HashListDetailPage() {
                 {summaryCracked.toLocaleString('en-US')}
               </TickingNumber>{' '}
               / {summaryTotal.toLocaleString('en-US')}
-              {summaryTotal > 0 && <> ({((summaryCracked / summaryTotal) * 100).toFixed(1)}%)</>}
+              {summaryTotal > 0 && (
+                <>
+                  {' '}
+                  <CrackRatePercent value={(summaryCracked / summaryTotal) * 100} />
+                </>
+              )}
             </p>
             <LiveIndicator />
           </div>
