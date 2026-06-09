@@ -145,7 +145,9 @@ describe('HashListDetailPage', () => {
 
     await waitFor(() => {
       // The summary's cracked/hash counts win once hashLists loads.
-      expect(screen.getByText(/Cracked:\s*250\s*\/\s*1,000\s*\(25\.0%\)/)).toBeDefined()
+      expect(screen.getByTestId('results-stats').textContent ?? '').toMatch(
+        /250\s*\/\s*1,000\s*\(25\.0%\)/
+      )
     })
   })
 
@@ -177,7 +179,7 @@ describe('HashListDetailPage', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText(/Cracked:\s*0\s*\/\s*0\s*\(0\.0%\)/)).toBeDefined()
+      expect(screen.getByTestId('results-stats').textContent ?? '').toMatch(/0\s*\/\s*0/)
     })
   })
 

@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ExportButton } from '../components/features/results/export-button'
-import { ResultsStatsCard } from '../components/features/results/results-stats-card'
 import { ResultsTable } from '../components/features/results/results-table'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
@@ -211,7 +210,14 @@ export function HashListDetailPage() {
 
       {view === 'cracked' && (
         <div className="space-y-3">
-          <ResultsStatsCard totalCracked={summaryCracked} totalHashes={summaryTotal} />
+          <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
+            Cracked{' '}
+            <span className="font-medium text-foreground">
+              {summaryCracked.toLocaleString('en-US')}
+            </span>{' '}
+            / {summaryTotal.toLocaleString('en-US')}
+            {summaryTotal > 0 && <> ({((summaryCracked / summaryTotal) * 100).toFixed(1)}%)</>}
+          </p>
           {resultsQuery.isError && (
             <ErrorBanner
               message={

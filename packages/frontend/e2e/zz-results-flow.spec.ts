@@ -134,9 +134,9 @@ test.describe.serial('Results flow E2E (U11)', () => {
     await page.getByRole('tab', { name: 'Results' }).click()
     await page.waitForURL((url) => url.search.includes('tab=results'), { timeout: 5_000 })
 
-    // ResultsStatsCard always mounts on the Results tab, even when totalCracked=0
-    // (figure renders "Cracked: 0"). The data-testid is the most stable hook.
-    await expect(page.getByTestId('results-stats-card')).toBeVisible()
-    await expect(page.getByTestId('results-stats-card')).toContainText(/Cracked/i)
+    // Inline stats render in the Results tab header, even when
+    // totalCracked=0. The data-testid is the most stable hook.
+    await expect(page.getByTestId('results-stats')).toBeVisible()
+    await expect(page.getByTestId('results-stats')).toContainText(/Cracked/i)
   })
 })

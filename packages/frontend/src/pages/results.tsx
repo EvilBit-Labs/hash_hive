@@ -170,7 +170,13 @@ export function ResultsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader>Cracked Results</PageHeader>
+        <div className="flex flex-wrap items-baseline gap-3">
+          <PageHeader>Cracked Results</PageHeader>
+          <span data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
+            <span className="font-medium text-foreground">{total.toLocaleString('en-US')}</span> in
+            the current filter
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <ResultsFilters filters={filters} onFiltersChange={handleFiltersChange} />
           <ExportButton filters={exportFilters} />

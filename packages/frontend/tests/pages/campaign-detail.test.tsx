@@ -444,7 +444,7 @@ describe('CampaignDetailPage', () => {
       // Attacks tab is active by default; the Attacks tab content
       // (Active agents heading) renders while the Results tab content
       // (stats card data-testid) does not.
-      expect(screen.queryByTestId('results-stats-card')).toBeNull()
+      expect(screen.queryByTestId('results-stats')).toBeNull()
 
       // The Attacks tab trigger is aria-selected="true".
       const attacksTrigger = screen.getByRole('tab', { name: 'Attacks' })
@@ -485,12 +485,14 @@ describe('CampaignDetailPage', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Results' }))
 
       await waitFor(() => {
-        expect(screen.getByTestId('results-stats-card')).toBeDefined()
+        expect(screen.getByTestId('results-stats')).toBeDefined()
       })
 
-      // Stats card shows the campaign-scoped figures from the
+      // Inline stats show the campaign-scoped figures from the
       // matched hash list (5,000) and the results total (1,283).
-      expect(screen.getByText('Cracked: 1,283 / 5,000 (25.7%)')).toBeDefined()
+      expect(screen.getByTestId('results-stats').textContent ?? '').toMatch(
+        /1,283\s*\/\s*5,000\s*\(25\.7%\)/
+      )
 
       // useResults must have been called with campaignId=1 so the
       // query is scoped to the current campaign rather than fetching
@@ -525,7 +527,7 @@ describe('CampaignDetailPage', () => {
       })
 
       await waitFor(() => {
-        expect(screen.getByTestId('results-stats-card')).toBeDefined()
+        expect(screen.getByTestId('results-stats')).toBeDefined()
       })
 
       // Attacks-tab-only content is hidden when Results is active.
@@ -559,13 +561,15 @@ describe('CampaignDetailPage', () => {
       })
 
       await waitFor(() => {
-        expect(screen.getByText('Cracked: 42')).toBeDefined()
+        const stats = screen.getByTestId('results-stats')
+        expect(stats.textContent ?? '').toMatch(/\b42\b/)
       })
 
       // The slash + percent rendering only appears when totalHashes is
-      // known. Anchor on a partial match against the regex so future
-      // copy tweaks don't break the assertion.
-      expect(screen.queryByText(/Cracked: 42 \/ /)).toBeNull()
+      // known; absent here because the campaign's hash list is missing
+      // from the lookup response.
+      const stats = screen.getByTestId('results-stats')
+      expect(stats.textContent ?? '').not.toMatch(/\//)
     })
   })
 })
