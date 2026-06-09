@@ -1,5 +1,5 @@
 /**
- * Tests for the `useHashLists` hook (U3, plan 2026-06-08-001).
+ * Tests for the `useHashListSummaries` hook (U3, plan 2026-06-08-001).
  *
  * Pins:
  *   - Fetches `/dashboard/hash-lists` when a project is selected and
@@ -19,7 +19,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { createElement, type ReactNode } from 'react'
 
-import { useHashLists } from '../../src/hooks/use-hash-lists'
+import { useHashListSummaries } from '../../src/hooks/use-hash-lists'
 import { useUiStore } from '../../src/stores/ui'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
 import { cleanupAll } from '../test-utils'
@@ -74,13 +74,13 @@ const sampleHashLists: HashListListResponse = {
   ],
 }
 
-describe('useHashLists — happy path', () => {
+describe('useHashListSummaries — happy path', () => {
   it('fetches /dashboard/hash-lists and returns parsed envelope when a project is selected', async () => {
     fetchMock = mockFetch({
       '/dashboard/hash-lists': { status: 200, body: sampleHashLists },
     })
 
-    const { result } = renderHook(() => useHashLists(), {
+    const { result } = renderHook(() => useHashListSummaries(), {
       wrapper: wrapperFactory(),
     })
 
@@ -96,7 +96,7 @@ describe('useHashLists — happy path', () => {
   })
 })
 
-describe('useHashLists — `enabled` gate', () => {
+describe('useHashListSummaries — `enabled` gate', () => {
   it('does not fire a fetch and returns undefined data when no project is selected', async () => {
     useUiStore.setState({ selectedProjectId: null })
 
@@ -104,7 +104,7 @@ describe('useHashLists — `enabled` gate', () => {
       '/dashboard/hash-lists': { status: 200, body: sampleHashLists },
     })
 
-    const { result } = renderHook(() => useHashLists(), {
+    const { result } = renderHook(() => useHashListSummaries(), {
       wrapper: wrapperFactory(),
     })
 
@@ -118,7 +118,7 @@ describe('useHashLists — `enabled` gate', () => {
   })
 })
 
-describe('useHashLists — cache key includes project id', () => {
+describe('useHashListSummaries — cache key includes project id', () => {
   it('does not leak cached rows across projects when selectedProjectId changes', async () => {
     const projectOneBody: HashListListResponse = {
       hashLists: [
@@ -141,7 +141,7 @@ describe('useHashLists — cache key includes project id', () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     })
 
-    const { result, rerender } = renderHook(() => useHashLists(), {
+    const { result, rerender } = renderHook(() => useHashListSummaries(), {
       wrapper: wrapperFactory(client),
     })
 
@@ -170,7 +170,7 @@ describe('useHashLists — cache key includes project id', () => {
   })
 })
 
-describe('useHashLists — wire type contract', () => {
+describe('useHashListSummaries — wire type contract', () => {
   it('accepts a row fixture matching the shared `hashListSummarySchema`', () => {
     // A row fixture matching the shared schema is assignable to the
     // hook's row type. If U3 regresses (e.g., someone re-introduces a

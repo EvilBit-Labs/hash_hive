@@ -132,12 +132,16 @@ if (!IS_ISOLATED) {
 
   // Filter by projectId on the session's project (always 1 in these
   // tests). Returns the projected shape the route's SELECT expects.
+  // `whereInvoked` is flipped inside `.where()` (not inside the row
+  // builder) so the regression guard at the bottom of the file
+  // actually catches a future change that drops the .where() clause.
+  // If we set `whereInvoked = true` inside `projectRows()` (which
+  // runs from `.then()` regardless), the guard would always pass.
   let whereInvoked = false
 
-  function projectRows(): Array<Record<string, unknown>> {
-    whereInvoked = true
+  function projectRows(scopedToProject: boolean): Array<Record<string, unknown>> {
     return state.rows
-      .filter((r) => r.projectId === 1)
+      .filter((r) => (scopedToProject ? r.projectId === 1 : true))
       .map((r) => ({
         id: r.id,
         name: r.name,
@@ -152,12 +156,15 @@ if (!IS_ISOLATED) {
     const chain = {
       from: () => chain,
       leftJoin: () => chain,
-      where: () => chain,
+      where: () => {
+        whereInvoked = true
+        return chain
+      },
       groupBy: () => chain,
       orderBy: () => chain,
       // oxlint-disable-next-line unicorn/no-thenable -- intentional thenable: mimics Drizzle's query-builder thenable so `await db.select(...).orderBy(...)` resolves to rows
       then: (resolve: (rows: unknown[]) => unknown) => {
-        resolve(projectRows())
+        resolve(projectRows(whereInvoked))
       },
     }
     return chain

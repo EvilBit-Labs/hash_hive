@@ -87,7 +87,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  */
 async function requestRaw(path: string, init?: RequestInit): Promise<Response> {
   const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
-  const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal
+  // Lift `init.signal` into a local so the narrowing is explicit
+  // to static analysers (CodeQL otherwise flags `init.signal` on
+  // the same line as `init?.signal` as a potential undefined deref).
+  const callerSignal = init?.signal
+  const signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal
 
   let res: Response
   try {

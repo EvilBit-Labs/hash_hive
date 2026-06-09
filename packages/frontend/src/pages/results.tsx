@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import type { ExportResultsFilters } from '../hooks/use-export-results'
@@ -71,9 +71,22 @@ export function ResultsPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Capture "now" once per mount. Refetches every 30s handle drift
-  // without churning the TanStack Query cache key on every render.
-  const nowIsoRef = useRef<string>(new Date().toISOString())
+  // "Now" advances on the polling cadence. Mount-anchoring the
+  // value would freeze the `endDate` query param so cracks landing
+  // 30+ minutes into a session would never appear, even though the
+  // 30s refetch would otherwise have surfaced them. The interval
+  // bucket is the same as RESULTS_POLL_INTERVAL_MS so the date
+  // window key changes at most once per poll.
+  const [nowIso, setNowIso] = useState<string>(() => new Date().toISOString())
+  useEffect(() => {
+    const t = window.setInterval(
+      () => setNowIso(new Date().toISOString()),
+      RESULTS_POLL_INTERVAL_MS
+    )
+    return () => {
+      window.clearInterval(t)
+    }
+  }, [])
 
   const filters = useMemo<ResultsFiltersValue>(() => {
     const campaignId = safePositiveInt(searchParams.get('campaignId'))
@@ -89,8 +102,8 @@ export function ResultsPage() {
   const offset = safeNonNegativeInt(searchParams.get('offset'))
 
   const dateWindow = useMemo(
-    () => resolveDateWindow(filters.dateRange, nowIsoRef.current),
-    [filters.dateRange]
+    () => resolveDateWindow(filters.dateRange, nowIso),
+    [filters.dateRange, nowIso]
   )
 
   // ExportButton filters mirror queryFilters but drop pagination /
@@ -176,10 +189,17 @@ export function ResultsPage() {
 
   const total = data?.total ?? 0
   const rows = data?.results ?? []
+  // Out-of-range offset (operator landed on a stale `?offset=N` URL
+  // after a filter narrowed the total) renders zero rows. The
+  // pagination affordance still needs to be visible so the operator
+  // has a way back to page 0 — gate visibility on `total > 0` rather
+  // than `rows.length > 0`. The range readout clamps to total so a
+  // stale offset doesn't surface confusing "301-400 of 50" output.
+  const hasOutOfRangeOffset = total > 0 && offset >= total
   const hasNext = offset + PAGE_SIZE < total
   const hasPrev = offset > 0
-  const rangeStart = total === 0 ? 0 : offset + 1
-  const rangeEnd = Math.min(offset + PAGE_SIZE, total)
+  const rangeStart = total === 0 || hasOutOfRangeOffset ? 0 : offset + 1
+  const rangeEnd = hasOutOfRangeOffset ? 0 : Math.min(offset + PAGE_SIZE, total)
 
   return (
     <div className="space-y-6">
@@ -212,7 +232,7 @@ export function ResultsPage() {
         )}
         <ResultsTable rows={rows} isLoading={isLoading} columns="full" />
 
-        {rows.length > 0 && (
+        {(rows.length > 0 || hasOutOfRangeOffset) && (
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground tabular-nums">
               {rangeStart}-{rangeEnd} of {total.toLocaleString('en-US')}

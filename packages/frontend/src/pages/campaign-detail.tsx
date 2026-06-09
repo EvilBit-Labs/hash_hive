@@ -22,7 +22,7 @@ import { Tabs } from '../components/ui/tabs'
 import { TextLink } from '../components/ui/text-link'
 import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
 import { useCampaignDetail } from '../hooks/use-dashboard'
-import { useHashLists } from '../hooks/use-hash-lists'
+import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useResults } from '../hooks/use-results'
 import { computeEta } from '../lib/campaign-eta'
 import { readCampaignPercentage } from '../lib/campaign-progress'
@@ -71,7 +71,7 @@ interface CampaignResultsPanelProps {
  * page has its own filter chrome, and the hash list detail view uses
  * a different segmented control).
  *
- * Hash list size is looked up from the project-scoped `useHashLists()`
+ * Hash list size is looked up from the project-scoped `useHashListSummaries()`
  * call at the parent. When the lookup hasn't returned (or returned no
  * matching row), `totalHashes` is omitted so the stats card renders
  * just the cracked count rather than a misleading 100% rate.
@@ -178,7 +178,7 @@ export function CampaignDetailPage() {
   // the Attacks tab doesn't pay the request cost just to render the
   // header. The campaign detail page is mounted in both tabs, so this
   // hook still has to live at the top level of the component.
-  const { data: hashListsData } = useHashLists({ enabled: tab === 'results' })
+  const { data: hashListsData } = useHashListSummaries({ enabled: tab === 'results' })
 
   // Same gate for the results query — TanStack Query won't fire when
   // `enabled` is false, but the call site still needs to opt in by way

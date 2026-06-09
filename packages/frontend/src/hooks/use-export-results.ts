@@ -38,10 +38,18 @@ function parseFilename(headerValue: string | null): string | null {
  * carries the numeric project id (see `stores/ui.ts`), so we slug
  * the id; if a project name becomes available later, this is the
  * single point to update.
+ *
+ * The timestamp is sanitized for cross-platform filesystems: Windows
+ * rejects `:` in filenames (NTFS reserves it as the alternate-data-
+ * stream separator), and `.` mid-name doesn't break anything but
+ * looks like a spurious extension. The backend's
+ * `Content-Disposition` filename already strips these — keeping the
+ * client fallback in sync prevents Windows downloads from landing
+ * with a clipped or browser-renamed filename.
  */
 function buildFallbackFilename(projectId: number | null): string {
   const slug = projectId === null ? 'project' : String(projectId)
-  const iso = new Date().toISOString()
+  const iso = new Date().toISOString().replace(/[:.]/g, '-')
   return `results-${slug}-${iso}.csv`
 }
 

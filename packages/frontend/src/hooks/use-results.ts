@@ -1,6 +1,6 @@
 import type { ListResultsResponse } from '@hashhive/shared'
 
-import { useQuery } from '@tanstack/react-query'
+import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
@@ -30,28 +30,32 @@ interface UseResultsOptions {
   enabled?: boolean
 }
 
-export function useResults(options?: UseResultsOptions) {
+export function useResults(
+  options?: UseResultsOptions
+): UseQueryResult<ListResultsResponse, Error> {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const callerEnabled = options?.enabled ?? true
 
-  // Strip lifecycle/control options from the cache key — only the
-  // request-shape filters identify a unique result set. Otherwise
-  // toggling tab visibility (which flips `enabled`) or tuning the
-  // polling cadence shards the cache for no benefit.
-  const { enabled: _enabled, refetchInterval: _refetchInterval, ...requestParams } = options ?? {}
+  // Normalize options into the EXACT URL-meaningful subset before
+  // composing both the cache key and the request. Two cache shards
+  // for the same URL is a real bug: `{ search: '', limit: 100 }` and
+  // `{ limit: 100 }` produce the same `/dashboard/results?limit=100`
+  // request but used to shard the TanStack cache because the
+  // spread-style key carried `search: ''` in one branch and not the
+  // other.
+  const requestPairs: Array<[string, string]> = []
+  if (options?.campaignId) requestPairs.push(['campaignId', String(options.campaignId)])
+  if (options?.hashListId) requestPairs.push(['hashListId', String(options.hashListId)])
+  if (options?.search) requestPairs.push(['q', options.search])
+  if (options?.startDate) requestPairs.push(['startDate', options.startDate])
+  if (options?.endDate) requestPairs.push(['endDate', options.endDate])
+  if (options?.limit !== undefined) requestPairs.push(['limit', String(options.limit)])
+  if (options?.offset !== undefined) requestPairs.push(['offset', String(options.offset)])
 
   return useQuery<ListResultsResponse>({
-    queryKey: ['results', selectedProjectId, requestParams],
+    queryKey: ['results', selectedProjectId, requestPairs],
     queryFn: () => {
-      const params = new URLSearchParams()
-      if (options?.campaignId) params.set('campaignId', String(options.campaignId))
-      if (options?.hashListId) params.set('hashListId', String(options.hashListId))
-      if (options?.search) params.set('q', options.search)
-      if (options?.startDate) params.set('startDate', options.startDate)
-      if (options?.endDate) params.set('endDate', options.endDate)
-      if (options?.limit !== undefined) params.set('limit', String(options.limit))
-      if (options?.offset !== undefined) params.set('offset', String(options.offset))
-
+      const params = new URLSearchParams(requestPairs)
       const query = params.toString()
       return api.get<ListResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
     },

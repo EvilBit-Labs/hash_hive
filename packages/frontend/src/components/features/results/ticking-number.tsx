@@ -111,7 +111,7 @@ export function TickingNumber({ value, children, className }: TickingNumberProps
               backgroundColor: 'var(--delta-bg)',
               color: 'var(--delta-fg)',
             }}
-            className="inline-flex items-center rounded-sm px-1 font-mono text-[10px] leading-tight font-medium tabular-nums"
+            className="inline-flex items-center rounded-sm px-1 font-mono text-xs leading-tight font-medium tabular-nums"
           >
             +{delta}
           </motion.span>

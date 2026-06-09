@@ -74,9 +74,9 @@ describe('ResultsTable', () => {
       expect(cell.className).toContain('text-success')
     })
 
-    it('renders an em dash when plaintext is null', () => {
+    it('renders a placeholder hyphen when plaintext is null', () => {
       renderWithProviders(<ResultsTable rows={[makeRow({ plaintext: null })]} isLoading={false} />)
-      // The em dash appears in the plaintext cell.
+      // The placeholder hyphen appears in the plaintext cell.
       const cells = screen.getAllByRole('cell')
       const plaintextCell = cells[1]
       expect(plaintextCell?.textContent).toBe('-')
@@ -117,7 +117,7 @@ describe('ResultsTable', () => {
       expect(screen.getByText('Orphaned')).toBeDefined()
     })
 
-    it('renders an em dash when both campaignId and campaignName are null', () => {
+    it('renders a placeholder hyphen when both campaignId and campaignName are null', () => {
       renderWithProviders(
         <ResultsTable
           rows={[makeRow({ campaignId: null, campaignName: null })]}
@@ -168,7 +168,7 @@ describe('ResultsTable', () => {
       expect(label.className).toContain('text-ctp-lavender')
     })
 
-    it('renders an em dash when attackModeName is null', () => {
+    it('renders a placeholder hyphen when attackModeName is null', () => {
       renderWithProviders(
         <ResultsTable rows={[makeRow({ attackModeName: null })]} isLoading={false} />
       )
@@ -179,7 +179,7 @@ describe('ResultsTable', () => {
   })
 
   describe('cracked at cell', () => {
-    it('renders an em dash when crackedAt is null', () => {
+    it('renders a placeholder hyphen when crackedAt is null', () => {
       renderWithProviders(<ResultsTable rows={[makeRow({ crackedAt: null })]} isLoading={false} />)
       const cells = screen.getAllByRole('cell')
       // Cell index 5 is the Cracked At cell in "full" mode.

@@ -126,7 +126,12 @@ test.describe.serial('Results flow E2E (U11)', () => {
     }
 
     await campaignLink.click()
-    await page.waitForURL(new RegExp(`${href.replace(/\//g, '\\/')}(\\?.*)?$`), { timeout: 10_000 })
+    // Escape ALL regex metacharacters in `href` before composing the
+    // wait pattern. Only escaping `/` (the previous approach) would
+    // leave other metacharacters (`?`, `.`, `(`, `)`, etc.) live in
+    // the regex, which is what CodeQL flagged.
+    const safeHref = href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    await page.waitForURL(new RegExp(`${safeHref}(\\?.*)?$`), { timeout: 10_000 })
 
     // Switch to the Results tab via the role=tab affordance (Tabs.Trigger
     // renders role="tab"). The Tabs primitive writes the URL param on the

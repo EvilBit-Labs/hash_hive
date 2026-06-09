@@ -87,9 +87,15 @@ export function useKeyboardShortcut(
 
   useEffect(() => {
     if (disabled || key === undefined) return
+    const targetKey = key.toLowerCase()
     function onKey(event: KeyboardEvent) {
       if (event.defaultPrevented) return
-      if (event.key !== key) return
+      // Letter-key shortcuts are matched case-insensitively so an
+      // export bound as 'E' fires whether the operator types E,
+      // Shift+E, or e with Caps Lock on. Non-letter keys (`/`,
+      // `Escape`, arrows) only have one form so the lowercase
+      // comparison is a no-op for them.
+      if (event.key.toLowerCase() !== targetKey) return
       if (event.ctrlKey || event.metaKey || event.altKey) return
       if (ignoreEditable && isEditable(event.target)) return
       try {

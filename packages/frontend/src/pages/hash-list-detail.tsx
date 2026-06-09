@@ -16,7 +16,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { TextLink } from '../components/ui/text-link'
 import { useDebounce } from '../hooks/use-debounce'
-import { useHashLists } from '../hooks/use-hash-lists'
+import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 import { useResults } from '../hooks/use-results'
 import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
@@ -66,13 +66,19 @@ export function HashListDetailPage() {
   // hash-list summary feeds the stats card numerator/denominator, and
   // useResults paginates the cracked-result table at 100 rows with the
   // 30s polling cadence the Results page uses.
-  const { data: hashListsData } = useHashLists({ enabled: view === 'cracked' })
+  // Both data sources are additionally gated on `isValidId` so an
+  // invalid URL like `/hash-lists/<garbage>` doesn't fire background
+  // polling against `hashListId=0` while the page is rendering its
+  // error state.
+  const { data: hashListsData } = useHashListSummaries({
+    enabled: isValidId && view === 'cracked',
+  })
   const resultsQuery = useResults({
     hashListId,
     limit: RESULTS_PAGE_SIZE,
     offset: resultsOffset,
     refetchInterval: RESULTS_POLL_INTERVAL_MS,
-    enabled: view === 'cracked',
+    enabled: isValidId && view === 'cracked',
   })
 
   if (!isValidId) {

@@ -25,7 +25,7 @@ export function LiveIndicator() {
   return (
     <span
       aria-label={`Live - auto-refreshing every ${cadenceSeconds} seconds`}
-      className="inline-flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground"
+      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
     >
       {prefersReducedMotion ? (
         <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-success" />

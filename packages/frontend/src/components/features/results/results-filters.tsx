@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useCampaigns } from '../../../hooks/use-dashboard'
 import { useDebounce } from '../../../hooks/use-debounce'
-import { useHashLists } from '../../../hooks/use-hash-lists'
+import { useHashListSummaries } from '../../../hooks/use-hash-lists'
 import { type ShortcutKey, useKeyboardShortcut } from '../../../hooks/use-keyboard-shortcut'
 import { cn } from '../../../lib/utils'
 import { Input } from '../../ui/input'
@@ -49,7 +49,7 @@ const SEARCH_DEBOUNCE_MS = 300
  * controls: Campaign Select, Hash List Select, Date Range Select, and
  * a debounced free-text Search Input.
  *
- * The hash-list dropdown is lazy: the `useHashLists` query stays
+ * The hash-list dropdown is lazy: the `useHashListSummaries` query stays
  * disabled until the operator opens (focuses) the select, unless the
  * URL already pins a `hashListId` filter — in which case we need the
  * options eagerly so the resolved label can render correctly.
@@ -87,7 +87,7 @@ export function ResultsFilters({
   // for; lazy-loading would add a focus-then-fetch latency tax we
   // don't want to pay.
   const campaignsQuery = useCampaigns()
-  const hashListsQuery = useHashLists({ enabled: hashListEnabled })
+  const hashListsQuery = useHashListSummaries({ enabled: hashListEnabled })
 
   const campaigns = (campaignsQuery.data?.campaigns ?? []) as ReadonlyArray<CampaignOption>
   const hashLists = hashListsQuery.data?.hashLists ?? []

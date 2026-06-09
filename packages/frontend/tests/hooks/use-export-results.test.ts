@@ -169,9 +169,11 @@ describe('useExportResults', () => {
       })
 
       expect(capturedAnchor).not.toBeNull()
-      // Selected project id is 7 (set in beforeEach).
+      // Selected project id is 7 (set in beforeEach). The timestamp
+      // has `:` and `.` replaced with `-` so the filename is valid
+      // on Windows / NTFS.
       expect(capturedAnchor!.download).toMatch(
-        /^results-7-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\.csv$/
+        /^results-7-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.csv$/
       )
     } finally {
       document.createElement = originalCreateElement

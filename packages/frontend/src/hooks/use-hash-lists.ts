@@ -1,6 +1,6 @@
 import type { HashListListResponse } from '@hashhive/shared'
 
-import { useQuery } from '@tanstack/react-query'
+import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
@@ -28,7 +28,9 @@ interface UseHashListsOptions {
  * the project-id segment but their payloads are different shapes and
  * must not bleed into each other's caches.
  */
-export function useHashListSummaries(options?: UseHashListsOptions) {
+export function useHashListSummaries(
+  options?: UseHashListsOptions
+): UseQueryResult<HashListListResponse, Error> {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const callerEnabled = options?.enabled ?? true
 
@@ -38,6 +40,3 @@ export function useHashListSummaries(options?: UseHashListsOptions) {
     enabled: !!selectedProjectId && callerEnabled,
   })
 }
-
-/** @deprecated use `useHashListSummaries` — name clashes with use-resources. */
-export const useHashLists = useHashListSummaries
