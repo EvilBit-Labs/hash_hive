@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 
+import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
 
 export interface ExportResultsFilters {
@@ -15,10 +16,13 @@ export interface ExportResultsFilters {
 
 /**
  * RFC 6266 §4.1 — parse `filename="..."` from a `Content-Disposition`
- * header value. We intentionally accept only the double-quoted form
- * because the backend (PR #204) always emits double-quoted filenames.
- * Bare-token and `filename*` (RFC 5987 ext-value) forms are out of
- * scope for this consumer.
+ * header value. We accept only the double-quoted form because the
+ * backend currently emits exactly that (`results-{ISO}.csv`). If the
+ * backend ever switches to a bare token or RFC 5987 `filename*`
+ * ext-value, this regex returns null and the caller falls back to
+ * the client-composed filename — no silent corruption. Escaped
+ * inner quotes (`filename="weird\"name.csv"`) would truncate; the
+ * backend doesn't emit those.
  */
 const FILENAME_REGEX = /filename="([^"]+)"/
 
@@ -59,10 +63,18 @@ function serializeFilters(filters: ExportResultsFilters): string {
  * filename from `Content-Disposition` (RFC 6266 double-quoted form);
  * if absent, falls back to `results-{projectId}-{ISO}.csv`.
  *
- * Cleanup: `URL.revokeObjectURL` runs in `finally` to release the blob
- * even if the `<a>` click handler throws. If `createObjectURL` was
- * never called (early `fetch`/`blob` error path), no revoke fires —
- * keeping the leak surface zero.
+ * Routes through `api.getRaw` so the export inherits the same
+ * 30s timeout, 401 session-expiry redirect, and `{ error: { code,
+ * message } }` envelope parsing the rest of the dashboard relies on.
+ * A hung export request can't spin in `isPending` forever; a 401
+ * doesn't leave the operator with a misleading "Export failed: 401"
+ * inline while their session is dead.
+ *
+ * Cleanup: `URL.revokeObjectURL` runs in `finally` to release the
+ * blob even if `<a>.click()` throws. The anchor is appended to and
+ * removed from the body inside a nested try/finally so a `click()`
+ * exception (CSP `navigate-to` violation, browser-hardened download
+ * blocker) doesn't leak a detached `<a>` into the document.
  */
 export function useExportResults() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
@@ -70,12 +82,9 @@ export function useExportResults() {
   return useMutation({
     mutationFn: async (filters: ExportResultsFilters) => {
       const query = serializeFilters(filters)
-      const url = `/api/v1/dashboard/results/export${query ? `?${query}` : ''}`
+      const url = `/dashboard/results/export${query ? `?${query}` : ''}`
 
-      const response = await fetch(url, { credentials: 'include' })
-      if (!response.ok) {
-        throw new Error(`Export failed: ${response.status} ${response.statusText}`)
-      }
+      const response = await api.getRaw(url)
 
       const filename =
         parseFilename(response.headers.get('Content-Disposition')) ??
@@ -87,14 +96,21 @@ export function useExportResults() {
       const blob = await response.blob()
 
       let objectUrl: string | null = null
+      const anchor = document.createElement('a')
       try {
         objectUrl = URL.createObjectURL(blob)
-        const anchor = document.createElement('a')
         anchor.href = objectUrl
         anchor.download = filename
         document.body.appendChild(anchor)
-        anchor.click()
-        document.body.removeChild(anchor)
+        try {
+          anchor.click()
+        } finally {
+          // Always remove the anchor — even if click() throws
+          // (CSP / browser-hardened download blockers can throw
+          // synchronously). Without this nested finally a thrown
+          // click leaks a detached <a> into the document body.
+          anchor.remove()
+        }
       } finally {
         if (objectUrl) URL.revokeObjectURL(objectUrl)
       }

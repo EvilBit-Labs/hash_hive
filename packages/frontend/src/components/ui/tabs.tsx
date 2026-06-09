@@ -45,8 +45,11 @@ interface TabsRootProps {
  *   call-site concern (intentionally not built into the primitive).
  * - Children consume context via `Tabs.List`, `Tabs.Trigger`, `Tabs.Content`.
  * - Keyboard: ArrowLeft / ArrowRight move focus + selection across triggers
- *   (wrapping); Enter / Space activate the focused trigger; roving tabindex
- *   (the active trigger is in the tab sequence, the rest are not).
+ *   in one step (automatic activation, per WAI-ARIA's "tabs with automatic
+ *   activation" model). Enter / Space also activate, mainly useful when
+ *   focus arrives via Tab on a `tabIndex=-1` trigger rather than via the
+ *   arrow keys. Uses a roving tabindex (only the active trigger is in the
+ *   tab sequence).
  */
 function TabsRoot({ value, onChange, children, className }: TabsRootProps) {
   // Stable per-instance ID prefix so multiple <Tabs> on the same page

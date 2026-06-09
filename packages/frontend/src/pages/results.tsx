@@ -19,10 +19,10 @@ import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { useKeyboardShortcut } from '../hooks/use-keyboard-shortcut'
 import { useResults } from '../hooks/use-results'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
 import { useUiStore } from '../stores/ui'
 
 const PAGE_SIZE = 100
-const POLL_INTERVAL_MS = 30_000
 
 const VALID_DATE_RANGES: ReadonlySet<DateRangeFilter> = new Set(['24h', '7d', '30d', 'all'])
 const DEFAULT_DATE_RANGE: DateRangeFilter = '30d'
@@ -112,7 +112,7 @@ export function ResultsPage() {
       ...exportFilters,
       limit: PAGE_SIZE,
       offset,
-      refetchInterval: POLL_INTERVAL_MS,
+      refetchInterval: RESULTS_POLL_INTERVAL_MS,
     }),
     [exportFilters, offset]
   )

@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { useParams } from 'react-router'
 
-import { CrackRatePercent } from '../components/features/results/crack-rate-percent'
+import { CrackedStatsLine } from '../components/features/results/cracked-stats-line'
 import { ExportButton } from '../components/features/results/export-button'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
-import { TickingNumber } from '../components/features/results/ticking-number'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
@@ -20,13 +19,13 @@ import { useDebounce } from '../hooks/use-debounce'
 import { useHashLists } from '../hooks/use-hash-lists'
 import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 import { useResults } from '../hooks/use-results'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
 
 type StatusFilter = 'all' | 'cracked' | 'uncracked'
 type DetailView = 'all' | 'cracked' | 'uncracked'
 
 const PAGE_SIZE = 50
 const RESULTS_PAGE_SIZE = 100
-const RESULTS_REFETCH_INTERVAL_MS = 30_000
 const SEARCH_DEBOUNCE_MS = 300
 
 const VIEW_OPTIONS = [
@@ -72,7 +71,7 @@ export function HashListDetailPage() {
     hashListId,
     limit: RESULTS_PAGE_SIZE,
     offset: resultsOffset,
-    refetchInterval: RESULTS_REFETCH_INTERVAL_MS,
+    refetchInterval: RESULTS_POLL_INTERVAL_MS,
     enabled: view === 'cracked',
   })
 
@@ -213,19 +212,7 @@ export function HashListDetailPage() {
       {view === 'cracked' && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-baseline gap-3">
-            <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-              Cracked{' '}
-              <TickingNumber value={summaryCracked} className="font-semibold text-foreground">
-                {summaryCracked.toLocaleString('en-US')}
-              </TickingNumber>{' '}
-              / {summaryTotal.toLocaleString('en-US')}
-              {summaryTotal > 0 && (
-                <>
-                  {' '}
-                  <CrackRatePercent value={(summaryCracked / summaryTotal) * 100} />
-                </>
-              )}
-            </p>
+            <CrackedStatsLine cracked={summaryCracked} total={summaryTotal} />
             <LiveIndicator />
           </div>
           {resultsQuery.isError && (

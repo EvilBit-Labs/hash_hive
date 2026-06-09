@@ -34,8 +34,14 @@ export function useResults(options?: UseResultsOptions) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const callerEnabled = options?.enabled ?? true
 
+  // Strip lifecycle/control options from the cache key — only the
+  // request-shape filters identify a unique result set. Otherwise
+  // toggling tab visibility (which flips `enabled`) or tuning the
+  // polling cadence shards the cache for no benefit.
+  const { enabled: _enabled, refetchInterval: _refetchInterval, ...requestParams } = options ?? {}
+
   return useQuery<ListResultsResponse>({
-    queryKey: ['results', selectedProjectId, options],
+    queryKey: ['results', selectedProjectId, requestParams],
     queryFn: () => {
       const params = new URLSearchParams()
       if (options?.campaignId) params.set('campaignId', String(options.campaignId))

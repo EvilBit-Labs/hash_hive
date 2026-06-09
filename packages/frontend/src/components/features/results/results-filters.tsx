@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCampaigns } from '../../../hooks/use-dashboard'
 import { useDebounce } from '../../../hooks/use-debounce'
 import { useHashLists } from '../../../hooks/use-hash-lists'
-import { useKeyboardShortcut } from '../../../hooks/use-keyboard-shortcut'
+import { type ShortcutKey, useKeyboardShortcut } from '../../../hooks/use-keyboard-shortcut'
 import { cn } from '../../../lib/utils'
 import { Input } from '../../ui/input'
 import { Kbd } from '../../ui/kbd'
@@ -27,7 +27,7 @@ interface ResultsFiltersProps {
    * as a visible Kbd chip inside the input so operators discover it
    * at a glance.
    */
-  readonly searchShortcutKey?: string
+  readonly searchShortcutKey?: ShortcutKey
 }
 
 interface CampaignOption {
@@ -75,9 +75,7 @@ export function ResultsFilters({
     searchInputRef.current.select()
   }, [])
 
-  useKeyboardShortcut(searchShortcutKey ?? '', focusSearch, {
-    disabled: !searchShortcutKey,
-  })
+  useKeyboardShortcut(searchShortcutKey, focusSearch)
 
   // Local input state lets us debounce the URL/query write without
   // making the input feel laggy. Seed from `filters.q` so deep-links
@@ -85,8 +83,9 @@ export function ResultsFilters({
   const [searchInput, setSearchInput] = useState(filters.q)
   const debouncedSearch = useDebounce(searchInput, SEARCH_DEBOUNCE_MS)
 
-  // Campaigns are cheap (already loaded for the Campaigns page) and the
-  // dropdown is almost always exercised, so we fetch eagerly.
+  // The campaigns dropdown is the primary filter operators reach
+  // for; lazy-loading would add a focus-then-fetch latency tax we
+  // don't want to pay.
   const campaignsQuery = useCampaigns()
   const hashListsQuery = useHashLists({ enabled: hashListEnabled })
 

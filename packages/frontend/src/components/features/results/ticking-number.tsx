@@ -1,13 +1,14 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
+import { EASE_OUT_EXPO } from '../../../lib/motion-tokens'
 import { cn } from '../../../lib/utils'
 
 interface TickingNumberProps {
   /** Current value to render. Numerical formatting is the caller's job. */
   readonly value: number
   /** Pre-formatted text to display (e.g. `1,283`). */
-  readonly children: ReactNode
+  readonly children: string | number
   /** Extra classes for the rendered span. */
   readonly className?: string
 }
@@ -15,11 +16,14 @@ interface TickingNumberProps {
 const TICK_DURATION_S = 0.6
 const DELTA_VISIBLE_MS = 2500
 const DELTA_DISMISS_DURATION_S = 0.35
-const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
 
-// Plausible delta range for a 30s poll on a single project. A bigger
-// jump almost certainly means a filter change (or a project switch
-// the cache didn't catch up on), so we skip the +N badge in that case.
+/**
+ * Above this delta the +N chip stops being informative and starts
+ * being noise — a chip reading "+412" doesn't help an operator who
+ * was already watching the figure tick. Calibrated as a UX threshold,
+ * not an empirical claim about crack rate; tune as the surface
+ * evolves.
+ */
 const MAX_PLAUSIBLE_DELTA = 200
 
 // Color tokens live on className as inline CSS variables; Motion
@@ -41,25 +45,42 @@ const TICK_VARS =
  *
  * The `prev > 0` guard excludes filter changes (which often drop to
  * zero before refilling); the MAX_PLAUSIBLE_DELTA guard excludes
- * project switches / huge filter widenings where a +N badge would
- * be noise. Reduced-motion users see a static figure update with
- * no badge.
+ * project switches / huge filter widenings where a +N badge would be
+ * noise. NaN / Infinity / negative values are also ignored so a wire
+ * shape race can't poison `prevValueRef` and silently disable future
+ * ticks. Reduced-motion users see a static figure update with no
+ * badge.
+ *
+ * When updates arrive faster than the chip's 2.5s dismiss timer, the
+ * displayed delta accumulates (e.g. 1283 -> 1286 -> 1289 surfaces as
+ * "+6") so a dense run of cracks doesn't visually shrink to the most
+ * recent single-tick delta.
  */
 export function TickingNumber({ value, children, className }: TickingNumberProps) {
   const prefersReducedMotion = useReducedMotion()
   const prevValueRef = useRef(value)
   const [tickKey, setTickKey] = useState(0)
   const [delta, setDelta] = useState<number | null>(null)
+  const pendingDeltaRef = useRef(0)
 
   useEffect(() => {
     const prev = prevValueRef.current
+    // Defend against wire-data drift (NaN, Infinity, negative). A bad
+    // value would otherwise poison `prevValueRef` and disable future
+    // ticks; ignore it and leave the ref pointing at the last good
+    // value.
+    if (!Number.isFinite(value) || value < 0) return
     prevValueRef.current = value
     if (prev <= 0 || value <= prev) return
     const d = value - prev
     if (d > MAX_PLAUSIBLE_DELTA) return
+    pendingDeltaRef.current += d
     setTickKey((k) => k + 1)
-    setDelta(d)
-    const t = window.setTimeout(() => setDelta(null), DELTA_VISIBLE_MS)
+    setDelta(pendingDeltaRef.current)
+    const t = window.setTimeout(() => {
+      pendingDeltaRef.current = 0
+      setDelta(null)
+    }, DELTA_VISIBLE_MS)
     return () => window.clearTimeout(t)
   }, [value])
 
@@ -73,7 +94,7 @@ export function TickingNumber({ value, children, className }: TickingNumberProps
         key={tickKey}
         initial={tickKey === 0 ? false : { opacity: 0.4, scale: 0.92, color: 'var(--tick-flash)' }}
         animate={{ opacity: 1, scale: 1, color: 'var(--tick-base)' }}
-        transition={{ duration: TICK_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+        transition={{ duration: TICK_DURATION_S, ease: EASE_OUT_EXPO }}
         className={className}
       >
         {children}
@@ -85,7 +106,7 @@ export function TickingNumber({ value, children, className }: TickingNumberProps
             initial={{ opacity: 0, y: -4, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -2, transition: { duration: DELTA_DISMISS_DURATION_S } }}
-            transition={{ duration: TICK_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+            transition={{ duration: TICK_DURATION_S, ease: EASE_OUT_EXPO }}
             style={{
               backgroundColor: 'var(--delta-bg)',
               color: 'var(--delta-fg)',

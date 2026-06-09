@@ -7,10 +7,9 @@ import { CampaignAgentsSection } from '../components/features/campaign-agents-se
 import { CampaignTaskStats } from '../components/features/campaign-task-stats'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { PriorityBadge } from '../components/features/priority-badge'
-import { CrackRatePercent } from '../components/features/results/crack-rate-percent'
+import { CrackedStatsLine } from '../components/features/results/cracked-stats-line'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
-import { TickingNumber } from '../components/features/results/ticking-number'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
@@ -27,6 +26,7 @@ import { useHashLists } from '../hooks/use-hash-lists'
 import { useResults } from '../hooks/use-results'
 import { computeEta } from '../lib/campaign-eta'
 import { readCampaignPercentage } from '../lib/campaign-progress'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
 import { Permission } from '../lib/permissions'
 
 // Lazy-load the DAG view so reactflow's bundle weight is only paid when
@@ -44,7 +44,6 @@ type CampaignDetailTab = 'attacks' | 'results'
 const VALID_TABS: ReadonlySet<CampaignDetailTab> = new Set(['attacks', 'results'])
 const DEFAULT_TAB: CampaignDetailTab = 'attacks'
 const RESULTS_PAGE_SIZE = 100
-const RESULTS_POLL_INTERVAL_MS = 30_000
 
 function safeTab(raw: string | null): CampaignDetailTab {
   if (raw && VALID_TABS.has(raw as CampaignDetailTab)) {
@@ -96,30 +95,13 @@ function CampaignResultsPanel({
   const rangeStart = resultsTotal === 0 ? 0 : offset + 1
   const rangeEnd = Math.min(offset + RESULTS_PAGE_SIZE, resultsTotal)
 
-  const crackRate =
-    totalHashes !== undefined && totalHashes > 0 ? (resultsTotal / totalHashes) * 100 : null
-
   return (
     <div aria-live="polite" className="space-y-4">
       <div className="flex flex-wrap items-baseline gap-3">
-        <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-          Cracked{' '}
-          <TickingNumber value={resultsTotal} className="font-semibold text-foreground">
-            {resultsTotal.toLocaleString('en-US')}
-          </TickingNumber>
-          {totalHashes !== undefined && (
-            <>
-              {' '}
-              / {totalHashes.toLocaleString('en-US')}
-              {crackRate !== null && (
-                <>
-                  {' '}
-                  <CrackRatePercent value={crackRate} />
-                </>
-              )}
-            </>
-          )}
-        </p>
+        <CrackedStatsLine
+          cracked={resultsTotal}
+          {...(totalHashes !== undefined && { total: totalHashes })}
+        />
         <LiveIndicator />
       </div>
 

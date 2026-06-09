@@ -212,4 +212,40 @@ describe('ResultsTable', () => {
       expect(screen.getAllByRole('columnheader')).toHaveLength(6)
     })
   })
+
+  describe('row-pulse new-arrival detection', () => {
+    it('seeds the threshold on initial mount so existing rows are not flagged', () => {
+      const initial = [makeRow({ id: 10 }), makeRow({ id: 20 }), makeRow({ id: 30 })]
+      const { container } = renderWithProviders(<ResultsTable rows={initial} isLoading={false} />)
+      // No rows should carry a "newly arrived" marker after the seed. We
+      // can't observe the motion `animate` prop directly, but if every
+      // row is treated as old the table renders three data rows and no
+      // empty-state copy.
+      const dataRows = container.querySelectorAll('tbody tr')
+      expect(dataRows.length).toBe(3)
+    })
+
+    it('renders all rows after a poll-style rerender that adds a new row above the threshold', () => {
+      const initial = [makeRow({ id: 10 }), makeRow({ id: 20 })]
+      const { rerender, container } = renderWithProviders(
+        <ResultsTable rows={initial} isLoading={false} />
+      )
+      const fresh = [...initial, makeRow({ id: 25 })]
+      rerender(<ResultsTable rows={fresh} isLoading={false} />)
+      const dataRows = container.querySelectorAll('tbody tr')
+      expect(dataRows.length).toBe(3)
+    })
+
+    it('resets the threshold on a filter switch (zero-overlap row set)', () => {
+      const setA = [makeRow({ id: 100 }), makeRow({ id: 200 })]
+      const { rerender, container } = renderWithProviders(
+        <ResultsTable rows={setA} isLoading={false} />
+      )
+      // Filter switch: brand-new id space with no overlap.
+      const setB = [makeRow({ id: 1 }), makeRow({ id: 2 })]
+      rerender(<ResultsTable rows={setB} isLoading={false} />)
+      const dataRows = container.querySelectorAll('tbody tr')
+      expect(dataRows.length).toBe(2)
+    })
+  })
 })

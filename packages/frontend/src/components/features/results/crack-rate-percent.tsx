@@ -1,32 +1,47 @@
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 
+import { EASE_OUT_EXPO } from '../../../lib/motion-tokens'
 import { cn } from '../../../lib/utils'
 
 interface CrackRatePercentProps {
-  /** Crack rate as a percent (0–100). Used both for the display and for the 100% milestone gate. */
+  /** Crack rate as a percent in [0, 100]. */
   readonly value: number
   /** Optional extra classes for the surrounding wrapper. */
   readonly className?: string
 }
 
 const MILESTONE_THRESHOLD = 99.95
+const MILESTONE_UPPER_BOUND = 100.5
 const TRANSITION_DURATION_S = 0.6
-const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
 
 /**
- * Inline percentage rendering for crack rate. At 100% (within
- * rounding) the figure flips from muted text to peach + semibold —
- * .impeccable.md's "A campaign completes -> the campaign card
- * acknowledges it" moment, applied to hash list completion. The
- * transition into 100% is a one-time scale lift; subsequent renders
- * stay in the milestone treatment without re-animating. Reduced-
- * motion users see the static milestone color without the lift.
+ * Inline percentage rendering for crack rate. Used by both the
+ * campaign-detail Results tab and the hash-list detail Cracked view
+ * to render the completion-moment treatment described in
+ * .impeccable.md ("A campaign completes -> the card acknowledges it").
+ * At 100% (within rounding — threshold 99.95) the figure flips from
+ * muted to peach + semibold; sub-100% renders in the muted treatment.
+ *
+ * Defensive against wire-data drift: NaN / Infinity / negative inputs
+ * render as a neutral hyphen so a race between cracked and hash counts
+ * doesn't surface "(NaN%)" or "(Infinity%)" to the operator. Values
+ * above MILESTONE_UPPER_BOUND (101.5%) get a console warning so the
+ * data drift is debuggable — the figure itself stays honest about the
+ * broken number rather than silently clamping.
+ *
+ * The transition into 100% is a one-time scale lift (subsequent
+ * renders stay in the milestone treatment without re-animating). If
+ * the value drops back below 100% and re-crosses, the milestone
+ * replays — intentional: a hash list that gains new hashes and gets
+ * re-completed is a fresh operator moment.
  */
 export function CrackRatePercent({ value, className }: CrackRatePercentProps) {
   const prefersReducedMotion = useReducedMotion()
   const isFiniteRate = Number.isFinite(value)
-  const isComplete = isFiniteRate && value >= MILESTONE_THRESHOLD
+  // Coerce -0 to 0 so the formatter doesn't render `-0.0%`.
+  const normalized = value === 0 ? 0 : value
+  const isComplete = isFiniteRate && normalized >= MILESTONE_THRESHOLD
   const wasCompleteRef = useRef(isComplete)
   const [crossedKey, setCrossedKey] = useState(0)
 
@@ -37,18 +52,24 @@ export function CrackRatePercent({ value, className }: CrackRatePercentProps) {
     wasCompleteRef.current = isComplete
   }, [isComplete])
 
-  const baseClass = cn('tabular-nums', className)
-  const completeClass = cn('font-semibold text-primary', baseClass)
-  const mutedClass = cn('text-muted-foreground', baseClass)
+  // Warn (once per render-with-drift) when the wire shape lies. The
+  // figure still renders honestly so the operator sees the number;
+  // the console line gives engineering a trail.
+  useEffect(() => {
+    if (isFiniteRate && normalized > MILESTONE_UPPER_BOUND) {
+      // oxlint-disable-next-line no-console -- wire-shape drift must be debuggable
+      console.warn('[CrackRatePercent] value exceeds 100% — wire data race?', { value })
+    }
+  }, [isFiniteRate, normalized, value])
 
-  // NaN / Infinity / negative inputs render as a neutral hyphen so a
-  // race between cracked and hash counts doesn't surface "NaN%" or
-  // "Infinity%" to the operator.
-  if (!isFiniteRate || value < 0) {
+  const completeClass = cn('font-semibold text-primary tabular-nums', className)
+  const mutedClass = cn('text-muted-foreground tabular-nums', className)
+
+  if (!isFiniteRate || normalized < 0) {
     return <span className={mutedClass}>(-%)</span>
   }
 
-  const formatted = value.toFixed(1)
+  const formatted = normalized.toFixed(1)
 
   if (!isComplete) {
     return <span className={mutedClass}>({formatted}%)</span>
@@ -63,7 +84,7 @@ export function CrackRatePercent({ value, className }: CrackRatePercentProps) {
       key={crossedKey}
       initial={crossedKey === 0 ? false : { scale: 0.9, opacity: 0.5 }}
       animate={{ scale: 1, opacity: 1 }}
-      transition={{ duration: TRANSITION_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+      transition={{ duration: TRANSITION_DURATION_S, ease: EASE_OUT_EXPO }}
       className={completeClass}
     >
       ({formatted}%)

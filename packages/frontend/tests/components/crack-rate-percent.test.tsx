@@ -41,4 +41,18 @@ describe('CrackRatePercent', () => {
     expect(screen.getByText('(-%)')).toBeDefined()
     cleanupAll()
   })
+
+  it('stays in the muted treatment for 99.94 (just below the milestone boundary)', () => {
+    render(<CrackRatePercent value={99.94} />)
+    const el = screen.getByText('(99.9%)')
+    expect(el.className).toContain('text-muted-foreground')
+    expect(el.className).not.toContain('text-primary')
+    cleanupAll()
+  })
+
+  it('coerces negative zero to zero so the figure is not rendered as -0.0%', () => {
+    render(<CrackRatePercent value={-0} />)
+    expect(screen.getByText('(0.0%)')).toBeDefined()
+    cleanupAll()
+  })
 })

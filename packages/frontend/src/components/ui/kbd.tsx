@@ -1,19 +1,16 @@
-import type { ReactNode } from 'react'
-
 import { cn } from '../../lib/utils'
 
 interface KbdProps {
-  readonly children: ReactNode
+  /** The shortcut character to display (e.g. `/`, `E`). Plain string only. */
+  readonly children: string
   readonly className?: string
 }
 
 /**
  * Tiny `<kbd>` chip that surfaces a keyboard shortcut inline next to
- * the action it triggers. Reads as the operator-grade pit-wall HUD
- * pattern .impeccable.md asks for in principle 4 ("keyboard is a
- * first-class peer of mouse"). The shortcut character itself is
- * Space Mono; the chrome around it is muted so the chip recedes
- * until the operator is ready to learn the shortcut.
+ * the action it triggers. Operator-grade chrome: the shortcut char is
+ * Space Mono; the surrounding chip is muted so it recedes until the
+ * operator is ready to learn the shortcut.
  */
 export function Kbd({ children, className }: KbdProps) {
   return (

@@ -6,13 +6,16 @@ import type { AttackModeName } from '@hashhive/shared'
  * Each mode gets a stable Catppuccin accent so the Results table's
  * Attack column communicates the attack family at a glance instead
  * of reading as a uniform field of muted text. Honors the
- * .impeccable.md "per-attack-mode colors for chunking" direction
- * and the lavender -> sapphire -> sky -> teal -> green sequence
- * called out for editorial use.
+ * .impeccable.md "per-attack-mode colors for chunking" direction.
+ * The mapping is a stable per-mode assignment, not a fixed
+ * sequence — Mask gets lavender and Association gets mauve to
+ * keep semantically distinct attacks visually distinct, even
+ * though those colors fall outside the editorial graph-series
+ * sequence the doc names for charts.
  *
  * Color is paired with a leading bullet glyph at the call site
  * (results-table.tsx) so the encoding survives color-blind operators
- * and grayscale screenshots per design principle 3.
+ * and grayscale screenshots — color + non-color cue + label.
  */
 const MODE_COLOR: Readonly<Record<AttackModeName, string>> = {
   Dictionary: 'text-ctp-sky',

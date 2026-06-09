@@ -41,8 +41,11 @@ const BUTTON_INACTIVE =
  *
  * Keyboard: each button sits in the normal tab order; once focused, left/right
  * arrows move focus AND selection to the adjacent option, wrapping at both
- * ends. This matches the WAI-ARIA toolbar pattern operators expect from a
- * row of related toggles.
+ * ends. The behavior mirrors the WAI-ARIA radiogroup pattern (mutually
+ * exclusive selection; arrows move both focus and selection in one step)
+ * rather than the toolbar pattern (which would move focus only). The
+ * surrounding markup uses `role="group"` with `aria-pressed` on each
+ * button so each option is independently labeled.
  */
 export function SegmentedControl({
   value,

@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 
 import { attackModeColorClass } from '../../../lib/attack-mode-color'
+import { EASE_OUT_EXPO } from '../../../lib/motion-tokens'
 import { cn } from '../../../lib/utils'
 import { EmptyState } from '../../ui/empty-state'
 import { Table, TableBody, TableHead, Td, Th } from '../../ui/table'
@@ -15,7 +16,6 @@ const PLACEHOLDER = '-'
 // "moment a hash cracks" operator-theater moment .impeccable.md
 // calls out. Catppuccin green-tinted background fades in over 1.2s.
 const ROW_PULSE_DURATION_S = 1.2
-const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const
 const ROW_PULSE_VARS =
   '[--pulse-on:hsl(var(--ctp-green)/0.2)] ' +
   '[--pulse-quiet:hsl(var(--ctp-green)/0.08)] ' +
@@ -58,9 +58,45 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
   // rows that arrived after the previous render. Initial mount seeds
   // the value without flagging anything — the operator landing on a
   // populated table didn't just crack those rows.
+  //
+  // The ref-not-state choice is load-bearing: updating via setState
+  // would re-render after seeding and re-evaluate `isNew` against
+  // the now-seeded threshold, defeating the seed-without-flagging
+  // semantics. The trade-off is `seenThreshold` reads the ref's
+  // value before the useEffect updates it (see render-time snapshot
+  // below) — that's intentional.
+  //
+  // Filter switches reset the threshold. Without this, switching
+  // from a filter that exposed ids 1..200 to one that exposes ids
+  // 1..50 would leave the threshold at 200, and a subsequent live
+  // crack at id 150 (still below 200) would NOT pulse — a real
+  // operator-theater miss. We detect a filter switch as "no overlap
+  // between previous and current row ids" — a refetch always shares
+  // most rows; a filter change shares few or none.
   const maxSeenIdRef = useRef<number>(0)
+  const prevIdsRef = useRef<Set<number>>(new Set())
   useEffect(() => {
-    if (rows.length === 0) return
+    if (rows.length === 0) {
+      prevIdsRef.current = new Set()
+      return
+    }
+    const currentIds = new Set(rows.map((r) => r.id))
+    const prevIds = prevIdsRef.current
+    if (prevIds.size > 0) {
+      let overlap = 0
+      for (const id of currentIds) {
+        if (prevIds.has(id)) overlap++
+      }
+      // Heuristic: a refetch shares at least one row with the prior
+      // render (unless the operator paged AND no overlap survived).
+      // If overlap is zero we treat it as a filter switch and reset
+      // the threshold so new cracks below the prior max can still
+      // pulse.
+      if (overlap === 0) {
+        maxSeenIdRef.current = 0
+      }
+    }
+    prevIdsRef.current = currentIds
     const maxId = Math.max(...rows.map((r) => r.id))
     if (maxId > maxSeenIdRef.current) {
       maxSeenIdRef.current = maxId
@@ -110,7 +146,7 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
               className={ROW_PULSE_VARS}
               animate={pulseAnimate}
               whileHover={{ backgroundColor: 'var(--row-hover)' }}
-              transition={{ duration: ROW_PULSE_DURATION_S, ease: [...EASE_OUT_EXPO] }}
+              transition={{ duration: ROW_PULSE_DURATION_S, ease: EASE_OUT_EXPO }}
             >
               <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
                 {row.hashValue}

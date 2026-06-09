@@ -182,4 +182,54 @@ describe('ResultsFilters', () => {
       expect(calls.some(([url]) => String(url).includes('/dashboard/hash-lists'))).toBe(true)
     })
   })
+
+  describe('keyboard shortcut: searchShortcutKey', () => {
+    it('focuses the search input when the shortcut key is pressed on document body', () => {
+      fetchMock = mockFetch({
+        '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse({ count: 0 }) },
+      })
+      selectProject()
+      renderWithProviders(
+        <ResultsFilters
+          filters={baseFilters()}
+          onFiltersChange={mock(() => {})}
+          searchShortcutKey="/"
+        />
+      )
+      const input = screen.getByLabelText('Search hashes or plaintexts') as HTMLInputElement
+      expect(document.activeElement === input).toBe(false)
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '/' }))
+
+      expect(document.activeElement === input).toBe(true)
+    })
+
+    it('renders the Kbd hint chip when searchShortcutKey is set', () => {
+      fetchMock = mockFetch({
+        '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse({ count: 0 }) },
+      })
+      selectProject()
+      renderWithProviders(
+        <ResultsFilters
+          filters={baseFilters()}
+          onFiltersChange={mock(() => {})}
+          searchShortcutKey="/"
+        />
+      )
+      const kbd = document.querySelector('kbd')
+      expect(kbd).not.toBeNull()
+      expect(kbd?.textContent).toBe('/')
+    })
+
+    it('omits the Kbd hint chip when searchShortcutKey is undefined', () => {
+      fetchMock = mockFetch({
+        '/dashboard/campaigns': { status: 200, body: mockCampaignsResponse({ count: 0 }) },
+      })
+      selectProject()
+      renderWithProviders(
+        <ResultsFilters filters={baseFilters()} onFiltersChange={mock(() => {})} />
+      )
+      expect(document.querySelector('kbd')).toBeNull()
+    })
+  })
 })

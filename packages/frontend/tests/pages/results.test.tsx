@@ -298,4 +298,31 @@ describe('ResultsPage', () => {
       expect(limitCall).toBeDefined()
     })
   })
+
+  it('refetches the results query when the `r` shortcut is pressed', async () => {
+    fetchMock = defaultMocks()
+    selectProject()
+    renderWithProviders(<ResultsPage />)
+
+    // Wait for the initial /dashboard/results fetch to land.
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
+      const resultsCall = calls.find(([url]) => String(url).includes('/dashboard/results'))
+      expect(resultsCall).toBeDefined()
+    })
+
+    const initialResultsCallCount = (fetchMock.mock.calls as Array<[string, ...unknown[]]>).filter(
+      ([url]) => String(url).includes('/dashboard/results')
+    ).length
+
+    // Press `r` to invalidate; the page should re-issue the /dashboard/results request.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }))
+
+    await waitFor(() => {
+      const next = (fetchMock.mock.calls as Array<[string, ...unknown[]]>).filter(([url]) =>
+        String(url).includes('/dashboard/results')
+      ).length
+      expect(next).toBeGreaterThan(initialResultsCallCount)
+    })
+  })
 })

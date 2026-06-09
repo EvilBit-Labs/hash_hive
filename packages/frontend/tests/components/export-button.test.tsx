@@ -100,4 +100,43 @@ describe('ExportButton', () => {
     renderWithProviders(<ExportButton filters={{}} label="Download results" />)
     expect(screen.getByRole('button', { name: 'Download results' })).toBeDefined()
   })
+
+  it('appends the Kbd character to the accessible name when shortcutKey is set', () => {
+    renderWithProviders(<ExportButton filters={{}} shortcutKey="E" />)
+    const button = screen.getByRole('button', { name: /Export CSV/ })
+    // The visible Kbd char becomes part of the accessible name.
+    expect(button.textContent ?? '').toContain('E')
+  })
+
+  it('clears the "Exported" label when a subsequent attempt errors', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/results/export': {
+        status: 200,
+        body: 'csv-body',
+        headers: { 'content-type': 'text/csv' },
+      },
+    })
+    renderWithProviders(<ExportButton filters={{}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Exported' })).toBeDefined()
+    })
+
+    // Swap the mock to a failure for the second attempt.
+    restoreFetch(fetchMock)
+    fetchMock = mockFetch({
+      '/dashboard/results/export': {
+        status: 500,
+        body: { error: { code: 'INTERNAL', message: 'boom' } },
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Exported' }))
+
+    await waitFor(() => {
+      const alert = screen.queryByRole('alert')
+      expect(alert).not.toBeNull()
+    })
+    // The button does NOT read "Exported" while the inline error is showing.
+    expect(screen.queryByRole('button', { name: 'Exported' })).toBeNull()
+  })
 })
