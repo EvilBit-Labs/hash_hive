@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
 } from 'react'
@@ -16,6 +17,8 @@ interface TabsContextValue {
   readonly onChange: (next: string) => void
   readonly registerTrigger: (value: string, node: HTMLButtonElement | null) => void
   readonly focusByOffset: (currentValue: string, offset: number) => void
+  /** Per-instance prefix for trigger/panel `id` and `aria-labelledby`. */
+  readonly idPrefix: string
 }
 
 const TabsContext = createContext<TabsContextValue | null>(null)
@@ -46,6 +49,11 @@ interface TabsRootProps {
  *   (the active trigger is in the tab sequence, the rest are not).
  */
 function TabsRoot({ value, onChange, children, className }: TabsRootProps) {
+  // Stable per-instance ID prefix so multiple <Tabs> on the same page
+  // produce unique trigger/panel ids — and so the panel's aria-labelledby
+  // resolves to its own trigger, not a sibling Tabs's.
+  const idPrefix = useId()
+
   // Keep an insertion-ordered registry of trigger refs so keyboard navigation
   // can move focus deterministically regardless of where triggers live in the
   // tree (Tabs.List + Tabs.Trigger are intentionally decoupled).
@@ -76,8 +84,8 @@ function TabsRoot({ value, onChange, children, className }: TabsRootProps) {
   )
 
   const ctxValue = useMemo<TabsContextValue>(
-    () => ({ value, onChange, registerTrigger, focusByOffset }),
-    [value, onChange, registerTrigger, focusByOffset]
+    () => ({ value, onChange, registerTrigger, focusByOffset, idPrefix }),
+    [value, onChange, registerTrigger, focusByOffset, idPrefix]
   )
 
   return (
@@ -120,9 +128,12 @@ function TabsTrigger({ value, children, className, disabled = false }: TabsTrigg
     onChange,
     registerTrigger,
     focusByOffset,
+    idPrefix,
   } = useTabsContext('Tabs.Trigger')
   const isActive = activeValue === value
   const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const triggerId = `${idPrefix}trigger-${value}`
+  const panelId = `${idPrefix}panel-${value}`
 
   useEffect(() => {
     registerTrigger(value, buttonRef.current)
@@ -152,9 +163,11 @@ function TabsTrigger({ value, children, className, disabled = false }: TabsTrigg
   return (
     <button
       ref={buttonRef}
+      id={triggerId}
       type="button"
       role="tab"
       aria-selected={isActive}
+      aria-controls={panelId}
       tabIndex={isActive ? 0 : -1}
       disabled={disabled}
       onClick={() => {
@@ -183,10 +196,15 @@ interface TabsContentProps {
 }
 
 function TabsContent({ value, children, className }: TabsContentProps) {
-  const { value: activeValue } = useTabsContext('Tabs.Content')
+  const { value: activeValue, idPrefix } = useTabsContext('Tabs.Content')
   if (activeValue !== value) return null
   return (
-    <div role="tabpanel" className={className}>
+    <div
+      role="tabpanel"
+      id={`${idPrefix}panel-${value}`}
+      aria-labelledby={`${idPrefix}trigger-${value}`}
+      className={className}
+    >
       {children}
     </div>
   )

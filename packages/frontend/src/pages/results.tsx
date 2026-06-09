@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 
+import type { ExportResultsFilters } from '../hooks/use-export-results'
+
 import { ExportButton } from '../components/features/results/export-button'
 import {
   type DateRangeFilter,
@@ -86,37 +88,29 @@ export function ResultsPage() {
     [filters.dateRange]
   )
 
-  const queryFilters = useMemo(() => {
-    const opts: Parameters<typeof useResults>[0] = {
+  // ExportButton filters mirror queryFilters but drop pagination /
+  // polling concerns — exports always span the full filtered set.
+  // Built first so queryFilters can spread it without duplication.
+  const exportFilters = useMemo<ExportResultsFilters>(
+    () => ({
+      ...(filters.campaignId !== undefined && { campaignId: filters.campaignId }),
+      ...(filters.hashListId !== undefined && { hashListId: filters.hashListId }),
+      ...(filters.q && { search: filters.q }),
+      ...(dateWindow.startDate && { startDate: dateWindow.startDate }),
+      ...(dateWindow.endDate && { endDate: dateWindow.endDate }),
+    }),
+    [filters.campaignId, filters.hashListId, filters.q, dateWindow]
+  )
+
+  const queryFilters = useMemo(
+    () => ({
+      ...exportFilters,
       limit: PAGE_SIZE,
       offset,
       refetchInterval: POLL_INTERVAL_MS,
-    }
-    if (filters.campaignId !== undefined) opts.campaignId = filters.campaignId
-    if (filters.hashListId !== undefined) opts.hashListId = filters.hashListId
-    if (filters.q) opts.search = filters.q
-    if (dateWindow.startDate) opts.startDate = dateWindow.startDate
-    if (dateWindow.endDate) opts.endDate = dateWindow.endDate
-    return opts
-  }, [filters.campaignId, filters.hashListId, filters.q, offset, dateWindow])
-
-  // ExportButton filters mirror queryFilters but drop pagination /
-  // polling concerns — exports always span the full filtered set.
-  const exportFilters = useMemo(() => {
-    const opts: {
-      campaignId?: number
-      hashListId?: number
-      search?: string
-      startDate?: string
-      endDate?: string
-    } = {}
-    if (filters.campaignId !== undefined) opts.campaignId = filters.campaignId
-    if (filters.hashListId !== undefined) opts.hashListId = filters.hashListId
-    if (filters.q) opts.search = filters.q
-    if (dateWindow.startDate) opts.startDate = dateWindow.startDate
-    if (dateWindow.endDate) opts.endDate = dateWindow.endDate
-    return opts
-  }, [filters.campaignId, filters.hashListId, filters.q, dateWindow])
+    }),
+    [exportFilters, offset]
+  )
 
   const handleFiltersChange = useCallback(
     (next: ResultsFiltersValue) => {

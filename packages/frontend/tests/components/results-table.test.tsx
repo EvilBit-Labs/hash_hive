@@ -79,7 +79,7 @@ describe('ResultsTable', () => {
       // The em dash appears in the plaintext cell.
       const cells = screen.getAllByRole('cell')
       const plaintextCell = cells[1]
-      expect(plaintextCell?.textContent).toBe('—')
+      expect(plaintextCell?.textContent).toBe('-')
     })
 
     it('applies break-all to the plaintext cell so very long values wrap', () => {
@@ -126,7 +126,7 @@ describe('ResultsTable', () => {
       )
       const cells = screen.getAllByRole('cell')
       // Cell index 2 is the Campaign cell in "full" mode.
-      expect(cells[2]?.textContent).toBe('—')
+      expect(cells[2]?.textContent).toBe('-')
     })
   })
 
@@ -165,7 +165,7 @@ describe('ResultsTable', () => {
       )
       const cells = screen.getAllByRole('cell')
       // Cell index 3 is the Attack cell in "full" mode.
-      expect(cells[3]?.textContent).toBe('—')
+      expect(cells[3]?.textContent).toBe('-')
     })
   })
 
@@ -174,7 +174,7 @@ describe('ResultsTable', () => {
       renderWithProviders(<ResultsTable rows={[makeRow({ crackedAt: null })]} isLoading={false} />)
       const cells = screen.getAllByRole('cell')
       // Cell index 5 is the Cracked At cell in "full" mode.
-      expect(cells[5]?.textContent).toBe('—')
+      expect(cells[5]?.textContent).toBe('-')
     })
 
     it('formats crackedAt with toLocaleString when non-null', () => {

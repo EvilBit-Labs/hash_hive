@@ -1,3 +1,5 @@
+import type { HashListSummary } from '@hashhive/shared'
+
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
@@ -49,14 +51,9 @@ function safeTab(raw: string | null): CampaignDetailTab {
   return DEFAULT_TAB
 }
 
-interface HashListSummaryLike {
-  readonly id: number
-  readonly hashCount: number
-}
-
 interface CampaignResultsPanelProps {
   readonly campaignHashListId: number
-  readonly hashLists: readonly HashListSummaryLike[] | undefined
+  readonly hashLists: readonly HashListSummary[] | undefined
   readonly resultsTotal: number
   readonly rows: Parameters<typeof ResultsTable>[0]['rows']
   readonly isLoading: boolean
@@ -179,8 +176,9 @@ export function CampaignDetailPage() {
       limit: RESULTS_PAGE_SIZE,
       offset: resultsOffset,
       refetchInterval: RESULTS_POLL_INTERVAL_MS,
+      enabled: tab === 'results',
     }),
-    [campaignId, resultsOffset]
+    [campaignId, resultsOffset, tab]
   )
   const { data: resultsData, isLoading: resultsLoading } = useResults(resultsQueryOptions)
 

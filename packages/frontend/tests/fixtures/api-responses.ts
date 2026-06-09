@@ -465,9 +465,10 @@ interface MockCrackedResult {
   hashListId: number
   hashListName: string
   campaignId: number | null
-  campaignName: string
+  campaignName: string | null
   attackId: number | null
   attackMode: number | null
+  attackModeName: string | null
   agentId: number | null
 }
 
@@ -492,6 +493,7 @@ export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
     campaignName: 'NTLM Campaign',
     attackId: 1,
     attackMode: 0,
+    attackModeName: 'Dictionary',
     agentId: 1,
     ...options.results?.[i],
   }))

@@ -28,10 +28,12 @@ export const hashListSummarySchema = z
     hashCount: z.number().int().nonnegative(),
     crackedCount: z.number().int().nonnegative(),
   })
+  .strict()
   .openapi('HashListSummary')
 
 export const hashListListResponseSchema = z
   .object({
     hashLists: z.array(hashListSummarySchema),
   })
+  .strict()
   .openapi('HashListListResponse')

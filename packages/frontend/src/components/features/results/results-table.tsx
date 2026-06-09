@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { EmptyState } from '../../ui/empty-state'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../../ui/table'
 
-const EM_DASH = '—'
+const PLACEHOLDER = '-'
 
 export type ResultsTableColumns = 'full' | 'no-campaign' | 'no-hashlist'
 
@@ -67,7 +67,7 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
               {row.hashValue}
             </Td>
             <Td className="font-mono text-xs font-medium break-all text-success">
-              {row.plaintext ?? EM_DASH}
+              {row.plaintext ?? PLACEHOLDER}
             </Td>
             {showCampaign && (
               <Td className="text-xs text-muted-foreground">
@@ -79,12 +79,12 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
                     {row.campaignName}
                   </Link>
                 ) : (
-                  (row.campaignName ?? EM_DASH)
+                  (row.campaignName ?? PLACEHOLDER)
                 )}
               </Td>
             )}
             <Td className="text-xs text-muted-foreground" title={row.attackModeName ?? undefined}>
-              {row.attackModeName ?? EM_DASH}
+              {row.attackModeName ?? PLACEHOLDER}
             </Td>
             {showHashList && (
               <Td className="text-xs text-muted-foreground">
@@ -97,7 +97,7 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
               </Td>
             )}
             <Td className="text-xs text-muted-foreground">
-              {row.crackedAt !== null ? new Date(row.crackedAt).toLocaleString() : EM_DASH}
+              {row.crackedAt !== null ? new Date(row.crackedAt).toLocaleString() : PLACEHOLDER}
             </Td>
           </TableRow>
         ))}

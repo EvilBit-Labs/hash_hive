@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ExportButton } from '../components/features/results/export-button'
@@ -14,6 +14,7 @@ import { SegmentedControl } from '../components/ui/segmented-control'
 import { Select } from '../components/ui/select'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { TextLink } from '../components/ui/text-link'
+import { useDebounce } from '../hooks/use-debounce'
 import { useHashLists } from '../hooks/use-hash-lists'
 import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 import { useResults } from '../hooks/use-results'
@@ -24,6 +25,7 @@ type DetailView = 'all' | 'cracked' | 'uncracked'
 const PAGE_SIZE = 50
 const RESULTS_PAGE_SIZE = 100
 const RESULTS_REFETCH_INTERVAL_MS = 30_000
+const SEARCH_DEBOUNCE_MS = 300
 
 const VIEW_OPTIONS = [
   { value: 'all', label: 'All' },
@@ -34,17 +36,6 @@ const VIEW_OPTIONS = [
 const UNCRACKED_PLACEHOLDER =
   'Uncracked listing is coming in the next release. For now, see the Cracked tab.'
 
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay)
-    return () => clearTimeout(handler)
-  }, [value, delay])
-
-  return debouncedValue
-}
-
 export function HashListDetailPage() {
   const { id } = useParams<{ id: string }>()
   const hashListId = Number(id)
@@ -52,7 +43,7 @@ export function HashListDetailPage() {
   const [view, setView] = useState<DetailView>('cracked')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [search, setSearch] = useState('')
-  const debouncedSearch = useDebounce(search, 300)
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS)
   const [offset, setOffset] = useState(0)
   const [resultsOffset, setResultsOffset] = useState(0)
 
@@ -68,7 +59,7 @@ export function HashListDetailPage() {
   // hash-list summary feeds the stats card numerator/denominator, and
   // useResults paginates the cracked-result table at 100 rows with the
   // 30s polling cadence the Results page uses.
-  const { data: hashListsData } = useHashLists()
+  const { data: hashListsData } = useHashLists({ enabled: view === 'cracked' })
   const resultsQuery = useResults({
     hashListId,
     limit: RESULTS_PAGE_SIZE,

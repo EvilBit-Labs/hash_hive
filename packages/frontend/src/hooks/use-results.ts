@@ -1,16 +1,9 @@
-import type { CrackedResultRow, ListResultsResponse } from '@hashhive/shared'
+import type { ListResultsResponse } from '@hashhive/shared'
 
 import { useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
-
-// Wire shapes live in `@hashhive/shared` as `z.infer` from the canonical
-// Zod schemas (`crackedResultRowSchema` / `listResultsResponseSchema`)
-// per AGENTS.md. Re-export local aliases so existing in-package callers
-// keep their imports stable while we point at the shared source of truth.
-export type CrackedResult = CrackedResultRow
-export type ResultsResponse = ListResultsResponse
 
 interface UseResultsOptions {
   campaignId?: number
@@ -28,12 +21,20 @@ interface UseResultsOptions {
    * without relying solely on the WebSocket event stream.
    */
   refetchInterval?: number
+  /**
+   * Caller-side gate that ANDs with the implicit project gate. Lets
+   * tab-style call sites (campaign detail Results tab) suspend the
+   * query — and its 30s poll — while the operator is on an adjacent
+   * tab. Defaults to true so existing call sites keep their behavior.
+   */
+  enabled?: boolean
 }
 
 export function useResults(options?: UseResultsOptions) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
+  const callerEnabled = options?.enabled ?? true
 
-  return useQuery<ResultsResponse>({
+  return useQuery<ListResultsResponse>({
     queryKey: ['results', selectedProjectId, options],
     queryFn: () => {
       const params = new URLSearchParams()
@@ -46,9 +47,9 @@ export function useResults(options?: UseResultsOptions) {
       if (options?.offset !== undefined) params.set('offset', String(options.offset))
 
       const query = params.toString()
-      return api.get<ResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
+      return api.get<ListResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
     },
-    enabled: !!selectedProjectId,
+    enabled: !!selectedProjectId && callerEnabled,
     ...(options?.refetchInterval !== undefined && { refetchInterval: options.refetchInterval }),
   })
 }
