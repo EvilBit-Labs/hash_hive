@@ -45,6 +45,7 @@ import { authRoutes } from './auth.js'
 import { campaignRoutes } from './campaigns.js'
 import { crackerRoutes } from './crackers.js'
 import { createEventRoutes } from './events.js'
+import { hashListsRoutes } from './hash-lists.js'
 import { hashRoutes } from './hashes.js'
 import { healthRoutes } from './health.js'
 import { projectRoutes } from './projects.js'
@@ -94,6 +95,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/tasks', taskRoutes)
   surface.route('/stats', statsRoutes)
   surface.route('/results', resultsRoutes)
+  surface.route('/hash-lists', hashListsRoutes)
   surface.route('/events', eventRoutes)
   surface.route('/crackers', crackerRoutes)
   surface.route('/health', healthRoutes)
