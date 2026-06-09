@@ -22,6 +22,12 @@ interface UseResultsOptions {
   endDate?: string
   limit?: number
   offset?: number
+  /**
+   * Polling interval in milliseconds. The global Results page (U7)
+   * passes 30_000 so the cracked-result list stays close to fresh
+   * without relying solely on the WebSocket event stream.
+   */
+  refetchInterval?: number
 }
 
 export function useResults(options?: UseResultsOptions) {
@@ -43,5 +49,6 @@ export function useResults(options?: UseResultsOptions) {
       return api.get<ResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
     },
     enabled: !!selectedProjectId,
+    ...(options?.refetchInterval !== undefined && { refetchInterval: options.refetchInterval }),
   })
 }

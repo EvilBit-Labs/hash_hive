@@ -1,25 +1,160 @@
-import { useState } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router'
 
 import { ExportButton } from '../components/features/results/export-button'
+import {
+  type DateRangeFilter,
+  ResultsFilters,
+  type ResultsFiltersValue,
+} from '../components/features/results/results-filters'
+import { ResultsTable } from '../components/features/results/results-table'
 import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
-import { Input } from '../components/ui/input'
 import { PageHeader } from '../components/ui/page-header'
-import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { useResults } from '../hooks/use-results'
 import { useUiStore } from '../stores/ui'
 
+const PAGE_SIZE = 100
+const POLL_INTERVAL_MS = 30_000
+
+const VALID_DATE_RANGES: ReadonlySet<DateRangeFilter> = new Set(['24h', '7d', '30d', 'all'])
+const DEFAULT_DATE_RANGE: DateRangeFilter = '30d'
+
+const HOURS_PER_DAY = 24
+const MS_PER_HOUR = 60 * 60 * 1000
+const DATE_RANGE_HOURS: Record<Exclude<DateRangeFilter, 'all'>, number> = {
+  '24h': 24,
+  '7d': 7 * HOURS_PER_DAY,
+  '30d': 30 * HOURS_PER_DAY,
+}
+
+function safeDateRange(raw: string | null): DateRangeFilter {
+  if (raw && VALID_DATE_RANGES.has(raw as DateRangeFilter)) {
+    return raw as DateRangeFilter
+  }
+  return DEFAULT_DATE_RANGE
+}
+
+function safePositiveInt(raw: string | null): number | undefined {
+  if (!raw) return undefined
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 ? n : undefined
+}
+
+function safeNonNegativeInt(raw: string | null): number {
+  if (!raw) return 0
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= 0 ? n : 0
+}
+
+interface DateWindow {
+  startDate?: string
+  endDate?: string
+}
+
+function resolveDateWindow(range: DateRangeFilter, nowIso: string): DateWindow {
+  if (range === 'all') return {}
+  const now = new Date(nowIso)
+  const hours = DATE_RANGE_HOURS[range]
+  const start = new Date(now.getTime() - hours * MS_PER_HOUR)
+  return { startDate: start.toISOString(), endDate: nowIso }
+}
+
 export function ResultsPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
-  const [search, setSearch] = useState('')
-  const [offset, setOffset] = useState(0)
-  const limit = 50
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  const { data, isLoading } = useResults({
-    ...(search ? { search } : {}),
-    limit,
-    offset,
-  })
+  // Capture "now" once per mount. Refetches every 30s handle drift
+  // without churning the TanStack Query cache key on every render.
+  const nowIsoRef = useRef<string>(new Date().toISOString())
+
+  const filters = useMemo<ResultsFiltersValue>(() => {
+    const campaignId = safePositiveInt(searchParams.get('campaignId'))
+    const hashListId = safePositiveInt(searchParams.get('hashListId'))
+    return {
+      dateRange: safeDateRange(searchParams.get('dateRange')),
+      q: searchParams.get('q') ?? '',
+      ...(campaignId !== undefined && { campaignId }),
+      ...(hashListId !== undefined && { hashListId }),
+    }
+  }, [searchParams])
+
+  const offset = safeNonNegativeInt(searchParams.get('offset'))
+
+  const dateWindow = useMemo(
+    () => resolveDateWindow(filters.dateRange, nowIsoRef.current),
+    [filters.dateRange]
+  )
+
+  const queryFilters = useMemo(() => {
+    const opts: Parameters<typeof useResults>[0] = {
+      limit: PAGE_SIZE,
+      offset,
+      refetchInterval: POLL_INTERVAL_MS,
+    }
+    if (filters.campaignId !== undefined) opts.campaignId = filters.campaignId
+    if (filters.hashListId !== undefined) opts.hashListId = filters.hashListId
+    if (filters.q) opts.search = filters.q
+    if (dateWindow.startDate) opts.startDate = dateWindow.startDate
+    if (dateWindow.endDate) opts.endDate = dateWindow.endDate
+    return opts
+  }, [filters.campaignId, filters.hashListId, filters.q, offset, dateWindow])
+
+  // ExportButton filters mirror queryFilters but drop pagination /
+  // polling concerns — exports always span the full filtered set.
+  const exportFilters = useMemo(() => {
+    const opts: {
+      campaignId?: number
+      hashListId?: number
+      search?: string
+      startDate?: string
+      endDate?: string
+    } = {}
+    if (filters.campaignId !== undefined) opts.campaignId = filters.campaignId
+    if (filters.hashListId !== undefined) opts.hashListId = filters.hashListId
+    if (filters.q) opts.search = filters.q
+    if (dateWindow.startDate) opts.startDate = dateWindow.startDate
+    if (dateWindow.endDate) opts.endDate = dateWindow.endDate
+    return opts
+  }, [filters.campaignId, filters.hashListId, filters.q, dateWindow])
+
+  const handleFiltersChange = useCallback(
+    (next: ResultsFiltersValue) => {
+      const params = new URLSearchParams(searchParams)
+      // Filter changes always reset pagination so the operator can't
+      // land on an `offset` past the new filtered total.
+      params.delete('offset')
+
+      if (next.campaignId !== undefined) params.set('campaignId', String(next.campaignId))
+      else params.delete('campaignId')
+
+      if (next.hashListId !== undefined) params.set('hashListId', String(next.hashListId))
+      else params.delete('hashListId')
+
+      // Keep the URL clean: omit `dateRange` when it equals the
+      // implicit default so a fresh /results link stays parameter-free.
+      if (next.dateRange !== DEFAULT_DATE_RANGE) params.set('dateRange', next.dateRange)
+      else params.delete('dateRange')
+
+      if (next.q) params.set('q', next.q)
+      else params.delete('q')
+
+      setSearchParams(params, { replace: true })
+    },
+    [searchParams, setSearchParams]
+  )
+
+  const goToOffset = useCallback(
+    (nextOffset: number) => {
+      const params = new URLSearchParams(searchParams)
+      if (nextOffset > 0) params.set('offset', String(nextOffset))
+      else params.delete('offset')
+      setSearchParams(params, { replace: true })
+    },
+    [searchParams, setSearchParams]
+  )
+
+  const { data, isLoading } = useResults(queryFilters)
 
   if (!selectedProjectId) {
     return (
@@ -31,88 +166,49 @@ export function ResultsPage() {
   }
 
   const total = data?.total ?? 0
-  const hasNext = offset + limit < total
+  const rows = data?.results ?? []
+  const hasNext = offset + PAGE_SIZE < total
   const hasPrev = offset > 0
+  const rangeStart = total === 0 ? 0 : offset + 1
+  const rangeEnd = Math.min(offset + PAGE_SIZE, total)
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader>Cracked Results</PageHeader>
-        <div className="flex gap-2">
-          <Input
-            aria-label="Search hashes or plaintexts"
-            placeholder="Search hashes or plaintexts..."
-            className="w-auto px-3 py-1.5 text-xs"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              setOffset(0)
-            }}
-          />
-          <ExportButton filters={search ? { search } : {}} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultsFilters filters={filters} onFiltersChange={handleFiltersChange} />
+          <ExportButton filters={exportFilters} />
         </div>
       </div>
 
-      <div aria-live="polite">
-        {isLoading ? (
-          <EmptyState message="Loading results..." />
-        ) : !data?.results.length ? (
-          <EmptyState message="No cracked results found." />
-        ) : (
-          <>
-            <Table>
-              <TableHead>
-                <tr>
-                  <Th>Hash</Th>
-                  <Th>Plaintext</Th>
-                  <Th>Campaign</Th>
-                  <Th>Hash List</Th>
-                  <Th>Cracked At</Th>
-                </tr>
-              </TableHead>
-              <TableBody>
-                {data.results.map((r) => (
-                  <TableRow key={r.id}>
-                    <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
-                      {r.hashValue}
-                    </Td>
-                    <Td className="font-mono text-xs font-medium text-success">
-                      {r.plaintext ?? '-'}
-                    </Td>
-                    <Td className="text-xs text-muted-foreground">{r.campaignName}</Td>
-                    <Td className="text-xs text-muted-foreground">{r.hashListName}</Td>
-                    <Td className="text-xs text-muted-foreground">
-                      {r.crackedAt ? new Date(r.crackedAt).toLocaleString() : '-'}
-                    </Td>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+      <div aria-live="polite" className="space-y-4">
+        <ResultsTable rows={rows} isLoading={isLoading} columns="full" />
 
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">
-                {offset + 1}-{Math.min(offset + limit, total)} of {total}
-              </span>
-              <div className="flex gap-1.5">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!hasPrev}
-                  onClick={() => setOffset(Math.max(0, offset - limit))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!hasNext}
-                  onClick={() => setOffset(offset + limit)}
-                >
-                  Next
-                </Button>
-              </div>
+        {rows.length > 0 && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">
+              {rangeStart}-{rangeEnd} of {total}
+            </span>
+            <div className="flex gap-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!hasPrev}
+                onClick={() => goToOffset(Math.max(0, offset - PAGE_SIZE))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!hasNext}
+                onClick={() => goToOffset(offset + PAGE_SIZE)}
+              >
+                Next
+              </Button>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>
