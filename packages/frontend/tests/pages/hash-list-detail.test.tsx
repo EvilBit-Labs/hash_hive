@@ -145,7 +145,7 @@ describe('HashListDetailPage', () => {
 
     await waitFor(() => {
       // The summary's cracked/hash counts win once hashLists loads.
-      expect(screen.getByText('250 / 1,000 (25.0%)')).toBeDefined()
+      expect(screen.getByText(/Cracked:\s*250\s*\/\s*1,000\s*\(25\.0%\)/)).toBeDefined()
     })
   })
 
@@ -177,7 +177,7 @@ describe('HashListDetailPage', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('0 / 0 (0.0%)')).toBeDefined()
+      expect(screen.getByText(/Cracked:\s*0\s*\/\s*0\s*\(0\.0%\)/)).toBeDefined()
     })
   })
 
