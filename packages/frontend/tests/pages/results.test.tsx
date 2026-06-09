@@ -123,12 +123,15 @@ describe('ResultsPage', () => {
       expect(searchCall).toBeDefined()
     })
 
-    // Export CSV link href should include the q parameter
-    const exportLink = screen.getByText('Export CSV')
-    expect(exportLink.getAttribute('href')).toContain('q=password')
+    // Export CSV button is now a mutation trigger (not an <a href>);
+    // see U8. Filter wiring is asserted via the underlying /dashboard/results
+    // fetch above. The export request only fires on click and is covered
+    // by the export-button + useExportResults tests.
+    const exportButton = screen.getByRole('button', { name: 'Export CSV' })
+    expect(exportButton).toBeDefined()
   })
 
-  it('renders Export CSV link', async () => {
+  it('renders Export CSV button', async () => {
     fetchMock = mockFetch({
       '/dashboard/results': { status: 200, body: mockResultsResponse() },
     })
@@ -137,11 +140,13 @@ describe('ResultsPage', () => {
     renderWithProviders(<ResultsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('Export CSV')).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDefined()
     })
 
-    const exportLink = screen.getByText('Export CSV')
-    expect(exportLink.getAttribute('href')).toBe('/api/v1/dashboard/results/export')
+    const exportButton = screen.getByRole('button', {
+      name: 'Export CSV',
+    }) as HTMLButtonElement
+    expect(exportButton.disabled).toBe(false)
   })
 
   it('renders pagination controls with correct showing text', async () => {

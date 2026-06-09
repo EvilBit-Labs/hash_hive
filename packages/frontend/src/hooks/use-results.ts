@@ -49,21 +49,3 @@ export function useResults(options?: {
     enabled: !!selectedProjectId,
   })
 }
-
-export function useResultsExportUrl(options?: {
-  campaignId?: number
-  hashListId?: number
-  search?: string
-}) {
-  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
-
-  if (!selectedProjectId) return null
-
-  const params = new URLSearchParams()
-  if (options?.campaignId) params.set('campaignId', String(options.campaignId))
-  if (options?.hashListId) params.set('hashListId', String(options.hashListId))
-  if (options?.search) params.set('q', options.search)
-
-  const query = params.toString()
-  return `/api/v1/dashboard/results/export${query ? `?${query}` : ''}`
-}
