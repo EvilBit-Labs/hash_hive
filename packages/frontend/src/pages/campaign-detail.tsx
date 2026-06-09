@@ -102,7 +102,9 @@ function CampaignResultsPanel({
     <div aria-live="polite" className="space-y-4">
       <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
         Cracked{' '}
-        <span className="font-medium text-foreground">{resultsTotal.toLocaleString('en-US')}</span>
+        <span className="font-semibold text-foreground">
+          {resultsTotal.toLocaleString('en-US')}
+        </span>
         {totalHashes !== undefined && (
           <>
             {' '}
@@ -122,8 +124,8 @@ function CampaignResultsPanel({
 
       {rows.length > 0 && (
         <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">
-            {rangeStart}-{rangeEnd} of {resultsTotal}
+          <span className="text-muted-foreground tabular-nums">
+            {rangeStart}-{rangeEnd} of {resultsTotal.toLocaleString('en-US')}
           </span>
           <div className="flex gap-1.5">
             <Button

@@ -66,7 +66,7 @@ export function ResultsTable({ rows, isLoading, columns = 'full' }: ResultsTable
             <Td className="max-w-[200px] truncate font-mono text-xs text-muted-foreground">
               {row.hashValue}
             </Td>
-            <Td className="font-mono text-xs font-medium break-all text-success">
+            <Td className="font-mono text-sm font-medium break-all text-success">
               {row.plaintext ?? PLACEHOLDER}
             </Td>
             {showCampaign && (

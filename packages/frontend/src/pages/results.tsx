@@ -173,8 +173,8 @@ export function ResultsPage() {
         <div className="flex flex-wrap items-baseline gap-3">
           <PageHeader>Cracked Results</PageHeader>
           <span data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
-            <span className="font-medium text-foreground">{total.toLocaleString('en-US')}</span> in
-            the current filter
+            <span className="font-semibold text-foreground">{total.toLocaleString('en-US')}</span>{' '}
+            in the current filter
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -193,8 +193,8 @@ export function ResultsPage() {
 
         {rows.length > 0 && (
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">
-              {rangeStart}-{rangeEnd} of {total}
+            <span className="text-muted-foreground tabular-nums">
+              {rangeStart}-{rangeEnd} of {total.toLocaleString('en-US')}
             </span>
             <div className="flex gap-1.5">
               <Button

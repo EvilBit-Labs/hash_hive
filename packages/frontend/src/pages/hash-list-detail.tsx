@@ -212,7 +212,7 @@ export function HashListDetailPage() {
         <div className="space-y-3">
           <p data-testid="results-stats" className="text-xs text-muted-foreground tabular-nums">
             Cracked{' '}
-            <span className="font-medium text-foreground">
+            <span className="font-semibold text-foreground">
               {summaryCracked.toLocaleString('en-US')}
             </span>{' '}
             / {summaryTotal.toLocaleString('en-US')}
@@ -234,10 +234,10 @@ export function HashListDetailPage() {
           />
           {resultsTotal > 0 && (
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
+              <span className="tabular-nums">
                 Showing {resultsOffset + 1}-
                 {Math.min(resultsOffset + RESULTS_PAGE_SIZE, resultsTotal)} of{' '}
-                {resultsTotal.toLocaleString()}
+                {resultsTotal.toLocaleString('en-US')}
               </span>
               <div className="flex gap-2">
                 <Button
