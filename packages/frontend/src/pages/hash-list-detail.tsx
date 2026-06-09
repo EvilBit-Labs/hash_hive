@@ -38,7 +38,14 @@ const UNCRACKED_PLACEHOLDER =
 
 export function HashListDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const hashListId = Number(id)
+  // Guard against malformed `/hash-lists/<garbage>` URLs (e.g. stale
+  // bookmarks, typos). Without this `Number(id)` would yield `NaN`,
+  // which propagates as `?hashListId=NaN` on every downstream query.
+  // We still need to run all hooks unconditionally so we substitute
+  // 0 and surface the error state after the hook section.
+  const parsedId = id !== undefined ? Number(id) : Number.NaN
+  const isValidId = Number.isInteger(parsedId) && parsedId > 0
+  const hashListId = isValidId ? parsedId : 0
 
   const [view, setView] = useState<DetailView>('cracked')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -65,7 +72,17 @@ export function HashListDetailPage() {
     limit: RESULTS_PAGE_SIZE,
     offset: resultsOffset,
     refetchInterval: RESULTS_REFETCH_INTERVAL_MS,
+    enabled: view === 'cracked',
   })
+
+  if (!isValidId) {
+    return (
+      <div className="space-y-4">
+        <PageHeader>Hash List</PageHeader>
+        <ErrorBanner message={`Invalid hash list id: ${id ?? '(none)'}`} />
+      </div>
+    )
+  }
 
   if (isLoading) return <EmptyState message="Loading hash list..." />
 
@@ -195,6 +212,15 @@ export function HashListDetailPage() {
       {view === 'cracked' && (
         <div className="space-y-3">
           <ResultsStatsCard totalCracked={summaryCracked} totalHashes={summaryTotal} />
+          {resultsQuery.isError && (
+            <ErrorBanner
+              message={
+                resultsQuery.error instanceof Error
+                  ? resultsQuery.error.message
+                  : 'Failed to load cracked results'
+              }
+            />
+          )}
           <ResultsTable
             rows={resultsRows}
             isLoading={resultsQuery.isLoading}

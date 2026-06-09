@@ -8,33 +8,36 @@ import { useUiStore } from '../stores/ui'
 interface UseHashListsOptions {
   /**
    * Optional gate that defers fetching even when a project is selected.
-   * The global Results page's hash-list filter dropdown (U7) uses this
-   * to lazy-load options only after the operator opens the menu, so a
-   * page mount with three filter dropdowns does not fan out three
-   * parallel requests when only one will be touched.
+   * The global Results page's hash-list filter dropdown uses this to
+   * lazy-load options only after the operator opens the menu.
    */
   enabled?: boolean
 }
 
 /**
- * Project-scoped hash-lists listing hook (U3, plan 2026-06-08-001).
+ * Project-scoped hash list summary hook.
  *
- * Thin TanStack Query wrapper over `GET /api/v1/dashboard/hash-lists`
- * (added in U2). Consumed by the global Results page's hash-list filter
- * dropdown (U7) and the hash list detail stats card (U10).
+ * Thin TanStack Query wrapper over `GET /api/v1/dashboard/hash-lists`.
+ * Returns the strict summary shape (`id`, `name`, `hashTypeId`,
+ * `hashCount`, `crackedCount`). Distinct from `use-resources.ts`
+ * `useHashLists`, which calls `GET /dashboard/resources/hash-lists`
+ * and returns the full row including status, fileRef, createdAt.
  *
- * Per AGENTS.md the wire shape lives in `@hashhive/shared` as `z.infer`
- * from `hashListListResponseSchema`. The cache key is scoped by
- * `selectedProjectId` so switching projects does not leak rows across
- * projects in the TanStack Query cache.
+ * Cache key is intentionally `hash-list-summaries` (NOT `hash-lists`)
+ * to avoid colliding with the resources hook above; both hooks share
+ * the project-id segment but their payloads are different shapes and
+ * must not bleed into each other's caches.
  */
-export function useHashLists(options?: UseHashListsOptions) {
+export function useHashListSummaries(options?: UseHashListsOptions) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const callerEnabled = options?.enabled ?? true
 
   return useQuery<HashListListResponse>({
-    queryKey: ['hash-lists', selectedProjectId],
+    queryKey: ['hash-list-summaries', selectedProjectId],
     queryFn: () => api.get<HashListListResponse>('/dashboard/hash-lists'),
     enabled: !!selectedProjectId && callerEnabled,
   })
 }
+
+/** @deprecated use `useHashListSummaries` — name clashes with use-resources. */
+export const useHashLists = useHashListSummaries

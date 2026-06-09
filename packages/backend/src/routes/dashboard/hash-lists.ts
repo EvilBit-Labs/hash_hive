@@ -24,7 +24,6 @@ import { eq, isNotNull, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
-import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireProjectAccess } from '../../middleware/rbac.js'
@@ -33,6 +32,7 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
+import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const hashListsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
@@ -43,15 +43,7 @@ hashListsRoutes.use('*', requireSession, requireProjectAccess())
 function getScopedProjectId(c: {
   get: (key: 'scopedUser') => { projectId: number } | undefined
 }): { ok: true; projectId: number } | { ok: false } {
-  const scoped = c.get('scopedUser')
-  if (!scoped) {
-    logger.error(
-      {},
-      'hash-lists: scopedUser middleware did not run before handler — middleware order regression'
-    )
-    return { ok: false }
-  }
-  return { ok: true, projectId: scoped.projectId }
+  return getScopedProjectIdShared(c, 'hash-lists')
 }
 
 const listHashListsRoute = createRoute({

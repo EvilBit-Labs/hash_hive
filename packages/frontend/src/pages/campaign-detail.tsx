@@ -59,6 +59,8 @@ interface CampaignResultsPanelProps {
   readonly isLoading: boolean
   readonly offset: number
   readonly onOffsetChange: (next: number) => void
+  readonly isError?: boolean
+  readonly error?: Error | null
 }
 
 /**
@@ -81,6 +83,8 @@ function CampaignResultsPanel({
   isLoading,
   offset,
   onOffsetChange,
+  isError,
+  error,
 }: CampaignResultsPanelProps) {
   const matchedHashList = hashLists?.find((hl) => hl.id === campaignHashListId)
   const totalHashes = matchedHashList?.hashCount
@@ -96,6 +100,12 @@ function CampaignResultsPanel({
         totalCracked={resultsTotal}
         {...(totalHashes !== undefined && { totalHashes })}
       />
+
+      {isError && (
+        <ErrorBanner
+          message={error instanceof Error ? error.message : 'Failed to load campaign results'}
+        />
+      )}
 
       <ResultsTable rows={rows} isLoading={isLoading} columns="no-campaign" />
 
@@ -180,7 +190,12 @@ export function CampaignDetailPage() {
     }),
     [campaignId, resultsOffset, tab]
   )
-  const { data: resultsData, isLoading: resultsLoading } = useResults(resultsQueryOptions)
+  const {
+    data: resultsData,
+    isLoading: resultsLoading,
+    isError: resultsIsError,
+    error: resultsError,
+  } = useResults(resultsQueryOptions)
 
   // Real-time updates: the shared useEvents hook mounted by EventsProvider
   // (in AppLayout) already invalidates ['campaign', campaignId] for every
@@ -449,6 +464,8 @@ export function CampaignDetailPage() {
             isLoading={resultsLoading}
             offset={resultsOffset}
             onOffsetChange={setResultsOffset}
+            isError={resultsIsError}
+            error={resultsError instanceof Error ? resultsError : null}
           />
         </Tabs.Content>
       </Tabs>

@@ -12,6 +12,7 @@ import {
 import { ResultsTable } from '../components/features/results/results-table'
 import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
+import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { useResults } from '../hooks/use-results'
 import { useUiStore } from '../stores/ui'
@@ -148,7 +149,7 @@ export function ResultsPage() {
     [searchParams, setSearchParams]
   )
 
-  const { data, isLoading } = useResults(queryFilters)
+  const { data, isLoading, isError, error } = useResults(queryFilters)
 
   if (!selectedProjectId) {
     return (
@@ -177,6 +178,11 @@ export function ResultsPage() {
       </div>
 
       <div aria-live="polite" className="space-y-4">
+        {isError && (
+          <ErrorBanner
+            message={error instanceof Error ? error.message : 'Failed to load cracked results'}
+          />
+        )}
         <ResultsTable rows={rows} isLoading={isLoading} columns="full" />
 
         {rows.length > 0 && (

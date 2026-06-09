@@ -29,6 +29,10 @@ export const hashListSummarySchema = z
     crackedCount: z.number().int().nonnegative(),
   })
   .strict()
+  .refine((row) => row.crackedCount <= row.hashCount, {
+    message: 'crackedCount cannot exceed hashCount',
+    path: ['crackedCount'],
+  })
   .openapi('HashListSummary')
 
 export const hashListListResponseSchema = z
