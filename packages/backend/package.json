@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1055.0",
-    "@aws-sdk/s3-request-presigner": "3.1055.0",
+    "@aws-sdk/s3-request-presigner": "3.1059.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "@hono/zod-validator": "^0.8.0",
