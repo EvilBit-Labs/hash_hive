@@ -52,7 +52,7 @@ const listHashListsRoute = createRoute({
   tags: ['Hash Lists'],
   summary: 'Project-scoped hash lists with aggregate hash and cracked counts',
   description:
-    'Returns every hash list belonging to the operator selected project with a total count and a cracked count (computed via FILTER on plaintext IS NOT NULL). Sorted by name ASC. No pagination — projects rarely host more than ~50 hash lists; scale concerns are deferred per plan #165 U2.',
+    'Returns every hash list belonging to the operator selected project with a total count and a cracked count (computed via FILTER on cracked_at IS NOT NULL — matches the canonical cracked semantic used by the hash-list parser, dashboard stats, and results endpoints). Sorted by name ASC. No pagination — projects rarely host more than ~50 hash lists; scale concerns are deferred per plan #165 U2.',
   security: [{ SessionCookie: [] }],
   responses: {
     200: {
@@ -82,7 +82,7 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
       name: hashLists.name,
       hashTypeId: hashLists.hashTypeId,
       hashCount: sql<number>`count(${hashItems.id})`,
-      crackedCount: sql<number>`count(${hashItems.id}) FILTER (WHERE ${isNotNull(hashItems.plaintext)})`,
+      crackedCount: sql<number>`count(${hashItems.id}) FILTER (WHERE ${isNotNull(hashItems.crackedAt)})`,
     })
     .from(hashLists)
     .leftJoin(hashItems, eq(hashItems.hashListId, hashLists.id))

@@ -168,14 +168,22 @@ export function ResultsPage() {
 
   const { data, isLoading, isError, error } = useResults(queryFilters)
 
-  // Power-user shortcut: `r` invalidates the results query, forcing
-  // an immediate refetch. No visible Kbd chip — the LiveIndicator
-  // already telegraphs that polling is active; refresh is a quiet
-  // operator-grade affordance for impatient runs.
+  // Power-user shortcut: `r` invalidates the current project's
+  // results queries, forcing an immediate refetch. No visible Kbd
+  // chip — the LiveIndicator already telegraphs that polling is
+  // active; refresh is a quiet operator-grade affordance for
+  // impatient runs.
+  //
+  // The key is scoped to `['results', selectedProjectId]` so an
+  // operator who has cached results for multiple projects in the
+  // same session only refetches the project they're currently
+  // viewing. TanStack Query's queryKey filter matches by prefix,
+  // so this catches every page/filter combination for the active
+  // project but leaves other projects' caches untouched.
   const queryClient = useQueryClient()
   const refreshResults = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['results'] })
-  }, [queryClient])
+    void queryClient.invalidateQueries({ queryKey: ['results', selectedProjectId] })
+  }, [queryClient, selectedProjectId])
   useKeyboardShortcut('r', refreshResults)
 
   if (!selectedProjectId) {
