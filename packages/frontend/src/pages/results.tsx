@@ -19,7 +19,7 @@ import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { useKeyboardShortcut } from '../hooks/use-keyboard-shortcut'
 import { useResults } from '../hooks/use-results'
-import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
 import { useUiStore } from '../stores/ui'
 
 const PAGE_SIZE = 100

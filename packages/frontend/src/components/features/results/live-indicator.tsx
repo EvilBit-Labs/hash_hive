@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from 'motion/react'
 
-import { EASE_OUT_EXPO, RESULTS_POLL_INTERVAL_MS } from '../../../lib/motion-tokens'
+import { EASE_OUT_EXPO, RESULTS_POLL_INTERVAL_MS } from '../../../lib/motion-presets'
 
 const PULSE_DURATION_S = 2.4
 

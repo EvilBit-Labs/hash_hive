@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 
 import { attackModeColorClass } from '../../../lib/attack-mode-color'
-import { EASE_OUT_EXPO } from '../../../lib/motion-tokens'
+import { EASE_OUT_EXPO } from '../../../lib/motion-presets'
 import { cn } from '../../../lib/utils'
 import { EmptyState } from '../../ui/empty-state'
 import { Table, TableBody, TableHead, Td, Th } from '../../ui/table'

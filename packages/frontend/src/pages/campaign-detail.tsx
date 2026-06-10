@@ -26,7 +26,7 @@ import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useResults } from '../hooks/use-results'
 import { computeEta } from '../lib/campaign-eta'
 import { readCampaignPercentage } from '../lib/campaign-progress'
-import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
 import { Permission } from '../lib/permissions'
 
 // Lazy-load the DAG view so reactflow's bundle weight is only paid when

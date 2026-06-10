@@ -19,7 +19,7 @@ import { useDebounce } from '../hooks/use-debounce'
 import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 import { useResults } from '../hooks/use-results'
-import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-tokens'
+import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
 
 type StatusFilter = 'all' | 'cracked' | 'uncracked'
 type DetailView = 'all' | 'cracked' | 'uncracked'

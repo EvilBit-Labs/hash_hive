@@ -1,7 +1,7 @@
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 
-import { EASE_OUT_EXPO } from '../../../lib/motion-tokens'
+import { EASE_OUT_EXPO } from '../../../lib/motion-presets'
 import { cn } from '../../../lib/utils'
 
 interface CrackRatePercentProps {
