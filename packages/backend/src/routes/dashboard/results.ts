@@ -25,6 +25,7 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
+import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
@@ -149,15 +150,7 @@ function resolveAttackModeNameWithTelemetry(mode: number | null): string | null 
 function getScopedProjectId(c: {
   get: (key: 'scopedUser') => { projectId: number } | undefined
 }): { ok: true; projectId: number } | { ok: false } {
-  const scoped = c.get('scopedUser')
-  if (!scoped) {
-    logger.error(
-      {},
-      'results: scopedUser middleware did not run before handler — middleware order regression'
-    )
-    return { ok: false }
-  }
-  return { ok: true, projectId: scoped.projectId }
+  return getScopedProjectIdShared(c, 'results')
 }
 
 const listResultsRoute = createRoute({

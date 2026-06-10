@@ -6,6 +6,7 @@
 import type {
   CampaignActiveAgent,
   CampaignTaskStats,
+  CrackedResultRow,
   FileRef,
   ResourceStatus,
 } from '@hashhive/shared'
@@ -457,19 +458,10 @@ export function mockHashTypeGuessResponse(options: MockHashTypeGuessResponseOpti
 
 // --- Results fixtures ---
 
-interface MockCrackedResult {
-  id: number
-  hashValue: string
-  plaintext: string | null
-  crackedAt: string | null
-  hashListId: number
-  hashListName: string
-  campaignId: number | null
-  campaignName: string
-  attackId: number | null
-  attackMode: number | null
-  agentId: number | null
-}
+// Wire shape derived from the canonical shared schema per AGENTS.md.
+// Importing the type here means fixture drift surfaces at compile time
+// rather than at runtime via test failures on a schema-strict route.
+type MockCrackedResult = CrackedResultRow
 
 interface MockResultsResponseOptions {
   count?: number
@@ -481,7 +473,7 @@ interface MockResultsResponseOptions {
 
 export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
   const count = options.count ?? 3
-  const results = Array.from({ length: count }, (_, i) => ({
+  const results: MockCrackedResult[] = Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     hashValue: `hash_${i + 1}_abcdef1234567890`,
     plaintext: `password${i + 1}`,
@@ -492,6 +484,7 @@ export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
     campaignName: 'NTLM Campaign',
     attackId: 1,
     attackMode: 0,
+    attackModeName: 'Dictionary' as const,
     agentId: 1,
     ...options.results?.[i],
   }))

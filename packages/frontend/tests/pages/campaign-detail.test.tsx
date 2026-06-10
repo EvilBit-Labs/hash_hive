@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { CampaignDetailPage } from '../../src/pages/campaign-detail'
 import { useAuthStore } from '../../src/stores/auth'
 import { useUiStore } from '../../src/stores/ui'
-import { mockCampaignDetailResponse } from '../fixtures/api-responses'
+import {
+  mockCampaignDetailResponse,
+  mockHashListsResponse,
+  mockResultsResponse,
+} from '../fixtures/api-responses'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
 import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor } from '../test-utils'
 
@@ -412,5 +416,160 @@ describe('CampaignDetailPage', () => {
     expect(screen.getByText('running')).toBeDefined()
     expect(screen.getByText('#5')).toBeDefined()
     expect(screen.getByText('2, 3')).toBeDefined()
+  })
+
+  describe('Results tab (U9)', () => {
+    it('renders the Attacks tab by default when no ?tab= param is set', async () => {
+      const data = mockCampaignDetailResponse({
+        campaign: { hashListId: 1 },
+        attacks: [{ id: 1, mode: 0, status: 'pending', wordlistId: 5, dependencies: null }],
+      })
+
+      fetchMock = mockFetch({
+        '/dashboard/campaigns/1': { status: 200, body: data },
+        '/dashboard/hash-lists': { status: 200, body: mockHashListsResponse() },
+        '/dashboard/results': { status: 200, body: mockResultsResponse() },
+      })
+
+      selectProject()
+      renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+        initialRoute: '/campaigns/1',
+      })
+
+      await waitFor(() => {
+        // The attacks-section heading lives in the Attacks tab panel.
+        expect(screen.getByText('Active agents')).toBeDefined()
+      })
+
+      // Attacks tab is active by default; the Attacks tab content
+      // (Active agents heading) renders while the Results tab content
+      // (stats card data-testid) does not.
+      expect(screen.queryByTestId('results-stats')).toBeNull()
+
+      // The Attacks tab trigger is aria-selected="true".
+      const attacksTrigger = screen.getByRole('tab', { name: 'Attacks' })
+      expect(attacksTrigger.getAttribute('aria-selected')).toBe('true')
+
+      const resultsTrigger = screen.getByRole('tab', { name: 'Results' })
+      expect(resultsTrigger.getAttribute('aria-selected')).toBe('false')
+    })
+
+    it('switches to the Results tab when the Results trigger is clicked and fires a campaign-scoped results query', async () => {
+      const data = mockCampaignDetailResponse({
+        campaign: { hashListId: 1 },
+      })
+
+      fetchMock = mockFetch({
+        '/dashboard/campaigns/1': { status: 200, body: data },
+        '/dashboard/hash-lists': {
+          status: 200,
+          body: mockHashListsResponse({
+            hashLists: [{ id: 1, name: 'Main List', hashCount: 5000, crackedCount: 1283 }],
+          }),
+        },
+        '/dashboard/results': {
+          status: 200,
+          body: mockResultsResponse({ count: 1, total: 1283 }),
+        },
+      })
+
+      selectProject()
+      renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+        initialRoute: '/campaigns/1',
+      })
+
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Results' })).toBeDefined()
+      })
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Results' }))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('results-stats')).toBeDefined()
+      })
+
+      // Inline stats show the campaign-scoped figures from the
+      // matched hash list (5,000) and the results total (1,283).
+      expect(screen.getByTestId('results-stats').textContent ?? '').toMatch(
+        /1,283\s*\/\s*5,000\s*\(25\.7%\)/
+      )
+
+      // useResults must have been called with campaignId=1 so the
+      // query is scoped to the current campaign rather than fetching
+      // the global result set.
+      await waitFor(() => {
+        const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
+        const scopedResults = calls.find(([url]) => {
+          const s = String(url)
+          return s.includes('/dashboard/results') && s.includes('campaignId=1')
+        })
+        expect(scopedResults).toBeDefined()
+      })
+    })
+
+    it('opens directly on the Results tab when mounted with ?tab=results', async () => {
+      const data = mockCampaignDetailResponse({
+        campaign: { hashListId: 1 },
+      })
+
+      fetchMock = mockFetch({
+        '/dashboard/campaigns/1': { status: 200, body: data },
+        '/dashboard/hash-lists': { status: 200, body: mockHashListsResponse() },
+        '/dashboard/results': {
+          status: 200,
+          body: mockResultsResponse({ count: 2, total: 250 }),
+        },
+      })
+
+      selectProject()
+      renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+        initialRoute: '/campaigns/1?tab=results',
+      })
+
+      await waitFor(() => {
+        expect(screen.getByTestId('results-stats')).toBeDefined()
+      })
+
+      // Attacks-tab-only content is hidden when Results is active.
+      expect(screen.queryByText('Active agents')).toBeNull()
+
+      // Results trigger is aria-selected="true".
+      const resultsTrigger = screen.getByRole('tab', { name: 'Results' })
+      expect(resultsTrigger.getAttribute('aria-selected')).toBe('true')
+    })
+
+    it('omits the crack rate when the campaign hash list is not in the lookup response', async () => {
+      const data = mockCampaignDetailResponse({
+        // hashListId=999 will not match any of the two default fixtures
+        // (ids 1 and 2), so `totalHashes` falls back to undefined and the
+        // stats card collapses to a single cracked figure.
+        campaign: { hashListId: 999 },
+      })
+
+      fetchMock = mockFetch({
+        '/dashboard/campaigns/1': { status: 200, body: data },
+        '/dashboard/hash-lists': { status: 200, body: mockHashListsResponse() },
+        '/dashboard/results': {
+          status: 200,
+          body: mockResultsResponse({ count: 0, total: 42 }),
+        },
+      })
+
+      selectProject()
+      renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+        initialRoute: '/campaigns/1?tab=results',
+      })
+
+      await waitFor(() => {
+        const stats = screen.getByTestId('results-stats')
+        expect(stats.textContent ?? '').toMatch(/\b42\b/)
+      })
+
+      // The slash + percent rendering only appears when totalHashes is
+      // known; absent here because the campaign's hash list is missing
+      // from the lookup response.
+      const stats = screen.getByTestId('results-stats')
+      expect(stats.textContent ?? '').not.toMatch(/\//)
+    })
   })
 })

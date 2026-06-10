@@ -79,8 +79,15 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
   // progress column would only refresh on campaign lifecycle
   // transitions, missing per-task progress.
   task_update: ['tasks', 'campaigns', 'dashboard-stats'],
-  crack_result: ['dashboard-stats', 'results', 'hash-list-detail', 'hash-list-items', 'hash-lists'],
-  resource_update: ['hash-lists', 'wordlists', 'rulelists', 'masklists'],
+  crack_result: [
+    'dashboard-stats',
+    'results',
+    'hash-list-detail',
+    'hash-list-items',
+    'hash-lists',
+    'hash-list-summaries',
+  ],
+  resource_update: ['hash-lists', 'hash-list-summaries', 'wordlists', 'rulelists', 'masklists'],
 }
 
 /**

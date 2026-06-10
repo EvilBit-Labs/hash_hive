@@ -238,6 +238,12 @@ export {
 } from './results.js'
 export type { AttackModeName } from './results.js'
 
+// Hash-lists listing wire shapes (issue #165 / U2). Powers the global
+// Results page's hash-list filter dropdown and the hash list detail
+// stats card. Re-exported from the barrel so consumers keep importing
+// from `@hashhive/shared` unchanged.
+export { hashListListResponseSchema, hashListSummarySchema } from './hash-lists.js'
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.

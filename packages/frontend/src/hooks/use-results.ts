@@ -1,69 +1,65 @@
-import { useQuery } from '@tanstack/react-query'
+import type { ListResultsResponse } from '@hashhive/shared'
+
+import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
 
-interface CrackedResult {
-  id: number
-  hashValue: string
-  plaintext: string | null
-  crackedAt: string | null
-  hashListId: number
-  hashListName: string
-  campaignId: number | null
-  campaignName: string
-  attackId: number | null
-  attackMode: number | null
-  agentId: number | null
-}
-
-interface ResultsResponse {
-  results: CrackedResult[]
-  total: number
-  limit: number
-  offset: number
-}
-
-export function useResults(options?: {
+interface UseResultsOptions {
   campaignId?: number
   hashListId?: number
   search?: string
+  /** ISO 8601 timestamp (e.g. `2026-06-01T00:00:00.000Z`). */
+  startDate?: string
+  /** ISO 8601 timestamp (e.g. `2026-06-08T23:59:59.000Z`). */
+  endDate?: string
   limit?: number
   offset?: number
-}) {
-  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
-
-  return useQuery<ResultsResponse>({
-    queryKey: ['results', selectedProjectId, options],
-    queryFn: () => {
-      const params = new URLSearchParams()
-      if (options?.campaignId) params.set('campaignId', String(options.campaignId))
-      if (options?.hashListId) params.set('hashListId', String(options.hashListId))
-      if (options?.search) params.set('q', options.search)
-      if (options?.limit !== undefined) params.set('limit', String(options.limit))
-      if (options?.offset !== undefined) params.set('offset', String(options.offset))
-
-      const query = params.toString()
-      return api.get<ResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
-    },
-    enabled: !!selectedProjectId,
-  })
+  /**
+   * Polling interval in milliseconds. The global Results page (U7)
+   * passes 30_000 so the cracked-result list stays close to fresh
+   * without relying solely on the WebSocket event stream.
+   */
+  refetchInterval?: number
+  /**
+   * Caller-side gate that ANDs with the implicit project gate. Lets
+   * tab-style call sites (campaign detail Results tab) suspend the
+   * query — and its 30s poll — while the operator is on an adjacent
+   * tab. Defaults to true so existing call sites keep their behavior.
+   */
+  enabled?: boolean
 }
 
-export function useResultsExportUrl(options?: {
-  campaignId?: number
-  hashListId?: number
-  search?: string
-}) {
+export function useResults(
+  options?: UseResultsOptions
+): UseQueryResult<ListResultsResponse, Error> {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
+  const callerEnabled = options?.enabled ?? true
 
-  if (!selectedProjectId) return null
+  // Normalize options into the EXACT URL-meaningful subset before
+  // composing both the cache key and the request. Two cache shards
+  // for the same URL is a real bug: `{ search: '', limit: 100 }` and
+  // `{ limit: 100 }` produce the same `/dashboard/results?limit=100`
+  // request but used to shard the TanStack cache because the
+  // spread-style key carried `search: ''` in one branch and not the
+  // other.
+  const requestPairs: Array<[string, string]> = []
+  if (options?.campaignId) requestPairs.push(['campaignId', String(options.campaignId)])
+  if (options?.hashListId) requestPairs.push(['hashListId', String(options.hashListId)])
+  if (options?.search) requestPairs.push(['q', options.search])
+  if (options?.startDate) requestPairs.push(['startDate', options.startDate])
+  if (options?.endDate) requestPairs.push(['endDate', options.endDate])
+  if (options?.limit !== undefined) requestPairs.push(['limit', String(options.limit)])
+  if (options?.offset !== undefined) requestPairs.push(['offset', String(options.offset)])
 
-  const params = new URLSearchParams()
-  if (options?.campaignId) params.set('campaignId', String(options.campaignId))
-  if (options?.hashListId) params.set('hashListId', String(options.hashListId))
-  if (options?.search) params.set('q', options.search)
-
-  const query = params.toString()
-  return `/api/v1/dashboard/results/export${query ? `?${query}` : ''}`
+  return useQuery<ListResultsResponse>({
+    queryKey: ['results', selectedProjectId, requestPairs],
+    queryFn: () => {
+      const params = new URLSearchParams(requestPairs)
+      const query = params.toString()
+      return api.get<ListResultsResponse>(`/dashboard/results${query ? `?${query}` : ''}`)
+    },
+    enabled: !!selectedProjectId && callerEnabled,
+    ...(options?.refetchInterval !== undefined && { refetchInterval: options.refetchInterval }),
+  })
 }
