@@ -13,7 +13,7 @@ Work is in two phases:
 
 ## Epic hierarchy (super-epic #166)
 
-`#166` is the master tracker. Its native sub-issues are the Phase 1 step-issues plus the Phase 2 sub-epics:
+`#166` is the master tracker. Its native sub-issues are the Phase 1 step-issues (#155–#165), the standalone migration tool (#154), and the data-flow + Phase 2 sub-epics (#117–#121):
 
 ```text
 #166  Phase 1 Foundation — Scheduler Core, Resource Pipeline & Operator Console
@@ -28,13 +28,13 @@ Work is in two phases:
 
 > **Membership is authoritative from GitHub native sub-issue links, not from issue-body prose.** The track tables below order the same issues by strategic leverage; the epic each issue lives under is shown here.
 
-### Open issues not yet captured under #166
+### Recently captured under #166
 
-These were filed after the epic structure was set and are **not** linked under any epic. Recommend nesting each under the noted home (or directly under #166 for cross-cutting test/CI work):
+These were filed after the epic structure was set and initially sat outside any epic. They have since been linked under #166 (directly or via a sub-epic); recorded here so the placement rationale stays visible. **No open issue remains outside the #166 tree.**
 
-| Issue | Title | Recommended home |
-|------:|-------|------------------|
-| #182 | Agent API zaps endpoint composite cursor (stable pagination) | #119 (hash pipeline hardening) or #166 direct |
+| Issue | Title | Linked under |
+|------:|-------|--------------|
+| #182 | Agent API zaps endpoint composite cursor (stable pagination) | #119 (hash pipeline hardening) |
 | #197 | Dashboard server-side sparkline history endpoint | #121 (Visualization) — pairs with #110 |
 | #201 | E2E: commit + unskip Linux Playwright visual baseline | #166 direct (CI/test closeout) |
 | #202 | Detect mixed hash types in hash lists and auto-split | #119 (hash management) |
@@ -45,7 +45,7 @@ These were filed after the epic structure was set and are **not** linked under a
 
 ## Phase 1 — Foundation ✅ COMPLETE
 
-Every Phase 1 ticket shipped as a step-issue nested under super-epic #166. Nothing remains in this phase. The strategy-driven sequence (scheduler core first, then resources, then visibility/auth, results last) is preserved here for the record.
+Every Phase 1 ticket shipped as an issue nested under super-epic #166 — step-issues #155–#165 plus the Resource Management API (#157). Nothing remains in this phase. The strategy-driven sequence (scheduler core first, then resources, then visibility/auth, results last) is preserved here for the record.
 
 | Step | Issue | Ticket                                        | Track                 |
 | ---: | ----- | --------------------------------------------- | --------------------- |
@@ -126,4 +126,4 @@ Begins after Phase 1 lands. These assume Task Distribution, the Resource Pipelin
 - **Phase 1 is done.** Start Phase 2 with **#105 + #106** (audit + soft delete) before any scheduler work, so the metrics light up.
 - **Re-rank when STRATEGY.md changes** or when a metric becomes a real bottleneck.
 - **Items below the `—` line** in each track are real work, not killed work. Parked until the strategy makes them load-bearing.
-- **Add new issues** to the matching track, and link them under their epic (or #166 directly) so the [hierarchy](#epic-hierarchy-super-epic-166) stays complete. Clear the [not-yet-captured list](#open-issues-not-yet-captured-under-166) as you go.
+- **Add new issues** to the matching track, and link them under their epic (or #166 directly) so the [hierarchy](#epic-hierarchy-super-epic-166) stays complete and no issue sits outside the #166 tree.
