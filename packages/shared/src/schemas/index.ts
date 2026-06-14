@@ -661,6 +661,36 @@ export const assignedTaskSchema = z.object({
   updatedAt: z.coerce.date(),
 })
 
+// ─── Task Preemption (issue #97) ────────────────────────────────────
+
+/**
+ * Why a task is in the `paused` state. `'preempted'` = a higher-priority
+ * campaign reclaimed the agent (task-level preemption); `'campaign_paused'`
+ * is reserved for a future campaign-level pause cascade. Mirrors the
+ * `tasks_paused_reason_chk` CHECK constraint in `../db/schema.ts` — keep
+ * the two lists in sync.
+ */
+export const pausedReasonSchema = z.enum(['preempted', 'campaign_paused'])
+
+/** The transitions an audit `task_events` row can record. */
+export const taskEventTypeSchema = z.enum(['preempted', 'resumed'])
+
+/**
+ * A durable preemption audit row (`task_events`). One row per pause/resume
+ * transition. `byCampaignId` is the higher-priority campaign that caused a
+ * pause (null on resume / when the campaign was deleted).
+ */
+export const taskEventSchema = z.object({
+  id: z.number().int().positive(),
+  taskId: z.number().int().positive().nullable(),
+  eventType: taskEventTypeSchema,
+  reason: pausedReasonSchema.nullable(),
+  fromStatus: z.string(),
+  toStatus: z.string(),
+  byCampaignId: z.number().int().positive().nullable(),
+  createdAt: z.coerce.date(),
+})
+
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 //
 // `campaignStatusSchema`, `campaignTaskStatsSchema`,

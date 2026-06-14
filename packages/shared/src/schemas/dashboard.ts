@@ -31,6 +31,7 @@ export const taskDbStatusSchema = z.enum([
   'pending',
   'assigned',
   'running',
+  'paused',
   'completed',
   'exhausted',
   'failed',
@@ -68,6 +69,11 @@ export const TASK_DB_TO_BUCKET = {
   pending: 'pending',
   assigned: 'running',
   running: 'running',
+  // `paused` (issue #97) is a preempted task waiting to resume -- no agent
+  // is actively computing it, so it counts as `pending`, not `running`.
+  // This keeps the ETA identity `remaining = total - completed - failed`
+  // correct without minting a 5th operator-facing bucket.
+  paused: 'pending',
   completed: 'completed',
   exhausted: 'completed',
   failed: 'failed',

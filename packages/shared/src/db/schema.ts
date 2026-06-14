@@ -497,6 +497,19 @@ export const tasks = pgTable(
     completedAt: timestamp('completed_at', { withTimezone: true }),
     failureReason: text('failure_reason'),
     retryCount: integer('retry_count').notNull().default(0),
+    // Preemption (issue #97): a non-terminal `paused` status with reason
+    // tracking. `pausedReason` distinguishes task-level preemption from a
+    // future campaign-level pause cascade; `preemptedByCampaignId` is the
+    // higher-priority campaign that triggered the pause. `resumedAt` drives
+    // the anti-thrash stability floor. A preempted task RETAINS its
+    // `agentId` while paused (so the heartbeat stop-signal is derivable);
+    // resume clears it.
+    pausedReason: varchar('paused_reason', { length: 20 }),
+    preemptedByCampaignId: integer('preempted_by_campaign_id').references(() => campaigns.id, {
+      onDelete: 'set null',
+    }),
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
+    resumedAt: timestamp('resumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -529,6 +542,51 @@ export const tasks = pgTable(
     index('tasks_pending_unassigned_idx')
       .on(table.campaignId, table.id)
       .where(sql`status = 'pending' AND agent_id IS NULL`),
+    // Preemption sweep + heartbeat stop-signal both filter on
+    // (agent_id, status, paused_reason). Bounding the index to preempted
+    // paused rows keeps the heartbeat-derived stopTaskIds query (issue #97
+    // U4) off a seq scan as paused history grows.
+    index('tasks_preempted_paused_idx')
+      .on(table.agentId)
+      .where(sql`status = 'paused' AND paused_reason = 'preempted'`),
+    // Pin the task status vocabulary at the DB level so a bad migration or
+    // direct UPDATE can't land a typo'd status and silently mis-route the
+    // dashboard buckets or the preemption sweep. Mirrors taskDbStatusSchema
+    // in `../schemas/dashboard.ts` -- keep the two lists in sync.
+    check(
+      'tasks_status_chk',
+      sql`${table.status} IN ('pending', 'assigned', 'running', 'paused', 'completed', 'exhausted', 'failed', 'cancelled')`
+    ),
+    // Pin the preemption reason vocabulary; NULL when the task was never
+    // paused. Mirrors pausedReasonSchema in `../schemas/index.ts`.
+    check(
+      'tasks_paused_reason_chk',
+      sql`${table.pausedReason} IS NULL OR ${table.pausedReason} IN ('preempted', 'campaign_paused')`
+    ),
+  ]
+)
+
+// Durable audit trail for preemption (issue #97 U2). Append-only: one row
+// per pause/resume transition. `agent_errors` is the model for the FK +
+// composite index shape; like it, the FK uses ON DELETE SET NULL so the
+// audit row survives task deletion with its linkage cleared.
+export const taskEvents = pgTable(
+  'task_events',
+  {
+    id: serial('id').primaryKey(),
+    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    eventType: varchar('event_type', { length: 20 }).notNull(),
+    reason: varchar('reason', { length: 20 }),
+    fromStatus: varchar('from_status', { length: 20 }).notNull(),
+    toStatus: varchar('to_status', { length: 20 }).notNull(),
+    byCampaignId: integer('by_campaign_id').references(() => campaigns.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('task_events_task_id_created_at_idx').on(table.taskId, table.createdAt.desc()),
+    check('task_events_event_type_chk', sql`${table.eventType} IN ('preempted', 'resumed')`),
   ]
 )
 

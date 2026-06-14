@@ -13,6 +13,9 @@ import type {
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
   assignedTaskSchema,
+  pausedReasonSchema,
+  taskEventSchema,
+  taskEventTypeSchema,
   benchmarkSubmissionSchema,
   campaignActiveAgentSchema,
   campaignAttackRowSchema,
@@ -238,6 +241,11 @@ export type RequiredCapabilities = z.infer<typeof requiredCapabilitiesSchema>
  * shape and the in-process TypeScript type cannot drift.
  */
 export type AssignedTask = z.infer<typeof assignedTaskSchema>
+
+/** Task preemption (issue #97) wire types. */
+export type PausedReason = z.infer<typeof pausedReasonSchema>
+export type TaskEventType = z.infer<typeof taskEventTypeSchema>
+export type TaskEvent = z.infer<typeof taskEventSchema>
 
 // ─── API Request Types ──────────────────────────────────────────────
 
