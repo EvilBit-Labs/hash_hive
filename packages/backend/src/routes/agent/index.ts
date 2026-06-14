@@ -455,6 +455,10 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
       if ('error' in failResult) {
         return c.json({ error: { code: 'TASK_ERROR', message: failResult.error } }, 400)
       }
+      // The task was preempted (paused) — tell the agent to stop (#97 U6).
+      if ('stopped' in failResult) {
+        return c.json({ acknowledged: true, action: 'stop' }, 200)
+      }
       return c.json({ acknowledged: true, retried: failResult.retried ?? false }, 200)
     }
 

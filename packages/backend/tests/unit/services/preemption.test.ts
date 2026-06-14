@@ -47,7 +47,7 @@ if (!IS_ISOLATED) {
   const txSelect = mock(() => {
     const result = selectQueue.shift() ?? []
     const chain: Record<string, unknown> = {}
-    for (const m of ['from', 'innerJoin', 'where', 'orderBy']) {
+    for (const m of ['from', 'innerJoin', 'where', 'orderBy', 'limit']) {
       chain[m] = () => chain
     }
     // A drizzle query builder is itself thenable; this mock mirrors that so
@@ -57,7 +57,18 @@ if (!IS_ISOLATED) {
     return chain
   })
   const txExecute = mock(() => Promise.resolve(executeQueue.shift() ?? []))
-  const tx = { select: txSelect, execute: txExecute }
+  // update(...).set(...).where(...).returning() → next queued result set.
+  let updateQueue: unknown[][] = []
+  const txUpdate = mock(() => {
+    const result = updateQueue.shift() ?? []
+    const chain: Record<string, unknown> = {}
+    for (const m of ['set', 'where']) {
+      chain[m] = () => chain
+    }
+    chain['returning'] = () => Promise.resolve(result)
+    return chain
+  })
+  const tx = { select: txSelect, execute: txExecute, update: txUpdate }
 
   mock.module('../../../src/db/index.js', () => ({
     db: { transaction: mock((cb: (t: typeof tx) => unknown) => cb(tx)) },
@@ -96,10 +107,27 @@ if (!IS_ISOLATED) {
   beforeEach(() => {
     selectQueue = []
     executeQueue = []
+    updateQueue = []
     txSelect.mockClear()
     txExecute.mockClear()
+    txUpdate.mockClear()
     mockRecordTaskEvent.mockClear()
     mockEmitTaskUpdate.mockClear()
+  })
+
+  // A paused-preempted task row for the resume pass.
+  const pausedRow = (
+    id: number,
+    priority: number,
+    progressDone = 40,
+    range = { start: 0, end: 100, total: 100 },
+    campaignId = 60
+  ) => ({
+    id,
+    campaignId,
+    priority,
+    workRange: range,
+    progress: { keyspaceProgress: progressDone },
   })
 
   describe('agentCanRunTask', () => {
@@ -201,6 +229,49 @@ if (!IS_ISOLATED) {
 
       expect(result.pausedTaskIds).toEqual([])
       expect(result.resumedTaskIds).toEqual([])
+    })
+  })
+
+  describe('evaluatePreemption resume pass', () => {
+    it('resumes a paused task when no higher-priority pending work remains', async () => {
+      // pause pass: no pending → short-circuits. resume pass: one paused
+      // task, no blocker.
+      selectQueue = [[], [pausedRow(300, 5)], []]
+      executeQueue = [[]] // advisory lock
+      updateQueue = [[{ id: 300 }]] // re-pend UPDATE matched
+
+      const result = await evaluatePreemption(7)
+
+      expect(result.resumedTaskIds).toEqual([300])
+      expect(mockRecordTaskEvent).toHaveBeenCalledTimes(1)
+      const event = mockRecordTaskEvent.mock.calls[0]?.[0] as Record<string, unknown>
+      expect(event).toMatchObject({ taskId: 300, eventType: 'resumed', fromStatus: 'paused' })
+      expect(event['toStatus']).toBe('pending')
+      expect(mockEmitTaskUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not resume while higher-priority pending work still blocks it', async () => {
+      // Blocker query returns a strictly-higher-priority pending task.
+      selectQueue = [[], [pausedRow(300, 5)], [{ id: 1 }]]
+      executeQueue = [[]]
+
+      const result = await evaluatePreemption(7)
+
+      expect(result.resumedTaskIds).toEqual([])
+      expect(mockRecordTaskEvent).not.toHaveBeenCalled()
+    })
+
+    it('marks an over-progressed paused task exhausted instead of re-pending', async () => {
+      // progressDone (100) >= total (100) → terminal, not resumed to pending.
+      selectQueue = [[], [pausedRow(300, 5, 100)], []]
+      executeQueue = [[]]
+      updateQueue = [[{ id: 300 }]]
+
+      const result = await evaluatePreemption(7)
+
+      expect(result.resumedTaskIds).toEqual([300])
+      const event = mockRecordTaskEvent.mock.calls[0]?.[0] as Record<string, unknown>
+      expect(event['toStatus']).toBe('exhausted')
     })
   })
 }

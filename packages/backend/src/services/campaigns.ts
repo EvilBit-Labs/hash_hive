@@ -664,6 +664,14 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   // defer until after task generation enqueue succeeds to avoid premature events.
   if (targetStatus !== 'running') {
     emitCampaignStatus(campaign.projectId, id, targetStatus)
+    // A campaign reaching a terminal/draft state frees its agents and clears
+    // its pending work — re-evaluate preemption so victims (of its or other
+    // preemptions) can resume (#97 U6). This is what covers the
+    // cancelled-preemptor case where no task completion would otherwise fire
+    // the resume trigger.
+    if (targetStatus === 'completed' || targetStatus === 'cancelled' || targetStatus === 'draft') {
+      await enqueuePreemptionEvaluation(campaign.projectId)
+    }
   }
 
   // When starting a campaign, generate tasks — inline if few, queued if many

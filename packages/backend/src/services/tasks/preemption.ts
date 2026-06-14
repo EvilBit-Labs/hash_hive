@@ -24,6 +24,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { emitTaskUpdate } from '../events.js'
+import { jsonSafeBigint, readKeyspaceProgress, readWorkRangeField } from './_internals.js'
 import { recordTaskEvent } from './task-events.js'
 
 /**
@@ -257,12 +258,141 @@ async function runPausePass(tx: Tx, projectId: number): Promise<number[]> {
   return pausedIds
 }
 
+interface ResumeRow {
+  id: number
+  campaignId: number
+  priority: number
+  workRange: unknown
+  progress: unknown
+}
+
 /**
- * Resume pass placeholder — implemented in U6. Defined here so the worker
- * (U5) calls a stable `evaluatePreemption` shape across the two units.
+ * Re-pend (or terminate) a paused-preempted task. Mirrors
+ * `reassignStaleTasks`' trim: `workRange.start` advances by the reported
+ * keyspace progress and `keyspaceProgress` is reset within the trimmed
+ * range. If the chunk's keyspace was already fully covered, the task is
+ * terminal (`exhausted`) rather than re-run. The status guard keeps the
+ * write idempotent. Returns the new status, or null if no row matched.
  */
-async function runResumePass(_tx: Tx, _projectId: number): Promise<number[]> {
-  return []
+async function resumeTask(
+  tx: Tx,
+  t: ResumeRow
+): Promise<{ toStatus: 'pending' | 'exhausted' } | null> {
+  const start = readWorkRangeField(t.workRange, 'start')
+  const end = readWorkRangeField(t.workRange, 'end')
+  const total = end > start ? end - start : 0n
+  const progressDone = readKeyspaceProgress(t.progress)
+
+  if (progressDone >= total && total > 0n) {
+    const updated = await tx
+      .update(tasks)
+      .set({
+        status: 'exhausted',
+        pausedReason: null,
+        preemptedByCampaignId: null,
+        resumedAt: new Date(),
+        completedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(tasks.id, t.id), eq(tasks.status, 'paused')))
+      .returning({ id: tasks.id })
+    return updated.length > 0 ? { toStatus: 'exhausted' } : null
+  }
+
+  const newStart = start + progressDone
+  const newTotal = end > newStart ? end - newStart : 0n
+  const prior =
+    t.progress && typeof t.progress === 'object' ? (t.progress as Record<string, unknown>) : {}
+  const carried: Record<string, unknown> = { ...prior }
+  delete carried['keyspaceProgress']
+
+  const updated = await tx
+    .update(tasks)
+    .set({
+      status: 'pending',
+      agentId: null,
+      assignedAt: null,
+      startedAt: null,
+      pausedReason: null,
+      preemptedByCampaignId: null,
+      resumedAt: new Date(),
+      workRange: {
+        start: jsonSafeBigint(newStart),
+        end: jsonSafeBigint(end),
+        total: jsonSafeBigint(newTotal),
+      },
+      progress: carried,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(tasks.id, t.id), eq(tasks.status, 'paused')))
+    .returning({ id: tasks.id })
+  return updated.length > 0 ? { toStatus: 'pending' } : null
+}
+
+/**
+ * Resume pass: re-pend paused-preempted tasks whose resources are no longer
+ * needed by higher-priority work. Resume eligibility is the strict negation
+ * of the pause trigger — a task may resume only when no strictly-higher-
+ * priority pending, unassigned work remains in the project (the same set the
+ * pause pass competes over). This inverse-predicate relationship keeps the
+ * pause and resume passes from reaching contradictory verdicts, and the
+ * stability floor (`resumedAt`) prevents a resume → reclaim → re-preempt
+ * loop. Returns the ids of tasks resumed (or terminated) this pass.
+ */
+async function runResumePass(tx: Tx, projectId: number): Promise<number[]> {
+  const paused = (await tx
+    .select({
+      id: tasks.id,
+      campaignId: tasks.campaignId,
+      priority: campaigns.priority,
+      workRange: tasks.workRange,
+      progress: tasks.progress,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(
+        eq(tasks.status, 'paused'),
+        eq(tasks.pausedReason, 'preempted'),
+        eq(campaigns.projectId, projectId)
+      )
+    )
+    .orderBy(campaigns.priority, tasks.id)) as ResumeRow[]
+
+  if (paused.length === 0) return []
+
+  const resumedIds: number[] = []
+  for (const t of paused) {
+    const blocker = await tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+      .where(
+        and(
+          eq(tasks.status, 'pending'),
+          sql`${tasks.agentId} IS NULL`,
+          eq(campaigns.projectId, projectId),
+          sql`${campaigns.priority} < ${t.priority}`
+        )
+      )
+      .limit(1)
+    if (blocker.length > 0) continue
+
+    const resumed = await resumeTask(tx, t)
+    if (!resumed) continue
+
+    resumedIds.push(t.id)
+    await recordTaskEvent({
+      taskId: t.id,
+      eventType: 'resumed',
+      fromStatus: 'paused',
+      toStatus: resumed.toStatus,
+      byCampaignId: null,
+    })
+    emitTaskUpdate(projectId, t.id, resumed.toStatus, { campaignId: t.campaignId })
+  }
+
+  return resumedIds
 }
 
 /**

@@ -282,6 +282,8 @@ if (!IS_ISOLATED) {
     // Required by tasks.ts (static import resolves to this mocked module
     // because mock.module is process-global).
     updateCampaignProgress: mock(async () => undefined),
+    // Likewise required by tasks.ts/retry.ts (#97 U6 completion trigger).
+    enqueuePreemptionEvaluation: mock(async () => undefined),
     resolveGenerationStrategy: () => 'inline' as const,
     INLINE_GENERATION_THRESHOLD: 100,
     _deps: {},

@@ -17,9 +17,9 @@ import { and, eq, sql } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
-import { updateCampaignProgress } from '../campaigns.js'
+import { enqueuePreemptionEvaluation, updateCampaignProgress } from '../campaigns.js'
 import { emitTaskUpdate } from '../events.js'
-import { jsonSafeBigint } from './_internals.js'
+import { jsonSafeBigint, readKeyspaceProgress, readWorkRangeField } from './_internals.js'
 
 /**
  * Maximum reassignment count before a task is permanently failed. A task
@@ -37,6 +37,13 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     .limit(1)
   if (!task) {
     return { error: 'Task not found or not assigned to this agent' }
+  }
+
+  // Preemption (#97 U6): a paused task still carries this agent_id. A
+  // failure report must not un-pause it via the retry branch below — tell
+  // the agent to stop instead (mirrors updateTaskProgress's paused guard).
+  if (task.status === 'paused') {
+    return { stopped: true as const }
   }
 
   const resultStats = (task.resultStats as Record<string, unknown>) ?? {}
@@ -63,7 +70,15 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
         resultStats: { ...resultStats, lastFailure: reason },
         updatedAt: new Date(),
       })
-      .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+      // Status guard (#97 U6) closes the TOCTOU window: a row paused between
+      // the read above and this write is left untouched, not re-pended.
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.agentId, agentId),
+          sql`${tasks.status} IN ('assigned', 'running')`
+        )
+      )
       .returning()
 
     if (updated && campaign) {
@@ -116,48 +131,12 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     // terminal-fail branches already do this — keep the two failure paths
     // symmetric so either subsystem keeps the aggregate honest.
     await updateCampaignProgress(task.campaignId)
+    // A terminally-failed task frees its agent — re-evaluate preemption so
+    // paused lower-priority victims can resume (#97 U6 completion trigger).
+    await enqueuePreemptionEvaluation(campaign.projectId)
   }
 
   return { task: updated, retried: false }
-}
-
-/**
- * Read the keyspace-progress value from a task's `progress` jsonb. Accepts
- * either a number or a numeric string (older agents may emit either).
- * Returns 0 for missing / unparseable values so the caller can treat the
- * task as "fresh" rather than fail noisily.
- */
-function readKeyspaceProgress(progress: unknown): bigint {
-  if (progress === null || typeof progress !== 'object') return 0n
-  const raw = (progress as Record<string, unknown>)['keyspaceProgress']
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
-  if (typeof raw === 'string') {
-    try {
-      return BigInt(raw)
-    } catch {
-      return 0n
-    }
-  }
-  return 0n
-}
-
-/**
- * Read a numeric field from a task's `work_range` jsonb. Accepts either a
- * JS Number (used for in-safe-range chunks) or a decimal string (used for
- * mask-attack chunks beyond Number.MAX_SAFE_INTEGER).
- */
-function readWorkRangeField(workRange: unknown, key: string): bigint {
-  if (workRange === null || typeof workRange !== 'object') return 0n
-  const raw = (workRange as Record<string, unknown>)[key]
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
-  if (typeof raw === 'string') {
-    try {
-      return BigInt(raw)
-    } catch {
-      return 0n
-    }
-  }
-  return 0n
 }
 
 /**

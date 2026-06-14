@@ -211,6 +211,9 @@ if (!IS_ISOLATED) {
     createAttack: createAttackMock,
     updateAttack: updateAttackMock,
     deleteAttack: deleteAttackMock,
+    // tasks.ts/retry.ts statically import this (#97 U6); the named import
+    // fails to link if the campaigns.js mock omits it.
+    enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
   }))
 
   const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {

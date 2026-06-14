@@ -77,6 +77,9 @@ if (isIsolated) {
   mockUpdateCampaignProgress = mock()
   mock.module('../../src/services/campaigns.js', () => ({
     updateCampaignProgress: mockUpdateCampaignProgress,
+    // tasks.ts + retry.ts now statically import this (#97 U6 completion
+    // trigger); the named import fails to link if the mock omits it.
+    enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
   }))
 
   mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null))

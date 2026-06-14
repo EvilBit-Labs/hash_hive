@@ -1290,6 +1290,30 @@ describe('Agent API: POST /tasks/:id/report — 200 body shape', () => {
     expect(body['retried']).toBe(true)
   })
 
+  it('returns action:stop when a failed report targets a preempted task (#97 U6)', async () => {
+    // handleTaskFailure reports the task is paused (preempted) — the failure
+    // must not un-pause it via the retry branch; the agent is told to stop.
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.handleTaskFailure as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ stopped: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status: 'failed', errors: ['gpu hung'] }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    expect(body['action']).toBe('stop')
+    expect(body['retried']).toBeUndefined()
+  })
+
   it('rejects non-numeric path param with 400 + VALIDATION_ERROR (zod coerce edge case)', async () => {
     // Arrange — the new `z.coerce.number().int().positive()` schema
     // replaces the old hand-rolled `Number.isNaN || taskId <= 0`

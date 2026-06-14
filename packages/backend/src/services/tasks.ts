@@ -16,7 +16,7 @@ import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { getAgentBenchmarkForMode } from './agents.js'
-import { updateCampaignProgress } from './campaigns.js'
+import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
 import { pickChunkSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { calculateAttackKeyspace } from './keyspace.js'
@@ -697,6 +697,13 @@ export async function updateTaskProgress(
     progress: data.progress,
   })
   await updateCampaignProgress(taskRow.campaignId)
+
+  // A task reaching a terminal state frees its agent — re-evaluate
+  // preemption so paused lower-priority victims can resume (#97 U6
+  // completion trigger). Best-effort; never fails the report.
+  if (data.status === 'completed' || data.status === 'exhausted') {
+    await enqueuePreemptionEvaluation(taskRow.projectId)
+  }
 
   return { task: updated }
 }
