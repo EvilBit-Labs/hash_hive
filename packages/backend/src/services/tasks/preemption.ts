@@ -74,6 +74,18 @@ export interface PreemptionResult {
 }
 
 /**
+ * A `task_update` SSE to fire once the preemption transaction commits. The
+ * passes collect these instead of emitting inline so a rolled-back
+ * transaction never broadcasts a phantom paused/resumed event (review #97).
+ */
+interface PendingEmit {
+  taskId: number
+  status: string
+  agentId?: number | null
+  campaignId: number
+}
+
+/**
  * Whether an agent's capabilities satisfy a task's required_capabilities.
  * JS mirror of `buildCapabilityPredicate` in `services/tasks.ts` (GPU
  * requirement + hashcatMode membership) so the app-side preemption match
@@ -152,7 +164,7 @@ async function pauseVictim(
  * pausing the lowest-priority capability-matching running/assigned task.
  * Returns the ids of tasks paused this pass.
  */
-async function runPausePass(tx: Tx, projectId: number): Promise<number[]> {
+async function runPausePass(tx: Tx, projectId: number, emits: PendingEmit[]): Promise<number[]> {
   // Higher-priority pending work, highest priority (lowest number) first.
   const pending = (await tx
     .select({
@@ -241,15 +253,20 @@ async function runPausePass(tx: Tx, projectId: number): Promise<number[]> {
 
     usedVictims.add(victim.id)
     pausedIds.push(victim.id)
-    await recordTaskEvent({
+    await recordTaskEvent(
+      {
+        taskId: victim.id,
+        eventType: 'preempted',
+        fromStatus: victim.status as 'running' | 'assigned',
+        toStatus: 'paused',
+        reason: 'preempted',
+        byCampaignId: hp.campaignId,
+      },
+      tx
+    )
+    emits.push({
       taskId: victim.id,
-      eventType: 'preempted',
-      fromStatus: victim.status as 'running' | 'assigned',
-      toStatus: 'paused',
-      reason: 'preempted',
-      byCampaignId: hp.campaignId,
-    })
-    emitTaskUpdate(projectId, victim.id, 'paused', {
+      status: 'paused',
       agentId: paused.agentId,
       campaignId: victim.campaignId,
     })
@@ -288,6 +305,10 @@ async function resumeTask(
       .update(tasks)
       .set({
         status: 'exhausted',
+        // Clear agentId like the re-pend branch (review #97): a terminated
+        // chunk must not stay attributed to the agent that was preempted
+        // off it before finishing.
+        agentId: null,
         pausedReason: null,
         preemptedByCampaignId: null,
         resumedAt: new Date(),
@@ -339,7 +360,7 @@ async function resumeTask(
  * stability floor (`resumedAt`) prevents a resume → reclaim → re-preempt
  * loop. Returns the ids of tasks resumed (or terminated) this pass.
  */
-async function runResumePass(tx: Tx, projectId: number): Promise<number[]> {
+async function runResumePass(tx: Tx, projectId: number, emits: PendingEmit[]): Promise<number[]> {
   const paused = (await tx
     .select({
       id: tasks.id,
@@ -382,14 +403,17 @@ async function runResumePass(tx: Tx, projectId: number): Promise<number[]> {
     if (!resumed) continue
 
     resumedIds.push(t.id)
-    await recordTaskEvent({
-      taskId: t.id,
-      eventType: 'resumed',
-      fromStatus: 'paused',
-      toStatus: resumed.toStatus,
-      byCampaignId: null,
-    })
-    emitTaskUpdate(projectId, t.id, resumed.toStatus, { campaignId: t.campaignId })
+    await recordTaskEvent(
+      {
+        taskId: t.id,
+        eventType: 'resumed',
+        fromStatus: 'paused',
+        toStatus: resumed.toStatus,
+        byCampaignId: null,
+      },
+      tx
+    )
+    emits.push({ taskId: t.id, status: resumed.toStatus, campaignId: t.campaignId })
   }
 
   return resumedIds
@@ -400,10 +424,13 @@ async function runResumePass(tx: Tx, projectId: number): Promise<number[]> {
  * a transaction-scoped advisory lock.
  */
 export async function evaluatePreemption(projectId: number): Promise<PreemptionResult> {
-  return db.transaction(async (tx) => {
+  // Collected inside the transaction, broadcast only after it commits so a
+  // rolled-back preemption never fires a phantom task_update (review #97).
+  const emits: PendingEmit[] = []
+  const result = await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${PREEMPTION_LOCK_NAMESPACE}, ${projectId})`)
-    const pausedTaskIds = await runPausePass(tx, projectId)
-    const resumedTaskIds = await runResumePass(tx, projectId)
+    const pausedTaskIds = await runPausePass(tx, projectId, emits)
+    const resumedTaskIds = await runResumePass(tx, projectId, emits)
     if (pausedTaskIds.length > 0 || resumedTaskIds.length > 0) {
       logger.info(
         {
@@ -417,4 +444,10 @@ export async function evaluatePreemption(projectId: number): Promise<PreemptionR
     }
     return { pausedTaskIds, resumedTaskIds }
   })
+
+  // Post-commit: emit each collected task_update.
+  for (const e of emits) {
+    emitTaskUpdate(projectId, e.taskId, e.status, { agentId: e.agentId, campaignId: e.campaignId })
+  }
+  return result
 }

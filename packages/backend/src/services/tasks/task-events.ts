@@ -36,10 +36,22 @@ export interface RecordTaskEventInput {
 }
 
 /**
- * Persist one preemption audit row. Returns the inserted row.
+ * The minimal db surface `recordTaskEvent` needs. Both the module `db` and a
+ * drizzle transaction handle satisfy it, so callers inside a transaction
+ * (the preemption pause/resume passes) pass their `tx` to keep the audit row
+ * atomic with the transition — without it a rolled-back preemption would
+ * leave a committed audit row, breaking the append-only "never written for a
+ * transition that did not commit" guarantee.
  */
-export async function recordTaskEvent(input: RecordTaskEventInput) {
-  const [row] = await db
+type Executor = Pick<typeof db, 'insert'>
+
+/**
+ * Persist one preemption audit row. Returns the inserted row. Pass the active
+ * transaction as `executor` to commit the audit atomically with the pause or
+ * resume write; defaults to the module `db` for standalone use.
+ */
+export async function recordTaskEvent(input: RecordTaskEventInput, executor: Executor = db) {
+  const [row] = await executor
     .insert(taskEvents)
     .values({
       taskId: input.taskId,
