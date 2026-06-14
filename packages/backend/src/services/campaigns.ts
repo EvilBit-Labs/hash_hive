@@ -655,13 +655,20 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     }
   }
 
-  // Stop action: running/paused → draft means cancel running tasks and reset
+  // Stop action: running/paused → draft means cancel non-terminal tasks and
+  // reset. `'paused'` is included (#97 U8) so preempted-paused tasks are
+  // cancelled rather than orphaned: a paused task is excluded from the stale
+  // sweep, so without this it would sit `paused` forever with a dangling
+  // agent_id + preempted_by_campaign_id after its campaign stops.
   if (targetStatus === 'draft' && (campaign.status === 'running' || campaign.status === 'paused')) {
     await db
       .update(tasks)
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(
-        and(eq(tasks.campaignId, id), sql`${tasks.status} IN ('pending', 'assigned', 'running')`)
+        and(
+          eq(tasks.campaignId, id),
+          sql`${tasks.status} IN ('pending', 'assigned', 'running', 'paused')`
+        )
       )
   }
 

@@ -42,6 +42,11 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
 })
 
 let mockAttacks: Array<Record<string, unknown>> = []
+// Mutable so a test can drive getCampaignById's status (e.g. 'running' for
+// the stop-cascade test). Default empty → 'draft'.
+let campaignOverrides: Record<string, unknown> = {}
+// Captures the WHERE of the tasks cancel-cascade UPDATE (status='cancelled').
+let capturedCancelWhere: unknown
 
 // Shared mock helper: makes where() awaitable AND chainable to
 // limit/orderBy. validateCampaignResources awaits where() directly;
@@ -59,7 +64,7 @@ mock.module('../../src/db/index.js', () => ({
       ({
         where: mock(() =>
           makeAwaitableChain([{ id: 1 }], {
-            limit: mock(() => Promise.resolve([makeCampaignRow()])),
+            limit: mock(() => Promise.resolve([makeCampaignRow(campaignOverrides)])),
             orderBy: mock(() => Promise.resolve(mockAttacks)),
           })
         ),
@@ -67,10 +72,14 @@ mock.module('../../src/db/index.js', () => ({
       })),
     })),
     update: mock(() => ({
-      set: mock(() => ({
-        where: mock(() => ({
-          returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
-        })),
+      set: mock((payload: Record<string, unknown>) => ({
+        where: mock((w: unknown) => {
+          // The cancel cascade is the only UPDATE that sets status='cancelled'.
+          if (payload['status'] === 'cancelled') capturedCancelWhere = w
+          return {
+            returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
+          }
+        }),
       })),
     })),
     insert: mock(() => ({
@@ -112,6 +121,22 @@ _deps.getQueueConfig = () =>
 _deps.getQueueTypes = () =>
   Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any)
 
+// Recursively collect string literals from a drizzle SQL object's chunks so
+// a test can assert the rendered filter without a real DB. StringChunks carry
+// `value: string[]`; composite SQL carries `queryChunks`.
+function collectSqlStrings(node: unknown): string {
+  if (node == null) return ''
+  if (typeof node === 'string') return node
+  const obj = node as Record<string, unknown>
+  if (Array.isArray(obj['value']) && obj['value'].every((v) => typeof v === 'string')) {
+    return (obj['value'] as string[]).join(' ')
+  }
+  if (Array.isArray(obj['queryChunks'])) {
+    return (obj['queryChunks'] as unknown[]).map(collectSqlStrings).join(' ')
+  }
+  return ''
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────
 
 describe('transitionCampaign task generation branching', () => {
@@ -119,6 +144,8 @@ describe('transitionCampaign task generation branching', () => {
     generateTasksForAttackSpy.mockClear()
     enqueueSpy.mockClear()
     mockAttacks = []
+    campaignOverrides = {}
+    capturedCancelWhere = undefined
   })
 
   test('calls generateTasksForAttack inline when estimated tasks < 100', async () => {
@@ -195,5 +222,18 @@ describe('transitionCampaign task generation branching', () => {
 
     expect(result).toMatchObject({ kind: 'updated' })
     expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-preemption')).toBe(true)
+  })
+
+  test("stopping a running campaign cancels 'paused' tasks too (#97 U8)", async () => {
+    // getCampaignById returns a running campaign so running → draft is a
+    // valid stop transition that fires the cancel cascade.
+    campaignOverrides = { status: 'running' }
+
+    await transitionCampaign(1, 'draft')
+
+    expect(capturedCancelWhere).toBeDefined()
+    // The cancel filter must include 'paused' so preempted tasks are
+    // cancelled rather than orphaned (they're excluded from the stale sweep).
+    expect(collectSqlStrings(capturedCancelWhere)).toContain('paused')
   })
 })
