@@ -184,6 +184,11 @@ if (!IS_ISOLATED) {
   })
   const transitionCampaignMock: CampaignsService['transitionCampaign'] = async () =>
     mockTransitionResult
+  const changeRunningCampaignPriorityMock: CampaignsService['changeRunningCampaignPriority'] =
+    async (id, projectId) => ({
+      kind: 'updated',
+      campaign: makeCampaign({ id, projectId, status: 'running' }),
+    })
   const listAttacksMock: CampaignsService['listAttacks'] = async () => []
   const listAttacksPaginatedMock: CampaignsService['listAttacksPaginated'] = async (campaignId) => {
     const matched = mockAttacks.filter((a) => a.campaignId === campaignId).map(makeAttack)
@@ -205,6 +210,7 @@ if (!IS_ISOLATED) {
     createCampaign: createCampaignMock,
     updateCampaign: updateCampaignMock,
     transitionCampaign: transitionCampaignMock,
+    changeRunningCampaignPriority: changeRunningCampaignPriorityMock,
     listAttacks: listAttacksMock,
     listAttacksPaginated: listAttacksPaginatedMock,
     getAttackById: getAttackByIdMock,
@@ -378,6 +384,30 @@ if (!IS_ISOLATED) {
           body: JSON.stringify({ name: 'New', hashListId: 1 }),
         })
         expect(res.status).toBe(201)
+      })
+
+      it('viewer-role members cannot change a running campaign priority (#97 U7)', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['viewer'] }]
+        activeProjectId = 1
+        const app = makeApp(controlCampaignRoutes)
+        const res = await app.request('/1/priority', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ priority: 1 }),
+        })
+        expect(res.status).toBe(403)
+      })
+
+      it('contributor-role members can change a running campaign priority (#97 U7)', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['contributor'] }]
+        activeProjectId = 1
+        const app = makeApp(controlCampaignRoutes)
+        const res = await app.request('/1/priority', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify({ priority: 1 }),
+        })
+        expect(res.status).toBe(200)
       })
     })
 

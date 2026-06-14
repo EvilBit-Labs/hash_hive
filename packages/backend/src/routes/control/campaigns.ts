@@ -20,6 +20,7 @@ import {
   sharedControlResponse,
 } from '../../openapi/components.js'
 import {
+  changeRunningCampaignPriority,
   createCampaign,
   getCampaignById,
   listCampaigns,
@@ -315,6 +316,62 @@ controlCampaignRoutes.openapi(transitionCampaignRoute, async (c) => {
       return problemResponse(c, 409, 'conflict', result.error)
     }
     return c.json(result, 200)
+  } catch (err) {
+    return controlErrorResponse(c, err)
+  }
+})
+
+// ─── POST /:id/priority — change a live campaign's priority (#97 U7) ─
+
+const changePrioritySchema = z
+  .object({ priority: z.number().int().min(1).max(10) })
+  .openapi('ControlChangePriorityRequest')
+
+const changePriorityRoute = createRoute({
+  method: 'post',
+  path: '/{id}/priority',
+  tags: ['Campaigns'],
+  summary: "Change a running or paused campaign's priority (contributor or admin only)",
+  description:
+    'Re-prioritises a live campaign and re-evaluates preemption. The draft-only PATCH /{id} cannot change a running campaign; non-running/paused campaigns return 409 conflict.',
+  security: [{ ControlApiKey: [] }],
+  request: {
+    params: idParamSchema,
+    body: { content: { 'application/json': { schema: changePrioritySchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Priority changed.',
+      content: { 'application/json': { schema: campaignSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlCampaignRoutes.openapi(changePriorityRoute, async (c) => {
+  try {
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
+    const { id } = c.req.valid('param')
+    const { priority } = c.req.valid('json')
+    const result = await changeRunningCampaignPriority(id, projectId, priority)
+    switch (result.kind) {
+      case 'updated':
+        return c.json(result.campaign, 200)
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'campaign not found')
+      case 'not_active':
+        return problemResponse(
+          c,
+          409,
+          'conflict',
+          `campaign priority cannot be changed in status "${result.status}"; only running or paused campaigns can be re-prioritised`
+        )
+    }
   } catch (err) {
     return controlErrorResponse(c, err)
   }

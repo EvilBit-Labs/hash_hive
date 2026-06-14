@@ -151,6 +151,16 @@ if (!IS_ISOLATED) {
     }
   )
 
+  const mockChangeRunningCampaignPriority = mock<CampaignsService['changeRunningCampaignPriority']>(
+    async (id, projectId) => {
+      if (id === 100) {
+        return { kind: 'updated', campaign: makeCampaign({ id, projectId, status: 'running' }) }
+      }
+      if (id === 101) return { kind: 'not_active', status: 'completed' }
+      return { kind: 'not_found' }
+    }
+  )
+
   const mockGetCampaignTaskStats = mock(async (_id: number) => ({
     total: 10,
     pending: 2,
@@ -264,6 +274,7 @@ if (!IS_ISOLATED) {
     createCampaign: mockCreateCampaign,
     createCampaignWithAttacks: mockCreateCampaignWithAttacks,
     updateCampaign: mockUpdateCampaign,
+    changeRunningCampaignPriority: mockChangeRunningCampaignPriority,
     listAttacks: mockListAttacks,
     listAttacksPaginated: mock(async () => ({ attacks: [], total: 0, limit: 50, offset: 0 })),
     createAttack: mockCreateAttack,
@@ -547,6 +558,27 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400)
       const body = (await res.json()) as { error?: { code?: string } }
       expect(body.error?.code).toBe('VALIDATION_ERROR')
+    })
+
+    it('PATCH /{id}/priority changes a running campaign and returns 200 (#97 U7)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/priority`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ priority: 1 }),
+      })
+      expect(res.status).toBe(200)
+      expect(mockChangeRunningCampaignPriority).toHaveBeenCalledTimes(1)
+    })
+
+    it('PATCH /{id}/priority on a non-active campaign returns 409 NOT_ACTIVE (#97 U7)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/101/priority`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ priority: 1 }),
+      })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('NOT_ACTIVE')
     })
 
     it('PUT with missing required field (name) returns 400 VALIDATION_ERROR', async () => {

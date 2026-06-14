@@ -92,7 +92,7 @@ mock.module('../../src/services/events.js', () => ({
 }))
 
 // Import module under test after DB/events mocks are registered
-const { transitionCampaign, enqueuePreemptionEvaluation, _deps } =
+const { transitionCampaign, enqueuePreemptionEvaluation, changeRunningCampaignPriority, _deps } =
   await import('../../src/services/campaigns.js')
 
 // Override _deps to inject spies directly — bypasses bun's shared module cache
@@ -187,5 +187,13 @@ describe('transitionCampaign task generation branching', () => {
     const [, payload, opts] = call as unknown as [string, { projectId: number }, { jobId: string }]
     expect(payload.projectId).toBe(7)
     expect(opts.jobId).toBe('preempt:7')
+  })
+
+  test('changeRunningCampaignPriority updates a live campaign and triggers preemption (#97 U7)', async () => {
+    // The db update mock returns a running campaign row → kind 'updated'.
+    const result = await changeRunningCampaignPriority(1, 1, 1)
+
+    expect(result).toMatchObject({ kind: 'updated' })
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-preemption')).toBe(true)
   })
 })

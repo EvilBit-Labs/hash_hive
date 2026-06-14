@@ -6,7 +6,7 @@ import {
   campaigns,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -503,6 +503,49 @@ export async function updateCampaign(
     return { kind: 'not_found' }
   }
   return { kind: 'not_draft', status: existing.status }
+}
+
+export type ChangePriorityResult =
+  | { kind: 'updated'; campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>> }
+  | { kind: 'not_found' }
+  | { kind: 'not_active'; status: string }
+
+/**
+ * Change a **running or paused** campaign's priority (issue #97 U7). This is
+ * the only path that can re-prioritise a live campaign — `updateCampaign`'s
+ * draft guard rejects it, and a draft campaign has no running tasks to
+ * compete for agents. The status bound is folded into the UPDATE WHERE
+ * (mirroring the draft guard) so a campaign that transitioned to a terminal
+ * state concurrently is not mutated. A successful change re-evaluates
+ * preemption for the project (trigger a).
+ */
+export async function changeRunningCampaignPriority(
+  id: number,
+  projectId: number,
+  priority: number
+): Promise<ChangePriorityResult> {
+  const [updated] = await db
+    .update(campaigns)
+    .set({ priority, updatedAt: new Date() })
+    .where(
+      and(
+        eq(campaigns.id, id),
+        eq(campaigns.projectId, projectId),
+        inArray(campaigns.status, ['running', 'paused'])
+      )
+    )
+    .returning()
+
+  if (updated) {
+    await enqueuePreemptionEvaluation(projectId)
+    return { kind: 'updated', campaign: updated }
+  }
+
+  const existing = await getCampaignById(id)
+  if (!existing || existing.projectId !== projectId) {
+    return { kind: 'not_found' }
+  }
+  return { kind: 'not_active', status: existing.status }
 }
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
