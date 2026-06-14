@@ -68,6 +68,7 @@ import {
   handleTaskFailure,
   updateTaskProgress,
 } from '../../services/tasks.js'
+import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
 import { agentInternalError } from './helpers.js'
 
 const agentRoutes = new OpenAPIHono<AppEnv>(agentOpenApiHonoOptions)
@@ -236,9 +237,21 @@ const agentErrorRequestSchema = z
 // Only the failure-retry branch of POST /tasks/{taskId}/report surfaces
 // the `retried` key; every other ack-bearing agent route uses the bare
 // shared `Acknowledged` response so the agent contract stays narrow.
-const taskReportAckSchema = z.object({ acknowledged: z.literal(true) }).strict()
+// `action: 'stop'` (issue #97 U4) is an additive optional field on BOTH
+// arms — server-initiated only — so an agent reporting progress on a task
+// that was preempted mid-flight is told to stop on the fast path (the
+// heartbeat `stopTaskIds` list is the slower primary channel). Omitted when
+// the task is still active, preserving the bare `{ acknowledged: true }`
+// wire shape the hashcat agent's strict JSON parser depends on.
+const taskReportAckSchema = z
+  .object({ acknowledged: z.literal(true), action: z.literal('stop').optional() })
+  .strict()
 const taskReportRetryAckSchema = z
-  .object({ acknowledged: z.literal(true), retried: z.boolean() })
+  .object({
+    acknowledged: z.literal(true),
+    retried: z.boolean(),
+    action: z.literal('stop').optional(),
+  })
   .strict()
 const taskReportResponseSchema = z
   .union([taskReportAckSchema, taskReportRetryAckSchema])
@@ -325,9 +338,13 @@ agentRoutes.openapi(heartbeatRoute, async (c) => {
   const data = c.req.valid('json')
   try {
     const result = await processHeartbeat(agentId, data)
+    // Derive the preemption stop-signal from the DB (#97 U4). Omitted when
+    // empty, mirroring the hasHighPriorityTasks omit-when-false policy.
+    const stopTaskIds = await getStopTaskIdsForAgent(agentId)
     const body: AgentHeartbeatResponse = {
       acknowledged: true,
       ...(result.hasHighPriorityTasks ? { hasHighPriorityTasks: true } : {}),
+      ...(stopTaskIds.length > 0 ? { stopTaskIds } : {}),
     }
     return c.json(body, 200)
   } catch (err: unknown) {
@@ -446,6 +463,12 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
 
     if ('error' in result) {
       return c.json({ error: { code: 'TASK_ERROR', message: result.error } }, 400)
+    }
+
+    // The task was preempted (paused) — the progress report was a no-op and
+    // the agent is told to stop on this fast path (#97 U4).
+    if ('stopped' in result) {
+      return c.json({ acknowledged: true, action: 'stop' }, 200)
     }
 
     return c.json({ acknowledged: true }, 200)

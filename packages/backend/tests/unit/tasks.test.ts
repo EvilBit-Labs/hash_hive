@@ -84,9 +84,56 @@ if (isIsolated) {
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
   }))
 
-  const { assignNextTask, handleTaskFailure, reassignStaleTasks } =
+  const { assignNextTask, handleTaskFailure, reassignStaleTasks, updateTaskProgress } =
     await import('../../src/services/tasks.js')
   const { db } = await import('../../src/db/index.js')
+
+  describe('updateTaskProgress preemption guard (#97 U4)', () => {
+    beforeEach(() => {
+      // select(...).from(tasks).innerJoin(campaigns).where(...).limit(1)
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }))
+      mockFrom.mockReset().mockImplementation(() => ({ innerJoin: () => ({ where: mockWhere }) }))
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit }))
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
+      // update(tasks).set(...).where(...).returning()
+      mockUpdateSet.mockReset().mockImplementation(() => ({ where: mockUpdateWhere }))
+      mockUpdateWhere
+        .mockReset()
+        .mockImplementation(() => ({ returning: mock(() => Promise.resolve([{ id: 1 }])) }))
+    })
+
+    const ownedRow = (status: string) => ({
+      taskId: 1,
+      attackId: 1,
+      campaignId: 1,
+      status,
+      startedAt: new Date(),
+      projectId: 1,
+      hashListId: 1,
+    })
+
+    test('returns { stopped: true } and skips the write when the task is paused', async () => {
+      mockLimit.mockResolvedValueOnce([ownedRow('paused')])
+
+      const result = await updateTaskProgress(1, 100, { status: 'running' })
+
+      expect(result).toEqual({ stopped: true })
+      // The progress write must NOT fire — a paused row stays paused.
+      expect(mockUpdateSet).not.toHaveBeenCalled()
+    })
+
+    test('updates the row when the task is still active', async () => {
+      mockLimit.mockResolvedValueOnce([ownedRow('running')])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([{ id: 1, status: 'completed' }])),
+      })
+
+      const result = await updateTaskProgress(1, 100, { status: 'completed' })
+
+      expect('task' in result).toBe(true)
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('assignNextTask', () => {
     beforeEach(() => {

@@ -44,6 +44,27 @@ const PREEMPTION_LOCK_NAMESPACE = 97
 /** Drizzle transaction handle inferred from `db.transaction`. */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
+/**
+ * Ids of an agent's tasks that were preempted (paused with
+ * `pausedReason='preempted'`). The heartbeat handler surfaces these as
+ * `stopTaskIds` so the agent stops the abandoned work (#97 U4). A preempted
+ * task deliberately retains its `agent_id` while paused, which is what makes
+ * this lookup possible without a separate signal store.
+ */
+export async function getStopTaskIdsForAgent(agentId: number): Promise<number[]> {
+  const rows = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.agentId, agentId),
+        eq(tasks.status, 'paused'),
+        eq(tasks.pausedReason, 'preempted')
+      )
+    )
+  return rows.map((r) => r.id)
+}
+
 type Caps = Record<string, unknown> | null | undefined
 
 export interface PreemptionResult {

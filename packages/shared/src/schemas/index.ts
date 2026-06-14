@@ -509,6 +509,12 @@ export const agentHeartbeatResponseSchema = z
     // the body as `{ hasHighPriorityTasks: someBool }` fails to type-check
     // against the inferred `true | undefined`.
     hasHighPriorityTasks: z.literal(true).optional(),
+    // Task preemption (issue #97 U4). Ids of this agent's tasks that were
+    // preempted (paused) by higher-priority work; the agent should stop
+    // them. **Omitted** (not `[]`) when nothing is preempted, mirroring the
+    // `hasHighPriorityTasks` omit-when-empty policy so a strict
+    // (`disallowUnknownFields`) agent parser tolerates the additive field.
+    stopTaskIds: z.array(z.number().int().positive()).optional(),
   })
   .strict()
 

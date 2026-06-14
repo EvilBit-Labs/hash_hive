@@ -11,7 +11,7 @@ import {
   tasks,
   wordLists,
 } from '@hashhive/shared'
-import { and, desc, eq, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -550,6 +550,7 @@ export async function updateTaskProgress(
       taskId: tasks.id,
       attackId: tasks.attackId,
       campaignId: tasks.campaignId,
+      status: tasks.status,
       startedAt: tasks.startedAt,
       projectId: campaigns.projectId,
       hashListId: campaigns.hashListId,
@@ -561,6 +562,16 @@ export async function updateTaskProgress(
 
   if (!taskRow) {
     return { error: 'Task not found or not assigned to this agent' }
+  }
+
+  // Preemption (#97 U4): a paused task still carries this agent_id (so the
+  // heartbeat stop-signal stays derivable), but the agent is reporting
+  // progress on work it should abandon. Do NOT resurrect the row to the
+  // reported status — tell the agent to stop. The status guard folded into
+  // the UPDATE below closes the residual TOCTOU window where a pause lands
+  // between this read and the write.
+  if (taskRow.status === 'paused') {
+    return { stopped: true as const }
   }
 
   const updates: Record<string, unknown> = {
@@ -580,11 +591,20 @@ export async function updateTaskProgress(
     updates['completedAt'] = new Date()
   }
 
-  // Update task status — re-verify ownership in the write path (TOCTOU defense)
+  // Update task status — re-verify ownership AND that the task is still
+  // active in the write path. The status guard (TOCTOU defense for #97 U4)
+  // means a row paused between the read above and this write is left
+  // untouched rather than resurrected to the reported status.
   const [updated] = await db
     .update(tasks)
     .set(updates)
-    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        eq(tasks.agentId, agentId),
+        inArray(tasks.status, ['assigned', 'running'])
+      )
+    )
     .returning()
 
   if (!updated) {
