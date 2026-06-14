@@ -57,6 +57,25 @@ export const _deps = {
 }
 
 /**
+ * Enqueue a preemption evaluation for a project (issue #97). Best-effort:
+ * preemption is a background optimization, so a missing queue or an enqueue
+ * failure must never fail the originating campaign transition or priority
+ * change. Deduped per project via a deterministic jobId so a burst of
+ * triggers collapses to a single evaluation.
+ */
+export async function enqueuePreemptionEvaluation(projectId: number): Promise<void> {
+  try {
+    const { getQueueManager } = await _deps.getQueueContext()
+    const { QUEUE_NAMES } = await _deps.getQueueConfig()
+    const qm = getQueueManager()
+    if (!qm) return
+    await qm.enqueue(QUEUE_NAMES.PREEMPTION, { projectId }, { jobId: `preempt:${projectId}` })
+  } catch (err: unknown) {
+    logger.warn({ err, projectId }, 'failed to enqueue preemption evaluation')
+  }
+}
+
+/**
  * Decide whether an attack with a null `keyspace` is *computable* by
  * `generateTasksForAttack` at generation time. The keyspace calculator
  * needs mode-specific inputs:
@@ -733,6 +752,10 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     // Emit after successful generation/enqueue
     if (updated) {
       emitCampaignStatus(campaign.projectId, id, targetStatus)
+      // A new campaign starting may starve higher-priority pending work of
+      // agents (or free agents that paused lower-priority work) — evaluate
+      // preemption for the project (#97 U5, trigger b).
+      await enqueuePreemptionEvaluation(campaign.projectId)
     }
   }
 

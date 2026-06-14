@@ -106,7 +106,7 @@ _deps.getQueueContext = () =>
   } as any)
 _deps.getQueueConfig = () =>
   Promise.resolve({
-    QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
+    QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation', PREEMPTION: 'jobs-preemption' },
   } as any)
 _deps.getQueueTypes = () =>
   Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any)
@@ -129,7 +129,9 @@ describe('transitionCampaign task generation branching', () => {
     expect(result).toHaveProperty('campaign')
     expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
     expect(generateTasksForAttackSpy).toHaveBeenCalledWith(10)
-    expect(enqueueSpy).not.toHaveBeenCalled()
+    // Inline generation does not enqueue task generation (the preemption
+    // evaluation enqueue, #97 U5, is asserted separately).
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(false)
   })
 
   test('calls generateTasksForAttack inline when estimated tasks = 99 (boundary)', async () => {
@@ -142,7 +144,7 @@ describe('transitionCampaign task generation branching', () => {
     expect(result).toHaveProperty('campaign')
     expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
     expect(generateTasksForAttackSpy).toHaveBeenCalledWith(15)
-    expect(enqueueSpy).not.toHaveBeenCalled()
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(false)
   })
 
   test('enqueues to BullMQ when estimated tasks >= 100', async () => {
@@ -153,8 +155,24 @@ describe('transitionCampaign task generation branching', () => {
     const result = await transitionCampaign(1, 'running')
 
     expect(result).toHaveProperty('campaign')
-    expect(enqueueSpy).toHaveBeenCalledTimes(1)
-    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs-task-generation')
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(true)
     expect(generateTasksForAttackSpy).not.toHaveBeenCalled()
+  })
+
+  test('enqueues a deduped preemption evaluation on → running (#97 U5)', async () => {
+    mockAttacks = [{ id: 10, keyspace: null, campaignId: 1 }]
+
+    await transitionCampaign(1, 'running')
+
+    const preemptCall = enqueueSpy.mock.calls.find((c) => c[0] === 'jobs-preemption')
+    expect(preemptCall).toBeDefined()
+    // Payload carries the project id; jobId dedups per project.
+    const [, payload, opts] = preemptCall as unknown as [
+      string,
+      { projectId: number },
+      { jobId: string },
+    ]
+    expect(payload.projectId).toBeGreaterThan(0)
+    expect(opts.jobId).toContain('preempt:')
   })
 })

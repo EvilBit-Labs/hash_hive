@@ -5,6 +5,7 @@ import { QueueManager } from './queue/manager.js'
 import { createHashListParserWorker } from './queue/workers/hash-list-parser.js'
 import { createHealthMonitorWorker } from './queue/workers/health-monitor.js'
 import { createHeartbeatMonitorWorker } from './queue/workers/heartbeat-monitor.js'
+import { createPreemptionWorker } from './queue/workers/preemption.js'
 
 const connection = createRedisClient('jobs-worker')
 
@@ -42,7 +43,10 @@ async function main() {
   const healthWorker = createHealthMonitorWorker(connection)
   logger.info('Health monitor worker started')
 
-  const workers = [hashListWorker, heartbeatWorker, healthWorker]
+  const preemptionWorker = createPreemptionWorker(connection)
+  logger.info('Preemption worker started')
+
+  const workers = [hashListWorker, heartbeatWorker, healthWorker, preemptionWorker]
 
   async function shutdown(signal: string) {
     logger.info({ signal }, 'Shutting down job workers')
