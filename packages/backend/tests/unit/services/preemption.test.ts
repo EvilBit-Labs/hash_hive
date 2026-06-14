@@ -58,13 +58,17 @@ if (!IS_ISOLATED) {
   })
   const txExecute = mock(() => Promise.resolve(executeQueue.shift() ?? []))
   // update(...).set(...).where(...).returning() → next queued result set.
+  // `set(...)` payloads are captured so resume tests can assert the trim.
   let updateQueue: unknown[][] = []
+  let capturedUpdateSets: Record<string, unknown>[] = []
   const txUpdate = mock(() => {
     const result = updateQueue.shift() ?? []
     const chain: Record<string, unknown> = {}
-    for (const m of ['set', 'where']) {
-      chain[m] = () => chain
+    chain['set'] = (payload: Record<string, unknown>) => {
+      capturedUpdateSets.push(payload)
+      return chain
     }
+    chain['where'] = () => chain
     chain['returning'] = () => Promise.resolve(result)
     return chain
   })
@@ -108,6 +112,7 @@ if (!IS_ISOLATED) {
     selectQueue = []
     executeQueue = []
     updateQueue = []
+    capturedUpdateSets = []
     txSelect.mockClear()
     txExecute.mockClear()
     txUpdate.mockClear()
@@ -272,6 +277,40 @@ if (!IS_ISOLATED) {
       expect(result.resumedTaskIds).toEqual([300])
       const event = mockRecordTaskEvent.mock.calls[0]?.[0] as Record<string, unknown>
       expect(event['toStatus']).toBe('exhausted')
+    })
+
+    it('trims workRange.start by progress and clears the paused linkage on re-pend', async () => {
+      // start=0, end=100, progressDone=40 → newStart=40, newTotal=60.
+      selectQueue = [[], [pausedRow(300, 5, 40, { start: 0, end: 100, total: 100 })], []]
+      executeQueue = [[]]
+      updateQueue = [[{ id: 300 }]]
+
+      await evaluatePreemption(7)
+
+      const setPayload = capturedUpdateSets[0] as Record<string, unknown>
+      expect(setPayload['status']).toBe('pending')
+      expect(setPayload['agentId']).toBeNull()
+      expect(setPayload['pausedReason']).toBeNull()
+      expect(setPayload['resumedAt']).toBeInstanceOf(Date)
+      expect(setPayload['workRange']).toEqual({ start: 40, end: 100, total: 60 })
+      // keyspaceProgress is reset (deleted) within the trimmed range.
+      expect(
+        (setPayload['progress'] as Record<string, unknown>)['keyspaceProgress']
+      ).toBeUndefined()
+    })
+  })
+
+  describe('evaluatePreemption transaction boundary', () => {
+    it('does not emit task_update when the transaction rolls back (#221)', async () => {
+      // A pause is selected, but the audit write throws — which propagates
+      // and rolls back the whole transaction. The post-commit emit loop must
+      // be skipped so no phantom paused event is broadcast.
+      selectQueue = [[pending(1, 10, 1)], [victim(200, 10)], []]
+      executeQueue = [[], [{ id: 200, agent_id: 100 }]]
+      mockRecordTaskEvent.mockImplementationOnce(() => Promise.reject(new Error('audit blip')))
+
+      await expect(evaluatePreemption(7)).rejects.toThrow('audit blip')
+      expect(mockEmitTaskUpdate).not.toHaveBeenCalled()
     })
   })
 }

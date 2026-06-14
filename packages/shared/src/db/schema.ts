@@ -568,8 +568,9 @@ export const tasks = pgTable(
 
 // Durable audit trail for preemption (issue #97 U2). Append-only: one row
 // per pause/resume transition. `agent_errors` is the model for the FK +
-// composite index shape; like it, the FK uses ON DELETE SET NULL so the
-// audit row survives task deletion with its linkage cleared.
+// composite index shape; like its `task_id` FK, the FKs here use ON DELETE
+// SET NULL so the audit row survives task/campaign deletion with its linkage
+// cleared.
 export const taskEvents = pgTable(
   'task_events',
   {

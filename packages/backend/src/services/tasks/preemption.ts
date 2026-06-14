@@ -7,9 +7,10 @@
  * concurrent evaluation (triggers (a) priority change, (b) → running, and
  * (c) task/campaign terminal states can all enqueue near-simultaneously;
  * BullMQ workers default to parallel). The advisory lock is the
- * serialization defense; `FOR UPDATE SKIP LOCKED` / the status guard folded
- * into each write handles agent-driven status changes that do not take the
- * lock.
+ * serialization defense; a status guard folded into each write
+ * (`status IN (...)` in the UPDATE WHERE) handles agent-driven status changes
+ * that do not take the lock. (Row-level `FOR UPDATE SKIP LOCKED` lives in the
+ * assignment path, `assignNextTask`, not here.)
  *
  * Pause pass (U3): pause the lowest-priority capability-matching running or
  * assigned task to free an agent for higher-priority pending work.
@@ -352,13 +353,19 @@ async function resumeTask(
 
 /**
  * Resume pass: re-pend paused-preempted tasks whose resources are no longer
- * needed by higher-priority work. Resume eligibility is the strict negation
- * of the pause trigger — a task may resume only when no strictly-higher-
- * priority pending, unassigned work remains in the project (the same set the
- * pause pass competes over). This inverse-predicate relationship keeps the
- * pause and resume passes from reaching contradictory verdicts, and the
- * stability floor (`resumedAt`) prevents a resume → reclaim → re-preempt
- * loop. Returns the ids of tasks resumed (or terminated) this pass.
+ * needed by higher-priority work. Resume eligibility is the *conservative
+ * inverse* of the pause trigger — a task may resume only when no strictly-
+ * higher-priority pending, unassigned work remains in the project. This
+ * blocker set is a SUPERSET of the pause pass's competition set: the pause
+ * pass further narrows by capability match + idle-agent availability, while
+ * the resume blocker counts any higher-priority pending row. So resume is
+ * strictly more conservative than the literal pause negation and can never
+ * reach a verdict that contradicts a pause, and the stability floor
+ * (`resumedAt`) prevents a resume → reclaim → re-preempt loop. Known
+ * limitation of the conservatism: a victim can stay paused behind a
+ * higher-priority pending task that no agent can actually run (a capability
+ * misconfiguration); a periodic backstop sweep is the future fix. Returns the
+ * ids of tasks resumed (or terminated) this pass.
  */
 async function runResumePass(tx: Tx, projectId: number, emits: PendingEmit[]): Promise<number[]> {
   const paused = (await tx

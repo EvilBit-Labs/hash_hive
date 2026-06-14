@@ -570,6 +570,13 @@ export async function updateTaskProgress(
   // reported status — tell the agent to stop. The status guard folded into
   // the UPDATE below closes the residual TOCTOU window where a pause lands
   // between this read and the write.
+  //
+  // Trade-off (review #221): a final report that also carries newly cracked
+  // results drops them here. This is recoverable — resume re-pends from the
+  // stored `workRange.start + keyspaceProgress`, so the un-acked range is
+  // re-scanned and any crack is re-found (the hash_items upsert is
+  // idempotent). Persisting on this branch was considered but kept out to
+  // avoid a write on the abandon path; the re-scan is the safety net.
   if (taskRow.status === 'paused') {
     return { stopped: true as const }
   }

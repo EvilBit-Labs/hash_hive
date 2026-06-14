@@ -691,8 +691,10 @@ export const taskEventSchema = z.object({
   taskId: z.number().int().positive().nullable(),
   eventType: taskEventTypeSchema,
   reason: pausedReasonSchema.nullable(),
-  fromStatus: z.string(),
-  toStatus: z.string(),
+  // The transition endpoints are persisted task statuses, not free strings —
+  // type them as the canonical enum so a reader narrows without re-checking.
+  fromStatus: taskDbStatusSchema,
+  toStatus: taskDbStatusSchema,
   byCampaignId: z.number().int().positive().nullable(),
   createdAt: z.coerce.date(),
 })

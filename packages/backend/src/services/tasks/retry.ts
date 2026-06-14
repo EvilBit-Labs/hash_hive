@@ -81,7 +81,20 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
       )
       .returning()
 
-    if (updated && campaign) {
+    if (!updated) {
+      // Zero-row write: the task changed state between the read above and
+      // this guarded write — paused by a concurrent preemption, or reassigned
+      // by the stale sweep. Do NOT claim `retried: true` on a no-op write
+      // (review #221: that silently told the agent its failure was retried).
+      // Tell the agent to stop; it resyncs on its next poll / heartbeat.
+      logger.warn(
+        { taskId, agentId },
+        'handleTaskFailure retry: task changed concurrently, no row updated — signalling stop'
+      )
+      return { stopped: true as const }
+    }
+
+    if (campaign) {
       // Surface the agent that was just freed so listeners can refresh that
       // agent's caches; the row itself no longer holds agentId after retry.
       emitTaskUpdate(campaign.projectId, taskId, 'pending', {
@@ -121,7 +134,18 @@ export async function handleTaskFailure(taskId: number, agentId: number, reason:
     )
     .returning()
 
-  if (updated && campaign) {
+  if (!updated) {
+    // Zero-row write (see the retry-branch note above): the row changed
+    // concurrently. Signal stop rather than returning a silent
+    // `retried: false` acknowledgement for a no-op write (review #221).
+    logger.warn(
+      { taskId, agentId },
+      'handleTaskFailure terminal: task changed concurrently, no row updated — signalling stop'
+    )
+    return { stopped: true as const }
+  }
+
+  if (campaign) {
     emitTaskUpdate(campaign.projectId, taskId, 'failed', {
       agentId,
       campaignId: task.campaignId,
