@@ -36,6 +36,15 @@ export interface PreemptionJob {
   projectId: number
 }
 
+export interface LineCountJob {
+  // Masklists are intentionally excluded: a masklist's line count is not a
+  // keyspace input (one mask per line, not a charset product), so they are
+  // never enqueued for counting.
+  resourceType: 'wordlist' | 'rulelist'
+  resourceId: number
+  projectId: number
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -50,4 +59,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HEARTBEAT_MONITOR]: HeartbeatMonitorJob
   [QUEUE_NAMES.HEALTH_MONITOR]: HealthMonitorJob
   [QUEUE_NAMES.PREEMPTION]: PreemptionJob
+  [QUEUE_NAMES.LINE_COUNT]: LineCountJob
 }

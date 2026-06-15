@@ -15,6 +15,7 @@ import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
 import { emitCampaignStatus } from './events.js'
+import { enqueueLineCountForUncountedResources } from './resources/line-count-trigger.js'
 
 export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js'
 // Re-export from sibling modules so existing callers (route handlers,
@@ -359,8 +360,9 @@ export async function createCampaignWithAttacks(input: {
     }
   }
 
+  let result: CreateCampaignWithAttacksResult
   try {
-    return await db.transaction(async (tx) => {
+    result = await db.transaction(async (tx) => {
       const [campaign] = await tx
         .insert(campaigns)
         .values({
@@ -458,6 +460,25 @@ export async function createCampaignWithAttacks(input: {
     }
     throw err
   }
+
+  // After commit: best-effort line-count enqueue for any attack whose keyspace
+  // couldn't be computed inline (its wordlist/rulelist isn't counted yet). Done
+  // post-commit so the count worker's fan-out sees the freshly persisted rows.
+  if (result.kind === 'created') {
+    await Promise.all(
+      input.attacks.map((a, idx) =>
+        keyspaceByIndex[idx] === null
+          ? enqueueLineCountForUncountedResources({
+              wordlistId: a.wordlistId ?? null,
+              rulelistId: a.rulelistId ?? null,
+              projectId: input.projectId,
+            })
+          : Promise.resolve()
+      )
+    )
+  }
+
+  return result
 }
 
 export type UpdateCampaignResult =
@@ -892,6 +913,16 @@ export async function createAttack(data: {
     })
     .returning()
 
+  // Keyspace couldn't be computed inline (referenced resource not counted yet):
+  // enqueue a count job best-effort so it fills in once the resource is sized.
+  if (attack && keyspace === null) {
+    await enqueueLineCountForUncountedResources({
+      wordlistId: attack.wordlistId,
+      rulelistId: attack.rulelistId,
+      projectId: attack.projectId,
+    })
+  }
+
   return attack ?? null
 }
 
@@ -925,6 +956,16 @@ export async function updateAttack(
     .set({ ...data, keyspace, updatedAt: new Date() })
     .where(eq(attacks.id, id))
     .returning()
+
+  // A resource swap may point at an uncounted wordlist/rulelist: enqueue a
+  // count job best-effort so keyspace fills in once the resource is sized.
+  if (updated && keyspace === null) {
+    await enqueueLineCountForUncountedResources({
+      wordlistId: updated.wordlistId,
+      rulelistId: updated.rulelistId,
+      projectId: updated.projectId,
+    })
+  }
 
   return updated ?? null
 }

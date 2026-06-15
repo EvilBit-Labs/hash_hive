@@ -17,6 +17,7 @@ import {
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
+import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import { countLinesInText, countsAsRuleLine, countsAsWordlistLine } from './resources/line-count.js'
 
 // ─── Errors ────────────────────────────────────────────────────────────
@@ -579,6 +580,17 @@ export async function createResource(
   return row ?? null
 }
 
+/**
+ * Map a chunked-upload `resourceType` string to the line-count worker's type,
+ * or null when the resource type's line count is not a keyspace input
+ * (masklists, hash lists).
+ */
+function lineCountTypeForResourceType(resourceType: string): LineCountResourceType | null {
+  if (resourceType === 'wordlists') return 'wordlist'
+  if (resourceType === 'rulelists') return 'rulelist'
+  return null
+}
+
 /** Discriminate a resource table into the keyspace fan-out's resource type. */
 function resourceTypeOf(table: ResourceTable): 'wordlist' | 'rulelist' | 'masklist' {
   if (table === wordLists) return 'wordlist'
@@ -882,6 +894,15 @@ export async function completeChunkedUpload(
     .where(eq(table.id, resourceId))
 
   logger.info({ resourceId, resourceType }, 'Chunked upload completed')
+
+  // A chunked upload streams parts straight to S3 and never buffers the file
+  // to count lines, so a wordlist/rulelist arrives ready with a null line
+  // count. Enqueue the count job (best-effort, deduped) so keyspace can be
+  // computed and fanned out to dependent attacks.
+  const lineCountType = lineCountTypeForResourceType(resourceType)
+  if (lineCountType) {
+    await enqueueLineCount(lineCountType, resourceId, projectId)
+  }
 
   return { resourceId }
 }
