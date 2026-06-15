@@ -3,7 +3,7 @@
  * routes are scoped via the parent campaign's project.
  */
 
-import { selectAttackSchema } from '@hashhive/shared'
+import { attackStatusSchema, keyspaceCoordSchema, selectAttackSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -15,6 +15,7 @@ import {
   controlOpenApiHonoOptions,
   sharedControlResponse,
 } from '../../openapi/components.js'
+import { deriveAttackRuntimes } from '../../services/attacks/runtime.js'
 import {
   createAttack,
   deleteAttack,
@@ -24,6 +25,42 @@ import {
   updateAttack,
 } from '../../services/campaigns.js'
 import { controlErrorResponse, requireProjectMembership, requireProjectRole } from './helpers.js'
+
+/** The persisted attack fields `deriveAttackRuntimes` needs to derive runtime. */
+type AttackWithRuntimeInput = {
+  id: number
+  campaignId: number
+  projectId: number
+  mode: number
+  keyspace: string | null
+}
+
+/**
+ * Attach the derived `status` and `estimatedSecondsRemaining` to an attack row.
+ * Attack status is never persisted (issue #99); the Control surface derives it
+ * through the same shared ladder the dashboard uses so the two cannot drift.
+ */
+async function withRuntime<T extends AttackWithRuntimeInput>(attack: T) {
+  const runtime = await deriveAttackRuntimes([attack])
+  const rt = runtime.get(attack.id)
+  return {
+    ...attack,
+    status: rt?.status ?? 'pending',
+    estimatedSecondsRemaining: rt?.estimatedSecondsRemaining ?? null,
+  }
+}
+
+async function withRuntimeMany<T extends AttackWithRuntimeInput>(attackList: T[]) {
+  const runtime = await deriveAttackRuntimes(attackList)
+  return attackList.map((attack) => {
+    const rt = runtime.get(attack.id)
+    return {
+      ...attack,
+      status: rt?.status ?? 'pending',
+      estimatedSecondsRemaining: rt?.estimatedSecondsRemaining ?? null,
+    }
+  })
+}
 
 export const controlAttackRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
 
@@ -67,7 +104,15 @@ const attackListQuerySchema = paginationQuerySchema.merge(
   z.object({ campaignId: z.coerce.number().int().positive() })
 )
 
-const attackSchema = selectAttackSchema.openapi('ControlAttack')
+// `selectAttackSchema` no longer carries `status` (the dead column was dropped
+// in issue #99); re-add it plus the ETA as derived, read-time fields so the
+// Control attack surface stays whole.
+const attackSchema = selectAttackSchema
+  .extend({
+    status: attackStatusSchema,
+    estimatedSecondsRemaining: keyspaceCoordSchema.nullable(),
+  })
+  .openapi('ControlAttack')
 const attackPageSchema = z
   .object({
     items: z.array(attackSchema),
@@ -120,7 +165,7 @@ controlAttackRoutes.openapi(listAttacksRoute, async (c) => {
       limit: query.limit,
       offset: query.offset,
     })
-    return c.json(paginate(items, total, query), 200)
+    return c.json(paginate(await withRuntimeMany(items), total, query), 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }
@@ -154,7 +199,7 @@ controlAttackRoutes.openapi(getAttackRoute, async (c) => {
     const { id } = c.req.valid('param')
     const attack = await loadAttackInProject(id, projectId)
     if (!attack) return problemResponse(c, 404, 'not_found', 'attack not found')
-    return c.json(attack, 200)
+    return c.json(await withRuntime(attack), 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }
@@ -193,7 +238,8 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
       return problemResponse(c, 404, 'not_found', 'campaign not found')
     }
     const attack = await createAttack({ ...data, projectId })
-    return c.json(attack, 201)
+    if (!attack) throw new Error('attack insert returned no row')
+    return c.json(await withRuntime(attack), 201)
   } catch (err) {
     return controlErrorResponse(c, err)
   }
@@ -232,7 +278,7 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
     const updated = await updateAttack(id, c.req.valid('json'))
     if (!updated) return problemResponse(c, 404, 'not_found', 'attack not found')
-    return c.json(updated, 200)
+    return c.json(await withRuntime(updated), 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }

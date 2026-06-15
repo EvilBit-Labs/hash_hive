@@ -30,6 +30,10 @@ export {
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
 } from './campaign-dashboard.js'
+// Re-export the read-time attack runtime builder so the dashboard detail route
+// imports it from the same `services/campaigns` facade as its sibling
+// payload builders (keeps that route's service mock to one module).
+export { getCampaignAttacksWithRuntime } from './attacks/runtime.js'
 export {
   _progressDeps,
   computeCampaignEta,
@@ -409,7 +413,6 @@ export async function createCampaignWithAttacks(input: {
             advancedConfiguration: a.advancedConfiguration ?? {},
             dependencies: [],
             keyspace: keyspaceByIndex[idx] ?? null,
-            status: 'pending' as const,
           })
           .returning({ id: attacks.id })
         if (!row) {
@@ -909,7 +912,6 @@ export async function createAttack(data: {
       advancedConfiguration: data.advancedConfiguration ?? {},
       dependencies: data.dependencies ?? [],
       keyspace,
-      status: 'pending',
     })
     .returning()
 

@@ -468,7 +468,9 @@ export const attacks = pgTable(
     masklistId: integer('masklist_id').references(() => maskLists.id, { onDelete: 'set null' }),
     advancedConfiguration: jsonb('advanced_configuration').default({}),
     keyspace: varchar('keyspace', { length: 255 }),
-    status: varchar('status', { length: 20 }).notNull().default('pending'),
+    // No `status` column: attack status is derived at read time from task
+    // aggregates + the campaign's status (issue #99). A persisted column would
+    // race campaign auto-completion and drift against a value nothing queries.
     dependencies: integer('dependencies').array(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
