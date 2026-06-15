@@ -839,7 +839,13 @@ export const campaignAttackRowSchema = z.object({
   id: z.number().int().positive(),
   campaignId: z.number().int().positive(),
   mode: z.number().int().nonnegative(),
-  status: z.string(),
+  // Derived at read time (issue #99), not a persisted column.
+  status: attackStatusSchema,
+  // Persisted total keyspace as a decimal string (varchar(255), may exceed
+  // 2^53); null until computable. ETA is the bigint-safe `number | string`
+  // seconds-remaining union, null when uncomputable.
+  keyspace: z.string().nullable(),
+  estimatedSecondsRemaining: keyspaceCoordSchema.nullable(),
   wordlistId: z.number().int().positive().nullable(),
   rulelistId: z.number().int().positive().nullable(),
   masklistId: z.number().int().positive().nullable(),

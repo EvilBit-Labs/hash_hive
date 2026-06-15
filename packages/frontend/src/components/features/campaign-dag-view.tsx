@@ -55,20 +55,22 @@ const STATUS_COLORS: Record<string, { background: string; border: string; text: 
     border: 'hsl(var(--info) / 0.4)',
     text: 'hsl(var(--info))',
   },
-  assigned: {
-    background: 'hsl(var(--info) / 0.15)',
-    border: 'hsl(var(--info) / 0.4)',
-    text: 'hsl(var(--info))',
+  paused: {
+    background: 'hsl(var(--warning) / 0.15)',
+    border: 'hsl(var(--warning) / 0.4)',
+    text: 'hsl(var(--warning))',
   },
   completed: {
     background: 'hsl(var(--success) / 0.15)',
     border: 'hsl(var(--success) / 0.4)',
     text: 'hsl(var(--success))',
   },
+  // Exhausted: keyspace searched, no crack here. Neutral (matches StatusBadge);
+  // green would falsely read as success.
   exhausted: {
-    background: 'hsl(var(--success) / 0.15)',
-    border: 'hsl(var(--success) / 0.4)',
-    text: 'hsl(var(--success))',
+    background: 'hsl(var(--surface-1))',
+    border: 'hsl(var(--surface-0))',
+    text: 'hsl(var(--muted-foreground))',
   },
   failed: {
     background: 'hsl(var(--destructive) / 0.15)',
@@ -202,7 +204,7 @@ function buildGraph(attacks: ReadonlyArray<CampaignAttackRow>): { nodes: Node[];
         id: `${depId}->${attack.id}`,
         source: String(depId),
         target: String(attack.id),
-        animated: attack.status === 'running' || attack.status === 'assigned',
+        animated: attack.status === 'running',
         style: { stroke: 'hsl(var(--muted-foreground))', strokeWidth: 1.5 },
       })
     }

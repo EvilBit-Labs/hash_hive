@@ -13,6 +13,7 @@
 
 import {
   type AttackStatus,
+  type CampaignAttackRow,
   agentBenchmarks,
   agents,
   attacks,
@@ -65,20 +66,6 @@ export interface AttackStatusCounts {
 export interface AttackRuntime {
   status: AttackStatus
   estimatedSecondsRemaining: number | string | null
-}
-
-/** The campaign-detail attack row: persisted fields + the derived runtime. */
-export interface CampaignAttackDetailRow {
-  id: number
-  campaignId: number
-  mode: number
-  status: AttackStatus
-  keyspace: string | null
-  estimatedSecondsRemaining: number | string | null
-  wordlistId: number | null
-  rulelistId: number | null
-  masklistId: number | null
-  dependencies: number[] | null
 }
 
 /**
@@ -212,7 +199,7 @@ export async function deriveAttackRuntimes(
  */
 export async function getCampaignAttacksWithRuntime(
   campaignId: number
-): Promise<CampaignAttackDetailRow[]> {
+): Promise<CampaignAttackRow[]> {
   const rows = await db
     .select({
       id: attacks.id,

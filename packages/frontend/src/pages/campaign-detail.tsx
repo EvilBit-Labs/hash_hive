@@ -1,4 +1,4 @@
-import type { HashListSummary } from '@hashhive/shared'
+import type { CampaignAttackRow, HashListSummary } from '@hashhive/shared'
 
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
@@ -24,6 +24,7 @@ import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
 import { useCampaignDetail } from '../hooks/use-dashboard'
 import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useResults } from '../hooks/use-results'
+import { formatAttackEta, formatAttackKeyspace } from '../lib/attack-format'
 import { computeEta } from '../lib/campaign-eta'
 import { readCampaignPercentage } from '../lib/campaign-progress'
 import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
@@ -38,6 +39,52 @@ const CampaignDagView = lazy(() =>
 )
 
 type ConfirmAction = 'stop' | 'delete' | null
+
+/**
+ * Render the keyspace cell with three distinct empty states (issue #99):
+ *  - a value -> formatted, exact value in the title;
+ *  - null but a wordlist/rulelist is referenced -> a count is likely in flight;
+ *  - null with no countable resource -> permanently uncomputable.
+ */
+function renderKeyspaceCell(attack: CampaignAttackRow) {
+  const formatted = formatAttackKeyspace(attack.keyspace)
+  if (formatted !== null) {
+    return (
+      <span className="tabular-nums" title={attack.keyspace ?? undefined}>
+        {formatted}
+      </span>
+    )
+  }
+  if (attack.wordlistId !== null || attack.rulelistId !== null) {
+    return <span className="text-muted-foreground italic">Computing...</span>
+  }
+  return (
+    <span className="text-muted-foreground" title="Keyspace not computable for this attack">
+      --
+    </span>
+  )
+}
+
+/**
+ * Render the ETA cell: a counting-down duration when computable, else `--` with
+ * a reason (no fleet benchmarks for the mode yet vs. no keyspace to estimate
+ * from).
+ */
+function renderEtaCell(attack: CampaignAttackRow) {
+  const eta = formatAttackEta(attack.estimatedSecondsRemaining)
+  if (eta !== null) {
+    return <span title="Estimate; updates as benchmarks and fleet size change">{eta}</span>
+  }
+  return (
+    <span
+      title={
+        attack.keyspace !== null ? 'No agent benchmarks for this mode yet' : 'No estimate available'
+      }
+    >
+      --
+    </span>
+  )
+}
 
 type CampaignDetailTab = 'attacks' | 'results'
 
@@ -433,6 +480,8 @@ export function CampaignDetailPage() {
                     <Th>ID</Th>
                     <Th>Mode</Th>
                     <Th>Status</Th>
+                    <Th>Keyspace</Th>
+                    <Th>ETA</Th>
                     <Th>Wordlist</Th>
                     <Th>Dependencies</Th>
                   </tr>
@@ -445,6 +494,10 @@ export function CampaignDetailPage() {
                       <Td>
                         <StatusBadge status={attack.status} />
                       </Td>
+                      <Td className="max-w-[10rem] truncate font-mono text-xs">
+                        {renderKeyspaceCell(attack)}
+                      </Td>
+                      <Td className="text-xs text-muted-foreground">{renderEtaCell(attack)}</Td>
                       <Td className="text-xs text-muted-foreground">
                         {attack.wordlistId ? `#${attack.wordlistId}` : '-'}
                       </Td>
