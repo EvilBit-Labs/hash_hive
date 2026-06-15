@@ -13,6 +13,9 @@ import type {
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
   assignedTaskSchema,
+  pausedReasonSchema,
+  taskEventSchema,
+  taskEventTypeSchema,
   benchmarkSubmissionSchema,
   campaignActiveAgentSchema,
   campaignAttackRowSchema,
@@ -26,6 +29,7 @@ import type {
   connectionStatusSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
+  changeCampaignPriorityRequestSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
@@ -239,10 +243,16 @@ export type RequiredCapabilities = z.infer<typeof requiredCapabilitiesSchema>
  */
 export type AssignedTask = z.infer<typeof assignedTaskSchema>
 
+/** Task preemption (issue #97) wire types. */
+export type PausedReason = z.infer<typeof pausedReasonSchema>
+export type TaskEventType = z.infer<typeof taskEventTypeSchema>
+export type TaskEvent = z.infer<typeof taskEventSchema>
+
 // ─── API Request Types ──────────────────────────────────────────────
 
 export type LoginRequest = z.infer<typeof loginRequestSchema>
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
+export type ChangeCampaignPriorityRequest = z.infer<typeof changeCampaignPriorityRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>
 export type HashCandidate = z.infer<typeof hashCandidateSchema>

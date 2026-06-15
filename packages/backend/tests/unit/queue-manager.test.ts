@@ -91,4 +91,44 @@ describeIfIsolated('QueueManager', () => {
     })
     expect(result).toBe(false)
   })
+
+  test('enqueue evicts the deduped jobId on terminal (#221: else preemption fires once then never)', async () => {
+    const qm = new QueueManager()
+    const addCalls: Array<Record<string, unknown>> = []
+    const fakeQueue = {
+      add: (_name: string, _data: unknown, opts: Record<string, unknown>) => {
+        addCalls.push(opts)
+        return Promise.resolve({})
+      },
+    }
+    // Inject a fake queue so enqueue reaches the .add() path without Redis.
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.PREEMPTION,
+      fakeQueue
+    )
+
+    // With jobId: the dedup key MUST be evicted on terminal — BullMQ retains
+    // terminal jobs and keeps the jobId alive, so without this preemption
+    // would fire once per project then silently never again.
+    await qm.enqueue(QUEUE_NAMES.PREEMPTION, { projectId: 7 }, { jobId: 'preempt:7' })
+    expect(addCalls[0]?.['jobId']).toBe('preempt:7')
+    expect(addCalls[0]?.['removeOnComplete']).toBe(true)
+    expect(addCalls[0]?.['removeOnFail']).toBe(true)
+
+    // Without jobId: no eviction options (other queues keep their job history).
+    addCalls.length = 0
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.TASK_GENERATION,
+      fakeQueue
+    )
+    await qm.enqueue(QUEUE_NAMES.TASK_GENERATION, {
+      campaignId: 1,
+      projectId: 7,
+      attackIds: [1],
+      priority: 5,
+    })
+    expect(addCalls[0]?.['jobId']).toBeUndefined()
+    expect(addCalls[0]?.['removeOnComplete']).toBeUndefined()
+    expect(addCalls[0]?.['removeOnFail']).toBeUndefined()
+  })
 })

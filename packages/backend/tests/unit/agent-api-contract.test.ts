@@ -228,11 +228,14 @@ const reassignStaleEmpty = {
   failedMaxRetries: 0,
   errored: 0,
 } satisfies Awaited<ReturnType<TasksRetryService['reassignStaleTasks']>>
+// Extracted so a test can override the return for the preemption
+// stop-signal path (#97 U4) via `.mockResolvedValueOnce`.
+const updateTaskProgressMock = mock<TasksService['updateTaskProgress']>(
+  async () => updateTaskProgressFixture
+)
 mock.module('../../src/services/tasks.js', () => ({
   assignNextTask: mock<TasksService['assignNextTask']>(async () => mockCamelCaseTask),
-  updateTaskProgress: mock<TasksService['updateTaskProgress']>(
-    async () => updateTaskProgressFixture
-  ),
+  updateTaskProgress: updateTaskProgressMock,
   handleTaskFailure: mock<TasksRetryService['handleTaskFailure']>(
     async () => handleTaskFailureFixture
   ),
@@ -247,6 +250,15 @@ mock.module('../../src/services/tasks.js', () => ({
   // Re-export real impls so sibling tests see the genuine functions.
   AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
   projectAgentTaskRows: realProjectAgentTaskRows,
+}))
+
+// Preemption stop-signal source (#97 U4). The heartbeat handler calls
+// getStopTaskIdsForAgent; the real impl's `.where()`-terminal query does not
+// fit this file's `.limit()`-only db mock, so pin it. Default empty so
+// existing heartbeat assertions (stopTaskIds omitted) hold; override per-test.
+const getStopTaskIdsForAgentMock = mock<() => Promise<number[]>>(async () => [])
+mock.module('../../src/services/tasks/preemption.js', () => ({
+  getStopTaskIdsForAgent: getStopTaskIdsForAgentMock,
 }))
 
 // Pull the real pure helpers in BEFORE mock.module runs for crackers.js
@@ -401,11 +413,32 @@ describe('Agent API: POST /heartbeat', () => {
     // from slipping past the unit contract test before reaching the
     // integration layer.
     expect(body['hasHighPriorityTasks']).toBeUndefined()
+    // Omit-when-empty for the preemption stop-signal too (#97 U4).
+    expect(body['stopTaskIds']).toBeUndefined()
     // Contract proof: the response body satisfies the shared Zod schema.
     // The runtime OpenAPI spec at /api/v1/agent/openapi.json is generated
     // from the same schema (bound via createRoute in routes/agent/index.ts),
     // so parse() success proves the route handler ↔ shared schema pair
     // stays in sync — and by extension the published spec.
+    expect(() => agentHeartbeatResponseSchema.parse(body)).not.toThrow()
+  })
+
+  it('returns stopTaskIds when the agent has preempted tasks (#97 U4)', async () => {
+    // Arrange — the agent has two preempted-paused tasks.
+    getStopTaskIdsForAgentMock.mockResolvedValueOnce([42, 43])
+    const token = agentToken(TEST_AGENT_TOKEN)
+
+    // Act
+    const res = await app.request(`${AGENT_BASE}/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status: 'online' }),
+    })
+
+    // Assert
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['stopTaskIds']).toEqual([42, 43])
     expect(() => agentHeartbeatResponseSchema.parse(body)).not.toThrow()
   })
 
@@ -1210,6 +1243,26 @@ describe('Agent API: POST /tasks/:id/report — 200 body shape', () => {
     // every ack body would silently break any strict
     // (`disallowUnknownFields`) consumer of the agent contract.
     expect(body['retried']).toBeUndefined()
+    // No `action` on the ordinary success path (#97 U4).
+    expect(body['action']).toBeUndefined()
+  })
+
+  it('returns { acknowledged: true, action: "stop" } when the task was preempted (#97 U4)', async () => {
+    // Arrange — updateTaskProgress reports the task is paused (preempted),
+    // so the progress write was a no-op and the agent must stop.
+    updateTaskProgressMock.mockResolvedValueOnce({ stopped: true })
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status: 'running' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    expect(body['action']).toBe('stop')
   })
 
   it('returns { acknowledged: true, retried } on the failure-retry branch', async () => {
@@ -1235,6 +1288,30 @@ describe('Agent API: POST /tasks/:id/report — 200 body shape', () => {
     const body = (await res.json()) as Record<string, unknown>
     expect(body['acknowledged']).toBe(true)
     expect(body['retried']).toBe(true)
+  })
+
+  it('returns action:stop when a failed report targets a preempted task (#97 U6)', async () => {
+    // handleTaskFailure reports the task is paused (preempted) — the failure
+    // must not un-pause it via the retry branch; the agent is told to stop.
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.handleTaskFailure as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ stopped: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status: 'failed', errors: ['gpu hung'] }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['acknowledged']).toBe(true)
+    expect(body['action']).toBe('stop')
+    expect(body['retried']).toBeUndefined()
   })
 
   it('rejects non-numeric path param with 400 + VALIDATION_ERROR (zod coerce edge case)', async () => {

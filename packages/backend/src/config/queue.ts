@@ -9,6 +9,10 @@ export const QUEUE_NAMES = {
   TASK_GENERATION: 'jobs-task-generation',
   HEARTBEAT_MONITOR: 'jobs-heartbeat-monitor',
   HEALTH_MONITOR: 'jobs-health-monitor',
+  // Task preemption evaluation (issue #97). Event-driven: enqueued on
+  // campaign priority changes and lifecycle transitions, deduped per
+  // project via a deterministic jobId.
+  PREEMPTION: 'jobs-preemption',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

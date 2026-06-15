@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 
-import { inlineAttackRequestSchema } from '@hashhive/shared'
+import { changeCampaignPriorityRequestSchema, inlineAttackRequestSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -19,6 +19,7 @@ import {
   createCampaign,
   createCampaignWithAttacks,
   deleteCampaign,
+  changeRunningCampaignPriority,
   getCampaignById,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
@@ -529,6 +530,62 @@ campaignRoutes.openapi(putCampaignRoute, async (c) => {
   const { id } = c.req.valid('param')
   const data = c.req.valid('json')
   return updateCampaignHandler(c, id, data)
+})
+
+// ─── Live Priority Change (issue #97 U7) ────────────────────────────
+// Distinct from PATCH /{id} (draft-only): this re-prioritises a RUNNING or
+// PAUSED campaign and re-evaluates preemption. Same contributor/admin gate.
+// Wire shape shared with the control surface (#97 U7) so the two cannot drift.
+const changePriorityBodySchema = changeCampaignPriorityRequestSchema
+
+const changePriorityRoute = createRoute({
+  method: 'patch',
+  path: '/{id}/priority',
+  tags: ['Campaigns'],
+  summary: "Change a running or paused campaign's priority (triggers preemption)",
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    params: campaignIdParamSchema,
+    body: { content: { 'application/json': { schema: changePriorityBodySchema } } },
+  },
+  responses: {
+    200: {
+      description: 'Priority changed.',
+      content: { 'application/json': { schema: updateCampaignResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Campaign is not running or paused; priority cannot be changed.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
+
+campaignRoutes.openapi(changePriorityRoute, async (c) => {
+  const { id } = c.req.valid('param')
+  const { priority } = c.req.valid('json')
+  const { projectId } = c.get('scopedUser')!
+  const result = await changeRunningCampaignPriority(id, projectId, priority)
+  switch (result.kind) {
+    case 'not_found':
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
+    case 'not_active':
+      return c.json(
+        {
+          error: {
+            code: 'NOT_ACTIVE',
+            message: `Campaign priority cannot be changed in status "${result.status}". Only running or paused campaigns can be re-prioritised.`,
+          },
+        },
+        409
+      )
+    case 'updated':
+      return c.json({ campaign: result.campaign }, 200)
+  }
 })
 
 // ─── DAG Validation ─────────────────────────────────────────────────

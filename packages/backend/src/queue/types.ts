@@ -32,6 +32,10 @@ export interface HealthMonitorJob {
   triggeredAt: string
 }
 
+export interface PreemptionJob {
+  projectId: number
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -45,4 +49,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.TASK_GENERATION]: TaskGenerationJob
   [QUEUE_NAMES.HEARTBEAT_MONITOR]: HeartbeatMonitorJob
   [QUEUE_NAMES.HEALTH_MONITOR]: HealthMonitorJob
+  [QUEUE_NAMES.PREEMPTION]: PreemptionJob
 }

@@ -6,7 +6,7 @@ import {
   campaigns,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -54,6 +54,25 @@ export const _deps = {
   getQueueContext: () => import('../queue/context.js'),
   getQueueConfig: () => import('../config/queue.js'),
   getQueueTypes: () => import('../queue/types.js'),
+}
+
+/**
+ * Enqueue a preemption evaluation for a project (issue #97). Best-effort:
+ * preemption is a background optimization, so a missing queue or an enqueue
+ * failure must never fail the originating campaign transition or priority
+ * change. Deduped per project via a deterministic jobId so a burst of
+ * triggers collapses to a single evaluation.
+ */
+export async function enqueuePreemptionEvaluation(projectId: number): Promise<void> {
+  try {
+    const { getQueueManager } = await _deps.getQueueContext()
+    const { QUEUE_NAMES } = await _deps.getQueueConfig()
+    const qm = getQueueManager()
+    if (!qm) return
+    await qm.enqueue(QUEUE_NAMES.PREEMPTION, { projectId }, { jobId: `preempt:${projectId}` })
+  } catch (err: unknown) {
+    logger.warn({ err, projectId }, 'failed to enqueue preemption evaluation')
+  }
 }
 
 /**
@@ -486,6 +505,49 @@ export async function updateCampaign(
   return { kind: 'not_draft', status: existing.status }
 }
 
+export type ChangePriorityResult =
+  | { kind: 'updated'; campaign: NonNullable<Awaited<ReturnType<typeof getCampaignById>>> }
+  | { kind: 'not_found' }
+  | { kind: 'not_active'; status: string }
+
+/**
+ * Change a **running or paused** campaign's priority (issue #97 U7). This is
+ * the only path that can re-prioritise a live campaign — `updateCampaign`'s
+ * draft guard rejects it, and a draft campaign has no running tasks to
+ * compete for agents. The status bound is folded into the UPDATE WHERE
+ * (mirroring the draft guard) so a campaign that transitioned to a terminal
+ * state concurrently is not mutated. A successful change re-evaluates
+ * preemption for the project (trigger a).
+ */
+export async function changeRunningCampaignPriority(
+  id: number,
+  projectId: number,
+  priority: number
+): Promise<ChangePriorityResult> {
+  const [updated] = await db
+    .update(campaigns)
+    .set({ priority, updatedAt: new Date() })
+    .where(
+      and(
+        eq(campaigns.id, id),
+        eq(campaigns.projectId, projectId),
+        inArray(campaigns.status, ['running', 'paused'])
+      )
+    )
+    .returning()
+
+  if (updated) {
+    await enqueuePreemptionEvaluation(projectId)
+    return { kind: 'updated', campaign: updated }
+  }
+
+  const existing = await getCampaignById(id)
+  if (!existing || existing.projectId !== projectId) {
+    return { kind: 'not_found' }
+  }
+  return { kind: 'not_active', status: existing.status }
+}
+
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
 //
 // Cross-project resource validation lives in `campaign-resources.ts`
@@ -593,13 +655,20 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     }
   }
 
-  // Stop action: running/paused → draft means cancel running tasks and reset
+  // Stop action: running/paused → draft means cancel non-terminal tasks and
+  // reset. `'paused'` is included (#97 U8) so preempted-paused tasks are
+  // cancelled rather than orphaned: a paused task is excluded from the stale
+  // sweep, so without this it would sit `paused` forever with a dangling
+  // agent_id + preempted_by_campaign_id after its campaign stops.
   if (targetStatus === 'draft' && (campaign.status === 'running' || campaign.status === 'paused')) {
     await db
       .update(tasks)
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(
-        and(eq(tasks.campaignId, id), sql`${tasks.status} IN ('pending', 'assigned', 'running')`)
+        and(
+          eq(tasks.campaignId, id),
+          sql`${tasks.status} IN ('pending', 'assigned', 'running', 'paused')`
+        )
       )
   }
 
@@ -645,6 +714,14 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   // defer until after task generation enqueue succeeds to avoid premature events.
   if (targetStatus !== 'running') {
     emitCampaignStatus(campaign.projectId, id, targetStatus)
+    // A campaign reaching a terminal/draft state frees its agents and clears
+    // its pending work — re-evaluate preemption so victims (of its or other
+    // preemptions) can resume (#97 U6). This is what covers the
+    // cancelled-preemptor case where no task completion would otherwise fire
+    // the resume trigger.
+    if (targetStatus === 'completed' || targetStatus === 'cancelled' || targetStatus === 'draft') {
+      await enqueuePreemptionEvaluation(campaign.projectId)
+    }
   }
 
   // When starting a campaign, generate tasks — inline if few, queued if many
@@ -733,6 +810,10 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     // Emit after successful generation/enqueue
     if (updated) {
       emitCampaignStatus(campaign.projectId, id, targetStatus)
+      // A new campaign starting may starve higher-priority pending work of
+      // agents (or free agents that paused lower-priority work) — evaluate
+      // preemption for the project (#97 U5, trigger b).
+      await enqueuePreemptionEvaluation(campaign.projectId)
     }
   }
 

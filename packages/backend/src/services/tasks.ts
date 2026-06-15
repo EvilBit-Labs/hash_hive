@@ -11,12 +11,12 @@ import {
   tasks,
   wordLists,
 } from '@hashhive/shared'
-import { and, desc, eq, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { getAgentBenchmarkForMode } from './agents.js'
-import { updateCampaignProgress } from './campaigns.js'
+import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
 import { pickChunkSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { calculateAttackKeyspace } from './keyspace.js'
@@ -550,6 +550,7 @@ export async function updateTaskProgress(
       taskId: tasks.id,
       attackId: tasks.attackId,
       campaignId: tasks.campaignId,
+      status: tasks.status,
       startedAt: tasks.startedAt,
       projectId: campaigns.projectId,
       hashListId: campaigns.hashListId,
@@ -561,6 +562,23 @@ export async function updateTaskProgress(
 
   if (!taskRow) {
     return { error: 'Task not found or not assigned to this agent' }
+  }
+
+  // Preemption (#97 U4): a paused task still carries this agent_id (so the
+  // heartbeat stop-signal stays derivable), but the agent is reporting
+  // progress on work it should abandon. Do NOT resurrect the row to the
+  // reported status — tell the agent to stop. The status guard folded into
+  // the UPDATE below closes the residual TOCTOU window where a pause lands
+  // between this read and the write.
+  //
+  // Trade-off (review #221): a final report that also carries newly cracked
+  // results drops them here. This is recoverable — resume re-pends from the
+  // stored `workRange.start + keyspaceProgress`, so the un-acked range is
+  // re-scanned and any crack is re-found (the hash_items upsert is
+  // idempotent). Persisting on this branch was considered but kept out to
+  // avoid a write on the abandon path; the re-scan is the safety net.
+  if (taskRow.status === 'paused') {
+    return { stopped: true as const }
   }
 
   const updates: Record<string, unknown> = {
@@ -580,11 +598,20 @@ export async function updateTaskProgress(
     updates['completedAt'] = new Date()
   }
 
-  // Update task status — re-verify ownership in the write path (TOCTOU defense)
+  // Update task status — re-verify ownership AND that the task is still
+  // active in the write path. The status guard (TOCTOU defense for #97 U4)
+  // means a row paused between the read above and this write is left
+  // untouched rather than resurrected to the reported status.
   const [updated] = await db
     .update(tasks)
     .set(updates)
-    .where(and(eq(tasks.id, taskId), eq(tasks.agentId, agentId)))
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        eq(tasks.agentId, agentId),
+        inArray(tasks.status, ['assigned', 'running'])
+      )
+    )
     .returning()
 
   if (!updated) {
@@ -677,6 +704,13 @@ export async function updateTaskProgress(
     progress: data.progress,
   })
   await updateCampaignProgress(taskRow.campaignId)
+
+  // A task reaching a terminal state frees its agent — re-evaluate
+  // preemption so paused lower-priority victims can resume (#97 U6
+  // completion trigger). Best-effort; never fails the report.
+  if (data.status === 'completed' || data.status === 'exhausted') {
+    await enqueuePreemptionEvaluation(taskRow.projectId)
+  }
 
   return { task: updated }
 }

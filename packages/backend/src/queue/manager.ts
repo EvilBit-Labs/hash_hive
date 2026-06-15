@@ -101,7 +101,7 @@ export class QueueManager {
   async enqueue<T extends QueueName>(
     queueName: T,
     data: QueueJobMap[T],
-    opts?: { priority?: number }
+    opts?: { priority?: number; jobId?: string }
   ): Promise<boolean> {
     const queue = this.queues.get(queueName)
     if (!queue) {
@@ -110,8 +110,16 @@ export class QueueManager {
     }
 
     try {
+      // `jobId` enables per-key dedup: BullMQ treats a re-add with an
+      // existing jobId as a no-op, so a burst of triggers for one project
+      // collapses to a single job. CRITICAL: a deduped job MUST also set
+      // removeOnComplete/removeOnFail — BullMQ retains terminal jobs and
+      // keeps their jobId key alive, so without eviction the *first* run
+      // permanently blocks every future re-add (preemption would fire once
+      // per project then silently never again).
       await queue.add(queueName, data, {
         ...(opts?.priority ? { priority: opts.priority } : {}),
+        ...(opts?.jobId ? { jobId: opts.jobId, removeOnComplete: true, removeOnFail: true } : {}),
         attempts: DEFAULT_JOB_ATTEMPTS,
         backoff: { type: 'exponential', delay: 5_000 },
       })

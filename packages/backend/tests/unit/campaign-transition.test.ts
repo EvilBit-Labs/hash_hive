@@ -42,6 +42,11 @@ const makeCampaignRow = (overrides: Record<string, unknown> = {}) => ({
 })
 
 let mockAttacks: Array<Record<string, unknown>> = []
+// Mutable so a test can drive getCampaignById's status (e.g. 'running' for
+// the stop-cascade test). Default empty → 'draft'.
+let campaignOverrides: Record<string, unknown> = {}
+// Captures the WHERE of the tasks cancel-cascade UPDATE (status='cancelled').
+let capturedCancelWhere: unknown
 
 // Shared mock helper: makes where() awaitable AND chainable to
 // limit/orderBy. validateCampaignResources awaits where() directly;
@@ -59,7 +64,7 @@ mock.module('../../src/db/index.js', () => ({
       ({
         where: mock(() =>
           makeAwaitableChain([{ id: 1 }], {
-            limit: mock(() => Promise.resolve([makeCampaignRow()])),
+            limit: mock(() => Promise.resolve([makeCampaignRow(campaignOverrides)])),
             orderBy: mock(() => Promise.resolve(mockAttacks)),
           })
         ),
@@ -67,10 +72,14 @@ mock.module('../../src/db/index.js', () => ({
       })),
     })),
     update: mock(() => ({
-      set: mock(() => ({
-        where: mock(() => ({
-          returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
-        })),
+      set: mock((payload: Record<string, unknown>) => ({
+        where: mock((w: unknown) => {
+          // The cancel cascade is the only UPDATE that sets status='cancelled'.
+          if (payload['status'] === 'cancelled') capturedCancelWhere = w
+          return {
+            returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
+          }
+        }),
       })),
     })),
     insert: mock(() => ({
@@ -92,7 +101,8 @@ mock.module('../../src/services/events.js', () => ({
 }))
 
 // Import module under test after DB/events mocks are registered
-const { transitionCampaign, _deps } = await import('../../src/services/campaigns.js')
+const { transitionCampaign, enqueuePreemptionEvaluation, changeRunningCampaignPriority, _deps } =
+  await import('../../src/services/campaigns.js')
 
 // Override _deps to inject spies directly — bypasses bun's shared module cache
 _deps.getTasksModule = () =>
@@ -106,10 +116,26 @@ _deps.getQueueContext = () =>
   } as any)
 _deps.getQueueConfig = () =>
   Promise.resolve({
-    QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation' },
+    QUEUE_NAMES: { TASK_GENERATION: 'jobs-task-generation', PREEMPTION: 'jobs-preemption' },
   } as any)
 _deps.getQueueTypes = () =>
   Promise.resolve({ JOB_PRIORITY: { HIGH: 1, NORMAL: 5, LOW: 10 } } as any)
+
+// Recursively collect string literals from a drizzle SQL object's chunks so
+// a test can assert the rendered filter without a real DB. StringChunks carry
+// `value: string[]`; composite SQL carries `queryChunks`.
+function collectSqlStrings(node: unknown): string {
+  if (node == null) return ''
+  if (typeof node === 'string') return node
+  const obj = node as Record<string, unknown>
+  if (Array.isArray(obj['value']) && obj['value'].every((v) => typeof v === 'string')) {
+    return (obj['value'] as string[]).join(' ')
+  }
+  if (Array.isArray(obj['queryChunks'])) {
+    return (obj['queryChunks'] as unknown[]).map(collectSqlStrings).join(' ')
+  }
+  return ''
+}
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
@@ -118,6 +144,8 @@ describe('transitionCampaign task generation branching', () => {
     generateTasksForAttackSpy.mockClear()
     enqueueSpy.mockClear()
     mockAttacks = []
+    campaignOverrides = {}
+    capturedCancelWhere = undefined
   })
 
   test('calls generateTasksForAttack inline when estimated tasks < 100', async () => {
@@ -129,7 +157,9 @@ describe('transitionCampaign task generation branching', () => {
     expect(result).toHaveProperty('campaign')
     expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
     expect(generateTasksForAttackSpy).toHaveBeenCalledWith(10)
-    expect(enqueueSpy).not.toHaveBeenCalled()
+    // Inline generation does not enqueue task generation (the preemption
+    // evaluation enqueue, #97 U5, is asserted separately).
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(false)
   })
 
   test('calls generateTasksForAttack inline when estimated tasks = 99 (boundary)', async () => {
@@ -142,7 +172,7 @@ describe('transitionCampaign task generation branching', () => {
     expect(result).toHaveProperty('campaign')
     expect(generateTasksForAttackSpy).toHaveBeenCalledTimes(1)
     expect(generateTasksForAttackSpy).toHaveBeenCalledWith(15)
-    expect(enqueueSpy).not.toHaveBeenCalled()
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(false)
   })
 
   test('enqueues to BullMQ when estimated tasks >= 100', async () => {
@@ -153,8 +183,57 @@ describe('transitionCampaign task generation branching', () => {
     const result = await transitionCampaign(1, 'running')
 
     expect(result).toHaveProperty('campaign')
-    expect(enqueueSpy).toHaveBeenCalledTimes(1)
-    expect(enqueueSpy.mock.calls[0]?.[0]).toBe('jobs-task-generation')
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-task-generation')).toBe(true)
     expect(generateTasksForAttackSpy).not.toHaveBeenCalled()
+  })
+
+  test('enqueues a deduped preemption evaluation on → running (#97 U5)', async () => {
+    mockAttacks = [{ id: 10, keyspace: null, campaignId: 1 }]
+
+    await transitionCampaign(1, 'running')
+
+    const preemptCall = enqueueSpy.mock.calls.find((c) => c[0] === 'jobs-preemption')
+    expect(preemptCall).toBeDefined()
+    // Payload carries the project id; jobId dedups per project.
+    const [, payload, opts] = preemptCall as unknown as [
+      string,
+      { projectId: number },
+      { jobId: string },
+    ]
+    expect(payload.projectId).toBeGreaterThan(0)
+    expect(opts.jobId).toContain('preempt:')
+  })
+
+  test('enqueuePreemptionEvaluation enqueues a deduped per-project job (#97 U6)', async () => {
+    // Shared by every preemption trigger (campaign start, terminal/draft
+    // transitions, task completion, priority change).
+    await enqueuePreemptionEvaluation(7)
+
+    const call = enqueueSpy.mock.calls.find((c) => c[0] === 'jobs-preemption')
+    expect(call).toBeDefined()
+    const [, payload, opts] = call as unknown as [string, { projectId: number }, { jobId: string }]
+    expect(payload.projectId).toBe(7)
+    expect(opts.jobId).toBe('preempt:7')
+  })
+
+  test('changeRunningCampaignPriority updates a live campaign and triggers preemption (#97 U7)', async () => {
+    // The db update mock returns a running campaign row → kind 'updated'.
+    const result = await changeRunningCampaignPriority(1, 1, 1)
+
+    expect(result).toMatchObject({ kind: 'updated' })
+    expect(enqueueSpy.mock.calls.some((c) => c[0] === 'jobs-preemption')).toBe(true)
+  })
+
+  test("stopping a running campaign cancels 'paused' tasks too (#97 U8)", async () => {
+    // getCampaignById returns a running campaign so running → draft is a
+    // valid stop transition that fires the cancel cascade.
+    campaignOverrides = { status: 'running' }
+
+    await transitionCampaign(1, 'draft')
+
+    expect(capturedCancelWhere).toBeDefined()
+    // The cancel filter must include 'paused' so preempted tasks are
+    // cancelled rather than orphaned (they're excluded from the stale sweep).
+    expect(collectSqlStrings(capturedCancelWhere)).toContain('paused')
   })
 })

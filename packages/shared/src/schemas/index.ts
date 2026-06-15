@@ -509,6 +509,12 @@ export const agentHeartbeatResponseSchema = z
     // the body as `{ hasHighPriorityTasks: someBool }` fails to type-check
     // against the inferred `true | undefined`.
     hasHighPriorityTasks: z.literal(true).optional(),
+    // Task preemption (issue #97 U4). Ids of this agent's tasks that were
+    // preempted (paused) by higher-priority work; the agent should stop
+    // them. **Omitted** (not `[]`) when nothing is preempted, mirroring the
+    // `hasHighPriorityTasks` omit-when-empty policy so a strict
+    // (`disallowUnknownFields`) agent parser tolerates the additive field.
+    stopTaskIds: z.array(z.number().int().positive()).optional(),
   })
   .strict()
 
@@ -690,6 +696,51 @@ export {
   type TaskBucket,
   type TaskDbStatus,
 }
+
+// ─── Task Preemption (issue #97) ────────────────────────────────────
+// Defined after the `./dashboard.js` import above so `taskDbStatusSchema` is
+// in scope before use (static analyzers flag use-before-declaration even
+// though ESM hoists the import).
+
+/**
+ * Why a task is in the `paused` state. `'preempted'` = a higher-priority
+ * campaign reclaimed the agent (task-level preemption); `'campaign_paused'`
+ * is reserved for a future campaign-level pause cascade. Mirrors the
+ * `tasks_paused_reason_chk` CHECK constraint in `../db/schema.ts` — keep
+ * the two lists in sync.
+ */
+export const pausedReasonSchema = z.enum(['preempted', 'campaign_paused'])
+
+/** The transitions an audit `task_events` row can record. */
+export const taskEventTypeSchema = z.enum(['preempted', 'resumed'])
+
+/**
+ * A durable preemption audit row (`task_events`). One row per pause/resume
+ * transition. `byCampaignId` is the higher-priority campaign that caused a
+ * pause (null on resume / when the campaign was deleted).
+ */
+export const taskEventSchema = z.object({
+  id: z.number().int().positive(),
+  taskId: z.number().int().positive().nullable(),
+  eventType: taskEventTypeSchema,
+  reason: pausedReasonSchema.nullable(),
+  // The transition endpoints are persisted task statuses, not free strings —
+  // type them as the canonical enum so a reader narrows without re-checking.
+  fromStatus: taskDbStatusSchema,
+  toStatus: taskDbStatusSchema,
+  byCampaignId: z.number().int().positive().nullable(),
+  createdAt: z.coerce.date(),
+})
+
+/**
+ * Request body for changing a running/paused campaign's priority (#97 U7).
+ * Single source of truth for the dashboard `PATCH /campaigns/{id}/priority`
+ * and control `POST /campaigns/{id}/priority` surfaces so the two routes
+ * cannot drift (per the wire-shape-in-@hashhive/shared rule).
+ */
+export const changeCampaignPriorityRequestSchema = z.object({
+  priority: z.number().int().min(1).max(10),
+})
 
 /**
  * An agent currently assigned to an active task on a campaign. `progress`

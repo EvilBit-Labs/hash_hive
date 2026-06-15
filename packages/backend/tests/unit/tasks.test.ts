@@ -77,6 +77,9 @@ if (isIsolated) {
   mockUpdateCampaignProgress = mock()
   mock.module('../../src/services/campaigns.js', () => ({
     updateCampaignProgress: mockUpdateCampaignProgress,
+    // tasks.ts + retry.ts now statically import this (#97 U6 completion
+    // trigger); the named import fails to link if the mock omits it.
+    enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
   }))
 
   mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null))
@@ -84,9 +87,56 @@ if (isIsolated) {
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
   }))
 
-  const { assignNextTask, handleTaskFailure, reassignStaleTasks } =
+  const { assignNextTask, handleTaskFailure, reassignStaleTasks, updateTaskProgress } =
     await import('../../src/services/tasks.js')
   const { db } = await import('../../src/db/index.js')
+
+  describe('updateTaskProgress preemption guard (#97 U4)', () => {
+    beforeEach(() => {
+      // select(...).from(tasks).innerJoin(campaigns).where(...).limit(1)
+      mockSelect.mockReset().mockImplementation(() => ({ from: mockFrom }))
+      mockFrom.mockReset().mockImplementation(() => ({ innerJoin: () => ({ where: mockWhere }) }))
+      mockWhere.mockReset().mockImplementation(() => ({ limit: mockLimit }))
+      mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
+      // update(tasks).set(...).where(...).returning()
+      mockUpdateSet.mockReset().mockImplementation(() => ({ where: mockUpdateWhere }))
+      mockUpdateWhere
+        .mockReset()
+        .mockImplementation(() => ({ returning: mock(() => Promise.resolve([{ id: 1 }])) }))
+    })
+
+    const ownedRow = (status: string) => ({
+      taskId: 1,
+      attackId: 1,
+      campaignId: 1,
+      status,
+      startedAt: new Date(),
+      projectId: 1,
+      hashListId: 1,
+    })
+
+    test('returns { stopped: true } and skips the write when the task is paused', async () => {
+      mockLimit.mockResolvedValueOnce([ownedRow('paused')])
+
+      const result = await updateTaskProgress(1, 100, { status: 'running' })
+
+      expect(result).toEqual({ stopped: true })
+      // The progress write must NOT fire — a paused row stays paused.
+      expect(mockUpdateSet).not.toHaveBeenCalled()
+    })
+
+    test('updates the row when the task is still active', async () => {
+      mockLimit.mockResolvedValueOnce([ownedRow('running')])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([{ id: 1, status: 'completed' }])),
+      })
+
+      const result = await updateTaskProgress(1, 100, { status: 'completed' })
+
+      expect('task' in result).toBe(true)
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('assignNextTask', () => {
     beforeEach(() => {
@@ -793,6 +843,44 @@ if (isIsolated) {
       }))
       mockEmitTaskUpdate.mockReset()
       mockUpdateCampaignProgress.mockReset()
+    })
+
+    test('signals stop when the failed task is paused, without writing (#97 U6)', async () => {
+      // A preempted task retains agentId, so a failure report still resolves
+      // it; the read-time paused guard must short-circuit to stop, not retry.
+      const task = {
+        id: 60,
+        agentId: 9,
+        campaignId: 12,
+        status: 'paused',
+        resultStats: {},
+        retryCount: 0,
+      }
+      mockLimit.mockResolvedValueOnce([task])
+
+      const result = await handleTaskFailure(60, 9, 'agent_timeout')
+
+      expect(result).toEqual({ stopped: true })
+      expect(setCalls).toHaveLength(0)
+    })
+
+    test('signals stop on a zero-row retry write (task changed concurrently) (#221)', async () => {
+      const task = {
+        id: 61,
+        agentId: 9,
+        campaignId: 12,
+        status: 'running',
+        resultStats: {},
+        retryCount: 0,
+      }
+      mockLimit.mockResolvedValueOnce([task]) // SELECT task (running at read)
+      mockLimit.mockResolvedValueOnce([{ projectId: 3 }]) // SELECT campaign
+      // The guarded UPDATE matches 0 rows (paused/reassigned between read and
+      // write); default mockUpdateWhere returns []. Must signal stop, not
+      // claim retried:true on a no-op write.
+      const result = await handleTaskFailure(61, 9, 'agent_timeout')
+
+      expect(result).toEqual({ stopped: true })
     })
 
     test('retries (sets retryCount = current + 1) when below MAX_RETRIES', async () => {
