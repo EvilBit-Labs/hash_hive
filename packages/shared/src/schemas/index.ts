@@ -814,6 +814,24 @@ export const useCampaignsOptionsSchema = z.object({
 })
 
 /**
+ * The attack lifecycle vocabulary. Unlike `campaignStatusSchema`, this
+ * governs a *wire-only* field: attack status is derived at read time from
+ * the attack's task aggregate plus the parent campaign's status (see the
+ * campaign detail payload builder), never persisted to a DB column.
+ * `exhausted` = the attack's keyspace was searched with no crack landing
+ * here; `completed` = the campaign completed (a crack landed somewhere)
+ * while this attack's tasks all reached a terminal-success state.
+ */
+export const attackStatusSchema = z.enum([
+  'pending',
+  'running',
+  'paused',
+  'completed',
+  'exhausted',
+  'failed',
+])
+
+/**
  * Per-attack row returned by the campaign detail payload. Scoped to
  * the fields the dashboard renders.
  */
