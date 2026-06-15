@@ -10,6 +10,7 @@ import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { computeAttackKeyspace } from './attacks/complexity.js'
 import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
@@ -345,6 +346,13 @@ export async function createCampaignWithAttacks(input: {
     return { kind: 'resource_missing', missing: resourceCheck.missing }
   }
 
+  // Pre-compute each attack's keyspace from its resources' line counts before
+  // opening the transaction (the resources were just validated to exist).
+  // Stored on the row so generation consumes it rather than recomputing; null
+  // when a line count isn't known yet, in which case the line-count worker
+  // recomputes once the resource is counted.
+  const keyspaceByIndex = await Promise.all(input.attacks.map((a) => computeAttackKeyspace(a)))
+
   class DAGInvalidInsideTx extends Error {
     constructor(public readonly reason: string) {
       super(reason)
@@ -385,7 +393,7 @@ export async function createCampaignWithAttacks(input: {
       // Dependencies start empty; they're translated and persisted in
       // the loop below.
       const realIdByIndex: number[] = []
-      for (const a of input.attacks) {
+      for (const [idx, a] of input.attacks.entries()) {
         const [row] = await tx
           .insert(attacks)
           .values({
@@ -398,6 +406,7 @@ export async function createCampaignWithAttacks(input: {
             masklistId: a.masklistId ?? null,
             advancedConfiguration: a.advancedConfiguration ?? {},
             dependencies: [],
+            keyspace: keyspaceByIndex[idx] ?? null,
             status: 'pending' as const,
           })
           .returning({ id: attacks.id })
@@ -865,6 +874,7 @@ export async function createAttack(data: {
   advancedConfiguration?: Record<string, unknown> | undefined
   dependencies?: number[] | undefined
 }) {
+  const keyspace = await computeAttackKeyspace(data)
   const [attack] = await db
     .insert(attacks)
     .values({
@@ -877,6 +887,7 @@ export async function createAttack(data: {
       masklistId: data.masklistId ?? null,
       advancedConfiguration: data.advancedConfiguration ?? {},
       dependencies: data.dependencies ?? [],
+      keyspace,
       status: 'pending',
     })
     .returning()
@@ -896,9 +907,22 @@ export async function updateAttack(
     dependencies?: number[] | undefined
   }
 ) {
+  // Recompute keyspace from the merged inputs so an edit that swaps a
+  // wordlist/rulelist/mask refreshes the stored value (it tracks current
+  // inputs, including back to null when a new resource isn't counted yet).
+  const [existing] = await db.select().from(attacks).where(eq(attacks.id, id)).limit(1)
+  if (!existing) return null
+  const keyspace = await computeAttackKeyspace({
+    mode: data.mode ?? existing.mode,
+    wordlistId: data.wordlistId ?? existing.wordlistId,
+    rulelistId: data.rulelistId ?? existing.rulelistId,
+    masklistId: data.masklistId ?? existing.masklistId,
+    advancedConfiguration: data.advancedConfiguration ?? existing.advancedConfiguration,
+  })
+
   const [updated] = await db
     .update(attacks)
-    .set({ ...data, updatedAt: new Date() })
+    .set({ ...data, keyspace, updatedAt: new Date() })
     .where(eq(attacks.id, id))
     .returning()
 

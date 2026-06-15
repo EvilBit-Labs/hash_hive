@@ -92,6 +92,37 @@ export async function countLines(
 }
 
 /**
+ * Split a fully-buffered string into newline-delimited segments, matching
+ * {@link streamLines} semantics: interior blanks preserved, no phantom empty
+ * line on a trailing newline. Used for the direct-upload path, where the file
+ * is already in memory (size-capped) so re-downloading to stream it would be
+ * wasteful.
+ */
+export function* splitTextLines(text: string): Generator<string> {
+  let start = 0
+  for (let idx = text.indexOf('\n'); idx !== -1; idx = text.indexOf('\n', start)) {
+    yield text.slice(start, idx)
+    start = idx + 1
+  }
+  if (start < text.length) yield text.slice(start)
+}
+
+/**
+ * Count the lines in an in-memory string that satisfy `predicate`, skipping any
+ * segment longer than {@link MAX_LINE_LENGTH}. The in-memory twin of
+ * {@link countLines}; both apply identical cap + predicate semantics so a
+ * resource sized at direct-upload time and one sized by the async worker agree.
+ */
+export function countLinesInText(text: string, predicate: (line: string) => boolean): number {
+  let count = 0
+  for (const line of splitTextLines(text)) {
+    if (line.length > MAX_LINE_LENGTH) continue
+    if (predicate(line)) count++
+  }
+  return count
+}
+
+/**
  * Wordlist sizing predicate: every within-cap line is a candidate, blank
  * lines included (an empty line is an empty-password candidate).
  */

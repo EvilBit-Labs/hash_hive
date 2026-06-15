@@ -28,8 +28,15 @@ mock.module('../../../src/config/storage.js', () => ({
   downloadFile: mockDownloadFile,
 }))
 
-const { countLines, countsAsRuleLine, countsAsWordlistLine, MAX_LINE_LENGTH, streamLines } =
-  await import('../../../src/services/resources/line-count.js')
+const {
+  countLines,
+  countLinesInText,
+  countsAsRuleLine,
+  countsAsWordlistLine,
+  MAX_LINE_LENGTH,
+  splitTextLines,
+  streamLines,
+} = await import('../../../src/services/resources/line-count.js')
 
 async function collect(key: string): Promise<string[]> {
   const out: string[] = []
@@ -94,6 +101,36 @@ describe('countLines', () => {
   test('a no-trailing-newline final line is counted once', async () => {
     fileContent = 'a\nb\nc'
     expect(await countLines('k', countsAsWordlistLine)).toBe(3)
+  })
+})
+
+describe('splitTextLines (in-memory, direct-upload path)', () => {
+  test('matches streamLines segment semantics', () => {
+    expect([...splitTextLines('alpha\nbravo\ncharlie')]).toEqual(['alpha', 'bravo', 'charlie'])
+    expect([...splitTextLines('alpha\nbravo\n')]).toEqual(['alpha', 'bravo']) // no phantom line
+    expect([...splitTextLines('alpha\n\nbravo')]).toEqual(['alpha', '', 'bravo']) // interior blank
+    expect([...splitTextLines('only')]).toEqual(['only'])
+    expect([...splitTextLines('')]).toEqual([])
+  })
+})
+
+describe('countLinesInText (in-memory, direct-upload path)', () => {
+  test('wordlist predicate counts every within-cap line, blanks included', () => {
+    expect(countLinesInText('password\n123456\n\nletmein', countsAsWordlistLine)).toBe(4)
+  })
+
+  test('rule predicate excludes blank lines and # comments', () => {
+    expect(countLinesInText('# rules\nc\n\n$1\n  \n:', countsAsRuleLine)).toBe(3)
+  })
+
+  test('respects the length cap', () => {
+    const text = ['short', 'x'.repeat(MAX_LINE_LENGTH + 1), 'alsoshort'].join('\n')
+    expect(countLinesInText(text, countsAsWordlistLine)).toBe(2)
+  })
+
+  test('a no-trailing-newline final line is counted once; empty string is 0', () => {
+    expect(countLinesInText('a\nb\nc', countsAsWordlistLine)).toBe(3)
+    expect(countLinesInText('', countsAsWordlistLine)).toBe(0)
   })
 })
 
