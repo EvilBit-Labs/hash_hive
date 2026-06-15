@@ -1,0 +1,3 @@
+ALTER TABLE "task_events" ADD CONSTRAINT "task_events_from_status_chk" CHECK ("task_events"."from_status" IN ('pending', 'assigned', 'running', 'paused', 'completed', 'exhausted', 'failed', 'cancelled'));--> statement-breakpoint
+ALTER TABLE "task_events" ADD CONSTRAINT "task_events_to_status_chk" CHECK ("task_events"."to_status" IN ('pending', 'assigned', 'running', 'paused', 'completed', 'exhausted', 'failed', 'cancelled'));--> statement-breakpoint
+ALTER TABLE "task_events" ADD CONSTRAINT "task_events_reason_chk" CHECK ("task_events"."reason" IS NULL OR "task_events"."reason" IN ('preempted', 'campaign_paused'));

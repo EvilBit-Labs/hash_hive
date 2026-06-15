@@ -667,7 +667,40 @@ export const assignedTaskSchema = z.object({
   updatedAt: z.coerce.date(),
 })
 
+// ─── Campaign Dashboard Surface ─────────────────────────────────────
+//
+// `campaignStatusSchema`, `campaignTaskStatsSchema`,
+// `dashboardStatsSchema`, the `TASK_DB_TO_BUCKET` helper, and the
+// related task-bucket types live in `./dashboard.ts` so this file
+// stays under the per-file budget. Imported + re-exported here so
+// other packages continue to import them from `@hashhive/shared`
+// unchanged and the local consumer below (`campaignDetailPayloadSchema`)
+// can reference `campaignTaskStatsSchema` directly.
+
+import {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+} from './dashboard.js'
+
+export {
+  campaignStatusSchema,
+  campaignTaskStatsSchema,
+  dashboardStatsSchema,
+  TASK_DB_TO_BUCKET,
+  taskDbStatusSchema,
+  type TaskBucket,
+  type TaskDbStatus,
+}
+
 // ─── Task Preemption (issue #97) ────────────────────────────────────
+// Defined after the `./dashboard.js` import above so `taskDbStatusSchema` is
+// in scope before use (static analyzers flag use-before-declaration even
+// though ESM hoists the import).
 
 /**
  * Why a task is in the `paused` state. `'preempted'` = a higher-priority
@@ -699,35 +732,15 @@ export const taskEventSchema = z.object({
   createdAt: z.coerce.date(),
 })
 
-// ─── Campaign Dashboard Surface ─────────────────────────────────────
-//
-// `campaignStatusSchema`, `campaignTaskStatsSchema`,
-// `dashboardStatsSchema`, the `TASK_DB_TO_BUCKET` helper, and the
-// related task-bucket types live in `./dashboard.ts` so this file
-// stays under the per-file budget. Imported + re-exported here so
-// other packages continue to import them from `@hashhive/shared`
-// unchanged and the local consumer below (`campaignDetailPayloadSchema`)
-// can reference `campaignTaskStatsSchema` directly.
-
-import {
-  campaignStatusSchema,
-  campaignTaskStatsSchema,
-  dashboardStatsSchema,
-  TASK_DB_TO_BUCKET,
-  taskDbStatusSchema,
-  type TaskBucket,
-  type TaskDbStatus,
-} from './dashboard.js'
-
-export {
-  campaignStatusSchema,
-  campaignTaskStatsSchema,
-  dashboardStatsSchema,
-  TASK_DB_TO_BUCKET,
-  taskDbStatusSchema,
-  type TaskBucket,
-  type TaskDbStatus,
-}
+/**
+ * Request body for changing a running/paused campaign's priority (#97 U7).
+ * Single source of truth for the dashboard `PATCH /campaigns/{id}/priority`
+ * and control `POST /campaigns/{id}/priority` surfaces so the two routes
+ * cannot drift (per the wire-shape-in-@hashhive/shared rule).
+ */
+export const changeCampaignPriorityRequestSchema = z.object({
+  priority: z.number().int().min(1).max(10),
+})
 
 /**
  * An agent currently assigned to an active task on a campaign. `progress`

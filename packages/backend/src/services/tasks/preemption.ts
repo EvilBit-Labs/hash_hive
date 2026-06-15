@@ -389,25 +389,39 @@ async function runResumePass(tx: Tx, projectId: number, emits: PendingEmit[]): P
 
   if (paused.length === 0) return []
 
+  // The blocker condition is "any pending-unassigned work with priority
+  // strictly higher (lower number) than this task". That reduces to the
+  // single minimum pending-unassigned priority for the project — compute it
+  // ONCE rather than a per-paused-task query (avoids an N+1 inside the
+  // advisory-locked transaction). `null` ⇒ no pending-unassigned work.
+  const [minRow] = await tx
+    .select({ minPriority: sql<number | null>`MIN(${campaigns.priority})` })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(
+        eq(tasks.status, 'pending'),
+        sql`${tasks.agentId} IS NULL`,
+        eq(campaigns.projectId, projectId)
+      )
+    )
+  let minPendingPriority: number | null = minRow?.minPriority ?? null
+
   const resumedIds: number[] = []
   for (const t of paused) {
-    const blocker = await tx
-      .select({ id: tasks.id })
-      .from(tasks)
-      .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
-      .where(
-        and(
-          eq(tasks.status, 'pending'),
-          sql`${tasks.agentId} IS NULL`,
-          eq(campaigns.projectId, projectId),
-          sql`${campaigns.priority} < ${t.priority}`
-        )
-      )
-      .limit(1)
-    if (blocker.length > 0) continue
+    // Blocked while strictly-higher-priority pending-unassigned work exists.
+    if (minPendingPriority !== null && minPendingPriority < t.priority) continue
 
     const resumed = await resumeTask(tx, t)
     if (!resumed) continue
+
+    // A task re-pended to 'pending' becomes higher-priority pending work for
+    // any subsequent (lower-priority) paused task in this ordered pass; fold
+    // it into the running minimum so the in-memory blocker stays correct.
+    if (resumed.toStatus === 'pending') {
+      minPendingPriority =
+        minPendingPriority === null ? t.priority : Math.min(minPendingPriority, t.priority)
+    }
 
     resumedIds.push(t.id)
     await recordTaskEvent(

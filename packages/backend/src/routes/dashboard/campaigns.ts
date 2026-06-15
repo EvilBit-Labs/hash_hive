@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 
-import { inlineAttackRequestSchema } from '@hashhive/shared'
+import { changeCampaignPriorityRequestSchema, inlineAttackRequestSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -535,7 +535,8 @@ campaignRoutes.openapi(putCampaignRoute, async (c) => {
 // ─── Live Priority Change (issue #97 U7) ────────────────────────────
 // Distinct from PATCH /{id} (draft-only): this re-prioritises a RUNNING or
 // PAUSED campaign and re-evaluates preemption. Same contributor/admin gate.
-const changePriorityBodySchema = z.object({ priority: z.number().int().min(1).max(10) })
+// Wire shape shared with the control surface (#97 U7) so the two cannot drift.
+const changePriorityBodySchema = changeCampaignPriorityRequestSchema
 
 const changePriorityRoute = createRoute({
   method: 'patch',

@@ -29,6 +29,7 @@ import type {
   connectionStatusSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
+  changeCampaignPriorityRequestSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
@@ -251,6 +252,7 @@ export type TaskEvent = z.infer<typeof taskEventSchema>
 
 export type LoginRequest = z.infer<typeof loginRequestSchema>
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
+export type ChangeCampaignPriorityRequest = z.infer<typeof changeCampaignPriorityRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>
 export type CreateAttackRequest = z.infer<typeof createAttackRequestSchema>
 export type HashCandidate = z.infer<typeof hashCandidateSchema>

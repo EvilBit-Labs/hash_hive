@@ -129,5 +129,6 @@ describeIfIsolated('QueueManager', () => {
     })
     expect(addCalls[0]?.['jobId']).toBeUndefined()
     expect(addCalls[0]?.['removeOnComplete']).toBeUndefined()
+    expect(addCalls[0]?.['removeOnFail']).toBeUndefined()
   })
 })

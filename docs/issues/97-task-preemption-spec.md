@@ -72,9 +72,11 @@ pending work:
    **lowest-priority running task** on a capability-matching agent (capability match
    matters — never pause a CPU task to free an agent for GPU-required work).
 3. Pause selected tasks: `running → paused`, `pausedReason='preempted'`,
-   `preemptedByCampaignId` set, `agentId` cleared, `workRange`/`progress` preserved.
-   Emit a `task_events` row + WebSocket `task_update`. Register the freed agent in the
-   stop-signal set so its next poll tells it to stop.
+   `preemptedByCampaignId` set, `agentId` **retained** while paused (so the
+   heartbeat-derived `stopTaskIds` signal stays derivable without a separate store),
+   `workRange`/`progress` preserved. `agentId` is cleared on resume. Emit a `task_events`
+   row + WebSocket `task_update`. The agent learns to stop via `stopTaskIds` on its next
+   heartbeat (derived from its preempted-paused tasks).
 4. Stop when enough agents are freed for the high-priority work or no further
    lower-priority candidates remain.
 
@@ -90,9 +92,12 @@ resume→reclaim→re-preempt loops under concurrent priority churn.
 ### Event-driven trigger
 
 A `evaluatePreemption(projectId)` BullMQ job (analog of `CampaignPriorityRebalanceJob`),
-enqueued on: (a) campaign priority change, (b) campaign `→ running` transition, and
-(c) high-priority task completion (to drive resume). Reuses the existing BullMQ infra
-that backs `reassignStaleTasks`.
+enqueued on: (a) campaign priority change, (b) campaign `→ running` transition,
+(c) campaign terminal/draft transitions (completed/cancelled/stop — frees the campaign's
+agents and clears its pending work, driving resume of victims, incl. the cancelled-
+preemptor case), and (d) task terminal-state hooks (a completed/exhausted/failed task
+frees its agent, driving resume). Deduped per project via a deterministic `jobId`
+(`preempt:${projectId}`). Reuses the existing BullMQ infra that backs `reassignStaleTasks`.
 
 ## Implementation Plan (phased, TDD-first)
 
@@ -100,9 +105,11 @@ that backs `reassignStaleTasks`.
 - Add `'paused'` to `taskDbStatusSchema`; add `paused: 'pending'` to `TASK_DB_TO_BUCKET`
   (`satisfies Record<TaskDbStatus, TaskBucket>` forces this).
 - Migration: `tasks.paused_reason` (varchar, nullable), `tasks.preempted_by_campaign_id`
-  (int, nullable FK), `tasks.paused_at` (timestamp, nullable), `tasks.resumed_at`
-  (timestamp, nullable). New `task_events` table (`id, task_id, event_type, reason,
-  from_status, to_status, by_campaign_id, created_at`, index on `(task_id, created_at DESC)`).
+  (int, nullable FK), `tasks.paused_at` (timestamptz, nullable), `tasks.resumed_at`
+  (timestamptz, nullable) — all timestamps `{ withTimezone: true }` per the shared-schema
+  coding guideline. New `task_events` table (`id, task_id, event_type, reason,
+  from_status, to_status, by_campaign_id, created_at` timestamptz, index on
+  `(task_id, created_at DESC)`).
 - Shared Zod schemas for `task_events` + stop-signal wire fields in `@hashhive/shared`.
 
 **Phase 2 — Preemption service + trigger**

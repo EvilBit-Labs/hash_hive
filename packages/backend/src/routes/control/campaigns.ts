@@ -6,7 +6,7 @@
  * `contributor` or `admin`; read paths require any project member.
  */
 
-import { selectCampaignSchema } from '@hashhive/shared'
+import { changeCampaignPriorityRequestSchema, selectCampaignSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -323,9 +323,9 @@ controlCampaignRoutes.openapi(transitionCampaignRoute, async (c) => {
 
 // ─── POST /:id/priority — change a live campaign's priority (#97 U7) ─
 
-const changePrioritySchema = z
-  .object({ priority: z.number().int().min(1).max(10) })
-  .openapi('ControlChangePriorityRequest')
+const changePrioritySchema = changeCampaignPriorityRequestSchema.openapi(
+  'ControlChangePriorityRequest'
+)
 
 const changePriorityRoute = createRoute({
   method: 'post',

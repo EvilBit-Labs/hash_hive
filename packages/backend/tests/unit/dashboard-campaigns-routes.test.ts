@@ -561,6 +561,8 @@ if (!IS_ISOLATED) {
     })
 
     it('PATCH /{id}/priority changes a running campaign and returns 200 (#97 U7)', async () => {
+      // Clear any prior calls so the call-count assertion is isolated.
+      mockChangeRunningCampaignPriority.mockClear()
       const res = await app.request(`${DASH_CAMPAIGNS}/100/priority`, {
         method: 'PATCH',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },

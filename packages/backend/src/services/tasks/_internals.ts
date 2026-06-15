@@ -39,16 +39,7 @@ export function jsonSafeBigint(value: bigint): number | string {
  */
 export function readKeyspaceProgress(progress: unknown): bigint {
   if (progress === null || typeof progress !== 'object') return 0n
-  const raw = (progress as Record<string, unknown>)['keyspaceProgress']
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
-  if (typeof raw === 'string') {
-    try {
-      return BigInt(raw)
-    } catch {
-      return 0n
-    }
-  }
-  return 0n
+  return readNonNegativeBigint((progress as Record<string, unknown>)['keyspaceProgress'])
 }
 
 /**
@@ -58,14 +49,19 @@ export function readKeyspaceProgress(progress: unknown): bigint {
  */
 export function readWorkRangeField(workRange: unknown, key: string): bigint {
   if (workRange === null || typeof workRange !== 'object') return 0n
-  const raw = (workRange as Record<string, unknown>)[key]
-  if (typeof raw === 'number' && Number.isFinite(raw)) return BigInt(Math.floor(raw))
-  if (typeof raw === 'string') {
-    try {
-      return BigInt(raw)
-    } catch {
-      return 0n
-    }
-  }
+  return readNonNegativeBigint((workRange as Record<string, unknown>)[key])
+}
+
+/**
+ * Coerce a jsonb keyspace/workRange coordinate to a bigint, accepting ONLY a
+ * non-negative safe-integer number or a digit-only string. Everything else —
+ * negatives, decimals, unsafe-large numbers (which would lose precision via
+ * `Math.floor`), and non-numeric strings — coerces to `0n` so a malformed
+ * agent report can't distort the bigint coordinate math (review #221). These
+ * coordinates are keyspace offsets, which are always non-negative integers.
+ */
+function readNonNegativeBigint(raw: unknown): bigint {
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return BigInt(raw)
+  if (typeof raw === 'string' && /^[0-9]+$/.test(raw)) return BigInt(raw)
   return 0n
 }

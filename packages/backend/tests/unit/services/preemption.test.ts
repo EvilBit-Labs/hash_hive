@@ -256,8 +256,9 @@ if (!IS_ISOLATED) {
     })
 
     it('does not resume while higher-priority pending work still blocks it', async () => {
-      // Blocker query returns a strictly-higher-priority pending task.
-      selectQueue = [[], [pausedRow(300, 5)], [{ id: 1 }]]
+      // The single min-pending-priority query returns 1 (< the paused task's
+      // priority 5), so a strictly-higher-priority pending task exists.
+      selectQueue = [[], [pausedRow(300, 5)], [{ minPriority: 1 }]]
       executeQueue = [[]]
 
       const result = await evaluatePreemption(7)

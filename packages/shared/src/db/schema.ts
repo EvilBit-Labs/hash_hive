@@ -588,6 +588,23 @@ export const taskEvents = pgTable(
   (table) => [
     index('task_events_task_id_created_at_idx').on(table.taskId, table.createdAt.desc()),
     check('task_events_event_type_chk', sql`${table.eventType} IN ('preempted', 'resumed')`),
+    // Pin the audit row's status + reason vocabularies the same way `tasks`
+    // does, so a typo or a direct UPDATE can't land an audit row that fails to
+    // parse against the shared schemas later. Keep these IN-lists in sync with
+    // taskDbStatusSchema (`../schemas/dashboard.ts`) and pausedReasonSchema
+    // (`../schemas/index.ts`).
+    check(
+      'task_events_from_status_chk',
+      sql`${table.fromStatus} IN ('pending', 'assigned', 'running', 'paused', 'completed', 'exhausted', 'failed', 'cancelled')`
+    ),
+    check(
+      'task_events_to_status_chk',
+      sql`${table.toStatus} IN ('pending', 'assigned', 'running', 'paused', 'completed', 'exhausted', 'failed', 'cancelled')`
+    ),
+    check(
+      'task_events_reason_chk',
+      sql`${table.reason} IS NULL OR ${table.reason} IN ('preempted', 'campaign_paused')`
+    ),
   ]
 )
 
