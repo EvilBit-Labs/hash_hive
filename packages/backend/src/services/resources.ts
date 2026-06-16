@@ -16,6 +16,9 @@ import {
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
+import { recomputeKeyspaceForResource } from './attacks/complexity.js'
+import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
+import { countLinesInText, countsAsRuleLine, countsAsWordlistLine } from './resources/line-count.js'
 
 // ─── Errors ────────────────────────────────────────────────────────────
 
@@ -577,6 +580,37 @@ export async function createResource(
   return row ?? null
 }
 
+/**
+ * Map a chunked-upload `resourceType` string to the line-count worker's type,
+ * or null when the resource type's line count is not a keyspace input
+ * (masklists, hash lists).
+ */
+function lineCountTypeForResourceType(resourceType: string): LineCountResourceType | null {
+  if (resourceType === 'wordlists') return 'wordlist'
+  if (resourceType === 'rulelists') return 'rulelist'
+  return null
+}
+
+/** Discriminate a resource table into the keyspace fan-out's resource type. */
+function resourceTypeOf(table: ResourceTable): 'wordlist' | 'rulelist' | 'masklist' {
+  if (table === wordLists) return 'wordlist'
+  if (table === ruleLists) return 'rulelist'
+  return 'masklist'
+}
+
+/**
+ * The line-count predicate that sizes a resource for keyspace, or null when a
+ * resource type's line count does not feed keyspace (masklists: one mask per
+ * line, not a charset product).
+ */
+function lineCountPredicateFor(
+  type: 'wordlist' | 'rulelist' | 'masklist'
+): ((line: string) => boolean) | null {
+  if (type === 'wordlist') return countsAsWordlistLine
+  if (type === 'rulelist') return countsAsRuleLine
+  return null
+}
+
 export async function uploadResourceFile(
   table: ResourceTable,
   resourceId: number,
@@ -598,6 +632,14 @@ export async function uploadResourceFile(
   const buffer = Buffer.from(await file.arrayBuffer())
   await uploadFile(key, buffer, file.type || 'application/octet-stream')
 
+  // Count lines from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so the
+  // common upload path never needs the async worker. Use the same util +
+  // predicate the worker uses, or a directly-uploaded rule list (raw count)
+  // and a worker-counted one (effective count) would yield divergent keyspace.
+  const resourceType = resourceTypeOf(table)
+  const predicate = lineCountPredicateFor(resourceType)
+  const lineCount = predicate ? countLinesInText(buffer.toString('utf8'), predicate) : null
+
   await db
     .update(table)
     .set({
@@ -610,10 +652,26 @@ export async function uploadResourceFile(
         uploadedAt: new Date().toISOString(),
       },
       fileSize: file.size,
+      ...(lineCount !== null ? { lineCount } : {}),
       status: 'ready',
       updatedAt: new Date(),
     })
     .where(eq(table.id, resourceId))
+
+  // Best-effort: refresh keyspace for any attacks already referencing this
+  // resource. The usual flow uploads before attacks exist (a no-op fan-out);
+  // this covers the rarer create-attack-before-upload ordering. A failure here
+  // must not fail the upload — the resource is already persisted as ready.
+  if (lineCount !== null) {
+    try {
+      await recomputeKeyspaceForResource(resourceType, resourceId)
+    } catch (err) {
+      logger.warn(
+        { resourceType, resourceId, err },
+        'keyspace recompute after direct upload failed; dependent attacks will recompute on next trigger'
+      )
+    }
+  }
 
   return { key, size: file.size }
 }
@@ -836,6 +894,15 @@ export async function completeChunkedUpload(
     .where(eq(table.id, resourceId))
 
   logger.info({ resourceId, resourceType }, 'Chunked upload completed')
+
+  // A chunked upload streams parts straight to S3 and never buffers the file
+  // to count lines, so a wordlist/rulelist arrives ready with a null line
+  // count. Enqueue the count job (best-effort, deduped) so keyspace can be
+  // computed and fanned out to dependent attacks.
+  const lineCountType = lineCountTypeForResourceType(resourceType)
+  if (lineCountType) {
+    await enqueueLineCount(lineCountType, resourceId, projectId)
+  }
 
   return { resourceId }
 }

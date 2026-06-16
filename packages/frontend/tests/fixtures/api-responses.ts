@@ -5,6 +5,7 @@
 
 import type {
   CampaignActiveAgent,
+  CampaignAttackRow,
   CampaignTaskStats,
   CrackedResultRow,
   FileRef,
@@ -273,16 +274,9 @@ export function mockCampaignsResponse(options: MockCampaignsResponseOptions = {}
   return { campaigns, total: campaigns.length }
 }
 
-interface MockAttack {
-  id: number
-  campaignId: number
-  mode: number
-  status: string
-  wordlistId: number | null
-  rulelistId: number | null
-  masklistId: number | null
-  dependencies: number[] | null
-}
+// Derive from the shared wire type so fixtures cannot drift from the contract
+// (per AGENTS.md). Carries the read-derived status enum + keyspace + ETA.
+type MockAttack = CampaignAttackRow
 
 // Fixture shapes derive from the shared Zod-inferred wire types so test
 // data cannot drift from runtime contracts. The shared types come from
@@ -311,28 +305,34 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
   }
 
   const attacks = options.attacks
-    ? options.attacks.map((a, i) => ({
-        id: i + 1,
-        campaignId: campaign.id,
-        mode: 0,
-        status: 'pending',
-        wordlistId: null,
-        rulelistId: null,
-        masklistId: null,
-        dependencies: null,
-        ...a,
-      }))
+    ? options.attacks.map(
+        (a, i): MockAttack => ({
+          id: i + 1,
+          campaignId: campaign.id,
+          mode: 0,
+          status: 'pending',
+          keyspace: null,
+          estimatedSecondsRemaining: null,
+          wordlistId: null,
+          rulelistId: null,
+          masklistId: null,
+          dependencies: null,
+          ...a,
+        })
+      )
     : [
         {
           id: 1,
           campaignId: campaign.id,
           mode: 0,
           status: 'pending',
+          keyspace: null,
+          estimatedSecondsRemaining: null,
           wordlistId: 1,
           rulelistId: null,
           masklistId: null,
           dependencies: null,
-        },
+        } satisfies MockAttack,
       ]
 
   const taskStats: CampaignTaskStats = {

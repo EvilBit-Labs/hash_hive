@@ -13,6 +13,12 @@ export const QUEUE_NAMES = {
   // campaign priority changes and lifecycle transitions, deduped per
   // project via a deterministic jobId.
   PREEMPTION: 'jobs-preemption',
+  // Resource line counting (issue #99). Event-driven: enqueued when a
+  // wordlist/rulelist becomes ready without an inline count (chunked upload)
+  // or an attack references an uncounted resource; deduped per resource via a
+  // deterministic jobId. Counts the file once, then recomputes keyspace for
+  // every dependent attack.
+  LINE_COUNT: 'jobs-line-count',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

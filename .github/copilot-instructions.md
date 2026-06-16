@@ -170,4 +170,6 @@ If a design choice could be guessed from "password-cracking platform" alone, rew
 4. **Keyboard is a first-class peer of mouse.** Visible focus rings, logical tab order, kbd hints on frequent actions, reduced-motion respected.
 5. **No category reflexes.** SaaS-cream, enterprise-navy, hacker-green, crypto-neon are all explicit anti-references.
 
+**Conformance target: WCAG 2.2 AA** (4.5:1 body text, 3:1 large text / UI boundaries). When a Catppuccin accent can't clear the text floor, pair it with weight/size/a non-color cue rather than dropping below AA. AAA is not a goal on this mid-tone palette.
+
 For full context, principles, and locked tokens, read `.impeccable.md`.

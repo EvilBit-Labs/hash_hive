@@ -20,10 +20,10 @@ import {
   createCampaignWithAttacks,
   deleteCampaign,
   changeRunningCampaignPriority,
+  getCampaignAttacksWithRuntime,
   getCampaignById,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
-  listAttacks,
   listCampaigns,
   updateCampaign,
   validateCampaignDAG,
@@ -299,7 +299,7 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
   }
 
   const [campaignAttacks, taskStats, activeAgents] = await Promise.all([
-    listAttacks(id),
+    getCampaignAttacksWithRuntime(id),
     getCampaignTaskStats(id),
     listActiveAgentsByCampaign(id),
   ])

@@ -46,6 +46,9 @@ if (IS_ISOLATED) {
     listParts: mock(),
     uploadFile: mock(),
     uploadPart: mock(),
+    // services/resources.ts now transitively imports services/resources/line-count.ts
+    // (shared line counting), which streams from storage via downloadFile.
+    downloadFile: mock(),
   }))
 
   // ─── Mock DB with per-test controllable behavior ─────────────────────
@@ -68,6 +71,9 @@ if (IS_ISOLATED) {
     wordLists: Symbol('word_lists'),
     ruleLists: Symbol('rule_lists'),
     maskLists: Symbol('mask_lists'),
+    // `services/resources.ts` now transitively imports `services/attacks/complexity.ts`
+    // (the keyspace fan-out), which references the attacks table.
+    attacks: Symbol('attacks'),
   }))
 
   mock.module('../../src/db/index.js', () => ({

@@ -418,6 +418,56 @@ describe('CampaignDetailPage', () => {
     expect(screen.getByText('2, 3')).toBeDefined()
   })
 
+  it('renders Keyspace + ETA columns with distinct empty states (issue #99)', async () => {
+    const data = mockCampaignDetailResponse({
+      attacks: [
+        // Computable: formatted keyspace + a counting-down ETA.
+        {
+          id: 1,
+          mode: 0,
+          status: 'running',
+          keyspace: '1000000',
+          estimatedSecondsRemaining: 12000,
+          wordlistId: 5,
+        },
+        // Count in flight: keyspace null but a wordlist is referenced.
+        {
+          id: 2,
+          mode: 0,
+          status: 'pending',
+          keyspace: null,
+          estimatedSecondsRemaining: null,
+          wordlistId: 9,
+        },
+        // Exhausted, mask-only: keyspace uncomputable.
+        {
+          id: 3,
+          mode: 3,
+          status: 'exhausted',
+          keyspace: null,
+          estimatedSecondsRemaining: null,
+          wordlistId: null,
+        },
+      ],
+    })
+
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/1': { status: 200, body: data },
+    })
+
+    selectProject()
+    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+      initialRoute: '/campaigns/1',
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('1.00e+6')).toBeDefined() // attack 1 keyspace
+    })
+    expect(screen.getByText('3h 20m')).toBeDefined() // attack 1 ETA (12000s)
+    expect(screen.getByText('Computing...')).toBeDefined() // attack 2 keyspace, count in flight
+    expect(screen.getByText('exhausted')).toBeDefined() // attack 3 status badge
+  })
+
   describe('Results tab (U9)', () => {
     it('renders the Attacks tab by default when no ?tab= param is set', async () => {
       const data = mockCampaignDetailResponse({

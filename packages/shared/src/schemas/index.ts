@@ -814,6 +814,24 @@ export const useCampaignsOptionsSchema = z.object({
 })
 
 /**
+ * The attack lifecycle vocabulary. Unlike `campaignStatusSchema`, this
+ * governs a *wire-only* field: attack status is derived at read time from
+ * the attack's task aggregate plus the parent campaign's status (see the
+ * campaign detail payload builder), never persisted to a DB column.
+ * `exhausted` = the attack's keyspace was searched with no crack landing
+ * here; `completed` = the campaign completed (a crack landed somewhere)
+ * while this attack's tasks all reached a terminal-success state.
+ */
+export const attackStatusSchema = z.enum([
+  'pending',
+  'running',
+  'paused',
+  'completed',
+  'exhausted',
+  'failed',
+])
+
+/**
  * Per-attack row returned by the campaign detail payload. Scoped to
  * the fields the dashboard renders.
  */
@@ -821,7 +839,13 @@ export const campaignAttackRowSchema = z.object({
   id: z.number().int().positive(),
   campaignId: z.number().int().positive(),
   mode: z.number().int().nonnegative(),
-  status: z.string(),
+  // Derived at read time (issue #99), not a persisted column.
+  status: attackStatusSchema,
+  // Persisted total keyspace as a decimal string (varchar(255), may exceed
+  // 2^53); null until computable. ETA is the bigint-safe `number | string`
+  // seconds-remaining union, null when uncomputable.
+  keyspace: z.string().nullable(),
+  estimatedSecondsRemaining: keyspaceCoordSchema.nullable(),
   wordlistId: z.number().int().positive().nullable(),
   rulelistId: z.number().int().positive().nullable(),
   masklistId: z.number().int().positive().nullable(),
