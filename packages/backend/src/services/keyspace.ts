@@ -133,20 +133,31 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
  * backslash. In `.hcmask` syntax an unescaped comma separates inline
  * custom-charset definitions (`charset1,...,mask`) from the mask, while `\,`
  * is a literal comma inside the mask. We cannot compute custom charsets, so an
- * unescaped comma marks the whole line uncomputable. A comma at index 0 has no
- * preceding char and is therefore unescaped.
+ * unescaped comma marks the whole line uncomputable.
+ *
+ * Escaping is decided by the PARITY of the immediately-preceding backslash run,
+ * matching hashcat's left-to-right escape handling: an odd run escapes the
+ * comma (`\,` literal, `\\\,` -> escaped backslash then literal comma), an even
+ * run (including zero) leaves it unescaped (`\\,` -> escaped backslash then a
+ * real separator). Checking only the single preceding char would wrongly treat
+ * `\\,` as escaped.
  */
 function hasUnescapedComma(line: string): boolean {
   for (let i = 0; i < line.length; i++) {
-    if (line[i] === ',' && line[i - 1] !== '\\') return true
+    if (line[i] !== ',') continue
+    let backslashes = 0
+    for (let j = i - 1; j >= 0 && line[j] === '\\'; j--) backslashes++
+    if (backslashes % 2 === 0) return true
   }
   return false
 }
 
 /**
- * Sum the per-line mask keyspace of a hashcat masklist (`.hcmask`) file,
- * returned as a decimal string, or `null` when the file's total cannot be
- * computed exactly.
+ * A running accumulator for the summed mask keyspace of a `.hcmask` file,
+ * shared by the sync ({@link sumMasklistKeyspace}) and streaming
+ * ({@link sumMasklistKeyspaceFromStream}) entry points so line classification
+ * and the early-abort rule cannot drift between the in-memory direct-upload
+ * path and the streaming worker/backfill path.
  *
  * A `.hcmask` line is a richer grammar than a single `mask` string, so each
  * line is classified before delegating to {@link calculateMaskKeyspace}:
@@ -159,31 +170,73 @@ function hasUnescapedComma(line: string): boolean {
  *   - otherwise -> {@link calculateMaskKeyspace}, which itself returns null on
  *     custom-charset refs (`?1`-`?4`) and unknown `?`-tokens
  *
- * If ANY non-skipped line is uncomputable, the whole masklist is `null` and the
- * caller falls back to the single-task path — summing only the computable lines
- * would under-count and mis-chunk ("rather under-chunk than mis-chunk"). A file
- * with no computable mask lines (empty, or all blanks/comments) is also `null`.
- *
- * Pure: no I/O. The caller streams the file and passes the lines plus the
- * shared `MAX_LINE_LENGTH` cap so the boundary stays consistent across the
- * resource counters.
+ * If ANY non-skipped line is uncomputable, the whole masklist is `null` — once
+ * a line aborts, {@link MaskKeyspaceAccumulator.add} returns false so the caller
+ * can stop reading. Summing only the computable lines would under-count and
+ * mis-chunk ("rather under-chunk than mis-chunk"). A file with no computable
+ * mask lines (empty, or all blanks/comments) is also `null`.
  */
-export function sumMasklistKeyspace(lines: Iterable<string>, maxLineLength: number): string | null {
+interface MaskKeyspaceAccumulator {
+  /** Fold one raw line in. Returns false once the list is uncomputable. */
+  add(line: string): boolean
+  /** The summed keyspace as a decimal string, or null when uncomputable. */
+  result(): string | null
+}
+
+function createMaskKeyspaceAccumulator(maxLineLength: number): MaskKeyspaceAccumulator {
   let total = 0n
   let sawComputableLine = false
+  let aborted = false
 
-  for (const line of lines) {
-    if (line.trim().length === 0) continue // blank / whitespace-only
-    if (line.startsWith('#')) continue // comment (unescaped leading #)
-    if (line.length > maxLineLength) return null // malformed/binary
-    if (hasUnescapedComma(line)) return null // inline custom-charset definition
+  return {
+    add(line) {
+      if (aborted) return false
+      if (line.trim().length === 0) return true // blank / whitespace-only
+      if (line.startsWith('#')) return true // comment (unescaped leading #)
+      if (line.length > maxLineLength) return ((aborted = true), false) // malformed/binary
+      if (hasUnescapedComma(line)) return ((aborted = true), false) // custom-charset def
 
-    const lineKs = calculateMaskKeyspace(line)
-    if (lineKs === null) return null // custom-charset ref or unknown token
+      const lineKs = calculateMaskKeyspace(line)
+      if (lineKs === null) return ((aborted = true), false) // charset ref / unknown token
 
-    total += lineKs
-    sawComputableLine = true
+      total += lineKs
+      sawComputableLine = true
+      return true
+    },
+    result() {
+      return !aborted && sawComputableLine ? total.toString() : null
+    },
   }
+}
 
-  return sawComputableLine ? total.toString() : null
+/**
+ * Sum the per-line mask keyspace of an in-memory hashcat masklist (`.hcmask`),
+ * returned as a decimal string, or `null` when the total cannot be computed
+ * exactly. Pure: no I/O. Used by the direct-upload path where the file is
+ * already buffered (size-capped); the streaming worker/backfill path uses
+ * {@link sumMasklistKeyspaceFromStream} instead so a large file never buffers.
+ */
+export function sumMasklistKeyspace(lines: Iterable<string>, maxLineLength: number): string | null {
+  const acc = createMaskKeyspaceAccumulator(maxLineLength)
+  for (const line of lines) {
+    if (!acc.add(line)) break // uncomputable: stop early, whole list is null
+  }
+  return acc.result()
+}
+
+/**
+ * Streaming twin of {@link sumMasklistKeyspace}: fold an async line stream so an
+ * adversarially large masklist is summed without buffering the whole file in
+ * memory. Stops reading as soon as a line proves the list uncomputable. Used by
+ * the line-count worker and the backfill, which read from object storage.
+ */
+export async function sumMasklistKeyspaceFromStream(
+  lines: AsyncIterable<string>,
+  maxLineLength: number
+): Promise<string | null> {
+  const acc = createMaskKeyspaceAccumulator(maxLineLength)
+  for await (const line of lines) {
+    if (!acc.add(line)) break // uncomputable: stop early, whole list is null
+  }
+  return acc.result()
 }

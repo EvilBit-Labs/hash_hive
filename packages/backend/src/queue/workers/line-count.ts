@@ -10,14 +10,12 @@ import { logger } from '../../config/logger.js'
 import { QUEUE_NAMES } from '../../config/queue.js'
 import { db } from '../../db/index.js'
 import { recomputeKeyspaceForResource } from '../../services/attacks/complexity.js'
-import { sumMasklistKeyspace } from '../../services/keyspace.js'
 import {
-  MAX_LINE_LENGTH,
   countLines,
   countsAsRuleLine,
   countsAsWordlistLine,
-  streamLines,
 } from '../../services/resources/line-count.js'
+import { computeAndPersistMasklistKeyspace } from '../../services/resources/masklist-keyspace.js'
 import { attachWorkerMetrics } from './metrics.js'
 
 const RESOURCE_TABLES = { wordlist: wordLists, rulelist: ruleLists, masklist: maskLists } as const
@@ -56,16 +54,9 @@ export function createLineCountWorker(connection: Redis): Worker<LineCountJob> {
       }
 
       if (resourceType === 'masklist') {
-        // Stream the masklist and sum its per-line mask keyspace. The file is
-        // one mask per line; collect into an array (small) for the pure sum.
-        const lines: string[] = []
-        for await (const line of streamLines(fileRef.key, fileRef.bucket)) lines.push(line)
-        const keyspace = sumMasklistKeyspace(lines, MAX_LINE_LENGTH)
-        await db
-          .update(maskLists)
-          .set({ keyspace, updatedAt: new Date() })
-          .where(eq(maskLists.id, resourceId))
-        await recomputeKeyspaceForResource('masklist', resourceId)
+        // Stream-sum the masklist keyspace, persist it, and fan out to dependent
+        // attacks (shared with the backfill so the two cannot drift, #231).
+        const keyspace = await computeAndPersistMasklistKeyspace(resourceId, fileRef)
         logger.info({ resourceType, resourceId, keyspace }, 'Masklist keyspace complete')
         return { keyspace }
       }

@@ -10,7 +10,11 @@
  */
 import { describe, expect, test } from 'bun:test'
 
-import { calculateAttackKeyspace, sumMasklistKeyspace } from '../../src/services/keyspace.js'
+import {
+  calculateAttackKeyspace,
+  sumMasklistKeyspace,
+  sumMasklistKeyspaceFromStream,
+} from '../../src/services/keyspace.js'
 
 // Match the resource line-length cap used by the streaming callers so the
 // over-length boundary scenario mirrors production.
@@ -144,6 +148,12 @@ describe('calculateAttackKeyspace - mode 3 via stored masklist keyspace', () => 
       null
     )
   })
+
+  test('mode 0 ignores masklistKeyspace (a masklist-backed straight attack is not chunked by it)', () => {
+    // masklistKeyspace is a mode-3 concept; a mode-0 attack is sized by its
+    // wordlist, never by a stray masklist sum, so this must not return 50.
+    expect(calculateAttackKeyspace({ mode: 0, masklistKeyspace: '50' })).toBe(null)
+  })
 })
 
 describe('sumMasklistKeyspace - .hcmask line classification + summation', () => {
@@ -189,6 +199,19 @@ describe('sumMasklistKeyspace - .hcmask line classification + summation', () => 
     expect(sum(['a\\,?d'])).toBe('10')
   })
 
+  test('escaped backslash before a comma (\\\\,) leaves the comma a real separator -> null', () => {
+    // `\\,abc` -> escaped literal backslash, then an UNESCAPED comma = custom
+    // charset definition. Backslash-run parity: 2 backslashes (even) before the
+    // comma means it is not escaped. A single-preceding-char check would miss this.
+    expect(sum(['\\\\,abc'])).toBe(null)
+  })
+
+  test('escaped backslash then escaped comma (\\\\\\,) is computable', () => {
+    // `\\\,?d` -> escaped literal backslash, escaped literal comma, then ?d(10).
+    // 3 backslashes (odd) before the comma means the comma IS escaped = literal.
+    expect(sum(['\\\\\\,?d'])).toBe('10')
+  })
+
   test('line referencing a custom charset ?1 nulls the whole list', () => {
     expect(sum(['?1?1'])).toBe(null)
   })
@@ -209,5 +232,25 @@ describe('sumMasklistKeyspace - .hcmask line classification + summation', () => 
 
   test('one bad line among good ones nulls the whole list (never skip-and-sum)', () => {
     expect(sum(['?d?d', '?1', '?d?d'])).toBe(null)
+  })
+})
+
+describe('sumMasklistKeyspaceFromStream - streaming twin matches the sync sum', () => {
+  async function* stream(lines: string[]): AsyncGenerator<string> {
+    for (const line of lines) yield line
+  }
+  const sumStream = (lines: string[]) =>
+    sumMasklistKeyspaceFromStream(stream(lines), MAX_LINE_LENGTH)
+
+  test('sums multiple mask lines from a stream', async () => {
+    expect(await sumStream(['?l?l', '?d?d?d'])).toBe('1676')
+  })
+
+  test('stops and nulls the whole list on the first uncomputable line', async () => {
+    expect(await sumStream(['?d?d', '?1', '?d?d'])).toBe(null)
+  })
+
+  test('empty stream returns null (nothing to compute)', async () => {
+    expect(await sumStream([])).toBe(null)
   })
 })

@@ -647,9 +647,15 @@ export async function uploadResourceFile(
   const resourceType = resourceTypeOf(table)
   const text = buffer.toString('utf8')
   let lineCount: number | null = null
-  let maskKeyspace: string | null = null
+  let masklistKeyspace: string | null = null
   if (resourceType === 'masklist') {
-    maskKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
+    masklistKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
+    if (masklistKeyspace === null) {
+      logger.warn(
+        { resourceType, resourceId },
+        'masklist keyspace uncomputable (custom charsets / unknown tokens); dependent attacks fall back to single-task'
+      )
+    }
   } else {
     const predicate = lineCountPredicateFor(resourceType)
     lineCount = predicate ? countLinesInText(text, predicate) : null
@@ -668,7 +674,7 @@ export async function uploadResourceFile(
       },
       fileSize: file.size,
       ...(lineCount !== null ? { lineCount } : {}),
-      ...(resourceType === 'masklist' ? { keyspace: maskKeyspace } : {}),
+      ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
       status: 'ready',
       updatedAt: new Date(),
     })
@@ -678,8 +684,13 @@ export async function uploadResourceFile(
   // resource. The usual flow uploads before attacks exist (a no-op fan-out);
   // this covers the rarer create-attack-before-upload ordering. A failure here
   // must not fail the upload — the resource is already persisted as ready.
-  const didComputeSizing = resourceType === 'masklist' ? maskKeyspace !== null : lineCount !== null
-  if (didComputeSizing) {
+  //
+  // A masklist ALWAYS fans out: its keyspace column is always rewritten (incl.
+  // null), so a re-upload to an uncomputable file must propagate that null to
+  // dependents rather than leave them on a stale value. Wordlists/rulelists fan
+  // out only once a line count is known.
+  const shouldFanOut = resourceType === 'masklist' || lineCount !== null
+  if (shouldFanOut) {
     try {
       await recomputeKeyspaceForResource(resourceType, resourceId)
     } catch (err) {
