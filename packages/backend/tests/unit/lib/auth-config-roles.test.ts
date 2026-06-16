@@ -28,9 +28,16 @@ import { describe, expect, it } from 'bun:test'
 const IS_ISOLATED = process.env['AUTH_CONFIG_ROLES_TEST_ISOLATED'] === '1'
 
 if (!IS_ISOLATED) {
-  describe.skip('auth-config-roles (skipped — runs in isolated phase)', () => {
-    it('runs only with AUTH_CONFIG_ROLES_TEST_ISOLATED=1', () => {
-      expect(true).toBe(true)
+  // Canonical skip stub (GOTCHAS.md "Backend Testing"): a console.warn plus
+  // a `toBeUndefined` assertion so a package.json edit that drops the
+  // isolated phase fails loudly instead of leaving the suite silently green.
+  describe('auth-config-roles (skipped — runs in isolated phase)', () => {
+    it('signals isolation phase is required', () => {
+      // oxlint-disable-next-line no-console -- surface phase-gating drift in CI logs
+      console.warn(
+        '[auth-config-roles] skipped — set AUTH_CONFIG_ROLES_TEST_ISOLATED=1 to run; the config-contract suite did NOT execute in this phase.'
+      )
+      expect(process.env['AUTH_CONFIG_ROLES_TEST_ISOLATED']).toBeUndefined()
     })
   })
 } else {
