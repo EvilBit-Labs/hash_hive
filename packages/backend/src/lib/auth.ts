@@ -166,6 +166,20 @@ export const auth = betterAuth({
 
   user: {
     modelName: 'users',
+    // BetterAuth only surfaces user columns it has been told about, so
+    // `users.roles` must be declared here or `session.user.roles` comes
+    // back undefined -- `coerceRoles` then yields [] and every global
+    // `requireRole(...)` check 403s for a legitimate admin (issue #228).
+    // `input: false` keeps roles admin/seed-managed: no client-facing
+    // write path (e.g. updateUser) may set them. Mirrors the
+    // `session.additionalFields.projectId` declaration above.
+    additionalFields: {
+      roles: {
+        type: 'string[]',
+        required: false,
+        input: false,
+      },
+    },
   },
 
   account: {
