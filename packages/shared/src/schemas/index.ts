@@ -897,9 +897,12 @@ export const selectProjectRequestSchema = z
 
 /**
  * Global capability tier for the dashboard API. Stored on `users.roles`
- * and surfaced on `session.user.roles` via BetterAuth. Distinct from
- * `project_users.roles` (per-project membership: admin|contributor|viewer)
- * which gates "what can this account do *within this project*".
+ * and surfaced on `session.user.roles` via BetterAuth -- this requires the
+ * `user.additionalFields.roles` declaration in `lib/auth.ts`; without it
+ * the column never reaches the session and every `requireRole(...)` check
+ * 403s (issue #228). Distinct from `project_users.roles` (per-project
+ * membership: admin|contributor|viewer) which gates "what can this account
+ * do *within this project*".
  *
  * - `admin`    full access incl. user/project/cracker-binary admin
  * - `operator` campaigns + resources (incl. run/stop/delete)
