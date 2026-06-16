@@ -517,6 +517,12 @@ export const tasks = pgTable(
   },
   (table) => [
     index('tasks_campaign_id_idx').on(table.campaignId),
+    // The read-time attack-runtime aggregate (issue #99) filters
+    // `WHERE attack_id IN (...) GROUP BY attack_id` with no campaign predicate,
+    // so the campaign indexes below can't serve it. Postgres does not
+    // auto-index FK columns, so this query would seq-scan the (large) tasks
+    // table on every campaign-detail load and Control attack read without it.
+    index('tasks_attack_id_idx').on(table.attackId),
     index('tasks_agent_id_idx').on(table.agentId),
     index('tasks_status_idx').on(table.status),
     index('tasks_status_campaign_id_idx').on(table.status, table.campaignId),

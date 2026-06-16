@@ -127,6 +127,13 @@
       "when": 1781565864621,
       "tag": "0017_tearful_whiplash",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1781568552649,
+      "tag": "0018_eminent_northstar",
+      "breakpoints": true
     }
   ]
 }
