@@ -2,6 +2,11 @@ import type { MeResponse } from '@hashhive/shared'
 
 import { create } from 'zustand'
 
+// `api` and this module form an import cycle (api.ts imports useAuthStore for its
+// 401 handler). It is eval-safe ONLY because each side references the other
+// strictly inside function bodies at runtime -- never at module-evaluation time.
+// Do not call `api.*` at the top level of this module or read the store at the
+// top level of api.ts, or boot will crash on an undefined cyclic reference.
 import { api } from '../lib/api'
 import { useUiStore } from './ui'
 
