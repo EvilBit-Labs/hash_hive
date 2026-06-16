@@ -17,8 +17,15 @@ import {
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
+import { sumMasklistKeyspace } from './keyspace.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
-import { countLinesInText, countsAsRuleLine, countsAsWordlistLine } from './resources/line-count.js'
+import {
+  MAX_LINE_LENGTH,
+  countLinesInText,
+  countsAsRuleLine,
+  countsAsWordlistLine,
+  splitTextLines,
+} from './resources/line-count.js'
 
 // ─── Errors ────────────────────────────────────────────────────────────
 
@@ -588,6 +595,7 @@ export async function createResource(
 function lineCountTypeForResourceType(resourceType: string): LineCountResourceType | null {
   if (resourceType === 'wordlists') return 'wordlist'
   if (resourceType === 'rulelists') return 'rulelist'
+  if (resourceType === 'masklists') return 'masklist'
   return null
 }
 
@@ -632,13 +640,20 @@ export async function uploadResourceFile(
   const buffer = Buffer.from(await file.arrayBuffer())
   await uploadFile(key, buffer, file.type || 'application/octet-stream')
 
-  // Count lines from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so the
-  // common upload path never needs the async worker. Use the same util +
-  // predicate the worker uses, or a directly-uploaded rule list (raw count)
-  // and a worker-counted one (effective count) would yield divergent keyspace.
+  // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
+  // the common upload path never needs the async worker, using the same utils
+  // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
+  // sized by line count; a masklist by its summed mask keyspace (#231).
   const resourceType = resourceTypeOf(table)
-  const predicate = lineCountPredicateFor(resourceType)
-  const lineCount = predicate ? countLinesInText(buffer.toString('utf8'), predicate) : null
+  const text = buffer.toString('utf8')
+  let lineCount: number | null = null
+  let maskKeyspace: string | null = null
+  if (resourceType === 'masklist') {
+    maskKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
+  } else {
+    const predicate = lineCountPredicateFor(resourceType)
+    lineCount = predicate ? countLinesInText(text, predicate) : null
+  }
 
   await db
     .update(table)
@@ -653,6 +668,7 @@ export async function uploadResourceFile(
       },
       fileSize: file.size,
       ...(lineCount !== null ? { lineCount } : {}),
+      ...(resourceType === 'masklist' ? { keyspace: maskKeyspace } : {}),
       status: 'ready',
       updatedAt: new Date(),
     })
@@ -662,7 +678,8 @@ export async function uploadResourceFile(
   // resource. The usual flow uploads before attacks exist (a no-op fan-out);
   // this covers the rarer create-attack-before-upload ordering. A failure here
   // must not fail the upload — the resource is already persisted as ready.
-  if (lineCount !== null) {
+  const didComputeSizing = resourceType === 'masklist' ? maskKeyspace !== null : lineCount !== null
+  if (didComputeSizing) {
     try {
       await recomputeKeyspaceForResource(resourceType, resourceId)
     } catch (err) {

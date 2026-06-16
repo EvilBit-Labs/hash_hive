@@ -37,10 +37,10 @@ export interface PreemptionJob {
 }
 
 export interface LineCountJob {
-  // Masklists are intentionally excluded: a masklist's line count is not a
-  // keyspace input (one mask per line, not a charset product), so they are
-  // never enqueued for counting.
-  resourceType: 'wordlist' | 'rulelist'
+  // Wordlists/rulelists are sized by line count; a masklist is sized by its
+  // summed mask keyspace (Σ per-line calculateMaskKeyspace), persisted to
+  // mask_lists.keyspace (#231). All three fan out to dependent attacks.
+  resourceType: 'wordlist' | 'rulelist' | 'masklist'
   resourceId: number
   projectId: number
 }

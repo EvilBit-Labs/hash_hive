@@ -134,6 +134,13 @@
       "when": 1781568552649,
       "tag": "0018_eminent_northstar",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781616842084,
+      "tag": "0019_daily_sasquatch",
+      "breakpoints": true
     }
   ]
 }

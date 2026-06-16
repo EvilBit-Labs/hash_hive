@@ -25,6 +25,12 @@ export interface CalculateAttackKeyspaceInput {
   secondaryWordlistRows?: number
   /** Mask string (modes 3, 6, 7). */
   mask?: string
+  /**
+   * Precomputed summed keyspace of a masklist file (mode 3 only), as a decimal
+   * string. Used when a mode-3 attack references a `masklistId` instead of a
+   * single inline `mask`. An inline `mask` takes precedence over this.
+   */
+  masklistKeyspace?: string
 }
 
 // Hashcat mask charset sizes for the standard ?-tokens. Keep this map narrow
@@ -94,10 +100,13 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
       return (BigInt(input.wordlistRows) * BigInt(input.secondaryWordlistRows)).toString()
     }
     case 3: {
-      // Mask: product of per-position charset sizes
-      if (!input.mask) return null
-      const maskKs = calculateMaskKeyspace(input.mask)
-      return maskKs === null ? null : maskKs.toString()
+      // Mask: product of per-position charset sizes. An inline mask wins; a
+      // mode-3 attack referencing a masklist file uses its precomputed sum.
+      if (input.mask) {
+        const maskKs = calculateMaskKeyspace(input.mask)
+        return maskKs === null ? null : maskKs.toString()
+      }
+      return input.masklistKeyspace ?? null
     }
     case 6: {
       // Hybrid wordlist + mask: wordlist * mask
@@ -117,4 +126,64 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
       // Unknown / unsupported mode - caller falls back to single-task path.
       return null
   }
+}
+
+/**
+ * True when `line` contains a comma that is NOT escaped by a preceding
+ * backslash. In `.hcmask` syntax an unescaped comma separates inline
+ * custom-charset definitions (`charset1,...,mask`) from the mask, while `\,`
+ * is a literal comma inside the mask. We cannot compute custom charsets, so an
+ * unescaped comma marks the whole line uncomputable. A comma at index 0 has no
+ * preceding char and is therefore unescaped.
+ */
+function hasUnescapedComma(line: string): boolean {
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === ',' && line[i - 1] !== '\\') return true
+  }
+  return false
+}
+
+/**
+ * Sum the per-line mask keyspace of a hashcat masklist (`.hcmask`) file,
+ * returned as a decimal string, or `null` when the file's total cannot be
+ * computed exactly.
+ *
+ * A `.hcmask` line is a richer grammar than a single `mask` string, so each
+ * line is classified before delegating to {@link calculateMaskKeyspace}:
+ *   - blank / whitespace-only lines -> skipped (hashcat ignores them)
+ *   - lines beginning with `#` -> comment, skipped (`\#` is a literal `#`, a
+ *     real mask line, so the check is on the raw leading char)
+ *   - lines longer than `maxLineLength` -> uncomputable (malformed/binary)
+ *   - lines with an unescaped comma -> inline custom-charset definition,
+ *     uncomputable (e.g. `?d?l,abc` is keyspace 1, not 260 — see issue #231)
+ *   - otherwise -> {@link calculateMaskKeyspace}, which itself returns null on
+ *     custom-charset refs (`?1`-`?4`) and unknown `?`-tokens
+ *
+ * If ANY non-skipped line is uncomputable, the whole masklist is `null` and the
+ * caller falls back to the single-task path — summing only the computable lines
+ * would under-count and mis-chunk ("rather under-chunk than mis-chunk"). A file
+ * with no computable mask lines (empty, or all blanks/comments) is also `null`.
+ *
+ * Pure: no I/O. The caller streams the file and passes the lines plus the
+ * shared `MAX_LINE_LENGTH` cap so the boundary stays consistent across the
+ * resource counters.
+ */
+export function sumMasklistKeyspace(lines: Iterable<string>, maxLineLength: number): string | null {
+  let total = 0n
+  let sawComputableLine = false
+
+  for (const line of lines) {
+    if (line.trim().length === 0) continue // blank / whitespace-only
+    if (line.startsWith('#')) continue // comment (unescaped leading #)
+    if (line.length > maxLineLength) return null // malformed/binary
+    if (hasUnescapedComma(line)) return null // inline custom-charset definition
+
+    const lineKs = calculateMaskKeyspace(line)
+    if (lineKs === null) return null // custom-charset ref or unknown token
+
+    total += lineKs
+    sawComputableLine = true
+  }
+
+  return sawComputableLine ? total.toString() : null
 }

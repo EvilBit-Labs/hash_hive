@@ -10,7 +10,11 @@
  */
 import { describe, expect, test } from 'bun:test'
 
-import { calculateAttackKeyspace } from '../../src/services/keyspace.js'
+import { calculateAttackKeyspace, sumMasklistKeyspace } from '../../src/services/keyspace.js'
+
+// Match the resource line-length cap used by the streaming callers so the
+// over-length boundary scenario mirrors production.
+const MAX_LINE_LENGTH = 10_000
 
 describe('calculateAttackKeyspace - mode 0 (straight)', () => {
   test('returns wordlist * rules', () => {
@@ -114,5 +118,96 @@ describe('calculateAttackKeyspace - unsupported modes', () => {
 
   test('mode 9 returns null even with full inputs', () => {
     expect(calculateAttackKeyspace({ mode: 9, wordlistRows: 1000, mask: '?d?d' })).toBe(null)
+  })
+})
+
+describe('calculateAttackKeyspace - mode 3 via stored masklist keyspace', () => {
+  test('uses masklistKeyspace when no inline mask is present', () => {
+    expect(calculateAttackKeyspace({ mode: 3, masklistKeyspace: '1676' })).toBe('1676')
+  })
+
+  test('inline mask wins over masklistKeyspace (precedence)', () => {
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?d?d', masklistKeyspace: '999999' })).toBe(
+      '100'
+    )
+  })
+
+  test('returns null when masklist keyspace is absent and no mask', () => {
+    expect(calculateAttackKeyspace({ mode: 3 })).toBe(null)
+  })
+
+  test('modes 6/7 ignore masklistKeyspace (single-mask only)', () => {
+    expect(calculateAttackKeyspace({ mode: 6, wordlistRows: 1000, masklistKeyspace: '50' })).toBe(
+      null
+    )
+    expect(calculateAttackKeyspace({ mode: 7, wordlistRows: 1000, masklistKeyspace: '50' })).toBe(
+      null
+    )
+  })
+})
+
+describe('sumMasklistKeyspace - .hcmask line classification + summation', () => {
+  const sum = (lines: string[]) => sumMasklistKeyspace(lines, MAX_LINE_LENGTH)
+
+  test('single mask line returns its keyspace', () => {
+    expect(sum(['?d?d?d?d'])).toBe('10000')
+  })
+
+  test('sums multiple mask lines', () => {
+    // ?l?l = 676, ?d?d?d = 1000 -> 1676
+    expect(sum(['?l?l', '?d?d?d'])).toBe('1676')
+  })
+
+  test('sum exceeds Number.MAX_SAFE_INTEGER and stays a precise decimal string', () => {
+    // two ?a^12 lines: 2 * 540360087662636962890625
+    const value = sum(['?a?a?a?a?a?a?a?a?a?a?a?a', '?a?a?a?a?a?a?a?a?a?a?a?a'])
+    expect(typeof value).toBe('string')
+    expect(value).toBe('1080720175325273925781250')
+  })
+
+  test('blank lines are skipped (contribute nothing, do not null)', () => {
+    expect(sum(['?d?d', '', '   ', '?d?d'])).toBe('200')
+  })
+
+  test('# comment lines are skipped', () => {
+    expect(sum(['# header comment', '?d?d'])).toBe('100')
+  })
+
+  test('escaped \\# leading line is a real mask line, not a comment', () => {
+    // `\#?d` -> literal `\`, literal `#`, then ?d(10) = 10
+    expect(sum(['\\#?d'])).toBe('10')
+  })
+
+  test('unescaped-comma (custom-charset definition) line nulls the whole list', () => {
+    // `?d?l,abc` defines custom charset ?1=?d?l (unused); true keyspace is 1,
+    // NOT 260. We cannot compute custom charsets -> whole masklist null.
+    expect(sum(['?d?l,abc'])).toBe(null)
+  })
+
+  test('escaped \\, literal comma is computable (not a charset separator)', () => {
+    // `a\,?d` -> literals a, \, , then ?d(10) = 10
+    expect(sum(['a\\,?d'])).toBe('10')
+  })
+
+  test('line referencing a custom charset ?1 nulls the whole list', () => {
+    expect(sum(['?1?1'])).toBe(null)
+  })
+
+  test('unknown ?-token nulls the whole list', () => {
+    expect(sum(['?z'])).toBe(null)
+  })
+
+  test('over-length line nulls the whole list (not silently skipped)', () => {
+    const longMask = '?d'.repeat(MAX_LINE_LENGTH) // far over the cap
+    expect(sum([longMask])).toBe(null)
+  })
+
+  test('empty / all-comment file returns null (nothing to compute)', () => {
+    expect(sum([])).toBe(null)
+    expect(sum(['', '# only comments', '   '])).toBe(null)
+  })
+
+  test('one bad line among good ones nulls the whole list (never skip-and-sum)', () => {
+    expect(sum(['?d?d', '?1', '?d?d'])).toBe(null)
   })
 })

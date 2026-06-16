@@ -9,7 +9,7 @@
  * resource line counts, persist, and fan out to dependent attacks.
  */
 
-import { attacks, ruleLists, wordLists } from '@hashhive/shared'
+import { attacks, maskLists, ruleLists, wordLists } from '@hashhive/shared'
 import { eq } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
@@ -33,9 +33,10 @@ export interface AttackKeyspaceInput {
  *
  * Mode 1 (combination) has no schema field for a second wordlist, so
  * `secondaryWordlistRows` stays undefined and combination attacks fall through
- * to the single-task path until that field exists. A masklist file (one mask
- * per line) is not a mask-string keyspace, so `masklistId` contributes nothing
- * here — mode 3 attacks set `advancedConfiguration.mask` directly.
+ * to the single-task path until that field exists. A mode-3 attack referencing
+ * a masklist file (one mask per line) uses the masklist's precomputed summed
+ * keyspace (`mask_lists.keyspace`, #231); an inline `advancedConfiguration.mask`
+ * takes precedence when both are somehow present.
  */
 export async function loadKeyspaceInputs(
   attack: AttackKeyspaceInput
@@ -61,6 +62,17 @@ export async function loadKeyspaceInputs(
   if (attack.advancedConfiguration && typeof attack.advancedConfiguration === 'object') {
     const cfg = attack.advancedConfiguration as Record<string, unknown>
     if (typeof cfg['mask'] === 'string') inputs.mask = cfg['mask']
+  }
+  // A masklist-backed mode-3 attack (no inline mask) reads the masklist's
+  // precomputed summed keyspace. Null when uncomputable or not yet counted.
+  if (inputs.mask === undefined && attack.masklistId !== null) {
+    const [row] = await db
+      .select({ keyspace: maskLists.keyspace })
+      .from(maskLists)
+      .where(eq(maskLists.id, attack.masklistId))
+      .limit(1)
+    if (row?.keyspace !== null && row?.keyspace !== undefined)
+      inputs.masklistKeyspace = row.keyspace
   }
   return inputs
 }
@@ -107,17 +119,21 @@ export async function persistAttackKeyspace(attack: {
 
 /**
  * Recompute and persist keyspace for every attack referencing a resource,
- * after that resource's line count becomes known (direct upload or the async
- * line-count worker). Counted once per resource; the recompute fans out to all
- * dependents. A masklist's line count does not feed keyspace, so only
- * wordlist/rulelist resources fan out.
+ * after that resource's keyspace input becomes known (direct upload or the
+ * async line-count worker). Counted once per resource; the recompute fans out
+ * to all dependents. Wordlist/rulelist fan out via their line count; a masklist
+ * fans out via its summed keyspace (#231) to dependent mode-3 attacks.
  */
 export async function recomputeKeyspaceForResource(
   resourceType: 'wordlist' | 'rulelist' | 'masklist',
   resourceId: number
 ): Promise<void> {
-  if (resourceType === 'masklist') return
-  const column = resourceType === 'wordlist' ? attacks.wordlistId : attacks.rulelistId
+  const column =
+    resourceType === 'wordlist'
+      ? attacks.wordlistId
+      : resourceType === 'rulelist'
+        ? attacks.rulelistId
+        : attacks.masklistId
   const dependents = await db
     .select({
       id: attacks.id,

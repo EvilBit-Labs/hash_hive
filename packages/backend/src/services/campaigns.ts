@@ -474,6 +474,7 @@ export async function createCampaignWithAttacks(input: {
           ? enqueueLineCountForUncountedResources({
               wordlistId: a.wordlistId ?? null,
               rulelistId: a.rulelistId ?? null,
+              masklistId: a.masklistId ?? null,
               projectId: input.projectId,
             })
           : Promise.resolve()
@@ -921,6 +922,7 @@ export async function createAttack(data: {
     await enqueueLineCountForUncountedResources({
       wordlistId: attack.wordlistId,
       rulelistId: attack.rulelistId,
+      masklistId: attack.masklistId,
       projectId: attack.projectId,
     })
   }
@@ -965,6 +967,7 @@ export async function updateAttack(
     await enqueueLineCountForUncountedResources({
       wordlistId: updated.wordlistId,
       rulelistId: updated.rulelistId,
+      masklistId: updated.masklistId,
       projectId: updated.projectId,
     })
   }

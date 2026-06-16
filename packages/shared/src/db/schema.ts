@@ -388,6 +388,10 @@ export const maskLists = pgTable('mask_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
+  // Summed keyspace of the masklist (Σ per-line calculateMaskKeyspace), a
+  // decimal string mirroring attacks.keyspace. Null when uncomputable
+  // (custom-charset / unknown-token lines) or not yet counted (#231).
+  keyspace: varchar('keyspace', { length: 255 }),
   status: varchar('status', { length: 20 })
     .$type<ResourceStatusLiteral>()
     .notNull()

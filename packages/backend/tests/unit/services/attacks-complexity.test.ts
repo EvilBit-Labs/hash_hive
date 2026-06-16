@@ -1,12 +1,13 @@
-import { wordLists } from '@hashhive/shared'
+import { maskLists, wordLists } from '@hashhive/shared'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 // Configurable DB mock:
-//  - loadKeyspaceInputs: select({lineCount}).from(table).where().limit(1)
+//  - loadKeyspaceInputs: select({lineCount|keyspace}).from(table).where().limit(1)
 //  - recomputeKeyspaceForResource: select({...}).from(attacks).where()  (awaited)
 //  - persistAttackKeyspace: update(attacks).set({keyspace}).where()
 let wordlistLineCount: number | null = null
 let rulelistLineCount: number | null = null
+let masklistKeyspace: string | null = null
 let dependentAttacks: Array<Record<string, unknown>> = []
 const keyspaceUpdates: Array<number | string | null> = []
 
@@ -17,7 +18,9 @@ mock.module('../../../src/db/index.js', () => ({
         where: () => ({
           limit: () =>
             Promise.resolve([
-              { lineCount: table === wordLists ? wordlistLineCount : rulelistLineCount },
+              table === maskLists
+                ? { keyspace: masklistKeyspace }
+                : { lineCount: table === wordLists ? wordlistLineCount : rulelistLineCount },
             ]),
           // The dependents query awaits the where() result directly (no limit).
           // oxlint-disable-next-line unicorn/no-thenable -- mock satisfies both `await` and `.limit()`
@@ -46,6 +49,7 @@ const {
 beforeEach(() => {
   wordlistLineCount = null
   rulelistLineCount = null
+  masklistKeyspace = null
   dependentAttacks = []
   keyspaceUpdates.length = 0
 })
@@ -174,6 +178,42 @@ describe('computeAttackKeyspace', () => {
     })
     expect(ks).toBeNull()
   })
+
+  test('mode 3 masklist resolves from the stored mask_lists.keyspace (#231)', async () => {
+    masklistKeyspace = '1676'
+    const ks = await computeAttackKeyspace({
+      mode: 3,
+      wordlistId: null,
+      rulelistId: null,
+      masklistId: 4,
+      advancedConfiguration: {},
+    })
+    expect(ks).toBe('1676')
+  })
+
+  test('inline mask wins over a masklistId (precedence)', async () => {
+    masklistKeyspace = '999999'
+    const ks = await computeAttackKeyspace({
+      mode: 3,
+      wordlistId: null,
+      rulelistId: null,
+      masklistId: 4,
+      advancedConfiguration: { mask: '?d?d' },
+    })
+    expect(ks).toBe('100')
+  })
+
+  test('mode 3 masklist with an uncomputable (null) stored keyspace stays null', async () => {
+    masklistKeyspace = null
+    const ks = await computeAttackKeyspace({
+      mode: 3,
+      wordlistId: null,
+      rulelistId: null,
+      masklistId: 4,
+      advancedConfiguration: {},
+    })
+    expect(ks).toBeNull()
+  })
 })
 
 describe('persistAttackKeyspace', () => {
@@ -217,7 +257,32 @@ describe('recomputeKeyspaceForResource', () => {
     expect(keyspaceUpdates).toEqual(['2000', '2000'])
   })
 
-  test('masklist resources do not fan out (line count is not keyspace)', async () => {
+  test('masklist resources fan out to dependent mode-3 attacks (#231)', async () => {
+    masklistKeyspace = '1676'
+    dependentAttacks = [
+      {
+        id: 1,
+        mode: 3,
+        wordlistId: null,
+        rulelistId: null,
+        masklistId: 4,
+        advancedConfiguration: {},
+      },
+      {
+        id: 2,
+        mode: 3,
+        wordlistId: null,
+        rulelistId: null,
+        masklistId: 4,
+        advancedConfiguration: {},
+      },
+    ]
+    await recomputeKeyspaceForResource('masklist', 4)
+    expect(keyspaceUpdates).toEqual(['1676', '1676'])
+  })
+
+  test('masklist fan-out persists null when the masklist keyspace is uncomputable', async () => {
+    masklistKeyspace = null
     dependentAttacks = [
       {
         id: 1,
@@ -229,6 +294,6 @@ describe('recomputeKeyspaceForResource', () => {
       },
     ]
     await recomputeKeyspaceForResource('masklist', 4)
-    expect(keyspaceUpdates).toEqual([])
+    expect(keyspaceUpdates).toEqual([null])
   })
 })
