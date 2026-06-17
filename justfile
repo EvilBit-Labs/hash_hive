@@ -30,7 +30,7 @@ install-hooks:
 # Update dependencies
 update-deps:
     mise upgrade --bump --local
-    {{ mise_exec }} bun update  --minimum-release-age=172800
+    {{ mise_exec }} bun update --workspaces --minimum-release-age=172800
     {{ mise_exec }} bun update --recursive --minimum-release-age=172800 --filter @hashhive/backend --filter @hashhive/frontend --filter @hashhive/shared
     {{ mise_exec }} pre-commit autoupdate
 
