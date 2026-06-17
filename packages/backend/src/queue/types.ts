@@ -36,6 +36,15 @@ export interface PreemptionJob {
   projectId: number
 }
 
+export interface LineCountJob {
+  // Wordlists/rulelists are sized by line count; a masklist is sized by its
+  // summed mask keyspace (Σ per-line calculateMaskKeyspace), persisted to
+  // mask_lists.keyspace (#231). All three fan out to dependent attacks.
+  resourceType: 'wordlist' | 'rulelist' | 'masklist'
+  resourceId: number
+  projectId: number
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -50,4 +59,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HEARTBEAT_MONITOR]: HeartbeatMonitorJob
   [QUEUE_NAMES.HEALTH_MONITOR]: HealthMonitorJob
   [QUEUE_NAMES.PREEMPTION]: PreemptionJob
+  [QUEUE_NAMES.LINE_COUNT]: LineCountJob
 }

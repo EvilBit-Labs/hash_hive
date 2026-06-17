@@ -388,6 +388,10 @@ export const maskLists = pgTable('mask_lists', {
   fileRef: jsonb('file_ref').default({}),
   lineCount: bigint('line_count', { mode: 'number' }),
   fileSize: bigint('file_size', { mode: 'number' }),
+  // Summed keyspace of the masklist (Σ per-line calculateMaskKeyspace), a
+  // decimal string mirroring attacks.keyspace. Null when uncomputable
+  // (custom-charset / unknown-token lines) or not yet counted (#231).
+  keyspace: varchar('keyspace', { length: 255 }),
   status: varchar('status', { length: 20 })
     .$type<ResourceStatusLiteral>()
     .notNull()
@@ -468,7 +472,9 @@ export const attacks = pgTable(
     masklistId: integer('masklist_id').references(() => maskLists.id, { onDelete: 'set null' }),
     advancedConfiguration: jsonb('advanced_configuration').default({}),
     keyspace: varchar('keyspace', { length: 255 }),
-    status: varchar('status', { length: 20 }).notNull().default('pending'),
+    // No `status` column: attack status is derived at read time from task
+    // aggregates + the campaign's status (issue #99). A persisted column would
+    // race campaign auto-completion and drift against a value nothing queries.
     dependencies: integer('dependencies').array(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -515,6 +521,12 @@ export const tasks = pgTable(
   },
   (table) => [
     index('tasks_campaign_id_idx').on(table.campaignId),
+    // The read-time attack-runtime aggregate (issue #99) filters
+    // `WHERE attack_id IN (...) GROUP BY attack_id` with no campaign predicate,
+    // so the campaign indexes below can't serve it. Postgres does not
+    // auto-index FK columns, so this query would seq-scan the (large) tasks
+    // table on every campaign-detail load and Control attack read without it.
+    index('tasks_attack_id_idx').on(table.attackId),
     index('tasks_agent_id_idx').on(table.agentId),
     index('tasks_status_idx').on(table.status),
     index('tasks_status_campaign_id_idx').on(table.status, table.campaignId),

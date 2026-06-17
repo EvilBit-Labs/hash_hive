@@ -17,6 +17,7 @@ import type {
   taskEventSchema,
   taskEventTypeSchema,
   benchmarkSubmissionSchema,
+  attackStatusSchema,
   campaignActiveAgentSchema,
   campaignAttackRowSchema,
   campaignDetailPayloadSchema,
@@ -180,6 +181,7 @@ export type CampaignSortOrder = z.infer<typeof campaignSortOrderSchema>
 export type CampaignLifecycleAction = z.infer<typeof campaignLifecycleActionSchema>
 export type CampaignPriorityBucket = z.infer<typeof campaignPriorityBucketSchema>
 export type UseCampaignsOptions = z.infer<typeof useCampaignsOptionsSchema>
+export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>
 export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js'

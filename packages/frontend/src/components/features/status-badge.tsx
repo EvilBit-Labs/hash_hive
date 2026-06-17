@@ -8,6 +8,9 @@ const STATUS_STYLES: Record<string, string> = {
   running: 'bg-info/15 text-info border-info/20',
   paused: 'bg-warning/15 text-warning border-warning/20',
   completed: 'bg-success/15 text-success border-success/20',
+  // Attack status (issue #99): keyspace searched, no crack here. Neutral/muted
+  // on purpose — green would falsely read as success, red as failure.
+  exhausted: 'bg-surface-1/50 text-muted-foreground border-surface-1',
   cancelled: 'bg-surface-1/50 text-muted-foreground border-surface-1',
   pending: 'bg-surface-1/50 text-muted-foreground border-surface-1',
   failed: 'bg-destructive/15 text-destructive border-destructive/20',

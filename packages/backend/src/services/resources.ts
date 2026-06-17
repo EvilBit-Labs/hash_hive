@@ -16,6 +16,16 @@ import {
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
+import { recomputeKeyspaceForResource } from './attacks/complexity.js'
+import { sumMasklistKeyspace } from './keyspace.js'
+import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
+import {
+  MAX_LINE_LENGTH,
+  countLinesInText,
+  countsAsRuleLine,
+  countsAsWordlistLine,
+  splitTextLines,
+} from './resources/line-count.js'
 
 // ─── Errors ────────────────────────────────────────────────────────────
 
@@ -577,6 +587,39 @@ export async function createResource(
   return row ?? null
 }
 
+/**
+ * Map a chunked-upload `resourceType` string to the line-count worker's type,
+ * or null for types the worker does not size (e.g. hash lists). Masklists ARE
+ * worker-sized (#231) — they map to `'masklist'` and are sized by their summed
+ * mask keyspace rather than a line count, so they are not excluded here.
+ */
+function lineCountTypeForResourceType(resourceType: string): LineCountResourceType | null {
+  if (resourceType === 'wordlists') return 'wordlist'
+  if (resourceType === 'rulelists') return 'rulelist'
+  if (resourceType === 'masklists') return 'masklist'
+  return null
+}
+
+/** Discriminate a resource table into the keyspace fan-out's resource type. */
+function resourceTypeOf(table: ResourceTable): 'wordlist' | 'rulelist' | 'masklist' {
+  if (table === wordLists) return 'wordlist'
+  if (table === ruleLists) return 'rulelist'
+  return 'masklist'
+}
+
+/**
+ * The line-count predicate that sizes a resource for keyspace, or null when a
+ * resource type's line count does not feed keyspace (masklists: one mask per
+ * line, not a charset product).
+ */
+function lineCountPredicateFor(
+  type: 'wordlist' | 'rulelist' | 'masklist'
+): ((line: string) => boolean) | null {
+  if (type === 'wordlist') return countsAsWordlistLine
+  if (type === 'rulelist') return countsAsRuleLine
+  return null
+}
+
 export async function uploadResourceFile(
   table: ResourceTable,
   resourceId: number,
@@ -598,6 +641,27 @@ export async function uploadResourceFile(
   const buffer = Buffer.from(await file.arrayBuffer())
   await uploadFile(key, buffer, file.type || 'application/octet-stream')
 
+  // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
+  // the common upload path never needs the async worker, using the same utils
+  // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
+  // sized by line count; a masklist by its summed mask keyspace (#231).
+  const resourceType = resourceTypeOf(table)
+  const text = buffer.toString('utf8')
+  let lineCount: number | null = null
+  let masklistKeyspace: string | null = null
+  if (resourceType === 'masklist') {
+    masklistKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
+    if (masklistKeyspace === null) {
+      logger.warn(
+        { resourceType, resourceId },
+        'masklist keyspace uncomputable (custom charsets / unknown tokens); dependent attacks fall back to single-task'
+      )
+    }
+  } else {
+    const predicate = lineCountPredicateFor(resourceType)
+    lineCount = predicate ? countLinesInText(text, predicate) : null
+  }
+
   await db
     .update(table)
     .set({
@@ -610,10 +674,39 @@ export async function uploadResourceFile(
         uploadedAt: new Date().toISOString(),
       },
       fileSize: file.size,
+      ...(lineCount !== null ? { lineCount } : {}),
+      ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
       status: 'ready',
       updatedAt: new Date(),
     })
     .where(eq(table.id, resourceId))
+
+  // Best-effort: refresh keyspace for any attacks already referencing this
+  // resource. The usual flow uploads before attacks exist (a no-op fan-out);
+  // this covers the rarer create-attack-before-upload ordering. A failure here
+  // must not fail the upload — the resource is already persisted as ready.
+  //
+  // A masklist ALWAYS fans out: its keyspace column is always rewritten (incl.
+  // null), so a re-upload to an uncomputable file must propagate that null to
+  // dependents rather than leave them on a stale value. Wordlists/rulelists fan
+  // out only once a line count is known.
+  const shouldFanOut = resourceType === 'masklist' || lineCount !== null
+  if (shouldFanOut) {
+    try {
+      await recomputeKeyspaceForResource(resourceType, resourceId)
+    } catch (err) {
+      // The resource is already persisted `ready`; failing the upload would be
+      // worse. But be honest about recovery: the resource's own sizing column is
+      // now non-null, and the only re-triggers (the uncounted-resource sweep and
+      // attack create/update) gate on a null sizing value — so an ALREADY-existing
+      // dependent attack will NOT auto-recompute. Re-uploading the resource (or a
+      // manual recompute) is the remedy. The ids are logged for that.
+      logger.warn(
+        { resourceType, resourceId, err },
+        'keyspace recompute after direct upload failed; existing dependent attacks keep a stale keyspace until the resource is re-uploaded'
+      )
+    }
+  }
 
   return { key, size: file.size }
 }
@@ -836,6 +929,15 @@ export async function completeChunkedUpload(
     .where(eq(table.id, resourceId))
 
   logger.info({ resourceId, resourceType }, 'Chunked upload completed')
+
+  // A chunked upload streams parts straight to S3 and never buffers the file
+  // to count lines, so a wordlist/rulelist arrives ready with a null line
+  // count. Enqueue the count job (best-effort, deduped) so keyspace can be
+  // computed and fanned out to dependent attacks.
+  const lineCountType = lineCountTypeForResourceType(resourceType)
+  if (lineCountType) {
+    await enqueueLineCount(lineCountType, resourceId, projectId)
+  }
 
   return { resourceId }
 }

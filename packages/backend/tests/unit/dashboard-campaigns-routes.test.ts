@@ -268,6 +268,7 @@ if (!IS_ISOLATED) {
     listCampaigns: mockListCampaigns,
     getCampaignById: mockGetCampaignById,
     getCampaignTaskStats: mockGetCampaignTaskStats,
+    getCampaignAttacksWithRuntime: mock(async () => []),
     listActiveAgentsByCampaign: mockListActiveAgentsByCampaign,
     deleteCampaign: mockDeleteCampaign,
     // Inert stubs for sibling exports the routes module imports.

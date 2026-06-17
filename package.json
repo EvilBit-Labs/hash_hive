@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "oxlint-tsgolint": "0.23.0",
-    "turbo": "^2.9.16",
+    "turbo": "^2.9.18",
     "typescript": "^6.0.3"
   },
   "overrides": {

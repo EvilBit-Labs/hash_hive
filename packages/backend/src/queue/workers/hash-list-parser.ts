@@ -8,13 +8,12 @@ import type { HashListParseJob } from '../types.js'
 
 import { logger } from '../../config/logger.js'
 import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
-import { downloadFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { emitResourceUpdate } from '../../services/events.js'
+import { MAX_LINE_LENGTH, streamLines } from '../../services/resources/line-count.js'
 import { attachWorkerMetrics } from './metrics.js'
 
 const BATCH_SIZE = 5_000
-const MAX_LINE_LENGTH = 10_000 // 10 KB — skip malformed/binary lines
 
 /**
  * Map a parse failure to an operator-facing string safe to broadcast over
@@ -143,75 +142,37 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         throw new Error(`Hash list ${hashListId} has no file reference`)
       }
 
-      // Stream file from S3 — never buffer the entire file in memory
-      const response = await downloadFile(fileRef.key, fileRef.bucket)
-      const body = response.Body
-      if (!body) {
-        throw new Error(`Empty file body for hash list ${hashListId}`)
-      }
-
-      // Use the AWS SDK's built-in transformToWebStream for ReadableStream access
-      const stream = body.transformToWebStream()
-      const reader = stream.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
+      // Stream the file line by line via the shared storage walker — never
+      // buffer the whole file in memory. The shared util owns the WebStream +
+      // TextDecoder mechanics (and yields the final no-trailing-newline line);
+      // the parser keeps its trim/cap/parse/batch logic local so over-cap and
+      // unparseable lines still feed skippedLines.
       let batch: HashItemInsert[] = []
       let linesProcessed = 0
       let skippedLines = 0
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) {
-          buffer += decoder.decode() // flush buffered multi-byte bytes
-          break
-        }
-
-        buffer += decoder.decode(value, { stream: true })
-
-        for (
-          let newlineIdx = buffer.indexOf('\n');
-          newlineIdx !== -1;
-          newlineIdx = buffer.indexOf('\n')
-        ) {
-          const line = buffer.slice(0, newlineIdx).trim()
-          buffer = buffer.slice(newlineIdx + 1)
-
-          if (line.length === 0) continue
-          if (line.length > MAX_LINE_LENGTH) {
-            skippedLines++
-            continue
-          }
-
-          const parsed = parseHashLine(line, hashListId)
-          if (parsed === null) {
-            // Empty hashValue after split (e.g. ':plain', '::', '::plain') —
-            // skip rather than insert a blank-hash row.
-            skippedLines++
-            continue
-          }
-          batch.push(parsed)
-
-          if (batch.length >= BATCH_SIZE) {
-            await flushBatch(batch)
-            linesProcessed += batch.length
-            batch = []
-            await job.updateProgress(linesProcessed)
-          }
-        }
-      }
-
-      // Flush final partial line left in buffer (file may not end with newline)
-      const finalLine = buffer.trim()
-      if (finalLine.length > 0) {
-        if (finalLine.length > MAX_LINE_LENGTH) {
+      for await (const raw of streamLines(fileRef.key, fileRef.bucket)) {
+        const line = raw.trim()
+        if (line.length === 0) continue
+        if (line.length > MAX_LINE_LENGTH) {
           skippedLines++
-        } else {
-          const parsed = parseHashLine(finalLine, hashListId)
-          if (parsed === null) {
-            skippedLines++
-          } else {
-            batch.push(parsed)
-          }
+          continue
+        }
+
+        const parsed = parseHashLine(line, hashListId)
+        if (parsed === null) {
+          // Empty hashValue after split (e.g. ':plain', '::', '::plain') —
+          // skip rather than insert a blank-hash row.
+          skippedLines++
+          continue
+        }
+        batch.push(parsed)
+
+        if (batch.length >= BATCH_SIZE) {
+          await flushBatch(batch)
+          linesProcessed += batch.length
+          batch = []
+          await job.updateProgress(linesProcessed)
         }
       }
 

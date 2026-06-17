@@ -1,3 +1,5 @@
+import { useAuthStore } from '../stores/auth'
+
 const API_BASE = '/api/v1'
 const DEFAULT_TIMEOUT_MS = 30_000
 
@@ -55,8 +57,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     if (res.status === 401) {
-      // Session expired -- clear auth state and redirect to login
-      const { useAuthStore } = await import('../stores/auth')
+      // Session expired -- clear auth state and redirect to login.
+      // `useAuthStore` is a static import; the auth<->api cycle is eval-safe
+      // because both modules reference each other only inside function bodies
+      // at runtime, never at module-evaluation time.
       useAuthStore.getState().clearAuth()
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
@@ -112,7 +116,7 @@ async function requestRaw(path: string, init?: RequestInit): Promise<Response> {
 
   if (!res.ok) {
     if (res.status === 401) {
-      const { useAuthStore } = await import('../stores/auth')
+      // See `request` above: static import, eval-safe cycle.
       useAuthStore.getState().clearAuth()
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'

@@ -49,4 +49,4 @@ Recipes that wrap individual concerns (`just test-frontend`, `just type-check`, 
 
 ## Agent Rules <!-- tessl-managed -->
 
-@.tessl/RULES.md follow the [instructions](.tessl/RULES.md)
+@.tessl/RULES.md Follow the instructions in [./.tessl/RULES.md](./.tessl/RULES.md).

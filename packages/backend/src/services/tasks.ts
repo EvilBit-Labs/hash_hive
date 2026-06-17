@@ -1,25 +1,15 @@
 import type { AssignedTask } from '@hashhive/shared'
 
-import {
-  agentBenchmarks,
-  agents,
-  attacks,
-  campaigns,
-  hashItems,
-  maskLists,
-  ruleLists,
-  tasks,
-  wordLists,
-} from '@hashhive/shared'
+import { agentBenchmarks, agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared'
 import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { getAgentBenchmarkForMode } from './agents.js'
+import { computeAttackKeyspace } from './attacks/complexity.js'
 import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
 import { pickChunkSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
-import { calculateAttackKeyspace } from './keyspace.js'
 import { jsonSafeBigint } from './tasks/_internals.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
@@ -78,72 +68,6 @@ async function getFleetBenchmarksForMode(
 }
 
 /**
- * Resolve the keyspace inputs for an attack by joining its wordlist /
- * rulelist / masklist references and reading the mask string from
- * `advancedConfiguration.mask` when present.
- *
- * Mode 1 (combination) currently has no schema field for a second
- * wordlist, so secondaryWordlistRows stays undefined and combination
- * attacks fall through to the single-task path until that field exists.
- */
-async function loadKeyspaceInputs(attack: {
-  mode: number
-  wordlistId: number | null
-  rulelistId: number | null
-  masklistId: number | null
-  advancedConfiguration: unknown
-}): Promise<{
-  mode: number
-  wordlistRows?: number
-  rulelistRows?: number
-  secondaryWordlistRows?: number
-  mask?: string
-}> {
-  const inputs: {
-    mode: number
-    wordlistRows?: number
-    rulelistRows?: number
-    secondaryWordlistRows?: number
-    mask?: string
-  } = { mode: attack.mode }
-
-  if (attack.wordlistId !== null) {
-    const [row] = await db
-      .select({ lineCount: wordLists.lineCount })
-      .from(wordLists)
-      .where(eq(wordLists.id, attack.wordlistId))
-      .limit(1)
-    if (row?.lineCount !== null && row?.lineCount !== undefined) inputs.wordlistRows = row.lineCount
-  }
-  if (attack.rulelistId !== null) {
-    const [row] = await db
-      .select({ lineCount: ruleLists.lineCount })
-      .from(ruleLists)
-      .where(eq(ruleLists.id, attack.rulelistId))
-      .limit(1)
-    if (row?.lineCount !== null && row?.lineCount !== undefined) inputs.rulelistRows = row.lineCount
-  }
-  if (attack.masklistId !== null) {
-    // Masklist line count isn't the same as a mask string keyspace - a
-    // masklist file contains one mask per line. Skipping for now; mode 3
-    // attacks should set `advancedConfiguration.mask` directly.
-    const [row] = await db
-      .select({ id: maskLists.id })
-      .from(maskLists)
-      .where(eq(maskLists.id, attack.masklistId))
-      .limit(1)
-    if (row) {
-      // No mask string here yet - masklist parsing is a follow-up.
-    }
-  }
-  if (attack.advancedConfiguration && typeof attack.advancedConfiguration === 'object') {
-    const cfg = attack.advancedConfiguration as Record<string, unknown>
-    if (typeof cfg['mask'] === 'string') inputs.mask = cfg['mask']
-  }
-  return inputs
-}
-
-/**
  * Generates tasks for an attack by partitioning its keyspace into chunks.
  *
  * Chunking strategy:
@@ -186,8 +110,7 @@ export async function generateTasksForAttack(
   // Resolve total keyspace: prefer the stored value; compute when missing.
   let totalKeyspaceStr = attack.keyspace?.trim() ?? ''
   if (!totalKeyspaceStr || totalKeyspaceStr === '0') {
-    const inputs = await loadKeyspaceInputs(attack)
-    const computed = calculateAttackKeyspace(inputs)
+    const computed = await computeAttackKeyspace(attack)
     totalKeyspaceStr = computed ?? ''
   }
 
