@@ -233,15 +233,28 @@ describe('line-count worker', () => {
     expect(result).toEqual({ keyspace: '1676' })
   })
 
-  test('a masklist with an uncomputable line persists a null keyspace', async () => {
+  test('a masklist with an uncomputable line persists null AND fans the null out to dependents', async () => {
     resourceFileRef = { key: 'masklists/2/custom.hcmask', bucket: 'hashhive' }
     fileContent = '?d?l,abc' // custom-charset definition -> uncomputable
-    dependentMaskKeyspace = null
-    dependents = []
+    dependentMaskKeyspace = null // what the dependent's masklist now reports
+    // A dependent mode-3 attack already references this masklist. The shared
+    // compute-and-persist path MUST fan the null out (clear any stale value),
+    // not gate the fan-out on a non-null keyspace — the asymmetry this PR fixes.
+    dependents = [
+      {
+        id: 1,
+        mode: 3,
+        wordlistId: null,
+        rulelistId: null,
+        masklistId: 2,
+        advancedConfiguration: {},
+      },
+    ]
 
     const result = await runJob({ resourceType: 'masklist', resourceId: 2, projectId: 1 })
 
     expect(masklistKeyspaceWrites).toEqual([null])
+    expect(keyspaceWrites).toEqual([null]) // fan-out fired even though keyspace is null
     expect(result).toEqual({ keyspace: null })
   })
 

@@ -64,6 +64,16 @@ describe('calculateAttackKeyspace - mode 3 (mask)', () => {
     expect(calculateAttackKeyspace({ mode: 3, mask: '?a' })).toBe('95')
   })
 
+  test('charset table sizes are pinned (?b=256, ?h/?H=16, ?s=33, ?u=26)', () => {
+    // A fat-fingered constant would silently mis-chunk every attack using that
+    // token; lock the less-exercised entries with one assertion each.
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?b?b' })).toBe('65536') // 256^2
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?h?h' })).toBe('256') // 16^2
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?H' })).toBe('16')
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?s' })).toBe('33')
+    expect(calculateAttackKeyspace({ mode: 3, mask: '?u' })).toBe('26')
+  })
+
   test('literal prefix contributes 1 per position', () => {
     expect(calculateAttackKeyspace({ mode: 3, mask: 'password?d' })).toBe('10')
   })
@@ -94,6 +104,23 @@ describe('calculateAttackKeyspace - mode 3 (mask)', () => {
     const value = calculateAttackKeyspace({ mode: 3, mask: '?a?a?a?a?a?a?a?a?a?a?a?a' })
     expect(typeof value).toBe('string')
     expect(value).toBe('540360087662636962890625')
+  })
+
+  test('mask whose keyspace exceeds varchar(255) returns null (degrade, not crash)', () => {
+    // ?a x129 = 95^129 ~ 10^255, a 256-digit decimal — too wide for the
+    // varchar(255) column. Must degrade to null rather than throw on persist.
+    const wide = calculateAttackKeyspace({ mode: 3, mask: '?a'.repeat(129) })
+    expect(wide).toBe(null)
+    // ?a x128 = 95^128 ~ 10^252, still within 255 digits — stays a string.
+    const fits = calculateAttackKeyspace({ mode: 3, mask: '?a'.repeat(128) })
+    expect(typeof fits).toBe('string')
+    expect((fits as string).length).toBeLessThanOrEqual(255)
+  })
+
+  test('hybrid mode 6 over-wide keyspace also degrades to null', () => {
+    expect(calculateAttackKeyspace({ mode: 6, wordlistRows: 1000, mask: '?a'.repeat(129) })).toBe(
+      null
+    )
   })
 })
 
@@ -232,6 +259,14 @@ describe('sumMasklistKeyspace - .hcmask line classification + summation', () => 
 
   test('one bad line among good ones nulls the whole list (never skip-and-sum)', () => {
     expect(sum(['?d?d', '?1', '?d?d'])).toBe(null)
+  })
+
+  test('summed keyspace exceeding varchar(255) degrades to null (not a crash on persist)', () => {
+    // A single ?a x129 line already sums to ~10^255 (256 digits), too wide for
+    // the column. Must return null so the caller falls back to a single task.
+    expect(sum(['?a'.repeat(129)])).toBe(null)
+    // ?a x128 (~10^252) fits in 255 digits and stays a computable string.
+    expect(typeof sum(['?a'.repeat(128)])).toBe('string')
   })
 })
 

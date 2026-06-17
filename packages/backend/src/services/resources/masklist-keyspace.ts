@@ -13,7 +13,7 @@
  * (and the job retries) without leaving a partial value behind.
  */
 
-import { maskLists } from '@hashhive/shared'
+import { type FileRef, maskLists } from '@hashhive/shared'
 import { eq } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
@@ -30,7 +30,10 @@ import { MAX_LINE_LENGTH, streamLines } from './line-count.js'
  */
 export async function computeAndPersistMasklistKeyspace(
   resourceId: number,
-  fileRef: { bucket?: string; key: string }
+  // `FileRef.key` is optional at rest; this function requires it (the caller
+  // guards `if (!fileRef?.key)`), so narrow the shared shape rather than
+  // re-declaring an inline object literal.
+  fileRef: Pick<FileRef, 'bucket'> & { key: string }
 ): Promise<string | null> {
   const keyspace = await sumMasklistKeyspaceFromStream(
     streamLines(fileRef.key, fileRef.bucket),

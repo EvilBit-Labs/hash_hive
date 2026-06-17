@@ -1,6 +1,6 @@
 import type Redis from 'ioredis'
 
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import { type FileRef, maskLists, ruleLists, wordLists } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
@@ -48,7 +48,9 @@ export function createLineCountWorker(connection: Redis): Worker<LineCountJob> {
       if (!row) {
         throw new Error(`${resourceType} ${resourceId} not found`)
       }
-      const fileRef = row.fileRef as { bucket?: string; key: string } | null
+      // `file_ref` JSONB at rest matches the shared FileRef shape; `key` is the
+      // one field we require, guarded below.
+      const fileRef = row.fileRef as FileRef | null
       if (!fileRef?.key) {
         throw new Error(`${resourceType} ${resourceId} has no file reference`)
       }
@@ -56,7 +58,10 @@ export function createLineCountWorker(connection: Redis): Worker<LineCountJob> {
       if (resourceType === 'masklist') {
         // Stream-sum the masklist keyspace, persist it, and fan out to dependent
         // attacks (shared with the backfill so the two cannot drift, #231).
-        const keyspace = await computeAndPersistMasklistKeyspace(resourceId, fileRef)
+        const keyspace = await computeAndPersistMasklistKeyspace(resourceId, {
+          key: fileRef.key,
+          ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
+        })
         logger.info({ resourceType, resourceId, keyspace }, 'Masklist keyspace complete')
         return { keyspace }
       }

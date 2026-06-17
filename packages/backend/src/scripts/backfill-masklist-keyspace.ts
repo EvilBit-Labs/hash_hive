@@ -10,13 +10,19 @@
  * the shared `computeAndPersistMasklistKeyspace`), run inline so no Redis or
  * worker is required.
  *
- * Idempotent — only masklists with a file reference and a null keyspace are
- * processed, so re-running re-counts only still-null rows.
+ * Mostly idempotent — the candidate query selects masklists with a null
+ * keyspace and a file reference, so re-running re-processes still-null rows.
+ * Caveat: `computeAndPersistMasklistKeyspace` persists the keyspace BEFORE
+ * fanning out to dependents, so a row whose keyspace write succeeds but whose
+ * fan-out then fails has a non-null keyspace and is EXCLUDED from a re-run while
+ * its dependent attacks stay stale. Such a row is logged with its id below; the
+ * durable fix for that window is the `keyspace_state` follow-up tracked in
+ * `docs/residual-review-findings/feat-masklist-keyspace.md`.
  *
- * Resilient — a single row's storage-read or write failure is logged and the
- * run continues to the next row, so one unreadable masklist cannot abort the
- * whole backfill. The process exits non-zero if any row failed, so a caller
- * (or CI) can tell a clean run from a partial one.
+ * Resilient — a single row's storage-read or write failure is logged (with the
+ * masklist id) and the run continues to the next row, so one unreadable masklist
+ * cannot abort the whole backfill. The process exits non-zero if any row failed,
+ * so a caller (or CI) can tell a clean run from a partial one.
  *
  * Usage:
  *   bun packages/backend/src/scripts/backfill-masklist-keyspace.ts
@@ -37,12 +43,14 @@ async function backfill(): Promise<number> {
   logger.info({ count: rows.length }, 'masklist keyspace backfill: candidates found')
 
   let computed = 0
-  let skipped = 0
-  let failed = 0
+  const skippedIds: number[] = []
+  const failedIds: number[] = []
   for (const row of rows) {
     const fileRef = row.fileRef as { bucket?: string; key?: string } | null
     if (!fileRef?.key) {
-      skipped++
+      // A row with a fileRef but no usable key is a data-integrity signal, not
+      // just a tally — name it so an operator can investigate.
+      skippedIds.push(row.id)
       continue
     }
 
@@ -54,9 +62,15 @@ async function backfill(): Promise<number> {
       if (keyspace !== null) computed++
       logger.info({ masklistId: row.id, keyspace }, 'masklist keyspace backfilled')
     } catch (err) {
-      // One unreadable masklist must not abort the whole run — log and continue.
-      failed++
-      logger.error({ masklistId: row.id, err }, 'masklist keyspace backfill: row failed, skipping')
+      // One row's failure must not abort the whole run — log its id and continue.
+      // If the failure came AFTER the keyspace write (fan-out), the row now has a
+      // non-null keyspace and a re-run will NOT re-process it (its dependents
+      // stay stale); the id below is the only record of that — see the header.
+      failedIds.push(row.id)
+      logger.error(
+        { masklistId: row.id, err },
+        'masklist keyspace backfill: row failed, continuing (may be persisted-but-not-fanned-out)'
+      )
     }
   }
 
@@ -64,15 +78,24 @@ async function backfill(): Promise<number> {
     {
       total: rows.length,
       computed,
-      failed,
-      uncomputableOrSkipped: rows.length - computed - failed,
+      failed: failedIds.length,
+      uncomputableOrSkipped: rows.length - computed - failedIds.length,
     },
     'masklist keyspace backfill complete'
   )
-  if (skipped > 0) {
-    logger.warn({ skipped }, 'masklist keyspace backfill: rows skipped (no file reference)')
+  if (failedIds.length > 0) {
+    logger.warn(
+      { failedIds },
+      'masklist keyspace backfill: rows failed (inspect for stale dependents)'
+    )
   }
-  return failed
+  if (skippedIds.length > 0) {
+    logger.warn(
+      { skipped: skippedIds.length, skippedIds },
+      'masklist keyspace backfill: rows skipped (file reference has no key)'
+    )
+  }
+  return failedIds.length
 }
 
 backfill()

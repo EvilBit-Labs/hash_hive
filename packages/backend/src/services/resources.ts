@@ -694,9 +694,15 @@ export async function uploadResourceFile(
     try {
       await recomputeKeyspaceForResource(resourceType, resourceId)
     } catch (err) {
+      // The resource is already persisted `ready`; failing the upload would be
+      // worse. But be honest about recovery: the resource's own sizing column is
+      // now non-null, and the only re-triggers (the uncounted-resource sweep and
+      // attack create/update) gate on a null sizing value — so an ALREADY-existing
+      // dependent attack will NOT auto-recompute. Re-uploading the resource (or a
+      // manual recompute) is the remedy. The ids are logged for that.
       logger.warn(
         { resourceType, resourceId, err },
-        'keyspace recompute after direct upload failed; dependent attacks will recompute on next trigger'
+        'keyspace recompute after direct upload failed; existing dependent attacks keep a stale keyspace until the resource is re-uploaded'
       )
     }
   }

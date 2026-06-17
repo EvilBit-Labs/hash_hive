@@ -47,6 +47,25 @@ const MASK_CHARSETS: Record<string, number> = {
   b: 256, // all bytes (0x00-0xff)
 }
 
+// Both keyspace columns (`attacks.keyspace`, `mask_lists.keyspace`) are
+// varchar(255). A mask keyspace is an unbounded product (e.g. 95^N), so a mask
+// still within the line-length cap can exceed 255 decimal digits (`?a` x129 ~
+// 10^255). Postgres REJECTS — does not truncate — an over-length varchar, so
+// persisting such a value throws (a forever-retrying worker job or a failed
+// upload). A keyspace past ~10^50 is operationally meaningless, so we degrade to
+// null (single-task fallback) rather than widen the column or crash — "rather
+// under-chunk than mis-chunk".
+const MAX_KEYSPACE_DIGITS = 255
+
+/**
+ * Render a computed keyspace as a decimal string the keyspace columns can hold,
+ * or `null` when it exceeds the column width (see {@link MAX_KEYSPACE_DIGITS}).
+ */
+function keyspaceToColumnString(value: bigint): string | null {
+  const decimal = value.toString()
+  return decimal.length > MAX_KEYSPACE_DIGITS ? null : decimal
+}
+
 /**
  * Parse a mask string into the product of its per-position charset sizes.
  * Returns `null` for missing/empty masks and for masks containing unknown
@@ -104,8 +123,9 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
       // mode-3 attack referencing a masklist file uses its precomputed sum.
       if (input.mask) {
         const maskKs = calculateMaskKeyspace(input.mask)
-        return maskKs === null ? null : maskKs.toString()
+        return maskKs === null ? null : keyspaceToColumnString(maskKs)
       }
+      // A masklist sum is already clamped to the column width at its source.
       return input.masklistKeyspace ?? null
     }
     case 6: {
@@ -113,14 +133,14 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
       if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
       const maskKs = calculateMaskKeyspace(input.mask)
       if (maskKs === null) return null
-      return (BigInt(input.wordlistRows) * maskKs).toString()
+      return keyspaceToColumnString(BigInt(input.wordlistRows) * maskKs)
     }
     case 7: {
       // Hybrid mask + wordlist: mask * wordlist
       if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
       const maskKs = calculateMaskKeyspace(input.mask)
       if (maskKs === null) return null
-      return (maskKs * BigInt(input.wordlistRows)).toString()
+      return keyspaceToColumnString(maskKs * BigInt(input.wordlistRows))
     }
     default:
       // Unknown / unsupported mode - caller falls back to single-task path.
@@ -204,7 +224,10 @@ function createMaskKeyspaceAccumulator(maxLineLength: number): MaskKeyspaceAccum
       return true
     },
     result() {
-      return !aborted && sawComputableLine ? total.toString() : null
+      // Clamp to the column width: a summed keyspace past 255 digits cannot be
+      // stored and degrades to null (single-task fallback), same as any other
+      // uncomputable line.
+      return !aborted && sawComputableLine ? keyspaceToColumnString(total) : null
     },
   }
 }
