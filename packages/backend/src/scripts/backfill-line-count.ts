@@ -26,10 +26,12 @@
  * #231).
  *
  * Resilient — a single resource's enqueue failure (a throw, or an enqueue that
- * reports the queue was unavailable) is logged with its id and the run
+ * reports the queue was unavailable) is logged with its ref and the run
  * continues. The process exits non-zero if any row failed to enqueue, or if
- * Redis is not connected after queue init, so a caller (or CI) can tell a clean
- * run from a partial or no-op one.
+ * Redis is not connected after queue init. Rows skipped for a missing file-ref
+ * key are a separate, permanent data-integrity condition (re-running will not
+ * fix them): they are logged at warn but do not affect the exit code, so a
+ * clean exit means "every countable row was enqueued", not "zero rows skipped".
  *
  * Usage (from the repo root — the --filter form sets CWD to packages/backend so
  * env validation finds packages/backend/.env):
@@ -58,8 +60,9 @@ export interface BackfillSummary {
 }
 
 // Seam so tests can inject a capturing or throwing enqueue. `enqueueLineCount`
-// is best-effort and swallows its own errors, so a real call never throws — the
-// per-row failure path can only be exercised through a stub.
+// wraps its whole body in try/catch and returns false on any error, so in the
+// current implementation a real call does not throw — the per-row catch is
+// exercised through a stub.
 export const _backfillDeps = {
   enqueue: enqueueLineCount,
 }

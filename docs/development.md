@@ -84,8 +84,9 @@ permanently for attacks that reference them. This one-shot enqueues a
 - **The line-count worker (`worker-jobs.ts`) must be running** — the backfill
   only enqueues; the worker does the counting and the dependent-attack
   recompute. Queued jobs sit until a worker drains them.
-- **Idempotent** — safe to re-run; counted rows drop out of the candidate set
-  and re-enqueues dedup per resource.
+- **Idempotent** — safe to re-run. Re-runs before workers drain collapse to the
+  same jobs via BullMQ jobId dedup; once a worker completes, the row gains a
+  non-null `line_count` and drops out of the next run's candidate set.
 - **Exit code** — non-zero if any row failed to enqueue, so a partial run is
   detectable by CI or an operator.
 - Masklists are excluded (sized by `keyspace`, not `line_count`; see #231).

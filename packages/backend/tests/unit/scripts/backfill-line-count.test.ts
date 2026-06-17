@@ -145,6 +145,20 @@ describe('backfillLineCount', () => {
     expect(summary.failed).toEqual([])
   })
 
+  test('qualifies refs by resource type so colliding wordlist/rulelist ids stay distinct', async () => {
+    // Wordlists and rulelists have independent id sequences; both can be id 2.
+    // The skipped refs must carry the resource type so an operator can tell them
+    // apart — a bare numeric id (or a hardcoded "wordlist:" prefix) would not.
+    wordlistRows = [{ id: 2, projectId: 10, fileRef: {} }]
+    rulelistRows = [{ id: 2, projectId: 20, fileRef: {} }]
+
+    const summary = await backfillLineCount()
+
+    expect(enqueueCalls).toEqual([])
+    expect(summary.skipped).toEqual(['wordlist:2', 'rulelist:2'])
+    expect(summary.failed).toEqual([])
+  })
+
   test('one row enqueue failure is recorded and does not abort the run', async () => {
     _backfillDeps.enqueue = (type, id, projectId) => {
       if (id === 2) return Promise.reject(new Error('redis down'))
