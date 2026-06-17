@@ -5,6 +5,7 @@
   "description": "HashHive backend API server — Hono on Bun.serve()",
   "type": "module",
   "scripts": {
+    "backfill:line-count": "bun src/scripts/backfill-line-count.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
