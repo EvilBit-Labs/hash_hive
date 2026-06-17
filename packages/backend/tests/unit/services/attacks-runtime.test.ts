@@ -282,4 +282,28 @@ describe('getCampaignAttacksWithRuntime', () => {
     const rows = await getCampaignAttacksWithRuntime(10)
     expect(rows[0]?.keyspacePending).toBe(false)
   })
+
+  test('keyspacePending false: referenced resource id resolves to no row (conservative fallback)', async () => {
+    // wordlistId 5 is referenced but no matching word_lists row is returned, so
+    // statusFor resolves to null -> not settling -> "--", never a false
+    // "Computing...". keyspace is null so the resource-status path is reached.
+    attackRows = [
+      {
+        id: 1,
+        campaignId: 10,
+        projectId: 1,
+        mode: 0,
+        keyspace: null,
+        wordlistId: 5,
+        rulelistId: null,
+        masklistId: null,
+        dependencies: null,
+      },
+    ]
+    campaignRows = [{ id: 10, status: 'running' }]
+    wordlistRows = [] // no row for id 5
+
+    const rows = await getCampaignAttacksWithRuntime(10)
+    expect(rows[0]?.keyspacePending).toBe(false)
+  })
 })

@@ -9,11 +9,14 @@ import type { ResourceStatus } from '@hashhive/shared'
  * consumes) versus *settled uncomputable* (so the cell should show "--").
  *
  * The mode-to-input mapping mirrors `calculateAttackKeyspace` in
- * `../keyspace.ts` - keep them in sync. Keeping this decision in the backend
- * (rather than the frontend guessing from `wordlistId`) is deliberate: the
- * frontend wire shape cannot distinguish "masklist line-count still in flight"
- * from "masklist counted and concluded null", and a second engine (JtR) would
- * make the mapping engine-scoped. One source of truth, server-side.
+ * `../keyspace.ts` - keep them in sync. The same mode->input knowledge also
+ * lives in `isAttackKeyspaceComputable` (`../campaigns.ts`) and the routing
+ * switch in `./complexity.ts`; a new mode or async input must be reflected in
+ * all four sites. Keeping this decision in the backend (rather than the
+ * frontend guessing from `wordlistId`) is deliberate: the frontend wire shape
+ * cannot distinguish "masklist line-count still in flight" from "masklist
+ * counted and concluded null", and a second engine (JtR) would make the mapping
+ * engine-scoped. One source of truth, server-side.
  *
  * This module is pure: no DB access, no I/O. Test in isolation in
  * `tests/unit/services/keyspace-pending.test.ts`.
@@ -37,6 +40,17 @@ export interface KeyspacePendingInput {
  * keyspace) is still in flight. Once a resource is `ready` its metric is
  * populated or definitively null; `error` means it will never compute. A null
  * status (no resource referenced) is never settling.
+ *
+ * Gating on `status` rather than on `lineCount IS NULL` is deliberate. A
+ * chunked upload flips to `ready` before its line-count job runs (see
+ * `completeChunkedUpload` in `../resources.ts`), so for a brief, self-healing
+ * window a genuinely-counting resource shows "--" instead of "Computing...".
+ * The alternative - treating any `ready` resource with a null line count as
+ * still settling - would show "Computing..." *forever* whenever a count job
+ * permanently fails (the worker sets `lineCount` but never `status`, so a
+ * failed count leaves `ready` + null line count). A permanent false
+ * "Computing..." is exactly the dishonesty issue #230 exists to kill, so the
+ * brief transient is the better trade.
  */
 export function isResourceMetricSettling(status: ResourceStatus | null): boolean {
   if (status === null) return false

@@ -9,7 +9,7 @@ import {
   mockResultsResponse,
 } from '../fixtures/api-responses'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
-import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor } from '../test-utils'
+import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor, within } from '../test-utils'
 
 let fetchMock: ReturnType<typeof mockFetch>
 
@@ -479,11 +479,14 @@ describe('CampaignDetailPage', () => {
       expect(screen.getByText('1.00e+6')).toBeDefined() // attack 1 keyspace
     })
     expect(screen.getByText('3h 20m')).toBeDefined() // attack 1 ETA (12000s)
-    expect(screen.getByText('Computing...')).toBeDefined() // attack 2 keyspace, genuinely pending
-    // Attacks 3 (stray wordlist) and 4 (settled-null masklist) render "--", not
-    // "Computing..." — the #230 fix. Exactly one cell is computing.
-    expect(screen.getAllByText('Computing...')).toHaveLength(1)
-    expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(2)
+
+    // Scope the assertion to the Keyspace column (4th cell) so the ETA column's
+    // own "--" cells can't satisfy it. Each row's keyspace cell is checked
+    // exactly: only the genuinely-pending attack 2 shows "Computing..."; the
+    // stray-wordlist (3) and settled-null masklist (4) both show "--" — the #230 fix.
+    const dataRows = screen.getAllByRole('row').slice(1) // drop the header row
+    const keyspaceCells = dataRows.map((row) => within(row).getAllByRole('cell')[3]?.textContent)
+    expect(keyspaceCells).toEqual(['1.00e+6', 'Computing...', '--', '--'])
   })
 
   describe('Results tab (U9)', () => {

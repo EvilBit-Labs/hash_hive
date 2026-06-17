@@ -280,19 +280,19 @@ export async function getCampaignAttacksWithRuntime(
     loadResourceStatuses(rows),
   ])
 
+  // A referenced id that resolves to no row is treated as not-settling
+  // (conservative: prefer "--" over a false "Computing...").
+  const statusFor = (id: number | null, m: Map<number, ResourceStatus>): ResourceStatus | null =>
+    id === null ? null : (m.get(id) ?? null)
+
   return rows.map((r) => {
     const rt = runtime.get(r.id)
-    // A referenced id that resolves to no row is treated as not-settling
-    // (conservative: prefer "--" over a false "Computing...").
     const keyspacePending = isKeyspacePending({
       mode: r.mode,
       keyspace: r.keyspace,
-      wordlistStatus:
-        r.wordlistId === null ? null : (resourceStatuses.wordlist.get(r.wordlistId) ?? null),
-      rulelistStatus:
-        r.rulelistId === null ? null : (resourceStatuses.rulelist.get(r.rulelistId) ?? null),
-      masklistStatus:
-        r.masklistId === null ? null : (resourceStatuses.masklist.get(r.masklistId) ?? null),
+      wordlistStatus: statusFor(r.wordlistId, resourceStatuses.wordlist),
+      rulelistStatus: statusFor(r.rulelistId, resourceStatuses.rulelist),
+      masklistStatus: statusFor(r.masklistId, resourceStatuses.masklist),
     })
     return {
       id: r.id,
