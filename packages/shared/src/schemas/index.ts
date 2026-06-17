@@ -845,6 +845,11 @@ export const campaignAttackRowSchema = z.object({
   // 2^53); null until computable. ETA is the bigint-safe `number | string`
   // seconds-remaining union, null when uncomputable.
   keyspace: z.string().nullable(),
+  // True when `keyspace` is null AND a count/compute is genuinely in flight for
+  // an input the attack's mode actually consumes (issue #230). Lets the cell
+  // show "Computing..." honestly instead of guessing from `wordlistId`; a
+  // settled-null masklist or stray wordlist is false here -> "--".
+  keyspacePending: z.boolean(),
   estimatedSecondsRemaining: keyspaceCoordSchema.nullable(),
   wordlistId: z.number().int().positive().nullable(),
   rulelistId: z.number().int().positive().nullable(),

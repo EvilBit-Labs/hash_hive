@@ -14,16 +14,21 @@
 import {
   type AttackStatus,
   type CampaignAttackRow,
+  type ResourceStatus,
   agentBenchmarks,
   agents,
   attacks,
   campaigns,
+  maskLists,
+  ruleLists,
   tasks,
+  wordLists,
 } from '@hashhive/shared'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
 import { estimateSecondsRemaining } from './complexity.js'
+import { isKeyspacePending } from './keyspace-pending.js'
 
 /**
  * Fleet benchmark speeds for a (project, mode) — the parallel throughput the
@@ -193,6 +198,60 @@ export async function deriveAttackRuntimes(
 }
 
 /**
+ * Per-attack referenced resource ids — the inputs whose settling state gates the
+ * keyspacePending signal (issue #230).
+ */
+interface AttackResourceRefs {
+  wordlistId: number | null
+  rulelistId: number | null
+  masklistId: number | null
+}
+
+/**
+ * Batch-load the `status` of every referenced wordlist / rulelist / masklist for
+ * a set of attacks — one query per resource table over the distinct referenced
+ * ids, never an N+1 per attack. Returns a status lookup keyed by resource kind.
+ */
+async function loadResourceStatuses(rows: ReadonlyArray<AttackResourceRefs>): Promise<{
+  wordlist: Map<number, ResourceStatus>
+  rulelist: Map<number, ResourceStatus>
+  masklist: Map<number, ResourceStatus>
+}> {
+  const distinct = (ids: ReadonlyArray<number | null>): number[] => [
+    ...new Set(ids.filter((id): id is number => id !== null)),
+  ]
+  const wordlistIds = distinct(rows.map((r) => r.wordlistId))
+  const rulelistIds = distinct(rows.map((r) => r.rulelistId))
+  const masklistIds = distinct(rows.map((r) => r.masklistId))
+
+  const toMap = (results: ReadonlyArray<{ id: number; status: ResourceStatus }>) =>
+    new Map(results.map((r) => [r.id, r.status]))
+
+  const [wordlist, rulelist, masklist] = await Promise.all([
+    wordlistIds.length === 0
+      ? []
+      : db
+          .select({ id: wordLists.id, status: wordLists.status })
+          .from(wordLists)
+          .where(inArray(wordLists.id, wordlistIds)),
+    rulelistIds.length === 0
+      ? []
+      : db
+          .select({ id: ruleLists.id, status: ruleLists.status })
+          .from(ruleLists)
+          .where(inArray(ruleLists.id, rulelistIds)),
+    masklistIds.length === 0
+      ? []
+      : db
+          .select({ id: maskLists.id, status: maskLists.status })
+          .from(maskLists)
+          .where(inArray(maskLists.id, masklistIds)),
+  ])
+
+  return { wordlist: toMap(wordlist), rulelist: toMap(rulelist), masklist: toMap(masklist) }
+}
+
+/**
  * Build the campaign-detail attack rows: persisted fields plus derived status
  * and ETA. Replaces the plain `listAttacks(id)` the detail payload used, which
  * surfaced the dead `pending` column. One aggregate, no N+1.
@@ -216,16 +275,32 @@ export async function getCampaignAttacksWithRuntime(
     .where(eq(attacks.campaignId, campaignId))
     .orderBy(asc(attacks.id))
 
-  const runtime = await deriveAttackRuntimes(rows)
+  const [runtime, resourceStatuses] = await Promise.all([
+    deriveAttackRuntimes(rows),
+    loadResourceStatuses(rows),
+  ])
 
   return rows.map((r) => {
     const rt = runtime.get(r.id)
+    // A referenced id that resolves to no row is treated as not-settling
+    // (conservative: prefer "--" over a false "Computing...").
+    const keyspacePending = isKeyspacePending({
+      mode: r.mode,
+      keyspace: r.keyspace,
+      wordlistStatus:
+        r.wordlistId === null ? null : (resourceStatuses.wordlist.get(r.wordlistId) ?? null),
+      rulelistStatus:
+        r.rulelistId === null ? null : (resourceStatuses.rulelist.get(r.rulelistId) ?? null),
+      masklistStatus:
+        r.masklistId === null ? null : (resourceStatuses.masklist.get(r.masklistId) ?? null),
+    })
     return {
       id: r.id,
       campaignId: r.campaignId,
       mode: r.mode,
       status: rt?.status ?? 'pending',
       keyspace: r.keyspace,
+      keyspacePending,
       estimatedSecondsRemaining: rt?.estimatedSecondsRemaining ?? null,
       wordlistId: r.wordlistId,
       rulelistId: r.rulelistId,
