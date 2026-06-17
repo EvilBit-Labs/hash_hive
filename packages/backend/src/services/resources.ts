@@ -589,8 +589,9 @@ export async function createResource(
 
 /**
  * Map a chunked-upload `resourceType` string to the line-count worker's type,
- * or null when the resource type's line count is not a keyspace input
- * (masklists, hash lists).
+ * or null for types the worker does not size (e.g. hash lists). Masklists ARE
+ * worker-sized (#231) — they map to `'masklist'` and are sized by their summed
+ * mask keyspace rather than a line count, so they are not excluded here.
  */
 function lineCountTypeForResourceType(resourceType: string): LineCountResourceType | null {
   if (resourceType === 'wordlists') return 'wordlist'

@@ -26,7 +26,11 @@ if (!IS_ISOLATED) {
       console.warn(
         '[resources-upload] skipped — set RESOURCES_UPLOAD_TEST_ISOLATED=1 to run; this suite mocks db so it must NOT run in the shared phase.'
       )
-      // Fail loud if a CI misconfig drops the isolated phase.
+      // Assert the gate really is unset in this (shared) phase — i.e. the
+      // DB-mocking suite is being skipped here, not running with its mocks
+      // leaking process-wide. The console.warn above is what surfaces a dropped
+      // isolated phase in CI logs (this stub passing means the real tests ran
+      // only in their own RESOURCES_UPLOAD_TEST_ISOLATED=1 invocation).
       expect(process.env['RESOURCES_UPLOAD_TEST_ISOLATED']).toBeUndefined()
     })
   })

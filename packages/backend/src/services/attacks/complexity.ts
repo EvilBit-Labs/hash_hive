@@ -65,7 +65,10 @@ export async function loadKeyspaceInputs(
   }
   // A masklist-backed mode-3 attack (no inline mask) reads the masklist's
   // precomputed summed keyspace. Null when uncomputable or not yet counted.
-  if (inputs.mask === undefined && attack.masklistId !== null) {
+  // Gated to mode 3: `masklistKeyspace` is a mode-3-only input
+  // (`calculateAttackKeyspace` ignores it for every other mode), so this avoids
+  // a wasted DB query for a stray masklistId on a non-mask attack.
+  if (attack.mode === 3 && inputs.mask === undefined && attack.masklistId !== null) {
     const [row] = await db
       .select({ keyspace: maskLists.keyspace })
       .from(maskLists)
