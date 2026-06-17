@@ -5,6 +5,7 @@
   "description": "HashHive backend API server — Hono on Bun.serve()",
   "type": "module",
   "scripts": {
+    "backfill:line-count": "bun src/scripts/backfill-line-count.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -20,8 +21,8 @@
     "worker:tasks": "bun src/worker-task-generation.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1055.0",
-    "@aws-sdk/s3-request-presigner": "3.1055.0",
+    "@aws-sdk/client-s3": "3.1070.0",
+    "@aws-sdk/s3-request-presigner": "3.1070.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "@hono/zod-validator": "^0.8.0",

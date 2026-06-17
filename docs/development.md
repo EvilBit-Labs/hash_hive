@@ -70,6 +70,27 @@ bun --filter @hashhive/backend db:studio     # Open Drizzle Studio
 bun --filter @hashhive/backend db:seed       # Seed admin user (admin@hashhive.local / changeme123)
 ```
 
+### Maintenance
+
+```bash
+just backfill-line-count   # Enqueue line-count jobs for pre-#99 uncounted wordlists/rulelists
+```
+
+Resources uploaded before line-count tracking landed (#99) keep a null
+`line_count`, so the attack-table Keyspace column reads "Computing..."
+permanently for attacks that reference them. This one-shot enqueues a
+`LINE_COUNT` job for every `ready` wordlist/rulelist with a null `line_count`.
+
+- **The line-count worker (`worker-jobs.ts`) must be running** — the backfill
+  only enqueues; the worker does the counting and the dependent-attack
+  recompute. Queued jobs sit until a worker drains them.
+- **Idempotent** — safe to re-run. Re-runs before workers drain collapse to the
+  same jobs via BullMQ jobId dedup; once a worker completes, the row gains a
+  non-null `line_count` and drops out of the next run's candidate set.
+- **Exit code** — non-zero if any row failed to enqueue, so a partial run is
+  detectable by CI or an operator.
+- Masklists are excluded (sized by `keyspace`, not `line_count`; see #231).
+
 ### Local CI Check
 
 ```bash

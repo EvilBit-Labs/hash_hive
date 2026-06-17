@@ -57,17 +57,18 @@ describe('enqueueLineCount', () => {
     expect(enqueueArgs[2]).toEqual({ jobId: 'linecount:wordlist:42' })
   })
 
-  test('no-op when no queue manager is available', async () => {
+  test('returns false and no-ops when no queue manager is available', async () => {
     queueManager = null
-    await enqueueLineCount('rulelist', 1, 1)
+    const enqueued = await enqueueLineCount('rulelist', 1, 1)
+    expect(enqueued).toBe(false)
     expect(enqueueArgs).toEqual([])
   })
 
-  test('swallows an enqueue failure', async () => {
+  test('swallows an enqueue failure and reports it as not enqueued', async () => {
     queueManager = {
       enqueue: () => Promise.reject(new Error('redis down')),
     }
-    await expect(enqueueLineCount('wordlist', 1, 1)).resolves.toBeUndefined()
+    await expect(enqueueLineCount('wordlist', 1, 1)).resolves.toBe(false)
   })
 })
 

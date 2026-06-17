@@ -30,7 +30,7 @@ install-hooks:
 # Update dependencies
 update-deps:
     mise upgrade --bump --local
-    {{ mise_exec }} bun update  --minimum-release-age=172800
+    {{ mise_exec }} bun update --workspaces --minimum-release-age=172800
     {{ mise_exec }} bun update --recursive --minimum-release-age=172800 --filter @hashhive/backend --filter @hashhive/frontend --filter @hashhive/shared
     {{ mise_exec }} pre-commit autoupdate
 
@@ -215,6 +215,14 @@ db-seed:
 # Open Drizzle Studio
 db-studio:
     {{ mise_exec }} bun --filter @hashhive/backend db:studio
+
+# Enqueue line-count jobs for wordlists/rulelists uploaded before #99 that
+# still have a null line_count, so the attack-table Keyspace column resolves
+# instead of reading "Computing..." forever (issue #229). Idempotent and safe
+# to re-run. Enqueues only — the line-count worker (worker-jobs.ts) must be
+# running to drain the jobs. Exits non-zero if any row failed to enqueue.
+backfill-line-count:
+    {{ mise_exec }} bun --filter @hashhive/backend backfill:line-count
 
 # -----------------------------
 # CI Workflow

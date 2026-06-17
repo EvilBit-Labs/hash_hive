@@ -26,25 +26,34 @@ export const _lineCountDeps = {
 /**
  * Enqueue a single line-count job, deduped per resource via a deterministic
  * jobId (`QueueManager.enqueue` auto-pairs the jobId with terminal eviction).
- * Best-effort: a missing queue manager or an enqueue throw is swallowed.
+ * Best-effort: a missing queue manager or an enqueue throw is swallowed, never
+ * rethrown, so it can never fail the originating upload/attack operation.
+ *
+ * Returns whether the job was actually enqueued. The upload/attack callers
+ * ignore this (best-effort side effect), but the backfill (#229) relies on it
+ * to detect a silent miss — `QueueManager.enqueue` returns `false` (rather than
+ * throwing) when Redis is unavailable and the queue map is empty, and treating
+ * that as success would let the backfill report a clean run while queuing
+ * nothing.
  */
 export async function enqueueLineCount(
   resourceType: LineCountResourceType,
   resourceId: number,
   projectId: number
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { getQueueManager } = await _lineCountDeps.getQueueContext()
     const { QUEUE_NAMES } = await _lineCountDeps.getQueueConfig()
     const qm = getQueueManager()
-    if (!qm) return
-    await qm.enqueue(
+    if (!qm) return false
+    return await qm.enqueue(
       QUEUE_NAMES.LINE_COUNT,
       { resourceType, resourceId, projectId },
       { jobId: `linecount:${resourceType}:${resourceId}` }
     )
   } catch (err) {
     logger.warn({ err, resourceType, resourceId }, 'failed to enqueue line-count job')
+    return false
   }
 }
 
