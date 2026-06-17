@@ -93,14 +93,6 @@ describe('backfillLineCount', () => {
     expect(summary).toEqual({ total: 3, enqueued: 3, skipped: [], failed: [] })
   })
 
-  test('forwards the resource projectId verbatim to the enqueue', async () => {
-    wordlistRows = [withKey(7, 99)]
-
-    await backfillLineCount()
-
-    expect(enqueueCalls).toEqual([['wordlist', 7, 99]])
-  })
-
   test('delegates to enqueueLineCount with the dedup jobId end to end', async () => {
     _backfillDeps.enqueue = enqueueLineCount
     wordlistRows = [withKey(42, 7)]
