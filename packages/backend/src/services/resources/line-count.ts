@@ -63,7 +63,18 @@ export async function* streamLines(key: string, bucket?: string): AsyncGenerator
       }
     }
   } finally {
-    reader.releaseLock()
+    // Tear down the underlying body, not just the lock. A consumer that `break`s
+    // before EOF (e.g. the masklist keyspace abort in
+    // `sumMasklistKeyspaceFromStream` — the first early-terminating reader of
+    // this stream) would otherwise leave the S3 response connection open until
+    // GC. `cancel()` signals the source to stop and is a no-op on an
+    // already-drained stream; both calls are best-effort during unwind.
+    await reader.cancel().catch(() => {})
+    try {
+      reader.releaseLock()
+    } catch {
+      // Already released by cancel() in some runtimes; ignore.
+    }
   }
 
   // Final segment after the last newline: a real line only when non-empty.

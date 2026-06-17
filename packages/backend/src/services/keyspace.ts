@@ -25,6 +25,12 @@ export interface CalculateAttackKeyspaceInput {
   secondaryWordlistRows?: number
   /** Mask string (modes 3, 6, 7). */
   mask?: string
+  /**
+   * Precomputed summed keyspace of a masklist file (mode 3 only), as a decimal
+   * string. Used when a mode-3 attack references a `masklistId` instead of a
+   * single inline `mask`. An inline `mask` takes precedence over this.
+   */
+  masklistKeyspace?: string
 }
 
 // Hashcat mask charset sizes for the standard ?-tokens. Keep this map narrow
@@ -39,6 +45,25 @@ const MASK_CHARSETS: Record<string, number> = {
   h: 16, // hex lowercase 0-9a-f
   H: 16, // hex uppercase 0-9A-F
   b: 256, // all bytes (0x00-0xff)
+}
+
+// Both keyspace columns (`attacks.keyspace`, `mask_lists.keyspace`) are
+// varchar(255). A mask keyspace is an unbounded product (e.g. 95^N), so a mask
+// still within the line-length cap can exceed 255 decimal digits (`?a` x129 ~
+// 10^255). Postgres REJECTS — does not truncate — an over-length varchar, so
+// persisting such a value throws (a forever-retrying worker job or a failed
+// upload). A keyspace past ~10^50 is operationally meaningless, so we degrade to
+// null (single-task fallback) rather than widen the column or crash — "rather
+// under-chunk than mis-chunk".
+const MAX_KEYSPACE_DIGITS = 255
+
+/**
+ * Render a computed keyspace as a decimal string the keyspace columns can hold,
+ * or `null` when it exceeds the column width (see {@link MAX_KEYSPACE_DIGITS}).
+ */
+function keyspaceToColumnString(value: bigint): string | null {
+  const decimal = value.toString()
+  return decimal.length > MAX_KEYSPACE_DIGITS ? null : decimal
 }
 
 /**
@@ -94,27 +119,147 @@ export function calculateAttackKeyspace(input: CalculateAttackKeyspaceInput): st
       return (BigInt(input.wordlistRows) * BigInt(input.secondaryWordlistRows)).toString()
     }
     case 3: {
-      // Mask: product of per-position charset sizes
-      if (!input.mask) return null
-      const maskKs = calculateMaskKeyspace(input.mask)
-      return maskKs === null ? null : maskKs.toString()
+      // Mask: product of per-position charset sizes. An inline mask wins; a
+      // mode-3 attack referencing a masklist file uses its precomputed sum.
+      if (input.mask) {
+        const maskKs = calculateMaskKeyspace(input.mask)
+        return maskKs === null ? null : keyspaceToColumnString(maskKs)
+      }
+      // A masklist sum is already clamped to the column width at its source.
+      return input.masklistKeyspace ?? null
     }
     case 6: {
       // Hybrid wordlist + mask: wordlist * mask
       if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
       const maskKs = calculateMaskKeyspace(input.mask)
       if (maskKs === null) return null
-      return (BigInt(input.wordlistRows) * maskKs).toString()
+      return keyspaceToColumnString(BigInt(input.wordlistRows) * maskKs)
     }
     case 7: {
       // Hybrid mask + wordlist: mask * wordlist
       if (input.wordlistRows === undefined || input.wordlistRows <= 0 || !input.mask) return null
       const maskKs = calculateMaskKeyspace(input.mask)
       if (maskKs === null) return null
-      return (maskKs * BigInt(input.wordlistRows)).toString()
+      return keyspaceToColumnString(maskKs * BigInt(input.wordlistRows))
     }
     default:
       // Unknown / unsupported mode - caller falls back to single-task path.
       return null
   }
+}
+
+/**
+ * True when `line` contains a comma that is NOT escaped by a preceding
+ * backslash. In `.hcmask` syntax an unescaped comma separates inline
+ * custom-charset definitions (`charset1,...,mask`) from the mask, while `\,`
+ * is a literal comma inside the mask. We cannot compute custom charsets, so an
+ * unescaped comma marks the whole line uncomputable.
+ *
+ * Escaping is decided by the PARITY of the immediately-preceding backslash run,
+ * matching hashcat's left-to-right escape handling: an odd run escapes the
+ * comma (`\,` literal, `\\\,` -> escaped backslash then literal comma), an even
+ * run (including zero) leaves it unescaped (`\\,` -> escaped backslash then a
+ * real separator). Checking only the single preceding char would wrongly treat
+ * `\\,` as escaped.
+ */
+function hasUnescapedComma(line: string): boolean {
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== ',') continue
+    let backslashes = 0
+    for (let j = i - 1; j >= 0 && line[j] === '\\'; j--) backslashes++
+    if (backslashes % 2 === 0) return true
+  }
+  return false
+}
+
+/**
+ * A running accumulator for the summed mask keyspace of a `.hcmask` file,
+ * shared by the sync ({@link sumMasklistKeyspace}) and streaming
+ * ({@link sumMasklistKeyspaceFromStream}) entry points so line classification
+ * and the early-abort rule cannot drift between the in-memory direct-upload
+ * path and the streaming worker/backfill path.
+ *
+ * A `.hcmask` line is a richer grammar than a single `mask` string, so each
+ * line is classified before delegating to {@link calculateMaskKeyspace}:
+ *   - blank / whitespace-only lines -> skipped (hashcat ignores them)
+ *   - lines beginning with `#` -> comment, skipped (`\#` is a literal `#`, a
+ *     real mask line, so the check is on the raw leading char)
+ *   - lines longer than `maxLineLength` -> uncomputable (malformed/binary)
+ *   - lines with an unescaped comma -> inline custom-charset definition,
+ *     uncomputable (e.g. `?d?l,abc` is keyspace 1, not 260 — see issue #231)
+ *   - otherwise -> {@link calculateMaskKeyspace}, which itself returns null on
+ *     custom-charset refs (`?1`-`?4`) and unknown `?`-tokens
+ *
+ * If ANY non-skipped line is uncomputable, the whole masklist is `null` — once
+ * a line aborts, {@link MaskKeyspaceAccumulator.add} returns false so the caller
+ * can stop reading. Summing only the computable lines would under-count and
+ * mis-chunk ("rather under-chunk than mis-chunk"). A file with no computable
+ * mask lines (empty, or all blanks/comments) is also `null`.
+ */
+interface MaskKeyspaceAccumulator {
+  /** Fold one raw line in. Returns false once the list is uncomputable. */
+  add(line: string): boolean
+  /** The summed keyspace as a decimal string, or null when uncomputable. */
+  result(): string | null
+}
+
+function createMaskKeyspaceAccumulator(maxLineLength: number): MaskKeyspaceAccumulator {
+  let total = 0n
+  let sawComputableLine = false
+  let aborted = false
+
+  return {
+    add(line) {
+      if (aborted) return false
+      if (line.trim().length === 0) return true // blank / whitespace-only
+      if (line.startsWith('#')) return true // comment (unescaped leading #)
+      if (line.length > maxLineLength) return ((aborted = true), false) // malformed/binary
+      if (hasUnescapedComma(line)) return ((aborted = true), false) // custom-charset def
+
+      const lineKs = calculateMaskKeyspace(line)
+      if (lineKs === null) return ((aborted = true), false) // charset ref / unknown token
+
+      total += lineKs
+      sawComputableLine = true
+      return true
+    },
+    result() {
+      // Clamp to the column width: a summed keyspace past 255 digits cannot be
+      // stored and degrades to null (single-task fallback), same as any other
+      // uncomputable line.
+      return !aborted && sawComputableLine ? keyspaceToColumnString(total) : null
+    },
+  }
+}
+
+/**
+ * Sum the per-line mask keyspace of an in-memory hashcat masklist (`.hcmask`),
+ * returned as a decimal string, or `null` when the total cannot be computed
+ * exactly. Pure: no I/O. Used by the direct-upload path where the file is
+ * already buffered (size-capped); the streaming worker/backfill path uses
+ * {@link sumMasklistKeyspaceFromStream} instead so a large file never buffers.
+ */
+export function sumMasklistKeyspace(lines: Iterable<string>, maxLineLength: number): string | null {
+  const acc = createMaskKeyspaceAccumulator(maxLineLength)
+  for (const line of lines) {
+    if (!acc.add(line)) break // uncomputable: stop early, whole list is null
+  }
+  return acc.result()
+}
+
+/**
+ * Streaming twin of {@link sumMasklistKeyspace}: fold an async line stream so an
+ * adversarially large masklist is summed without buffering the whole file in
+ * memory. Stops reading as soon as a line proves the list uncomputable. Used by
+ * the line-count worker and the backfill, which read from object storage.
+ */
+export async function sumMasklistKeyspaceFromStream(
+  lines: AsyncIterable<string>,
+  maxLineLength: number
+): Promise<string | null> {
+  const acc = createMaskKeyspaceAccumulator(maxLineLength)
+  for await (const line of lines) {
+    if (!acc.add(line)) break // uncomputable: stop early, whole list is null
+  }
+  return acc.result()
 }
