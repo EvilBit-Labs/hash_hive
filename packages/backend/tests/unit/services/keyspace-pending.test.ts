@@ -110,6 +110,11 @@ describe('isKeyspacePending', () => {
     it('is pending while the wordlist is settling', () => {
       expect(isKeyspacePending({ ...base, mode: 1, wordlistStatus: 'processing' })).toBe(true)
     })
+
+    it('is not pending once the wordlist has settled (ready or error)', () => {
+      expect(isKeyspacePending({ ...base, mode: 1, wordlistStatus: 'ready' })).toBe(false)
+      expect(isKeyspacePending({ ...base, mode: 1, wordlistStatus: 'error' })).toBe(false)
+    })
   })
 
   it('is never pending for a failed resource (error status)', () => {

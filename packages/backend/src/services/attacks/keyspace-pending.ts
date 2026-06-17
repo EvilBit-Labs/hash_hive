@@ -8,15 +8,16 @@ import type { ResourceStatus } from '@hashhive/shared'
  * *pending* (a count/compute is in flight for an input the attack's mode actually
  * consumes) versus *settled uncomputable* (so the cell should show "--").
  *
- * The mode-to-input mapping mirrors `calculateAttackKeyspace` in
- * `../keyspace.ts` - keep them in sync. The same mode->input knowledge also
- * lives in `isAttackKeyspaceComputable` (`../campaigns.ts`) and the routing
- * switch in `./complexity.ts`; a new mode or async input must be reflected in
- * all four sites. Keeping this decision in the backend (rather than the
- * frontend guessing from `wordlistId`) is deliberate: the frontend wire shape
- * cannot distinguish "masklist line-count still in flight" from "masklist
- * counted and concluded null", and a second engine (JtR) would make the mapping
- * engine-scoped. One source of truth, server-side.
+ * The mode-to-input mapping mirrors two sibling mode switches that must stay in
+ * sync: `calculateAttackKeyspace` in `../keyspace.ts` and
+ * `isAttackKeyspaceComputable` in `../campaigns.ts`. `loadKeyspaceInputs` in
+ * `./complexity.ts` is mode-aware too - it gates the masklist input on
+ * `mode === 3` - so a new mode or async input must be reflected there as well.
+ * Keeping this decision in the backend (rather than the frontend guessing from
+ * `wordlistId`) is deliberate: the frontend wire shape cannot distinguish
+ * "masklist line-count still in flight" from "masklist counted and concluded
+ * null", and a second engine (JtR) would make the mapping engine-scoped. One
+ * source of truth, server-side.
  *
  * This module is pure: no DB access, no I/O. Test in isolation in
  * `tests/unit/services/keyspace-pending.test.ts`.
@@ -47,14 +48,32 @@ export interface KeyspacePendingInput {
  * window a genuinely-counting resource shows "--" instead of "Computing...".
  * The alternative - treating any `ready` resource with a null line count as
  * still settling - would show "Computing..." *forever* whenever a count job
- * permanently fails (the worker sets `lineCount` but never `status`, so a
- * failed count leaves `ready` + null line count). A permanent false
- * "Computing..." is exactly the dishonesty issue #230 exists to kill, so the
- * brief transient is the better trade.
+ * permanently fails: the line-count worker only ever writes `lineCount` (it
+ * never touches `status`), so an abandoned job leaves the resource `ready` with
+ * a null line count indefinitely. A permanent false "Computing..." is exactly
+ * the dishonesty issue #230 exists to kill, so the brief transient is the
+ * better trade.
+ *
+ * The `switch` is exhaustive over the sealed `ResourceStatus` enum on purpose:
+ * a future status member trips the `satisfies never` arm at compile time,
+ * forcing a deliberate settling/settled decision instead of silently defaulting
+ * a new state to "settling" (another permanent false "Computing...").
  */
 export function isResourceMetricSettling(status: ResourceStatus | null): boolean {
   if (status === null) return false
-  return status !== 'ready' && status !== 'error'
+  switch (status) {
+    case 'pending':
+    case 'uploading':
+    case 'uploaded':
+    case 'processing':
+      return true
+    case 'ready':
+    case 'error':
+      return false
+    default:
+      status satisfies never
+      return false
+  }
 }
 
 /**
