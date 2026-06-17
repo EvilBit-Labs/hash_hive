@@ -41,10 +41,14 @@ const CampaignDagView = lazy(() =>
 type ConfirmAction = 'stop' | 'delete' | null
 
 /**
- * Render the keyspace cell with three distinct empty states (issue #99):
+ * Render the keyspace cell with three honest empty states (issues #99, #230):
  *  - a value -> formatted, exact value in the title;
- *  - null but a wordlist/rulelist is referenced -> a count is likely in flight;
- *  - null with no countable resource -> permanently uncomputable.
+ *  - null and `keyspacePending` -> a count/compute is genuinely in flight;
+ *  - null and not pending -> truly uncomputable.
+ *
+ * `keyspacePending` is computed server-side (it is mode/source-aware: a stray
+ * wordlist on a mask attack or a masklist that settled to a null keyspace are
+ * both not pending), so the cell no longer guesses from `wordlistId`.
  */
 function renderKeyspaceCell(attack: CampaignAttackRow) {
   const formatted = formatAttackKeyspace(attack.keyspace)
@@ -55,7 +59,7 @@ function renderKeyspaceCell(attack: CampaignAttackRow) {
       </span>
     )
   }
-  if (attack.wordlistId !== null || attack.rulelistId !== null) {
+  if (attack.keyspacePending) {
     return <span className="text-muted-foreground italic">Computing...</span>
   }
   return (

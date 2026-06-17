@@ -1,4 +1,12 @@
-import { agentBenchmarks, attacks, campaigns, tasks } from '@hashhive/shared'
+import {
+  agentBenchmarks,
+  attacks,
+  campaigns,
+  maskLists,
+  ruleLists,
+  tasks,
+  wordLists,
+} from '@hashhive/shared'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 mock.module('../../../src/config/logger.js', () => ({
@@ -12,6 +20,9 @@ let aggRows: Array<Record<string, unknown>> = []
 let campaignRows: Array<Record<string, unknown>> = []
 let benchmarkRows: Array<Record<string, unknown>> = []
 let attackRows: Array<Record<string, unknown>> = []
+let wordlistRows: Array<Record<string, unknown>> = []
+let rulelistRows: Array<Record<string, unknown>> = []
+let masklistRows: Array<Record<string, unknown>> = []
 
 function makeChain(rows: unknown[]) {
   const settled = Promise.resolve(rows)
@@ -40,7 +51,13 @@ mock.module('../../../src/db/index.js', () => ({
                 ? benchmarkRows
                 : table === attacks
                   ? attackRows
-                  : []
+                  : table === wordLists
+                    ? wordlistRows
+                    : table === ruleLists
+                      ? rulelistRows
+                      : table === maskLists
+                        ? masklistRows
+                        : []
         ),
     }),
   },
@@ -56,6 +73,9 @@ beforeEach(() => {
   campaignRows = []
   benchmarkRows = []
   attackRows = []
+  wordlistRows = []
+  rulelistRows = []
+  masklistRows = []
 })
 
 describe('deriveAttackStatus (pure ladder)', () => {
@@ -194,8 +214,96 @@ describe('getCampaignAttacksWithRuntime', () => {
       mode: 0,
       status: 'pending',
       keyspace: '1000',
+      keyspacePending: false, // keyspace already computed
       estimatedSecondsRemaining: 10,
       wordlistId: 5,
     })
+  })
+
+  test('keyspacePending true: mode-0 attack whose wordlist is still processing', async () => {
+    attackRows = [
+      {
+        id: 1,
+        campaignId: 10,
+        projectId: 1,
+        mode: 0,
+        keyspace: null,
+        wordlistId: 5,
+        rulelistId: null,
+        masklistId: null,
+        dependencies: null,
+      },
+    ]
+    campaignRows = [{ id: 10, status: 'running' }]
+    wordlistRows = [{ id: 5, status: 'processing' }]
+
+    const rows = await getCampaignAttacksWithRuntime(10)
+    expect(rows[0]?.keyspacePending).toBe(true)
+  })
+
+  test('keyspacePending false: mode-3 masklist settled to a null keyspace (#230 / #231)', async () => {
+    attackRows = [
+      {
+        id: 1,
+        campaignId: 10,
+        projectId: 1,
+        mode: 3,
+        keyspace: null,
+        wordlistId: null,
+        rulelistId: null,
+        masklistId: 8,
+        dependencies: null,
+      },
+    ]
+    campaignRows = [{ id: 10, status: 'running' }]
+    masklistRows = [{ id: 8, status: 'ready' }] // counted, concluded uncomputable
+
+    const rows = await getCampaignAttacksWithRuntime(10)
+    expect(rows[0]?.keyspacePending).toBe(false)
+  })
+
+  test('keyspacePending false: mode-3 mask attack carrying a stray, still-processing wordlist (#230)', async () => {
+    attackRows = [
+      {
+        id: 1,
+        campaignId: 10,
+        projectId: 1,
+        mode: 3,
+        keyspace: null,
+        wordlistId: 5, // irrelevant to a mask attack's keyspace
+        rulelistId: null,
+        masklistId: null,
+        dependencies: null,
+      },
+    ]
+    campaignRows = [{ id: 10, status: 'running' }]
+    wordlistRows = [{ id: 5, status: 'processing' }]
+
+    const rows = await getCampaignAttacksWithRuntime(10)
+    expect(rows[0]?.keyspacePending).toBe(false)
+  })
+
+  test('keyspacePending false: referenced resource id resolves to no row (conservative fallback)', async () => {
+    // wordlistId 5 is referenced but no matching word_lists row is returned, so
+    // statusFor resolves to null -> not settling -> "--", never a false
+    // "Computing...". keyspace is null so the resource-status path is reached.
+    attackRows = [
+      {
+        id: 1,
+        campaignId: 10,
+        projectId: 1,
+        mode: 0,
+        keyspace: null,
+        wordlistId: 5,
+        rulelistId: null,
+        masklistId: null,
+        dependencies: null,
+      },
+    ]
+    campaignRows = [{ id: 10, status: 'running' }]
+    wordlistRows = [] // no row for id 5
+
+    const rows = await getCampaignAttacksWithRuntime(10)
+    expect(rows[0]?.keyspacePending).toBe(false)
   })
 })
