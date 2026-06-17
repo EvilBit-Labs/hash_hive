@@ -418,7 +418,7 @@ describe('CampaignDetailPage', () => {
     expect(screen.getByText('2, 3')).toBeDefined()
   })
 
-  it('renders Keyspace + ETA columns with distinct empty states (issue #99)', async () => {
+  it('renders Keyspace + ETA columns with honest empty states (issues #99, #230)', async () => {
     const data = mockCampaignDetailResponse({
       attacks: [
         // Computable: formatted keyspace + a counting-down ETA.
@@ -427,26 +427,41 @@ describe('CampaignDetailPage', () => {
           mode: 0,
           status: 'running',
           keyspace: '1000000',
+          keyspacePending: false,
           estimatedSecondsRemaining: 12000,
           wordlistId: 5,
         },
-        // Count in flight: keyspace null but a wordlist is referenced.
+        // Genuinely computing: backend says a consumed input is in flight.
         {
           id: 2,
           mode: 0,
           status: 'pending',
           keyspace: null,
+          keyspacePending: true,
           estimatedSecondsRemaining: null,
           wordlistId: 9,
         },
-        // Exhausted, mask-only: keyspace uncomputable.
+        // Mask attack with a stray wordlist (#230 mode-blind repro): not pending
+        // -> "--", never "Computing...".
         {
           id: 3,
           mode: 3,
           status: 'exhausted',
           keyspace: null,
+          keyspacePending: false,
           estimatedSecondsRemaining: null,
-          wordlistId: null,
+          wordlistId: 7,
+        },
+        // Masklist counted but concluded uncomputable (#230 / #231 settled-null):
+        // not pending -> "--".
+        {
+          id: 4,
+          mode: 3,
+          status: 'pending',
+          keyspace: null,
+          keyspacePending: false,
+          estimatedSecondsRemaining: null,
+          masklistId: 2,
         },
       ],
     })
@@ -464,8 +479,11 @@ describe('CampaignDetailPage', () => {
       expect(screen.getByText('1.00e+6')).toBeDefined() // attack 1 keyspace
     })
     expect(screen.getByText('3h 20m')).toBeDefined() // attack 1 ETA (12000s)
-    expect(screen.getByText('Computing...')).toBeDefined() // attack 2 keyspace, count in flight
-    expect(screen.getByText('exhausted')).toBeDefined() // attack 3 status badge
+    expect(screen.getByText('Computing...')).toBeDefined() // attack 2 keyspace, genuinely pending
+    // Attacks 3 (stray wordlist) and 4 (settled-null masklist) render "--", not
+    // "Computing..." — the #230 fix. Exactly one cell is computing.
+    expect(screen.getAllByText('Computing...')).toHaveLength(1)
+    expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(2)
   })
 
   describe('Results tab (U9)', () => {
