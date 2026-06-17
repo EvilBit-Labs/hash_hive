@@ -48,8 +48,13 @@ import { enqueueLineCount } from '../services/resources/line-count-trigger.js'
 export interface BackfillSummary {
   total: number
   enqueued: number
-  skippedIds: number[]
-  failedIds: number[]
+  /**
+   * Qualified `resourceType:id` refs (e.g. "wordlist:5"). Wordlists and rulelists
+   * have independent id sequences and can collide on a bare number, so refs are
+   * tagged with the resource type to keep operator logs unambiguous.
+   */
+  skipped: string[]
+  failed: string[]
 }
 
 // Seam so tests can inject a capturing or throwing enqueue. `enqueueLineCount`
@@ -69,8 +74,8 @@ const CANDIDATE_TABLES = [
  * `line_count` and a usable file reference. Returns a summary of the run.
  */
 export async function backfillLineCount(): Promise<BackfillSummary> {
-  const skippedIds: number[] = []
-  const failedIds: number[] = []
+  const skipped: string[] = []
+  const failed: string[] = []
   let total = 0
   let enqueued = 0
 
@@ -82,11 +87,12 @@ export async function backfillLineCount(): Promise<BackfillSummary> {
 
     total += rows.length
     for (const row of rows) {
+      const ref = `${resourceType}:${row.id}`
       const fileRef = row.fileRef as { key?: string } | null
       if (!fileRef?.key) {
         // A `ready` row with a fileRef but no usable key is a data-integrity
         // signal, not a count candidate — name it so an operator can investigate.
-        skippedIds.push(row.id)
+        skipped.push(ref)
         continue
       }
 
@@ -99,15 +105,15 @@ export async function backfillLineCount(): Promise<BackfillSummary> {
           // is unavailable — e.g. Redis down and the queue map is empty. Counting
           // it as enqueued would report a clean run while queuing nothing, so
           // record it as a failure.
-          failedIds.push(row.id)
+          failed.push(ref)
           logger.warn(
             { resourceType, resourceId: row.id },
             'line-count backfill: enqueue reported not enqueued (queue unavailable?), continuing'
           )
         }
       } catch (err) {
-        // One row's failure must not abort the run — log its id and continue.
-        failedIds.push(row.id)
+        // One row's failure must not abort the run — log its ref and continue.
+        failed.push(ref)
         logger.error(
           { err, resourceType, resourceId: row.id },
           'line-count backfill: enqueue failed, continuing'
@@ -117,17 +123,17 @@ export async function backfillLineCount(): Promise<BackfillSummary> {
   }
 
   logger.info(
-    { total, enqueued, skipped: skippedIds.length, failed: failedIds.length },
+    { total, enqueued, skipped: skipped.length, failed: failed.length },
     'line-count backfill complete'
   )
-  if (skippedIds.length > 0) {
-    logger.warn({ skippedIds }, 'line-count backfill: rows skipped (file reference has no key)')
+  if (skipped.length > 0) {
+    logger.warn({ skipped }, 'line-count backfill: rows skipped (file reference has no key)')
   }
-  if (failedIds.length > 0) {
-    logger.warn({ failedIds }, 'line-count backfill: rows failed to enqueue')
+  if (failed.length > 0) {
+    logger.warn({ failed }, 'line-count backfill: rows failed to enqueue')
   }
 
-  return { total, enqueued, skippedIds, failedIds }
+  return { total, enqueued, skipped, failed }
 }
 
 async function run(): Promise<number> {
@@ -145,7 +151,7 @@ async function run(): Promise<number> {
       throw new Error('Redis is not connected after queue init; cannot enqueue line-count jobs')
     }
     const summary = await backfillLineCount()
-    return summary.failedIds.length
+    return summary.failed.length
   } finally {
     await queueManager.shutdown()
   }

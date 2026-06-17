@@ -90,7 +90,7 @@ describe('backfillLineCount', () => {
       ['wordlist', 2, 10],
       ['rulelist', 3, 20],
     ])
-    expect(summary).toEqual({ total: 3, enqueued: 3, skippedIds: [], failedIds: [] })
+    expect(summary).toEqual({ total: 3, enqueued: 3, skipped: [], failed: [] })
   })
 
   test('forwards the resource projectId verbatim to the enqueue', async () => {
@@ -121,7 +121,7 @@ describe('backfillLineCount', () => {
     const summary = await backfillLineCount()
 
     expect(enqueueCalls).toEqual([])
-    expect(summary).toEqual({ total: 0, enqueued: 0, skippedIds: [], failedIds: [] })
+    expect(summary).toEqual({ total: 0, enqueued: 0, skipped: [], failed: [] })
   })
 
   test('never queries the masklist table', async () => {
@@ -140,9 +140,9 @@ describe('backfillLineCount', () => {
     const summary = await backfillLineCount()
 
     expect(enqueueCalls).toEqual([['wordlist', 1, 10]])
-    expect(summary.skippedIds).toEqual([2])
+    expect(summary.skipped).toEqual(['wordlist:2'])
     expect(summary.enqueued).toBe(1)
-    expect(summary.failedIds).toEqual([])
+    expect(summary.failed).toEqual([])
   })
 
   test('one row enqueue failure is recorded and does not abort the run', async () => {
@@ -158,7 +158,7 @@ describe('backfillLineCount', () => {
       ['wordlist', 1, 10],
       ['wordlist', 3, 10],
     ])
-    expect(summary.failedIds).toEqual([2])
+    expect(summary.failed).toEqual(['wordlist:2'])
     expect(summary.enqueued).toBe(2)
     expect(summary.total).toBe(3)
   })
@@ -178,7 +178,7 @@ describe('backfillLineCount', () => {
       ['wordlist', 1, 10],
       ['wordlist', 3, 10],
     ])
-    expect(summary.failedIds).toEqual([2])
+    expect(summary.failed).toEqual(['wordlist:2'])
     expect(summary.enqueued).toBe(2)
     expect(summary.total).toBe(3)
   })
