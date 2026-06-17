@@ -55,11 +55,12 @@ _lineCountDeps.getQueueConfig = () =>
   // oxlint-disable-next-line no-explicit-any -- test stub for the dynamic-import seam
   Promise.resolve({ QUEUE_NAMES: { LINE_COUNT: 'jobs-line-count' } } as any)
 
-// Default enqueue spy: captures (type, id, projectId) without touching the queue.
+// Default enqueue spy: captures (type, id, projectId) and reports success
+// (mirrors enqueueLineCount's boolean return) without touching the queue.
 let enqueueCalls: Array<[LineCountResourceType, number, number]> = []
-function spyEnqueue(type: LineCountResourceType, id: number, projectId: number): Promise<void> {
+function spyEnqueue(type: LineCountResourceType, id: number, projectId: number): Promise<boolean> {
   enqueueCalls.push([type, id, projectId])
-  return Promise.resolve()
+  return Promise.resolve(true)
 }
 
 beforeEach(() => {
@@ -147,6 +148,26 @@ describe('backfillLineCount', () => {
   test('one row enqueue failure is recorded and does not abort the run', async () => {
     _backfillDeps.enqueue = (type, id, projectId) => {
       if (id === 2) return Promise.reject(new Error('redis down'))
+      return spyEnqueue(type, id, projectId)
+    }
+    wordlistRows = [withKey(1, 10), withKey(2, 10), withKey(3, 10)]
+
+    const summary = await backfillLineCount()
+
+    expect(enqueueCalls).toEqual([
+      ['wordlist', 1, 10],
+      ['wordlist', 3, 10],
+    ])
+    expect(summary.failedIds).toEqual([2])
+    expect(summary.enqueued).toBe(2)
+    expect(summary.total).toBe(3)
+  })
+
+  test('records a row as failed when the enqueue reports not enqueued (queue unavailable)', async () => {
+    // enqueueLineCount returns false (rather than throwing) when the queue is
+    // unavailable — counting it as enqueued would mask a silent no-op.
+    _backfillDeps.enqueue = (type, id, projectId) => {
+      if (id === 2) return Promise.resolve(false)
       return spyEnqueue(type, id, projectId)
     }
     wordlistRows = [withKey(1, 10), withKey(2, 10), withKey(3, 10)]

@@ -25,12 +25,16 @@
  * not `line_count`, and have their own backfill (`backfill-masklist-keyspace.ts`,
  * #231).
  *
- * Resilient — a single resource's enqueue failure is logged (with its id) and
- * the run continues. The process exits non-zero if any row failed, so a caller
- * (or CI) can tell a clean run from a partial one.
+ * Resilient — a single resource's enqueue failure (a throw, or an enqueue that
+ * reports the queue was unavailable) is logged with its id and the run
+ * continues. The process exits non-zero if any row failed to enqueue, or if
+ * Redis is not connected after queue init, so a caller (or CI) can tell a clean
+ * run from a partial or no-op one.
  *
- * Usage:
- *   bun packages/backend/src/scripts/backfill-line-count.ts
+ * Usage (from the repo root — the --filter form sets CWD to packages/backend so
+ * env validation finds packages/backend/.env):
+ *   just backfill-line-count
+ *   # or: bun --filter @hashhive/backend backfill:line-count
  */
 import { ruleLists, wordLists } from '@hashhive/shared'
 import { and, eq, isNotNull, isNull } from 'drizzle-orm'
@@ -87,8 +91,20 @@ export async function backfillLineCount(): Promise<BackfillSummary> {
       }
 
       try {
-        await _backfillDeps.enqueue(resourceType, row.id, row.projectId)
-        enqueued++
+        const ok = await _backfillDeps.enqueue(resourceType, row.id, row.projectId)
+        if (ok) {
+          enqueued++
+        } else {
+          // enqueueLineCount returns false (rather than throwing) when the queue
+          // is unavailable — e.g. Redis down and the queue map is empty. Counting
+          // it as enqueued would report a clean run while queuing nothing, so
+          // record it as a failure.
+          failedIds.push(row.id)
+          logger.warn(
+            { resourceType, resourceId: row.id },
+            'line-count backfill: enqueue reported not enqueued (queue unavailable?), continuing'
+          )
+        }
       } catch (err) {
         // One row's failure must not abort the run — log its id and continue.
         failedIds.push(row.id)
@@ -122,6 +138,12 @@ async function run(): Promise<number> {
   setQueueManager(queueManager)
   await queueManager.init()
   try {
+    // QueueManager.init() swallows a Redis connect failure and returns with an
+    // empty queue map, so a down Redis would otherwise let every enqueue no-op
+    // while the run still reports success. Fail loudly instead.
+    if (queueManager.getRedisStatus() !== 'connected') {
+      throw new Error('Redis is not connected after queue init; cannot enqueue line-count jobs')
+    }
     const summary = await backfillLineCount()
     return summary.failedIds.length
   } finally {
