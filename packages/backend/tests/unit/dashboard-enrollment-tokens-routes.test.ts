@@ -15,6 +15,11 @@
  * Service mocks are pinned to the real service ReturnType per
  * docs/solutions/conventions/contract-test-mocks-mirror-service-not-schema.md.
  */
+import {
+  createEnrollmentTokenResponseSchema,
+  enrollmentTokenMetadataSchema,
+  listEnrollmentTokensResponseSchema,
+} from '@hashhive/shared'
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
@@ -177,6 +182,9 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { token: string; metadata: Record<string, unknown> }
       expect(body.token).toBe('etk_1_brave-coral-otter-47')
       expect(body.metadata).not.toHaveProperty('secretHash')
+      // Live body must satisfy the shared schema (runtime-validate the
+      // route-as-spec contract, which @hono/zod-openapi does not enforce).
+      expect(() => createEnrollmentTokenResponseSchema.parse(body)).not.toThrow()
     })
 
     it('rejects a non-admin member with 403', async () => {
@@ -215,6 +223,7 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { tokens: Record<string, unknown>[] }
       expect(body.tokens).toHaveLength(1)
       expect(body.tokens[0]).not.toHaveProperty('secretHash')
+      expect(() => listEnrollmentTokensResponseSchema.parse(body)).not.toThrow()
     })
 
     it('rejects an unauthenticated request with 401', async () => {
@@ -232,6 +241,7 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(200)
       const body = (await res.json()) as { revokedAt: string | null }
       expect(body.revokedAt).toBe('2026-06-18T01:00:00.000Z')
+      expect(() => enrollmentTokenMetadataSchema.parse(body)).not.toThrow()
     })
 
     it('returns 404 for a missing / cross-project token', async () => {

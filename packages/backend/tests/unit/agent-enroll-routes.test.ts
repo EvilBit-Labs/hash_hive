@@ -1,3 +1,4 @@
+import { enrollAgentResponseSchema } from '@hashhive/shared'
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
@@ -90,7 +91,11 @@ if (!IS_ISOLATED) {
       claimResult = { ok: true, agentId: 42, token: 'agt_42_rand' }
       const res = await post(validBody) // deliberately no Authorization header
       expect(res.status).toBe(201)
-      expect(await res.json()).toEqual({ agentId: 42, token: 'agt_42_rand' })
+      const body = await res.json()
+      expect(body).toEqual({ agentId: 42, token: 'agt_42_rand' })
+      // @hono/zod-openapi response schemas are compile-time only; round-trip
+      // the live body through the shared schema to catch handler/schema drift.
+      expect(() => enrollAgentResponseSchema.parse(body)).not.toThrow()
       expect(res.headers.get('cache-control')).toBe('no-store')
       // Service received the parsed enrollment input.
       expect(lastClaimArg).toMatchObject({ rawToken: validBody.token, clientId: 'rig-a' })
