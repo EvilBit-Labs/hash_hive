@@ -36,6 +36,7 @@ export type AgentInternalErrorCode =
   | 'BENCHMARK_ERROR'
   | 'RESOURCE_URL_ERROR'
   | 'CRACKER_UPDATE_ERROR'
+  | 'ENROLL_ERROR'
 
 /**
  * Log a route-handler exception with the route's per-call context and
