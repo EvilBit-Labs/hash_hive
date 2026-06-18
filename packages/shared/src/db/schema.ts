@@ -207,6 +207,17 @@ export const agents = pgTable(
      * this column and any callers reading it.
      */
     crackerVersion: varchar('cracker_version', { length: 100 }),
+    /**
+     * Stable agent-supplied identifier used to make enrollment
+     * idempotent. The agent persists this on first boot and sends it on
+     * every `/enroll` call. A dropped enrollment response (agent never
+     * received its bearer token) is retried with the same client id, and
+     * the enrollment service re-issues a bearer for the existing row
+     * instead of minting a duplicate agent. NULL for legacy/migrated
+     * agents that predate enrollment. Uniqueness is per-project (see the
+     * partial unique index below).
+     */
+    enrollmentClientId: varchar('enrollment_client_id', { length: 255 }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -214,6 +225,12 @@ export const agents = pgTable(
   (table) => [
     index('agents_project_id_idx').on(table.projectId),
     index('agents_status_idx').on(table.status),
+    // Idempotent enrollment: at most one agent per (project, client id).
+    // Partial so the many legacy/migrated agents with a NULL client id
+    // do not collide with each other.
+    uniqueIndex('agents_project_enrollment_client_unique')
+      .on(table.projectId, table.enrollmentClientId)
+      .where(sql`${table.enrollmentClientId} IS NOT NULL`),
     // S-H2: legacy plaintext path looks up by `auth_token` directly;
     // partial uniqueness here preserves the pre-S-H2 invariant
     // (`agents.auth_token` was UNIQUE NOT NULL) for the rows that still
@@ -281,6 +298,59 @@ export const agentBenchmarks = pgTable(
   (table) => [
     index('agent_benchmarks_agent_id_idx').on(table.agentId),
     uniqueIndex('agent_benchmarks_agent_id_hashcat_mode_idx').on(table.agentId, table.hashcatMode),
+  ]
+)
+
+/**
+ * Enrollment tokens — the typeable, short-lived credential an admin mints
+ * and hands to a new agent. The agent presents it once at `/enroll`; the
+ * server validates + consumes it and issues the agent its long-lived
+ * per-agent bearer token (`agents.auth_token_hash`). One-time tokens are
+ * consumed on first successful claim; reusable tokens enroll many agents
+ * (optionally capped by `max_uses`). Only the bcrypt hash of the secret
+ * is stored — the raw `etk_<id>_<word-phrase>` token is shown once at
+ * mint time and never persisted. Project-scoped: enrolled agents join
+ * the token's project.
+ */
+export const enrollmentTokens = pgTable(
+  'enrollment_tokens',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    // Operator-facing label so a token is recognizable in the list
+    // (e.g. "rack-3 rigs"). Optional.
+    label: varchar('label', { length: 255 }),
+    // bcrypt hash of the word-phrase secret portion. Same cost as agent
+    // bearer tokens and Control API keys so no surface is the weak link.
+    // The raw token is delivered to the operator exactly once.
+    secretHash: varchar('secret_hash', { length: 255 }).notNull(),
+    // false = one-time (consumed on first claim); true = reusable.
+    isReusable: boolean('is_reusable').notNull().default(false),
+    // Optional cap on a reusable token. NULL = unlimited (reusable) or
+    // unused (one-time, which is implicitly single-use).
+    maxUses: integer('max_uses'),
+    useCount: integer('use_count').notNull().default(0),
+    // Absolute UTC expiry; NULL = never expires.
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    // Revocation is a timestamp (not a boolean) to preserve an audit
+    // trail of when the token was killed. NULL = active.
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdByUserId: integer('created_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('enrollment_tokens_project_id_idx').on(table.projectId),
+    // Guard the counters at the DB level so a bad migration or direct
+    // UPDATE cannot land a negative or zero-capped token that the atomic
+    // claim guard would then reason about incorrectly.
+    check('enrollment_tokens_use_count_chk', sql`${table.useCount} >= 0`),
+    check('enrollment_tokens_max_uses_chk', sql`${table.maxUses} IS NULL OR ${table.maxUses} > 0`),
   ]
 )
 

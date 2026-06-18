@@ -141,6 +141,13 @@
       "when": 1781616842084,
       "tag": "0019_daily_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781792730174,
+      "tag": "0020_great_namorita",
+      "breakpoints": true
     }
   ]
 }
