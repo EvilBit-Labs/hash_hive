@@ -60,6 +60,9 @@ export const DASHBOARD_ERROR_CODES = [
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',
   'API_KEY_REVOKE_FAILED',
+  // ─── Enrollment tokens ────────────────────────────────────────────
+  'ENROLLMENT_TOKEN_NOT_FOUND',
+  'ENROLLMENT_TOKEN_CREATE_FAILED',
   // ─── Generic ──────────────────────────────────────────────────────
   'INTERNAL_ERROR',
 ] as const

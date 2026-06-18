@@ -44,6 +44,7 @@ import { attackTemplateRoutes } from './attack-templates.js'
 import { authRoutes } from './auth.js'
 import { campaignRoutes } from './campaigns.js'
 import { crackerRoutes } from './crackers.js'
+import { enrollmentTokenRoutes } from './enrollment-tokens.js'
 import { createEventRoutes } from './events.js'
 import { hashListsRoutes } from './hash-lists.js'
 import { hashRoutes } from './hashes.js'
@@ -88,6 +89,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/auth', authRoutes)
   surface.route('/projects', projectRoutes)
   surface.route('/agents', dashboardAgentRoutes)
+  surface.route('/enrollment-tokens', enrollmentTokenRoutes)
   surface.route('/resources', resourceRoutes)
   surface.route('/hashes', hashRoutes)
   surface.route('/attack-templates', attackTemplateRoutes)
