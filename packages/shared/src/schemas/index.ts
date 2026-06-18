@@ -968,3 +968,71 @@ export const meResponseSchema = z.object({
   ),
   selectedProjectId: z.number().int().positive().nullable(),
 })
+
+// ─── Enrollment tokens (#233 / #114) ────────────────────────────────
+// The typeable credential an admin mints to register new agents. The
+// secret is never on the wire after mint — only this metadata is. All
+// timestamps are ISO strings (the service maps DB Dates before
+// returning, so service ReturnType === this wire shape).
+
+export const enrollmentTokenMetadataSchema = z
+  .object({
+    id: z.number().int().positive(),
+    projectId: z.number().int().positive(),
+    label: z.string().nullable(),
+    isReusable: z.boolean(),
+    // null = unlimited (reusable) or unused (one-time).
+    maxUses: z.number().int().positive().nullable(),
+    useCount: z.number().int().nonnegative(),
+    expiresAt: z.string().nullable(),
+    revokedAt: z.string().nullable(),
+    lastUsedAt: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .openapi('EnrollmentTokenMetadata')
+
+export const createEnrollmentTokenRequestSchema = z
+  .object({
+    label: z.string().max(255).optional(),
+    isReusable: z.boolean().default(false),
+    // Only meaningful for reusable tokens; ignored for one-time.
+    maxUses: z.number().int().positive().optional(),
+    // Absolute UTC expiry; the route rejects a non-future value.
+    expiresAt: z.iso.datetime().optional(),
+  })
+  .openapi('CreateEnrollmentTokenRequest')
+
+export const createEnrollmentTokenResponseSchema = z
+  .object({
+    // Raw token, shown to the operator exactly once. Never persisted.
+    token: z.string(),
+    metadata: enrollmentTokenMetadataSchema,
+  })
+  .openapi('CreateEnrollmentTokenResponse')
+
+export const listEnrollmentTokensResponseSchema = z
+  .object({
+    tokens: z.array(enrollmentTokenMetadataSchema),
+  })
+  .openapi('ListEnrollmentTokensResponse')
+
+// Agent-side enrollment (anonymous agent API). The agent presents the
+// enrollment token plus a stable, self-generated clientId (for idempotent
+// retry) and gets its long-lived bearer token back exactly once.
+export const enrollAgentRequestSchema = z
+  .object({
+    token: z.string().min(1),
+    clientId: z.string().min(1).max(255),
+    name: z.string().max(255).optional(),
+    capabilities: z.record(z.string(), z.unknown()).optional(),
+    hardwareProfile: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('EnrollAgentRequest')
+
+export const enrollAgentResponseSchema = z
+  .object({
+    agentId: z.number().int().positive(),
+    // The agent's long-lived bearer token (agt_<id>_<random>). Shown once.
+    token: z.string(),
+  })
+  .openapi('EnrollAgentResponse')
