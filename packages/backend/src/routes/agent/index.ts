@@ -146,13 +146,13 @@ agentRoutes.use('/cracker/*', requireAgentToken)
 // exactly once. The route never trusts the token's embedded id beyond
 // routing — `claimEnrollmentToken` bcrypt-verifies the secret.
 //
-// SECURITY NOTE (flagged for review): this endpoint is intentionally NOT
-// rate-limited in Phase A. The cheap-reject path (unknown id -> no row ->
-// no bcrypt) plus the atomic per-token usage cap bound practical abuse,
-// and a naive per-IP limiter would throttle the very batch-enrollment
-// case reusable tokens exist for (many rigs behind one NAT'd egress IP).
-// The correct guard is a *failed-attempt* limiter (successes never
-// throttle); it is deferred to a follow-up rather than shipped half-built.
+// NOTE: this endpoint is intentionally NOT rate-limited. Abuse is already
+// bounded by the cheap-reject path (unknown id -> no row -> no bcrypt) and
+// the atomic per-token usage cap, and per-request throttling would work
+// against the batch-enrollment case reusable tokens exist for (many rigs
+// behind one NAT'd egress IP). If backpressure is ever needed, the
+// intended shape is an OPTIONAL slow-down hint on the response (a header
+// telling the agent to pace its submissions), not a request limiter.
 const enrollGoneSchema = z
   .object({ error: z.object({ code: z.string(), message: z.string() }) })
   .openapi('AgentEnrollmentGone')
