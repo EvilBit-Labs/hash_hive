@@ -15,7 +15,12 @@ const REVOKE_WARNING =
 export function AccountPage() {
   return (
     <div className="space-y-6">
-      <PageHeader>Account</PageHeader>
+      <div className="space-y-1">
+        <PageHeader>Account</PageHeader>
+        <p className="text-sm text-muted-foreground">
+          Manage how you and your tooling authenticate to HashHive.
+        </p>
+      </div>
       <ApiKeySection />
     </div>
   )
