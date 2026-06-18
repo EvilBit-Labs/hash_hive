@@ -49,7 +49,7 @@ describe('AgentsPage', () => {
     expect(screen.getByText('offline')).toBeDefined()
   })
 
-  it('shows no agents message when API returns empty list', async () => {
+  it('shows the on-brand empty state when API returns empty list', async () => {
     fetchMock = mockFetch({
       '/dashboard/agents': { status: 200, body: { agents: [], total: 0 } },
     })
@@ -58,8 +58,11 @@ describe('AgentsPage', () => {
     renderWithProviders(<AgentsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('No agents found.')).toBeDefined()
+      expect(screen.getByText('No agents yet')).toBeDefined()
     })
+    // Non-admin (no enrollment-token-manage role in this test) sees honest
+    // guidance rather than a mint button that would 403.
+    expect(screen.getByText(/Ask a project admin to generate an enrollment token/)).toBeDefined()
   })
 
   it('renders filter buttons (All, Online, Offline, Error)', async () => {
