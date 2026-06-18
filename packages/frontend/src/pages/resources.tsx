@@ -245,6 +245,43 @@ function ResourceDeleteDialog({ target, onClose }: { target: DeleteTarget; onClo
   )
 }
 
+// On-brand empty states for each resource tab. The first-run checklist
+// routes operators here, so these explain what the resource is and why it
+// matters rather than rendering a bare "No X found." The upload affordance
+// is the persistent top-right button (visible to uploaders).
+const RESOURCE_EMPTY_COPY: Record<UploadableTab, { title: string; description: string }> = {
+  'hash-lists': {
+    title: 'No hash lists yet',
+    description:
+      'A hash list is the set of hashes you want to crack. Upload one to give your agents something to work on.',
+  },
+  wordlists: {
+    title: 'No wordlists yet',
+    description:
+      'Wordlists are the candidate passwords your agents try. Upload one to run dictionary attacks.',
+  },
+  rulelists: {
+    title: 'No rule lists yet',
+    description:
+      'Rules mutate wordlist entries — capitalize, append digits, leetspeak. Upload a .rule file to widen coverage.',
+  },
+  masklists: {
+    title: 'No mask lists yet',
+    description:
+      'Masks describe brute-force patterns like ?u?l?l?l?d?d. Upload a mask list for structured guessing.',
+  },
+}
+
+function ResourceEmptyState({ type }: { type: UploadableTab }) {
+  const copy = RESOURCE_EMPTY_COPY[type]
+  return (
+    <div className="space-y-2 rounded-md border border-surface-1 bg-surface-0/40 p-6 text-center">
+      <p className="text-sm font-medium text-foreground">{copy.title}</p>
+      <p className="mx-auto max-w-prose text-xs text-muted-foreground">{copy.description}</p>
+    </div>
+  )
+}
+
 function UploadButton({ type }: { type: UploadableTab }) {
   const [open, setOpen] = useState(false)
 
@@ -306,7 +343,7 @@ function HashListsTab({
       </PermissionGuard>
 
       {hashLists.length === 0 ? (
-        <EmptyState message="No hash lists found." />
+        <ResourceEmptyState type="hash-lists" />
       ) : (
         <Table>
           <TableHead>
@@ -445,7 +482,7 @@ function ResourceListTab({
       </PermissionGuard>
 
       {resources.length === 0 ? (
-        <EmptyState message={`No ${type} found.`} />
+        <ResourceEmptyState type={type} />
       ) : (
         <Table>
           <TableHead>
