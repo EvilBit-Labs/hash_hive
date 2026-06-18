@@ -21,8 +21,8 @@
     "worker:tasks": "bun src/worker-task-generation.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1070.0",
-    "@aws-sdk/s3-request-presigner": "3.1070.0",
+    "@aws-sdk/client-s3": "3.1069.0",
+    "@aws-sdk/s3-request-presigner": "3.1069.0",
     "@hashhive/shared": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "@hono/zod-validator": "^0.8.0",
@@ -34,6 +34,7 @@
     "ioredis": "5.11.1",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",
+    "unique-names-generator": "^4.7.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
