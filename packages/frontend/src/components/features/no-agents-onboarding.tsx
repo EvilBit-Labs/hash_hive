@@ -2,13 +2,14 @@ import { Check, Copy, Server } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
+import { buildAgentEnrollCommand } from '../../lib/agent-enroll-command'
 import { cn } from '../../lib/utils'
 
 const COPIED_FLASH_MS = 1_500
 
 interface NoAgentsOnboardingProps {
   /**
-   * Origin used as the `--server` value in the install command. Pass
+   * Origin used as the `--server` value in the enroll command. Pass
    * `window.location.origin` from the page-level consumer so the snippet
    * shows the operator's actual dashboard URL, not a placeholder.
    */
@@ -27,11 +28,10 @@ interface NoAgentsOnboardingProps {
  * attention.
  */
 export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
-  const command = [
-    `curl -fsSL ${serverOrigin}/install.sh \\`,
-    `  | HASHHIVE_SERVER=${serverOrigin} \\`,
-    `    HASHHIVE_TOKEN=<AGENT_TOKEN> sh`,
-  ].join('\n')
+  // Shared with the agents-page reveal and the first-run checklist so the
+  // three never drift. Placeholder token — the operator mints a real one
+  // on the agents page (linked below) and pastes it in.
+  const command = buildAgentEnrollCommand(serverOrigin)
 
   const [copied, setCopied] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -93,8 +93,8 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
               Awaiting first agent
             </h2>
             <p className="max-w-prose text-sm text-foreground/80">
-              Your dashboard fills in as soon as a hashcat worker connects to this project. Run the
-              command below on a worker machine to register it.
+              Your dashboard fills in as soon as a hashcat worker connects to this project. Generate
+              an enrollment token, then run this on a worker machine to register it.
             </p>
           </div>
 
@@ -121,8 +121,7 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Replace <code className="font-mono text-foreground/90">{'<AGENT_TOKEN>'}</code> with a
-            token from the{' '}
+            Generate an enrollment token on the{' '}
             <Link
               to="/agents"
               className={cn(
@@ -132,7 +131,7 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
             >
               agents page
             </Link>
-            .
+            , then drop it into <code className="font-mono text-foreground/90">--token</code> above.
           </p>
         </div>
       </div>

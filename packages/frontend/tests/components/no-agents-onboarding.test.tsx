@@ -19,20 +19,19 @@ describe('NoAgentsOnboarding', () => {
     expect(screen.getByText('Awaiting first agent')).toBeDefined()
   })
 
-  it('embeds the provided serverOrigin into the command', () => {
+  it('embeds the provided serverOrigin into the enroll command', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://hashhive.lab" />)
     const block = screen.getByTestId('dashboard-no-agents-onboarding')
-    expect(block.textContent ?? '').toContain('https://hashhive.lab/install.sh')
-    expect(block.textContent ?? '').toContain('HASHHIVE_SERVER=https://hashhive.lab')
+    expect(block.textContent ?? '').toContain('hashhive-agent enroll')
+    expect(block.textContent ?? '').toContain('--server https://hashhive.lab')
   })
 
-  it('uses an obvious placeholder for the agent token', () => {
+  it('uses an obvious placeholder for the enrollment token (no dishonest install.sh)', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-    // <AGENT_TOKEN> appears twice: once in the command, once in the
-    // "Replace <AGENT_TOKEN> with a token from the agents page" tip.
-    // The structural test is that it appears at all.
     const block = screen.getByTestId('dashboard-no-agents-onboarding')
-    expect(block.textContent ?? '').toContain('<AGENT_TOKEN>')
+    expect(block.textContent ?? '').toContain('<ENROLLMENT_TOKEN>')
+    // The previous curl|sh install.sh command pointed at a 404 — it's gone.
+    expect(block.textContent ?? '').not.toContain('install.sh')
   })
 
   it('links to the agents management page via an inline "agents page" link', () => {
@@ -77,8 +76,9 @@ describe('NoAgentsOnboarding', () => {
       expect(writeText).toHaveBeenCalledTimes(1)
       const calls = writeText.mock.calls
       const argument = calls.length > 0 && calls[0] ? calls[0][0] : ''
-      expect(String(argument)).toContain('curl -fsSL https://hashhive.lab/install.sh')
-      expect(String(argument)).toContain('HASHHIVE_TOKEN=<AGENT_TOKEN>')
+      expect(String(argument)).toContain('hashhive-agent enroll')
+      expect(String(argument)).toContain('--server https://hashhive.lab')
+      expect(String(argument)).toContain('--token <ENROLLMENT_TOKEN>')
     })
 
     it('flips the button label to "Command copied" after a successful copy', async () => {
