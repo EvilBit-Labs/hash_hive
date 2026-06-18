@@ -31,13 +31,14 @@ export function useHashTypes() {
   })
 }
 
-export function useHashLists() {
+export function useHashLists(options?: ResourceListOptions) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
+  const enabledOverride = options?.enabled ?? true
 
   return useQuery({
     queryKey: ['hash-lists', selectedProjectId],
     queryFn: () => api.get<{ hashLists: HashList[] }>('/dashboard/resources/hash-lists'),
-    enabled: !!selectedProjectId,
+    enabled: !!selectedProjectId && enabledOverride,
   })
 }
 

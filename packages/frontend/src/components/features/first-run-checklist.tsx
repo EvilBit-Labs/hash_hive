@@ -27,17 +27,30 @@ interface Step {
  */
 export function FirstRunChecklist() {
   const { data: stats } = useDashboardStats()
-  const { data: hashLists } = useHashLists()
-  const { data: wordlists } = useWordlists()
-  const { data: rulelists } = useRulelists()
+
+  // Only fetch the resource lists while genuinely mid-onboarding: an agent
+  // exists but nothing has launched yet. Once a campaign is running/done the
+  // arc is complete (you can't launch without hashes + a wordlist), so we
+  // stop polling resources — important for a wall-display dashboard that
+  // stays mounted indefinitely.
+  const statAgents = stats?.agents.total ?? 0
+  const statLaunched = (stats?.campaigns.running ?? 0) > 0 || (stats?.campaigns.completed ?? 0) > 0
+  const resourcesEnabled = statAgents > 0 && !statLaunched
+
+  const { data: hashLists } = useHashLists({ enabled: resourcesEnabled })
+  const { data: wordlists } = useWordlists({ enabled: resourcesEnabled })
+  const { data: rulelists } = useRulelists({ enabled: resourcesEnabled })
 
   // Wait for the gating signal (agent count) before deciding anything.
   if (!stats) return null
 
   const hasAgent = stats.agents.total > 0
-  const hasHashList = (hashLists?.hashLists.length ?? 0) > 0
+  // A launched campaign implies its prerequisites (hashes, a wordlist, a
+  // campaign) are all in place — and is exactly when we stop fetching the
+  // resource lists, so fold it in rather than reading the (now-skipped) data.
+  const hasHashList = statLaunched || (hashLists?.hashLists.length ?? 0) > 0
   const hasResource =
-    (wordlists?.resources.length ?? 0) > 0 || (rulelists?.resources.length ?? 0) > 0
+    statLaunched || (wordlists?.resources.length ?? 0) > 0 || (rulelists?.resources.length ?? 0) > 0
   const hasCampaign = stats.campaigns.total > 0
   const hasLaunched = stats.campaigns.running > 0 || stats.campaigns.completed > 0
 
