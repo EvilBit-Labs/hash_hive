@@ -19,11 +19,13 @@ What is the change that we're proposing and/or doing?
 ## Alternatives Considered
 
 ### Alternative 1: [Name]
+
 - **Pros**: [benefits]
 - **Cons**: [drawbacks]
 - **Why not**: [specific reason this was rejected]
 
 ### Alternative 2: [Name]
+
 - **Pros**: [benefits]
 - **Cons**: [drawbacks]
 - **Why not**: [specific reason this was rejected]
@@ -33,10 +35,13 @@ What is the change that we're proposing and/or doing?
 What becomes easier or more difficult to do because of this change?
 
 ### Positive
+
 - [benefit 1]
 
 ### Negative
+
 - [trade-off 1]
 
 ### Risks
+
 - [risk and mitigation]

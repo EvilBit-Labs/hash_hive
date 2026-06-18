@@ -28,6 +28,7 @@ bearer token. Enrollment is idempotent on an agent-supplied stable
 ## Alternatives Considered
 
 ### Alternative 1: Single pre-shared bearer token typed into the agent
+
 - **Pros**: simplest; no new endpoint or table.
 - **Cons**: the 43-char base64url bearer token is not human-typeable; no
   lifecycle (expiry/revocation/usage caps); no batch enrollment.
@@ -35,6 +36,7 @@ bearer token. Enrollment is idempotent on an agent-supplied stable
   can't support bringing up a rack of rigs at once.
 
 ### Alternative 2: Fast hash (SHA-256/HMAC) for the enrollment secret
+
 - **Pros**: cheaper verify; avoids bcrypt CPU on an unauthenticated endpoint.
 - **Why not**: a *typeable* token is necessarily low-entropy (a word-phrase),
   so bcrypt's slowness is protective, not waste. The `id` routing hint means
@@ -42,6 +44,7 @@ bearer token. Enrollment is idempotent on an agent-supplied stable
   moot. Keeping bcrypt-12 also preserves the codebase's single-hash unification.
 
 ### Alternative 3: Per-IP rate limiting on the enroll endpoint
+
 - **Pros**: bounds brute-force/abuse on an anonymous endpoint.
 - **Why not**: a reusable token's whole purpose is batch enrollment — many
   rigs behind one NAT'd egress IP — which naive per-IP limiting would throttle.
@@ -52,6 +55,7 @@ bearer token. Enrollment is idempotent on an agent-supplied stable
 ## Consequences
 
 ### Positive
+
 - Honest first-run: the onboarding arc now lands on real affordances.
 - Reuses the existing `agt_` bearer infrastructure unchanged.
 - Project-scoped, revocable, expiring, usage-capped credentials with an audit
@@ -59,11 +63,13 @@ bearer token. Enrollment is idempotent on an agent-supplied stable
 - Idempotent retry: a dropped enroll response doesn't mint duplicate agents.
 
 ### Negative
+
 - New unauthenticated endpoint that creates agents (mitigated: requires a valid
   project-scoped secret; atomic consumption caps blast radius).
 - A second credential format (`etk_`) alongside `agt_`/`cst_`.
 
 ### Risks
+
 - DB-level atomicity of the guarded consume + partial unique index is currently
   proven by reasoning + decision-logic tests, not a real-DB concurrency test;
   the planned testcontainers work will close this.
