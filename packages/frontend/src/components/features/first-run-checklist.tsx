@@ -71,7 +71,7 @@ export function FirstRunChecklist() {
     {
       label: 'Create a campaign',
       hint: 'Point attacks at your hashes',
-      href: '/campaigns',
+      href: '/campaigns/new',
       done: hasCampaign,
     },
     { label: 'Launch it', hint: 'Put the rigs to work', href: '/campaigns', done: hasLaunched },
