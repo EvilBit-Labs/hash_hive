@@ -162,6 +162,13 @@
       "when": 1781894775162,
       "tag": "0022_telemetry_hypertable",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781899915147,
+      "tag": "0023_ambiguous_steel_serpent",
+      "breakpoints": true
     }
   ]
 }

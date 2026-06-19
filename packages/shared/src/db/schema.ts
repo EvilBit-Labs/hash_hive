@@ -521,11 +521,29 @@ export const tasks = pgTable(
     }),
     pausedAt: timestamp('paused_at', { withTimezone: true }),
     resumedAt: timestamp('resumed_at', { withTimezone: true }),
+    // Task lease + committed-offset (ADR-0017, U10). `leaseExpiresAt` is extended
+    // only when the keyspace watermark advances (U11); a lapsed lease makes the
+    // task reclaimable inside the assignNextTask claim CTE even when Redis is
+    // down. `committedKeyspaceOffset` is the BOINC-style resume cursor (U12) —
+    // an ABSOLUTE keyspace coordinate (same space as workRange.start),
+    // authoritative state exempt from RRD downsampling. bigint mode preserves
+    // mask keyspaces beyond Number.MAX_SAFE_INTEGER. Both nullable: legacy rows
+    // carry NULL lease and are swept by the demoted BullMQ backstop until they
+    // cycle.
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    committedKeyspaceOffset: bigint('committed_keyspace_offset', { mode: 'bigint' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('tasks_campaign_id_idx').on(table.campaignId),
+    // U11 reclaim hot path: assignNextTask scans non-terminal leased tasks for
+    // expired leases. The predicate cannot include `lease_expires_at < NOW()`
+    // (NOW() is not immutable), so bound the partial index to the leasable
+    // statuses and index `lease_expires_at` for the range scan.
+    index('tasks_expired_lease_idx')
+      .on(table.leaseExpiresAt)
+      .where(sql`status IN ('assigned', 'running')`),
     // The read-time attack-runtime aggregate (issue #99) filters
     // `WHERE attack_id IN (...) GROUP BY attack_id` with no campaign predicate,
     // so the campaign indexes below can't serve it. Postgres does not
