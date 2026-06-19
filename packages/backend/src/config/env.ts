@@ -61,6 +61,16 @@ const envSchema = z.object({
   // Lower values smooth more aggressively; higher values track recent samples
   // faster. The default 0.125 (1/8) is a conventional starting point.
   AGENT_RATE_EWMA_ALPHA: z.coerce.number().min(0).max(1).default(0.125),
+
+  // Telemetry RRD retention windows (U8, KTD-7).
+  // Postgres interval literals — e.g. "2 hours", "7 days".
+  // applyTelemetryRetentionPolicies() re-applies these at startup so operators
+  // can change the windows without a migration. Defaults match the 0022
+  // migration, which sets the initial policies; a no-op re-apply is harmless.
+  TELEMETRY_FULLRES_RETENTION: z.string().default('1 hour'),
+  TELEMETRY_1M_RETENTION: z.string().default('24 hours'),
+  TELEMETRY_5M_RETENTION: z.string().default('7 days'),
+  TELEMETRY_1H_RETENTION: z.string().default('30 days'),
 })
 
 export type Env = z.infer<typeof envSchema>

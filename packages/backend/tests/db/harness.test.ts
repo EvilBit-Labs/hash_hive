@@ -14,14 +14,17 @@
  * the default mocked `bun test` lane.
  */
 
-import { afterAll, describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import { sql } from 'drizzle-orm'
 
-import { client, db } from '../../src/db/index.js'
+import { db } from '../../src/db/index.js'
 
-afterAll(async () => {
-  await client.end({ timeout: 5 })
-})
+// NOTE: do NOT call client.end() here. The pooled `client` from src/db/index.js
+// is a singleton shared by every test file in the `tests/db` lane (bun:test runs
+// them in one process). Ending it from any one file's afterAll closes the
+// connection for files that run later, surfacing as CONNECTION_ENDED. bun
+// force-exits the process when the run completes, so leaving the pool open is
+// fine and the lane still finishes promptly.
 
 describe('real-DB harness', () => {
   it('connects to the live test database', async () => {

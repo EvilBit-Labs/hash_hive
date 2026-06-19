@@ -201,6 +201,27 @@ queueManager.init().catch((err) => {
   logger.error({ err }, 'Queue manager init failed — queues unavailable')
 })
 
+// ─── Telemetry Retention Policy Init (non-blocking, U8) ─────────────────────
+//
+// Gated on NODE_ENV !== 'test' so the mocked default test lane and
+// non-TimescaleDB CI environments never attempt policy catalog writes.
+// The real-DB lane tests this independently in telemetry-retention.db.test.ts.
+//
+// Non-fatal: a policy failure (e.g. TimescaleDB not yet loaded on the volume)
+// does not prevent the API from serving requests — retention defaults set by
+// the 0022 migration remain in effect. Errors are logged but swallowed.
+
+if (env.NODE_ENV !== 'test') {
+  import('./services/telemetry-retention.js')
+    .then(({ applyTelemetryRetentionPolicies }) => applyTelemetryRetentionPolicies())
+    .catch((err) => {
+      logger.error(
+        { err },
+        'Telemetry retention policy init failed — migration defaults remain in effect'
+      )
+    })
+}
+
 // ─── NotifyBus Init (non-blocking, API role: publisher + subscriber) ────────
 //
 // Gated on NODE_ENV !== 'test' so the mocked default test lane never opens
