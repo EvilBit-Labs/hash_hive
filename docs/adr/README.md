@@ -20,3 +20,6 @@ Each ADR is immutable once accepted — supersede rather than rewrite.
 | [0012](0012-in-memory-websocket-v1-redis-deferred.md) | In-memory WebSocket v1, Redis pub/sub deferred | accepted | 2026-06-18 |
 | [0013](0013-route-as-spec-hono-zod-openapi.md)      | Route-as-spec via @hono/zod-openapi         | accepted | 2026-06-18 |
 | [0014](0014-turborepo-bun-over-nx.md)               | Turborepo + Bun workspaces over NX          | accepted | 2026-06-18 |
+| [0015](0015-append-only-telemetry-timescaledb-rrd.md) | Append-only progress telemetry + TimescaleDB RRD retention | accepted | 2026-06-19 |
+| [0016](0016-server-fanout-bus.md)                   | Server-to-server fan-out bus (LISTEN/NOTIFY first) | accepted | 2026-06-19 |
+| [0017](0017-adaptive-task-sizing-lease.md)          | Adaptive task sizing with lease + committed-offset | accepted | 2026-06-19 |
