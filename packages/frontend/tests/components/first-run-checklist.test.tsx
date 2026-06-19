@@ -106,4 +106,30 @@ describe('FirstRunChecklist', () => {
     await new Promise((r) => setTimeout(r, 80))
     expect(screen.queryByText('Finish setting up')).toBeNull()
   })
+
+  it('does not fetch resource endpoints once a campaign has launched', async () => {
+    // statLaunched = true (running: 1) with agents present — resourcesEnabled
+    // evaluates to false, so the wordlist/rulelist hooks must not fire.
+    fetchMock = mockAll({
+      stats: statsBody({ agents: 2, campaigns: 1, running: 1 }),
+    })
+    renderChecklist()
+
+    // Wait until the stats fetch has resolved — confirms the component has
+    // rendered (and evaluated enabled:false) before we inspect the call log.
+    // The component returns null once doneCount === steps.length, but the
+    // hooks still run so enabled:false is exercised regardless.
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((c) =>
+        typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
+      )
+      expect(urls.some((u) => u.includes('/dashboard/stats'))).toBe(true)
+    })
+
+    const urls = fetchMock.mock.calls.map((c) =>
+      typeof c[0] === 'string' ? c[0] : (c[0] as URL).href
+    )
+    expect(urls.some((u) => u.includes('/dashboard/resources/wordlists'))).toBe(false)
+    expect(urls.some((u) => u.includes('/dashboard/resources/rulelists'))).toBe(false)
+  })
 })

@@ -142,7 +142,10 @@ export async function verifyEnrollmentTokenHash(secret: string, hash: string): P
   try {
     return await Bun.password.verify(secret, hash)
   } catch (err) {
-    logger.warn({ err }, 'Bun.password.verify threw for enrollment token — treating as failure')
+    // error, not warn: a throw here means a corrupt stored hash or a runtime
+    // fault (a normal mismatch returns false), which needs investigation and
+    // should reach error-level alerting rather than be filtered as noise.
+    logger.error({ err }, 'Bun.password.verify threw for enrollment token — treating as failure')
     return false
   }
 }

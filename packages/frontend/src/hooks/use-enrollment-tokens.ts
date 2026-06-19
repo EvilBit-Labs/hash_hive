@@ -13,7 +13,7 @@ import { useUiStore } from '../stores/ui'
 export type { CreateEnrollmentTokenRequest, EnrollmentTokenMetadata }
 
 interface MutationCallbacks {
-  onError?: (message: string) => void
+  onError: (message: string) => void
 }
 
 // Project-scoped: enrollment tokens belong to the active project, so the
@@ -37,7 +37,7 @@ export function useEnrollmentTokens() {
   })
 }
 
-export function useCreateEnrollmentToken({ onError }: MutationCallbacks = {}) {
+export function useCreateEnrollmentToken({ onError }: MutationCallbacks) {
   const qc = useQueryClient()
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   return useMutation<CreateEnrollmentTokenResponse, unknown, CreateEnrollmentTokenRequest>({
@@ -48,11 +48,11 @@ export function useCreateEnrollmentToken({ onError }: MutationCallbacks = {}) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKey(selectedProjectId) })
     },
-    onError: (err) => onError?.(errorMessage(err, 'Failed to mint enrollment token')),
+    onError: (err) => onError(errorMessage(err, 'Failed to mint enrollment token')),
   })
 }
 
-export function useRevokeEnrollmentToken({ onError }: MutationCallbacks = {}) {
+export function useRevokeEnrollmentToken({ onError }: MutationCallbacks) {
   const qc = useQueryClient()
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   return useMutation<EnrollmentTokenMetadata, unknown, number>({
@@ -60,6 +60,6 @@ export function useRevokeEnrollmentToken({ onError }: MutationCallbacks = {}) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKey(selectedProjectId) })
     },
-    onError: (err) => onError?.(errorMessage(err, 'Failed to revoke enrollment token')),
+    onError: (err) => onError(errorMessage(err, 'Failed to revoke enrollment token')),
   })
 }

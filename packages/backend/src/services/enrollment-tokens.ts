@@ -11,7 +11,7 @@
  * bearer token, all in one transaction so a failure can never leave a
  * half-enrolled agent or a phantom-consumed use.
  */
-import type { EnrollmentTokenMetadata } from '@hashhive/shared'
+import type { EnrollAgentRequest, EnrollmentTokenMetadata } from '@hashhive/shared'
 
 import { agents, enrollmentTokens } from '@hashhive/shared'
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm'
@@ -27,8 +27,29 @@ import {
 // Row shape returned by selecting from enrollment_tokens (Dates, not ISO).
 type EnrollmentTokenRow = typeof enrollmentTokens.$inferSelect
 
+// The transaction handle passed to db.transaction's callback.
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+// The non-secret columns `toMetadata` maps. Narrowed so a caller cannot
+// pass a row that still carries `secretHash` into a wire-bound mapper, and
+// so the list path can select exactly these columns (never `secretHash`).
+const metadataColumns = {
+  id: enrollmentTokens.id,
+  projectId: enrollmentTokens.projectId,
+  label: enrollmentTokens.label,
+  isReusable: enrollmentTokens.isReusable,
+  maxUses: enrollmentTokens.maxUses,
+  useCount: enrollmentTokens.useCount,
+  expiresAt: enrollmentTokens.expiresAt,
+  revokedAt: enrollmentTokens.revokedAt,
+  lastUsedAt: enrollmentTokens.lastUsedAt,
+  createdAt: enrollmentTokens.createdAt,
+} as const
+
+type EnrollmentTokenMetadataRow = Pick<EnrollmentTokenRow, keyof typeof metadataColumns>
+
 /** Map a DB row to the wire metadata shape (Dates -> ISO strings, no secret). */
-function toMetadata(row: EnrollmentTokenRow): EnrollmentTokenMetadata {
+function toMetadata(row: EnrollmentTokenMetadataRow): EnrollmentTokenMetadata {
   return {
     id: row.id,
     projectId: row.projectId,
@@ -104,7 +125,7 @@ export async function createEnrollmentToken(
  */
 export async function listEnrollmentTokens(projectId: number): Promise<EnrollmentTokenMetadata[]> {
   const rows = await db
-    .select()
+    .select(metadataColumns)
     .from(enrollmentTokens)
     .where(eq(enrollmentTokens.projectId, projectId))
     .orderBy(sql`${enrollmentTokens.createdAt} DESC`)
@@ -144,13 +165,25 @@ export type ClaimEnrollmentResult =
   | { ok: true; agentId: number; token: string }
   | { ok: false; reason: EnrollmentRejectionReason }
 
-export interface ClaimEnrollmentInput {
+/**
+ * Thrown when a concurrent claim with the same (project, clientId) won the
+ * insert race. The losing transaction rolls back (so its consumed use is
+ * released); the agent should simply retry, landing on the idempotent path.
+ * The route maps this to a retryable 409 rather than an opaque 500.
+ */
+export class ConcurrentEnrollmentError extends Error {
+  constructor() {
+    super('Concurrent enrollment for the same clientId — retry')
+    this.name = 'ConcurrentEnrollmentError'
+  }
+}
+
+// The wire request carries `token`; the service works with the already-
+// extracted `rawToken`. Otherwise identical to the shared wire shape — no
+// local re-declaration of cross-boundary fields (see AGENTS.md).
+export type ClaimEnrollmentInput = Omit<EnrollAgentRequest, 'token'> & {
+  /** The raw `etk_<id>_<phrase>` token string presented by the agent. */
   rawToken: string
-  /** Stable, agent-generated id — the idempotency key for retried enrollment. */
-  clientId: string
-  name?: string | undefined
-  capabilities?: Record<string, unknown> | undefined
-  hardwareProfile?: Record<string, unknown> | undefined
 }
 
 /**
@@ -159,7 +192,9 @@ export interface ClaimEnrollmentInput {
  *
  * 1. Parse + bcrypt-verify the secret (unknown id / bad secret -> invalid).
  * 2. Idempotent retry: if an agent already exists for (project, clientId),
- *    re-issue its bearer WITHOUT consuming a use (handles a dropped 201).
+ *    re-issue its bearer WITHOUT consuming a use (handles a dropped 201) —
+ *    but only when the SAME token enrolled it (binding) and the token is
+ *    still active (a guarded touch gates revoked/expired before re-issue).
  * 3. Atomic guarded consume: a single UPDATE increments use_count only
  *    when the token is active, unexpired, and not exhausted. Concurrency-
  *    safe — under READ COMMITTED a second claim re-evaluates the guard
@@ -188,19 +223,38 @@ export async function claimEnrollmentToken(
     const now = new Date()
 
     // (2) Idempotent retry: same (project, clientId) already enrolled.
-    // Re-issue a bearer for that row; do not consume a use.
+    // Re-issue a bearer for that row WITHOUT consuming a use — but only if
+    // the same token enrolled it (binding) and the token is still valid.
     const [existingAgent] = await tx
-      .select({ id: agents.id })
+      .select({ id: agents.id, enrolledByTokenId: agents.enrolledByTokenId })
       .from(agents)
       .where(
         and(eq(agents.projectId, tokenRow.projectId), eq(agents.enrollmentClientId, input.clientId))
       )
     if (existingAgent) {
-      const token = await issueAgentBearer(tx, existingAgent.id)
-      await tx
+      // A foreign token (or a legacy NULL binding) must not re-credential an
+      // agent it did not enroll — otherwise any valid project token could
+      // rotate/hijack another agent's bearer. Collapse to opaque 'invalid'.
+      if (existingAgent.enrolledByTokenId !== tokenRow.id) {
+        return { ok: false, reason: 'invalid' } as const
+      }
+      // The guarded touch doubles as the revoked/expired gate: 0 rows => the
+      // token was revoked or expired (possibly concurrently). Reject BEFORE
+      // issuing a bearer so a revoked token can never re-issue credentials.
+      const [touched] = await tx
         .update(enrollmentTokens)
         .set({ lastUsedAt: now, updatedAt: now })
-        .where(eq(enrollmentTokens.id, tokenRow.id))
+        .where(
+          and(
+            eq(enrollmentTokens.id, tokenRow.id),
+            isNull(enrollmentTokens.revokedAt),
+            or(isNull(enrollmentTokens.expiresAt), gt(enrollmentTokens.expiresAt, now))
+          )
+        )
+        .returning({ id: enrollmentTokens.id })
+      if (!touched) return classifyClaimRejection(tx, tokenRow.id, now)
+
+      const token = await issueAgentBearer(tx, existingAgent.id)
       return { ok: true, agentId: existingAgent.id, token } as const
     }
 
@@ -223,14 +277,10 @@ export async function claimEnrollmentToken(
       .returning({ id: enrollmentTokens.id })
 
     if (consumed.length === 0) {
-      // Classify from the row we already read. Revoked or expired are
-      // explicit; otherwise the cap was reached (or a concurrent claim
-      // took the last use).
-      if (tokenRow.revokedAt) return { ok: false, reason: 'invalid' } as const
-      if (tokenRow.expiresAt && tokenRow.expiresAt <= now) {
-        return { ok: false, reason: 'expired' } as const
-      }
-      return { ok: false, reason: 'exhausted' } as const
+      // Re-read the committed row to classify accurately even when a
+      // concurrent revoke/expiry raced our snapshot (which might still show
+      // the token as active).
+      return classifyClaimRejection(tx, tokenRow.id, now)
     }
 
     // (4) Create the agent, then mint its bearer. ON CONFLICT guards the
@@ -243,6 +293,7 @@ export async function claimEnrollmentToken(
         name: input.name ?? input.clientId,
         projectId: tokenRow.projectId,
         enrollmentClientId: input.clientId,
+        enrolledByTokenId: tokenRow.id,
         status: 'offline',
         capabilities: input.capabilities ?? {},
         hardwareProfile: input.hardwareProfile ?? {},
@@ -251,7 +302,7 @@ export async function claimEnrollmentToken(
       .returning({ id: agents.id })
 
     if (!agent) {
-      throw new Error('Concurrent enrollment for the same clientId — retry')
+      throw new ConcurrentEnrollmentError()
     }
 
     const token = await issueAgentBearer(tx, agent.id)
@@ -260,14 +311,31 @@ export async function claimEnrollmentToken(
 }
 
 /**
+ * Classify why a guarded consume/touch matched zero rows by re-reading the
+ * committed token row, so a concurrent revoke/expiry is reflected rather
+ * than the caller's stale snapshot. Order matters: revoked and expired are
+ * explicit; anything else means the usage cap was reached.
+ */
+async function classifyClaimRejection(
+  tx: DbTx,
+  tokenId: number,
+  now: Date
+): Promise<{ ok: false; reason: EnrollmentRejectionReason }> {
+  const [live] = await tx
+    .select({ revokedAt: enrollmentTokens.revokedAt, expiresAt: enrollmentTokens.expiresAt })
+    .from(enrollmentTokens)
+    .where(eq(enrollmentTokens.id, tokenId))
+  if (live?.revokedAt) return { ok: false, reason: 'invalid' }
+  if (live?.expiresAt && live.expiresAt <= now) return { ok: false, reason: 'expired' }
+  return { ok: false, reason: 'exhausted' }
+}
+
+/**
  * Mint a fresh bearer token for an agent row and persist its bcrypt hash.
  * Mirrors `rotateAgentToken` but participates in the caller's transaction.
  * Returns the raw token for the handler to return exactly once.
  */
-async function issueAgentBearer(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  agentId: number
-): Promise<string> {
+async function issueAgentBearer(tx: DbTx, agentId: number): Promise<string> {
   const { token, hash } = await generateAgentToken(agentId)
   await tx
     .update(agents)

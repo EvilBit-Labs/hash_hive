@@ -226,6 +226,13 @@ if (!IS_ISOLATED) {
       expect(() => listEnrollmentTokensResponseSchema.parse(body)).not.toThrow()
     })
 
+    it('returns 200 for a non-admin project member (list uses requireProjectAccess, not admin)', async () => {
+      const res = await app.request(BASE, { headers: { cookie: VIEWER_COOKIE, ...ORIGIN_HEADERS } })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { tokens: Record<string, unknown>[] }
+      expect(body.tokens).toHaveLength(1)
+    })
+
     it('rejects an unauthenticated request with 401', async () => {
       const res = await app.request(BASE, { headers: { ...ORIGIN_HEADERS } })
       expect(res.status).toBe(401)

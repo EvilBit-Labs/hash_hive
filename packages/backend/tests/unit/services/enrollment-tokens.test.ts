@@ -113,6 +113,7 @@ if (!IS_ISOLATED) {
     createEnrollmentToken,
     listEnrollmentTokens,
     revokeEnrollmentToken,
+    ConcurrentEnrollmentError,
   } = await import('../../../src/services/enrollment-tokens.js')
 
   const FIXED_DATE = new Date('2026-06-18T00:00:00.000Z')
@@ -249,9 +250,10 @@ if (!IS_ISOLATED) {
 
     it('idempotent retry: re-issues a bearer for an existing agent without inserting or consuming', async () => {
       selectQueue = [
-        [tokenRow({ isReusable: true })], // token row
-        [{ id: 7 }], // existing agent for this clientId
+        [tokenRow({ isReusable: true })], // select #1: token row (id: 1)
+        [{ id: 7, enrolledByTokenId: 1 }], // select #2: existing agent — BOUND to this token
       ]
+      updateReturningQueue = [[{ id: 1 }]] // guarded touch succeeds
 
       const result = await claimEnrollmentToken({
         rawToken: 'etk_1_brave-coral-otter-47',
@@ -271,26 +273,93 @@ if (!IS_ISOLATED) {
     })
 
     it('rejects with "expired" when the token is past its expiry', async () => {
-      selectQueue = [[tokenRow({ expiresAt: new Date('2020-01-01T00:00:00Z') })], []]
-      updateReturningQueue = [[]]
+      const expiredRow = tokenRow({ expiresAt: new Date('2020-01-01T00:00:00Z') })
+      selectQueue = [
+        [expiredRow], // select #1: token row
+        [], // select #2: no existing agent
+        [expiredRow], // select #3: re-read in classifyClaimRejection — expiresAt in the past
+      ]
+      updateReturningQueue = [[]] // guarded consume returns []
       const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-b' })
       expect(result).toEqual({ ok: false, reason: 'expired' })
     })
 
     it('rejects with "invalid" when the token is revoked', async () => {
-      selectQueue = [[tokenRow({ revokedAt: FIXED_DATE })], []]
-      updateReturningQueue = [[]]
+      const revokedRow = tokenRow({ revokedAt: FIXED_DATE })
+      selectQueue = [
+        [revokedRow], // select #1: token row
+        [], // select #2: no existing agent
+        [revokedRow], // select #3: re-read in classifyClaimRejection — revokedAt set
+      ]
+      updateReturningQueue = [[]] // guarded consume returns []
       const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-b' })
       expect(result).toEqual({ ok: false, reason: 'invalid' })
     })
 
-    it('aborts (throws) on a concurrent same-clientId insert conflict so the use rolls back', async () => {
+    it('aborts (throws ConcurrentEnrollmentError) on a same-clientId insert conflict so the use rolls back', async () => {
       selectQueue = [[tokenRow({ isReusable: true })], []]
       updateReturningQueue = [[{ id: 1 }]] // consume succeeded
       insertReturningQueue = [[]] // ON CONFLICT DO NOTHING -> no row
       await expect(
         claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-a' })
-      ).rejects.toThrow(/concurrent enrollment/i)
+      ).rejects.toBeInstanceOf(ConcurrentEnrollmentError)
+    })
+
+    // ─── C1 regression tests: bound-agent rejection paths ──────────────
+
+    it('C1: revoked token + bound existing agent → guarded touch fails → invalid, no bearer issued', async () => {
+      const revokedRow = tokenRow({ revokedAt: FIXED_DATE })
+      selectQueue = [
+        [revokedRow], // select #1: token row
+        [{ id: 9, enrolledByTokenId: 1 }], // select #2: existing agent — BOUND to this token
+        [revokedRow], // select #3: re-read in classifyClaimRejection — revokedAt set
+      ]
+      updateReturningQueue = [[]] // guarded touch returns [] (revoked)
+
+      const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-c' })
+      expect(result).toEqual({ ok: false, reason: 'invalid' })
+      // No bearer token should have been issued.
+      expect(generateAgentTokenMock).not.toHaveBeenCalled()
+    })
+
+    it('C1: expired token + bound existing agent → guarded touch fails → expired, no bearer issued', async () => {
+      const expiredRow = tokenRow({ expiresAt: new Date('2020-01-01T00:00:00Z') })
+      selectQueue = [
+        [expiredRow], // select #1: token row
+        [{ id: 9, enrolledByTokenId: 1 }], // select #2: existing agent — BOUND to this token
+        [expiredRow], // select #3: re-read in classifyClaimRejection — expiresAt in the past
+      ]
+      updateReturningQueue = [[]] // guarded touch returns [] (expired)
+
+      const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-c' })
+      expect(result).toEqual({ ok: false, reason: 'expired' })
+      // No bearer token should have been issued.
+      expect(generateAgentTokenMock).not.toHaveBeenCalled()
+    })
+
+    it('binding mismatch: existing agent enrolled by a different token → invalid, no touch update consumed', async () => {
+      selectQueue = [
+        [tokenRow()], // select #1: token row (id: 1)
+        [{ id: 9, enrolledByTokenId: 99 }], // select #2: existing agent — enrolled by token 99, not 1
+      ]
+
+      const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-c' })
+      expect(result).toEqual({ ok: false, reason: 'invalid' })
+      // No touch update was consumed — short-circuited before the guarded update.
+      expect(updateMock).not.toHaveBeenCalled()
+    })
+
+    it('cap-reached reusable token (no existing agent) → exhausted', async () => {
+      const capRow = tokenRow({ isReusable: true, maxUses: 3, useCount: 3 })
+      selectQueue = [
+        [capRow], // select #1: token row
+        [], // select #2: no existing agent
+        [capRow], // select #3: re-read in classifyClaimRejection — still cap-reached (no revokedAt, expiresAt ok)
+      ]
+      updateReturningQueue = [[]] // guarded consume returns [] (cap reached)
+
+      const result = await claimEnrollmentToken({ rawToken: 'etk_1_x', clientId: 'rig-d' })
+      expect(result).toEqual({ ok: false, reason: 'exhausted' })
     })
   })
 }

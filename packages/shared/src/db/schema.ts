@@ -218,6 +218,19 @@ export const agents = pgTable(
      * partial unique index below).
      */
     enrollmentClientId: varchar('enrollment_client_id', { length: 255 }),
+    /**
+     * The enrollment token that originally enrolled this agent. Binds the
+     * agent to its token so only that token can re-issue the agent's bearer
+     * on an idempotent retry — a different (or revoked) token presenting the
+     * same client id cannot re-credential (and thereby rotate/DoS) this
+     * agent. NULL for legacy/migrated agents that predate enrollment; such
+     * rows are never reachable via `/enroll` (they have a NULL client id).
+     * `set null` on delete keeps the agent if its token row is ever removed
+     * (tokens are normally revoked, not deleted).
+     */
+    enrolledByTokenId: integer('enrolled_by_token_id').references(() => enrollmentTokens.id, {
+      onDelete: 'set null',
+    }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -351,6 +364,19 @@ export const enrollmentTokens = pgTable(
     // claim guard would then reason about incorrectly.
     check('enrollment_tokens_use_count_chk', sql`${table.useCount} >= 0`),
     check('enrollment_tokens_max_uses_chk', sql`${table.maxUses} IS NULL OR ${table.maxUses} > 0`),
+    // A one-time token must not carry a usage cap (max_uses is only
+    // meaningful for reusable tokens). Keeps an illegal combination out of
+    // the table even via a direct UPDATE or a bad migration.
+    check(
+      'enrollment_tokens_reusable_max_uses_chk',
+      sql`${table.isReusable} OR ${table.maxUses} IS NULL`
+    ),
+    // use_count can never exceed the cap. The atomic claim guard reads
+    // `use_count < max_uses`; enforce the ceiling at the DB level too.
+    check(
+      'enrollment_tokens_use_count_le_max_uses_chk',
+      sql`${table.maxUses} IS NULL OR ${table.useCount} <= ${table.maxUses}`
+    ),
   ]
 )
 

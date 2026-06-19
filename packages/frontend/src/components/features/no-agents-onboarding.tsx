@@ -34,6 +34,7 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
   const command = buildAgentEnrollCommand(serverOrigin)
 
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(
@@ -54,12 +55,12 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
       .writeText(command)
       .then(() => {
         setCopied(true)
+        setCopyFailed(false)
         if (timeoutRef.current) clearTimeout(timeoutRef.current)
         timeoutRef.current = setTimeout(() => setCopied(false), COPIED_FLASH_MS)
       })
       .catch(() => {
-        // Clipboard write rejected at runtime (locked permissions,
-        // user-deny prompt). Non-blocking action — no toast.
+        setCopyFailed(true)
       })
   }, [command])
 
@@ -98,26 +99,33 @@ export function NoAgentsOnboarding({ serverOrigin }: NoAgentsOnboardingProps) {
             </p>
           </div>
 
-          <div className="relative">
-            <pre className="overflow-x-auto rounded border border-surface-1 bg-surface-0/70 p-4 pr-12 font-mono text-xs leading-relaxed text-foreground/90">
-              <code>{command}</code>
-            </pre>
-            <button
-              type="button"
-              onClick={onCopy}
-              aria-label={copied ? 'Command copied' : 'Copy command to clipboard'}
-              className={cn(
-                'absolute top-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded',
-                'border border-surface-1 bg-surface-0/95 transition-colors hover:bg-surface-1',
-                'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-              )}
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5 text-success" />
-              ) : (
-                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-              )}
-            </button>
+          <div>
+            <div className="relative">
+              <pre className="overflow-x-auto rounded border border-surface-1 bg-surface-0/70 p-4 pr-12 font-mono text-xs leading-relaxed text-foreground/90">
+                <code>{command}</code>
+              </pre>
+              <button
+                type="button"
+                onClick={onCopy}
+                aria-label={copied ? 'Command copied' : 'Copy command to clipboard'}
+                className={cn(
+                  'absolute top-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded',
+                  'border border-surface-1 bg-surface-0/95 transition-colors hover:bg-surface-1',
+                  'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                )}
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-success" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                )}
+              </button>
+            </div>
+            {copyFailed && (
+              <p className="mt-1 text-xs text-warning">
+                Copy failed - select the text and copy manually.
+              </p>
+            )}
           </div>
 
           <p className="text-xs text-muted-foreground">

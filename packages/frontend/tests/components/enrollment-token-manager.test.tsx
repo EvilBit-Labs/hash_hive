@@ -99,4 +99,35 @@ describe('EnrollmentTokenManager', () => {
     expect(screen.getByText(/hashhive-agent enroll/)).toBeTruthy()
     expect(screen.getByText(/--token etk_1_brave-coral-otter-47/)).toBeTruthy()
   })
+
+  it('clears the revealed token after Done is clicked', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/enrollment-tokens': {
+        GET: { status: 200, body: { tokens: [] } },
+        POST: {
+          status: 201,
+          body: { token: 'etk_1_brave-coral-otter-47', metadata: activeToken },
+        },
+      },
+    })
+    renderManager()
+
+    // Mint a token so the reveal block appears.
+    await waitFor(() => expect(screen.getByText('Generate enrollment token')).toBeTruthy())
+    fireEvent.click(screen.getByText('Generate enrollment token'))
+    fireEvent.click(screen.getByText('Generate token'))
+
+    // Wait for the reveal block to render with the raw token.
+    await waitFor(() => expect(screen.getByText('etk_1_brave-coral-otter-47')).toBeTruthy())
+
+    // Dismiss the reveal.
+    fireEvent.click(screen.getByText('Done'))
+
+    // The exact token string (in its standalone <code> block) must be gone.
+    // Use queryByText with the exact string — not a regex — to avoid matching
+    // the command block that also embeds the token value.
+    await waitFor(() => expect(screen.queryByText('etk_1_brave-coral-otter-47')).toBeNull())
+    // The primary generate button must be restored.
+    expect(screen.getByText('Generate enrollment token')).toBeTruthy()
+  })
 })

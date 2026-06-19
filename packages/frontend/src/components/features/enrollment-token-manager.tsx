@@ -128,7 +128,7 @@ function MintForm({
       ...(isReusable && Number.isInteger(maxUsesNum) && maxUsesNum > 0
         ? { maxUses: maxUsesNum }
         : {}),
-      ...(daysNum > 0
+      ...(Number.isInteger(daysNum) && daysNum > 0
         ? { expiresAt: new Date(Date.now() + daysNum * 86_400_000).toISOString() }
         : {}),
     }
@@ -323,6 +323,7 @@ function CopyableBlock({
   oneLine?: boolean
 }) {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   const onCopy = () => {
     // navigator.clipboard is undefined in insecure contexts (plain http,
@@ -332,10 +333,11 @@ function CopyableBlock({
     void navigator.clipboard.writeText(value).then(
       () => {
         setCopied(true)
+        setCopyFailed(false)
         setTimeout(() => setCopied(false), COPIED_FLASH_MS)
       },
       () => {
-        /* permission denied / locked — manual select still works */
+        setCopyFailed(true)
       }
     )
   }
@@ -366,6 +368,11 @@ function CopyableBlock({
           <Copy className="h-3.5 w-3.5 text-muted-foreground" />
         )}
       </button>
+      {copyFailed && (
+        <p className="mt-1 text-xs text-warning">
+          Copy failed - select the text and copy manually.
+        </p>
+      )}
     </div>
   )
 }

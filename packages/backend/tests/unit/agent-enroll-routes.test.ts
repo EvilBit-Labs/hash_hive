@@ -39,15 +39,30 @@ if (!IS_ISOLATED) {
 } else {
   type ClaimResult = Awaited<ReturnType<typeof ClaimFn>>
 
+  // Local ConcurrentEnrollmentError class — must be the exact same object
+  // exported from mock.module AND thrown by claimMock, so that the route's
+  // `err instanceof ConcurrentEnrollmentError` check resolves correctly.
+  class ConcurrentEnrollmentError extends Error {
+    constructor() {
+      super('Concurrent enrollment for the same clientId — retry')
+      this.name = 'ConcurrentEnrollmentError'
+    }
+  }
+
   let claimResult: ClaimResult = { ok: true, agentId: 1, token: 'agt_1_x' }
+  let claimShouldThrowConcurrent = false
   let lastClaimArg: unknown = null
   const claimMock = mock((arg: unknown) => {
     lastClaimArg = arg
+    if (claimShouldThrowConcurrent) {
+      return Promise.reject(new ConcurrentEnrollmentError())
+    }
     return Promise.resolve(claimResult)
   })
 
   mock.module('../../src/services/enrollment-tokens.js', () => ({
     claimEnrollmentToken: claimMock,
+    ConcurrentEnrollmentError,
   }))
   mock.module('../../src/db/index.js', () => ({ db: {}, client: {} }))
   mock.module('../../src/config/logger.js', () => ({
@@ -72,6 +87,7 @@ if (!IS_ISOLATED) {
     claimMock.mockClear()
     lastClaimArg = null
     claimResult = { ok: true, agentId: 1, token: 'agt_1_x' }
+    claimShouldThrowConcurrent = false
   })
 
   // Agent envelope must be exactly { error: { code, message } } — no
@@ -135,6 +151,14 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400)
       await expectAgentEnvelope(res, 'VALIDATION_ERROR')
       expect(claimMock).not.toHaveBeenCalled()
+    })
+
+    it('maps a ConcurrentEnrollmentError throw to 409 with ENROLLMENT_RETRY and Cache-Control: no-store', async () => {
+      claimShouldThrowConcurrent = true
+      const res = await post(validBody)
+      expect(res.status).toBe(409)
+      expect(res.headers.get('cache-control')).toBe('no-store')
+      await expectAgentEnvelope(res, 'ENROLLMENT_RETRY')
     })
   })
 }

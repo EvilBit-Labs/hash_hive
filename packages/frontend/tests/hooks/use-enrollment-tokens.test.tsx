@@ -43,7 +43,7 @@ function ListComponent() {
 }
 
 function MintComponent() {
-  const { mutate, data } = useCreateEnrollmentToken()
+  const { mutate, data } = useCreateEnrollmentToken({ onError: () => {} })
   return (
     <div>
       <button type="button" onClick={() => mutate({ isReusable: true, maxUses: 3 })}>
@@ -55,7 +55,7 @@ function MintComponent() {
 }
 
 function RevokeComponent() {
-  const { mutate, isSuccess } = useRevokeEnrollmentToken()
+  const { mutate, isSuccess } = useRevokeEnrollmentToken({ onError: () => {} })
   return (
     <div>
       <button type="button" onClick={() => mutate(1)}>

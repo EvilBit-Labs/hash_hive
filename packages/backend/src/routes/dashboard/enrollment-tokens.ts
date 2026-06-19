@@ -110,13 +110,24 @@ const listTokensRoute = createRoute({
     },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
 enrollmentTokenRoutes.openapi(listTokensRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
-  const tokens = await listEnrollmentTokens(projectId)
-  return c.json({ tokens }, 200)
+  try {
+    const tokens = await listEnrollmentTokens(projectId)
+    return c.json({ tokens }, 200)
+  } catch (err) {
+    logger.error({ err, projectId }, 'Failed to list enrollment tokens')
+    return dashboardError(
+      c,
+      500,
+      'ENROLLMENT_TOKEN_LIST_FAILED',
+      'Failed to list enrollment tokens'
+    )
+  }
 })
 
 // ─── DELETE /{id} — revoke an enrollment token (admin) ──────────────
@@ -137,17 +148,28 @@ const revokeTokenRoute = createRoute({
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
 enrollmentTokenRoutes.openapi(revokeTokenRoute, async (c) => {
   const { id } = c.req.valid('param')
   const { projectId } = c.get('scopedUser')!
-  const metadata = await revokeEnrollmentToken(id, projectId)
-  if (!metadata) {
-    return dashboardError(c, 404, 'ENROLLMENT_TOKEN_NOT_FOUND', 'Enrollment token not found')
+  try {
+    const metadata = await revokeEnrollmentToken(id, projectId)
+    if (!metadata) {
+      return dashboardError(c, 404, 'ENROLLMENT_TOKEN_NOT_FOUND', 'Enrollment token not found')
+    }
+    return c.json(metadata, 200)
+  } catch (err) {
+    logger.error({ err, projectId, tokenId: id }, 'Failed to revoke enrollment token')
+    return dashboardError(
+      c,
+      500,
+      'ENROLLMENT_TOKEN_REVOKE_FAILED',
+      'Failed to revoke enrollment token'
+    )
   }
-  return c.json(metadata, 200)
 })
 
 export { enrollmentTokenRoutes }

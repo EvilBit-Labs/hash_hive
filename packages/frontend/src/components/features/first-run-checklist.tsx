@@ -10,6 +10,8 @@ interface Step {
   readonly hint: string
   readonly href: string
   readonly done: boolean
+  /** True when the data query for this step errored and the step is not yet done. */
+  readonly queryFailed?: boolean
 }
 
 /**
@@ -37,9 +39,9 @@ export function FirstRunChecklist() {
   const statLaunched = (stats?.campaigns.running ?? 0) > 0 || (stats?.campaigns.completed ?? 0) > 0
   const resourcesEnabled = statAgents > 0 && !statLaunched
 
-  const { data: hashLists } = useHashLists({ enabled: resourcesEnabled })
-  const { data: wordlists } = useWordlists({ enabled: resourcesEnabled })
-  const { data: rulelists } = useRulelists({ enabled: resourcesEnabled })
+  const { data: hashLists, isError: hashListsError } = useHashLists({ enabled: resourcesEnabled })
+  const { data: wordlists, isError: wordlistsError } = useWordlists({ enabled: resourcesEnabled })
+  const { data: rulelists, isError: rulelistsError } = useRulelists({ enabled: resourcesEnabled })
 
   // Wait for the gating signal (agent count) before deciding anything.
   if (!stats) return null
@@ -61,12 +63,14 @@ export function FirstRunChecklist() {
       hint: 'The hashes you want to crack',
       href: '/resources',
       done: hasHashList,
+      queryFailed: !hasHashList && hashListsError,
     },
     {
       label: 'Add a wordlist or rules',
       hint: 'What the agents try',
       href: '/resources',
       done: hasResource,
+      queryFailed: !hasResource && (wordlistsError || rulelistsError),
     },
     {
       label: 'Create a campaign',
@@ -124,7 +128,13 @@ export function FirstRunChecklist() {
                   >
                     {step.label}
                   </span>
-                  <span className="block text-xs text-muted-foreground">{step.hint}</span>
+                  {step.queryFailed ? (
+                    <span className="block text-xs text-warning">
+                      Could not load - check your connection and reload.
+                    </span>
+                  ) : (
+                    <span className="block text-xs text-muted-foreground">{step.hint}</span>
+                  )}
                 </span>
                 {isActive && (
                   <span className="shrink-0 text-xs font-medium text-[hsl(var(--ctp-peach))]">

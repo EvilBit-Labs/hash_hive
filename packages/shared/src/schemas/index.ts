@@ -995,10 +995,16 @@ export const createEnrollmentTokenRequestSchema = z
   .object({
     label: z.string().max(255).optional(),
     isReusable: z.boolean().default(false),
-    // Only meaningful for reusable tokens; ignored for one-time.
+    // Only meaningful for reusable tokens. Rejected for one-time tokens
+    // below so the illegal combination can't be constructed at the wire
+    // boundary (mirrors the DB CHECK constraint).
     maxUses: z.number().int().positive().optional(),
     // Absolute UTC expiry; the route rejects a non-future value.
     expiresAt: z.iso.datetime().optional(),
+  })
+  .refine((data) => data.isReusable || data.maxUses === undefined, {
+    error: 'maxUses is only valid for reusable tokens',
+    path: ['maxUses'],
   })
   .openapi('CreateEnrollmentTokenRequest')
 
@@ -1021,11 +1027,14 @@ export const listEnrollmentTokensResponseSchema = z
 // retry) and gets its long-lived bearer token back exactly once.
 export const enrollAgentRequestSchema = z
   .object({
-    token: z.string().min(1),
+    token: z.string().min(1).max(512),
     clientId: z.string().min(1).max(255),
     name: z.string().max(255).optional(),
-    capabilities: z.record(z.string(), z.unknown()).optional(),
-    hardwareProfile: z.record(z.string(), z.unknown()).optional(),
+    // Free-form agent metadata; keys bounded so a single field can't carry
+    // an unbounded blob. Total request size is additionally capped by the
+    // `bodyLimit` middleware on the /enroll route.
+    capabilities: z.record(z.string().max(128), z.unknown()).optional(),
+    hardwareProfile: z.record(z.string().max(128), z.unknown()).optional(),
   })
   .openapi('EnrollAgentRequest')
 
