@@ -3,6 +3,7 @@ import { createBunWebSocket } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
+import type { NotifyBus } from './services/events/notify-bus.js'
 import type { AppEnv } from './types.js'
 
 import { env } from './config/env.js'
@@ -200,10 +201,37 @@ queueManager.init().catch((err) => {
   logger.error({ err }, 'Queue manager init failed — queues unavailable')
 })
 
+// ─── NotifyBus Init (non-blocking, API role: publisher + subscriber) ────────
+//
+// Gated on NODE_ENV !== 'test' so the mocked default test lane never opens
+// a real Postgres LISTEN connection. Real-DB tests wire their own instances.
+//
+// Non-fatal startup: mirrors the QueueManager .catch pattern. The API
+// degrades to in-process-only event delivery (the pre-U2 posture) if the
+// bus fails to start — worker-emitted events are dropped, but the API
+// itself continues serving requests.
+
+let notifyBus: NotifyBus<object> | null = null
+
+if (env.NODE_ENV !== 'test') {
+  import('./services/events/notify-bus.js')
+    .then(({ createNotifyBus }) => createNotifyBus('api'))
+    .then((bus) => {
+      notifyBus = bus
+      return bus.start()
+    })
+    .catch((err) => {
+      logger.error({ err }, 'NotifyBus init failed — cross-process events unavailable')
+    })
+}
+
 // ─── Graceful Shutdown ──────────────────────────────────────────────
 
 async function handleShutdown(signal: string) {
   logger.info({ signal }, 'received shutdown signal, closing gracefully')
+  if (notifyBus) {
+    await notifyBus.stop()
+  }
   const qm = getQueueManager()
   if (qm) {
     await qm.shutdown()
