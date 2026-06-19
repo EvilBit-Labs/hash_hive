@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+// A simple Postgres interval literal: "<n> <unit>" (e.g. "30 days", "2 hours").
+// Used to validate telemetry retention windows that are interpolated into raw
+// SQL, so a malformed value is rejected at startup rather than swallowed later.
+const INTERVAL_LITERAL = /^\d+\s+(second|minute|hour|day|week|month|year)s?$/i
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -67,10 +72,16 @@ const envSchema = z.object({
   // applyTelemetryRetentionPolicies() re-applies these at startup so operators
   // can change the windows without a migration. Defaults match the 0022
   // migration, which sets the initial policies; a no-op re-apply is harmless.
-  TELEMETRY_FULLRES_RETENTION: z.string().default('1 hour'),
-  TELEMETRY_1M_RETENTION: z.string().default('24 hours'),
-  TELEMETRY_5M_RETENTION: z.string().default('7 days'),
-  TELEMETRY_1H_RETENTION: z.string().default('30 days'),
+  //
+  // The values are interpolated into a raw `add_retention_policy(... ::interval)`
+  // statement (telemetry-retention.ts), so constrain them to a simple
+  // "<n> <unit>" interval shape: a misconfiguration fails loudly at startup here
+  // rather than as a swallowed SQL error later, and the regex closes the raw-SQL
+  // interpolation vector even though the source is operator-controlled env.
+  TELEMETRY_FULLRES_RETENTION: z.string().regex(INTERVAL_LITERAL).default('1 hour'),
+  TELEMETRY_1M_RETENTION: z.string().regex(INTERVAL_LITERAL).default('24 hours'),
+  TELEMETRY_5M_RETENTION: z.string().regex(INTERVAL_LITERAL).default('7 days'),
+  TELEMETRY_1H_RETENTION: z.string().regex(INTERVAL_LITERAL).default('30 days'),
 
   // Task lease duration in milliseconds (U11, KTD-5).
   // The claim CTE sets lease_expires_at = NOW() + this interval so a

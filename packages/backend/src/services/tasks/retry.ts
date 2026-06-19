@@ -230,6 +230,10 @@ async function terminalFailStaleTask(
     campaignId: staleTask.campaignId,
   })
   await updateCampaignProgress(staleTask.campaignId)
+  // A terminally-failed task frees its agent — re-evaluate preemption so paused
+  // lower-priority victims can resume. Mirrors handleTaskFailure's terminal
+  // branch; without it, sweep/poison-failed tasks would orphan paused campaigns.
+  await enqueuePreemptionEvaluation(staleTask.projectId)
   return true
 }
 
@@ -481,11 +485,10 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
   for (const poison of poisonTasks) {
     try {
       if (await terminalFailStaleTask(poison, 'max_retries_exceeded')) {
+        // terminalFailStaleTask already emits the failed event, recomputes the
+        // campaign aggregate, and enqueues preemption re-evaluation — do not
+        // duplicate them here (matches the main-sweep call sites above).
         failedMaxRetries++
-        emitTaskUpdate(poison.projectId, poison.taskId, 'failed', {
-          campaignId: poison.campaignId,
-        })
-        await updateCampaignProgress(poison.campaignId)
       }
     } catch (err) {
       errored += 1

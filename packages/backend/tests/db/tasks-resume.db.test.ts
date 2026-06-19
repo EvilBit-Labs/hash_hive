@@ -167,11 +167,18 @@ describe('U12 reclaim resume', () => {
     })
     await expireLease(id)
     await assignNextTask(agentBId)
-    expect((await readTask(id)).retryCount).toBe(1)
-    // B makes progress -> healthy resume -> retry_count resets
+    const reclaimed = await readTask(id)
+    expect(reclaimed.retryCount).toBe(1)
+    // Coordinate-frame regression guard: on reclaim, work_range.start rebased to
+    // the committed offset AND progress.keyspaceProgress reset to 0. B then
+    // reports a SMALL relative value (100) — BELOW A's last report (500). With
+    // the reset, 100 > 0 so the watermark advances and retry_count resets. Before
+    // the fix this compared 100 < 500 (stale) and the legitimate resume was
+    // wrongly penalized (lease not extended, retry not reset).
+    expect(Number(reclaimed.committedOffset)).toBe(START + 500)
     await updateTaskProgress(id, agentBId, {
       status: 'running',
-      progress: { keyspaceProgress: 700 },
+      progress: { keyspaceProgress: 100 },
     })
     expect((await readTask(id)).retryCount).toBe(0)
   })

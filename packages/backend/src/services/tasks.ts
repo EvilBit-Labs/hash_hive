@@ -396,12 +396,30 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       -- committed offset so only un-committed keyspace is redone. committed_offset
       -- is an ABSOLUTE coordinate in the same space as workRange.start, so it is
       -- written straight into work_range.start (as text to preserve bigint-scale
-      -- precision; readers accept number|string). end/total are unchanged. A NULL
-      -- committed_offset (no prior progress) leaves the range at its original start.
+      -- precision; readers accept number|string). total is rebased to
+      -- (end - committed_offset) so the remaining range is reported correctly.
+      -- A NULL committed_offset (no prior progress) leaves the range unchanged.
       work_range = CASE
         WHEN candidate.prior_status IN ('assigned', 'running') AND candidate.committed_offset IS NOT NULL
-          THEN jsonb_set(${tasks.workRange}, '{start}', to_jsonb(candidate.committed_offset::text))
+          THEN jsonb_set(
+                 jsonb_set(${tasks.workRange}, '{start}', to_jsonb(candidate.committed_offset::text)),
+                 '{total}',
+                 to_jsonb((((${tasks.workRange} ->> 'end')::numeric) - (candidate.committed_offset::numeric))::text)
+               )
         ELSE ${tasks.workRange}
+      END,
+      -- U12 (coordinate-frame fix): reset progress.keyspaceProgress to 0 on
+      -- reclaim. keyspaceProgress is RELATIVE to work_range.start; rebasing start
+      -- to the committed offset without resetting it would leave the stale
+      -- old-agent value, so the watermark predicate (which compares the resuming
+      -- agent's fresh near-zero reports against tasks.progress) would read "no
+      -- advance", failing to extend the lease (risking a false reclaim loop) and
+      -- failing to reset retry_count. Zeroing it gives the new agent a clean
+      -- baseline. Other progress fields (speed/temperature) are preserved.
+      progress = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running') AND candidate.committed_offset IS NOT NULL
+          THEN jsonb_set(COALESCE(${tasks.progress}, '{}'::jsonb), '{keyspaceProgress}', '0'::jsonb)
+        ELSE ${tasks.progress}
       END,
       -- U12: count a retry on every reclaim; updateTaskProgress resets it to 0
       -- when the watermark advances, so only no-progress reclaims accumulate.
