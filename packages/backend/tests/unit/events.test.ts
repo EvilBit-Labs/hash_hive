@@ -5,6 +5,10 @@
  * helpers which bypass project-scope filtering, and the existing
  * `emit()` / `emitAgentStatus` to verify project scoping is preserved
  * (regression guard).
+ *
+ * Also covers the U1 EventBus seam: `appBus.publish()` exercises the
+ * delivery subscriber registered at module load in `events.ts`, verifying
+ * the bus → WS delivery path end-to-end.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
@@ -15,10 +19,12 @@ import {
   broadcastSystemHealth,
   emit,
   emitAgentStatus,
+  emitTaskUpdate,
   getClientCount,
   registerClient,
   unregisterClient,
 } from '../../src/services/events.js'
+import { appBus } from '../../src/services/events/bus.js'
 
 // Compile-time exhaustiveness pin for the drift-guard test below. Adding
 // a new EventType without updating this map is a type error, which then
@@ -331,5 +337,91 @@ describe('emit (regression: project scoping unchanged)', () => {
     })
 
     expect(ws.sent).toHaveLength(2)
+  })
+})
+
+// ─── U1 EventBus seam ───────────────────────────────────────────────
+//
+// These tests exercise the delivery subscriber registered at module load
+// in events.ts by calling appBus.publish() directly, bypassing the
+// convenience emitters. They prove:
+//   1. The bus → WS delivery path is wired correctly.
+//   2. Project-scope filtering and throttle operate identically whether
+//      the call site is emit() or appBus.publish().
+//   3. __resetEventsForTesting does NOT drop the bus subscription.
+//   4. emitTaskUpdate() (convenience emitter) still reaches WS clients
+//      through the bus (end-to-end integration regression guard).
+
+describe('EventBus seam (U1)', () => {
+  test('appBus.publish delivers task_update to a client subscribed to the event project', async () => {
+    const ws = createFakeWs()
+    trackedRegister(ws, [5])
+
+    await appBus.publish({
+      type: 'task_update',
+      projectId: 5,
+      data: { taskId: 99, status: 'running' },
+      timestamp: new Date().toISOString(),
+    } as AppEvent)
+
+    expect(ws.sent).toHaveLength(1)
+    const frame = getFrame(ws, 0)
+    expect(frame.type).toBe('task_update')
+    expect(frame.projectId).toBe(5)
+    expect(frame.data.taskId).toBe(99)
+  })
+
+  test('appBus.publish does not deliver to a client on a different project', async () => {
+    const wsScoped = createFakeWs()
+    const wsOther = createFakeWs()
+    trackedRegister(wsScoped, [10])
+    trackedRegister(wsOther, [20])
+
+    await appBus.publish({
+      type: 'task_update',
+      projectId: 10,
+      data: { taskId: 1, status: 'running' },
+      timestamp: new Date().toISOString(),
+    } as AppEvent)
+
+    expect(wsScoped.sent).toHaveLength(1)
+    expect(wsOther.sent).toHaveLength(0)
+  })
+
+  test('throttle coalesces two appBus.publish calls within 250ms for the same type:projectId', async () => {
+    const ws = createFakeWs()
+    trackedRegister(ws, [7])
+
+    await appBus.publish({
+      type: 'task_update',
+      projectId: 7,
+      data: { taskId: 1, status: 'running' },
+      timestamp: new Date().toISOString(),
+    } as AppEvent)
+    // Second publish within the 250ms window — must be coalesced (dropped).
+    await appBus.publish({
+      type: 'task_update',
+      projectId: 7,
+      data: { taskId: 1, status: 'paused' },
+      timestamp: new Date().toISOString(),
+    } as AppEvent)
+
+    expect(ws.sent).toHaveLength(1)
+    const frame = getFrame(ws, 0)
+    expect(frame.data.status).toBe('running')
+  })
+
+  test('emitTaskUpdate still reaches a registered WS client through the bus', () => {
+    const ws = createFakeWs()
+    trackedRegister(ws, [3])
+
+    emitTaskUpdate(3, 42, 'running', { agentId: 7 })
+
+    expect(ws.sent).toHaveLength(1)
+    const frame = getFrame(ws, 0)
+    expect(frame.type).toBe('task_update')
+    expect(frame.data.taskId).toBe(42)
+    expect(frame.data.status).toBe('running')
+    expect(frame.data.agentId).toBe(7)
   })
 })
