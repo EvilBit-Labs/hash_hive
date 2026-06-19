@@ -7,6 +7,26 @@ name: CI
 jobs:
   ci-check:
     runs-on: ubuntu-latest
+    # Real-DB integration lane (`just test-db`) needs a live Postgres with the
+    # TimescaleDB extension. The image is PostgreSQL 16 + TimescaleDB and, on a
+    # fresh (always-empty in CI) data dir, auto-preloads `timescaledb`, so the
+    # hypertable migration's `CREATE EXTENSION` succeeds without a command
+    # override (which GitHub service containers do not support). The default
+    # mocked lane (`just test`) does not use this service.
+    services:
+      postgres:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_USER: hashhive
+          POSTGRES_PASSWORD: hashhive
+          POSTGRES_DB: hashhive_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hashhive"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout code
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -23,6 +43,15 @@ jobs:
       # only happens where needed.
       - name: Quality gates and unit tests
         run: just check && just test
+
+      # Real-DB lane: prepares hashhive_test (create + migrate) and runs
+      # tests/db against the live TimescaleDB service. Verifies DB-layer
+      # correctness the mocked lane cannot (LISTEN/NOTIFY, claim CTE, lease
+      # reclaim, hypertable retention).
+      - name: Real-DB integration tests
+        run: just test-db
+        env:
+          DATABASE_URL: postgres://hashhive:hashhive@localhost:5432/hashhive_test
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
