@@ -16,6 +16,8 @@ let mockGetAgentBenchmarkForMode: ReturnType<typeof mock>
 let mockUpdateSet: ReturnType<typeof mock>
 let mockUpdateWhere: ReturnType<typeof mock>
 let mockEmitTaskUpdate: ReturnType<typeof mock>
+let mockEmitCrackResult: ReturnType<typeof mock>
+let mockInsert: ReturnType<typeof mock>
 let mockUpdateCampaignProgress: ReturnType<typeof mock>
 // updateTaskProgress now wraps the hot-row UPDATE + telemetry INSERT (U4) in
 // db.transaction; the mock invokes the callback with a tx that delegates to the
@@ -70,21 +72,30 @@ if (isIsolated) {
     })
   )
 
+  // db.insert mock: supports both the outer hash_items upsert path
+  // (.values().onConflictDoUpdate()) and any other .values().returning() callers.
+  // Capturable so crack-persist tests can assert called / not-called.
+  mockInsert = mock(() => ({
+    values: mock(() => ({
+      returning: mock(() => Promise.resolve([])),
+      onConflictDoUpdate: mock(() => Promise.resolve()),
+    })),
+  }))
+
   mock.module('../../src/db/index.js', () => ({
     db: {
       select: mockSelect,
       execute: mockExecute,
-      insert: mock(() => ({
-        values: mock(() => ({ returning: mock(() => Promise.resolve([])) })),
-      })),
+      insert: mockInsert,
       update: mock(() => ({ set: mockUpdateSet })),
       transaction: mockTransaction,
     },
   }))
 
   mockEmitTaskUpdate = mock()
+  mockEmitCrackResult = mock()
   mock.module('../../src/services/events.js', () => ({
-    emitCrackResult: mock(),
+    emitCrackResult: mockEmitCrackResult,
     emitTaskUpdate: mockEmitTaskUpdate,
   }))
 
@@ -117,19 +128,27 @@ if (isIsolated) {
       mockUpdateWhere
         .mockReset()
         .mockImplementation(() => ({ returning: mock(() => Promise.resolve([{ id: 1 }])) }))
+      // crack-result mocks: reset before each test so call-count assertions don't bleed
+      mockInsert.mockReset().mockImplementation(() => ({
+        values: mock(() => ({
+          returning: mock(() => Promise.resolve([])),
+          onConflictDoUpdate: mock(() => Promise.resolve()),
+        })),
+      }))
+      mockEmitCrackResult.mockReset()
     })
 
-    const ownedRow = (status: string) => ({
+    const ownedRow = (status: string, hashListId: number | null = 1) => ({
       taskId: 1,
       attackId: 1,
       campaignId: 1,
       status,
       startedAt: new Date(),
       projectId: 1,
-      hashListId: 1,
+      hashListId,
     })
 
-    test('returns { stopped: true } and skips the write when the task is paused', async () => {
+    test('returns { stopped: true } and skips the write when the task is paused (no results)', async () => {
       mockLimit.mockResolvedValueOnce([ownedRow('paused')])
 
       const result = await updateTaskProgress(1, 100, { status: 'running' })
@@ -149,6 +168,106 @@ if (isIsolated) {
 
       expect('task' in result).toBe(true)
       expect(mockUpdateSet).toHaveBeenCalledTimes(1)
+    })
+
+    // ─── U5: crack-result persist-first tests ───────────────────────
+
+    test('happy path: running report with crack persists hash_item and fires emitCrackResult', async () => {
+      // Arrange
+      mockLimit.mockResolvedValueOnce([ownedRow('running')])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([{ id: 1, status: 'running' }])),
+      })
+
+      // Act
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [{ hashValue: 'abc123', plaintext: 'password' }],
+      })
+
+      // Assert: plaintext persisted, crack event fired, task returned
+      expect(mockInsert).toHaveBeenCalledTimes(1)
+      expect(mockEmitCrackResult).toHaveBeenCalledTimes(1)
+      expect(mockEmitCrackResult).toHaveBeenCalledWith(1, 1, 1)
+      expect('task' in result).toBe(true)
+    })
+
+    test('behavior change (U5): paused task with crack persists plaintext then returns stopped', async () => {
+      // Arrange: task is paused mid-flight; agent reports with a crack result
+      mockLimit.mockResolvedValueOnce([ownedRow('paused')])
+
+      // Act
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [{ hashValue: 'abc123', plaintext: 'password' }],
+      })
+
+      // Assert: plaintext IS persisted (was dropped before U5)
+      expect(mockInsert).toHaveBeenCalledTimes(1)
+      // Attribution must NOT fire — task is not live
+      expect(mockEmitCrackResult).not.toHaveBeenCalled()
+      // Progress write must NOT fire — paused row stays paused
+      expect(mockUpdateSet).not.toHaveBeenCalled()
+      // Agent is told to stop
+      expect(result).toEqual({ stopped: true })
+    })
+
+    test('TOCTOU: task reassigned between SELECT and UPDATE persists plaintext but skips emitCrackResult', async () => {
+      // Arrange: task appears running at SELECT time; UPDATE matches zero rows
+      // (reassigned or reclaimed between the two operations)
+      mockLimit.mockResolvedValueOnce([ownedRow('running')])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([])), // zero rows -> updated is undefined
+      })
+
+      // Act
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [{ hashValue: 'deadbeef', plaintext: 'secret' }],
+      })
+
+      // Assert: plaintext IS persisted (before the ownership UPDATE)
+      expect(mockInsert).toHaveBeenCalledTimes(1)
+      // Attribution must NOT fire — ownership was lost
+      expect(mockEmitCrackResult).not.toHaveBeenCalled()
+      // Returns the reassigned error
+      expect(result).toEqual({ error: 'Task was reassigned during update' })
+    })
+
+    test('duplicate crack (same hash_list_id + hash_value) upserts without error', async () => {
+      // Arrange: onConflictDoUpdate resolves cleanly on duplicate
+      mockLimit.mockResolvedValueOnce([ownedRow('running')])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([{ id: 1, status: 'running' }])),
+      })
+
+      // Act: submit the same crack twice (simulating idempotent retry)
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [
+          { hashValue: 'abc123', plaintext: 'password' },
+          { hashValue: 'abc123', plaintext: 'password' },
+        ],
+      })
+
+      // Assert: insert called once (with both rows; DB handles dedup via upsert)
+      expect(mockInsert).toHaveBeenCalledTimes(1)
+      expect('error' in result).toBe(false)
+    })
+
+    test('campaign with no hash list returns error, no insert', async () => {
+      // Arrange: task row has no hashListId
+      mockLimit.mockResolvedValueOnce([ownedRow('running', null)])
+
+      // Act
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [{ hashValue: 'abc123', plaintext: 'password' }],
+      })
+
+      // Assert: insert must NOT be called; error surfaces
+      expect(mockInsert).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ error: expect.stringContaining('no associated hash list') })
     })
   })
 

@@ -488,6 +488,80 @@ export async function updateTaskProgress(
     return { error: 'Task not found or not assigned to this agent' }
   }
 
+  // Persist-first (U5, KTD-8): move the hash_items upsert ABOVE the paused
+  // guard so preemption or agent death between report and ack never drops a
+  // found plaintext. The upsert is idempotent on (hash_list_id, hash_value),
+  // so persisting before the guard is safe to repeat on resume.
+  //
+  // The hashListId-missing guard stays ahead of the insert: a campaign with no
+  // hash list still surfaces the configuration error immediately (no insert).
+  //
+  // Attribution side-effects (emitCrackResult) remain gated on the
+  // ownership-verifying UPDATE below — if the UPDATE matches zero rows
+  // (task paused or reassigned), the plaintext is already persisted but no
+  // crack event fires and no cursor advances. This closes the TOCTOU gap that
+  // moving the insert alone would open: a concurrently cancelled task still
+  // gets its plaintext saved, but does not generate a misattributed event.
+  //
+  // The hash_items FK to tasks is ON DELETE SET NULL, so a concurrent task
+  // delete leaves the plaintext with a null task_id rather than an FK error.
+  if (data.results && data.results.length > 0 && !taskRow.hashListId) {
+    logger.error(
+      {
+        taskId,
+        campaignId: taskRow.campaignId,
+        resultCount: data.results.length,
+      },
+      'Cannot store crack results: campaign has no associated hash list'
+    )
+    return {
+      error:
+        'Campaign has no associated hash list; cracked results cannot be stored. Check campaign configuration before resubmitting.',
+    }
+  }
+
+  if (data.results && data.results.length > 0 && taskRow.hashListId) {
+    try {
+      await db
+        .insert(hashItems)
+        .values(
+          data.results.map((r) => ({
+            hashListId: taskRow.hashListId,
+            hashValue: r.hashValue,
+            plaintext: r.plaintext,
+            crackedAt: new Date(),
+            campaignId: taskRow.campaignId,
+            attackId: taskRow.attackId,
+            taskId,
+            agentId,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [hashItems.hashListId, hashItems.hashValue],
+          set: {
+            plaintext: sql`EXCLUDED.plaintext`,
+            crackedAt: sql`EXCLUDED.cracked_at`,
+            campaignId: sql`EXCLUDED.campaign_id`,
+            attackId: sql`EXCLUDED.attack_id`,
+            taskId: sql`EXCLUDED.task_id`,
+            agentId: sql`EXCLUDED.agent_id`,
+          },
+        })
+    } catch (err) {
+      logger.error(
+        {
+          err,
+          taskId,
+          agentId,
+          hashListId: taskRow.hashListId,
+          resultCount: data.results.length,
+        },
+        'Failed to insert crack results'
+      )
+      return { error: 'Failed to store crack results' }
+    }
+  }
+
   // Preemption (#97 U4): a paused task still carries this agent_id (so the
   // heartbeat stop-signal stays derivable), but the agent is reporting
   // progress on work it should abandon. Do NOT resurrect the row to the
@@ -495,12 +569,8 @@ export async function updateTaskProgress(
   // the UPDATE below closes the residual TOCTOU window where a pause lands
   // between this read and the write.
   //
-  // Trade-off (review #221): a final report that also carries newly cracked
-  // results drops them here. This is recoverable — resume re-pends from the
-  // stored `workRange.start + keyspaceProgress`, so the un-acked range is
-  // re-scanned and any crack is re-found (the hash_items upsert is
-  // idempotent). Persisting on this branch was considered but kept out to
-  // avoid a write on the abandon path; the re-scan is the safety net.
+  // Crack results from a paused report are now persisted above (U5) before
+  // reaching this guard, so no plaintext is dropped on the abandon path.
   if (taskRow.status === 'paused') {
     return { stopped: true as const }
   }
@@ -556,83 +626,11 @@ export async function updateTaskProgress(
     return { error: 'Task was reassigned during update' }
   }
 
-  // Insert cracked hash results if submitted.
-  //
-  // **Data-integrity gate.** When the agent submits cracked results
-  // but the task's campaign has no associated `hashListId`, the
-  // results cannot be stored — there is no hash list row to attach
-  // them to. The prior implementation only LOGGED this and fell
-  // through to a successful `{ task: updated }` return, leaving the
-  // agent with no signal that its cracked hashes were dropped on the
-  // floor. That silently lost work — exactly the failure class the
-  // agent contract was built to prevent.
-  //
-  // The corrected behavior surfaces an `{ error }` envelope so the
-  // route's `'error' in result` branch returns a 400 + `TASK_ERROR`
-  // and the agent can quarantine the report (or escalate the
-  // campaign-misconfiguration alert) rather than mark the task done
-  // with phantom progress. The task-row update above is allowed to
-  // stand — `data.status` and `data.progress` are still meaningful
-  // signal — but the results-loss branch returns instead of falling
-  // through to `updateCampaignProgress` so the campaign aggregate
-  // doesn't tick forward on dropped work.
-  if (data.results && data.results.length > 0 && !taskRow.hashListId) {
-    logger.error(
-      {
-        taskId,
-        campaignId: taskRow.campaignId,
-        resultCount: data.results.length,
-      },
-      'Cannot store crack results: campaign has no associated hash list'
-    )
-    return {
-      error:
-        'Campaign has no associated hash list; cracked results cannot be stored. Check campaign configuration before resubmitting.',
-    }
-  }
-
+  // Attribution: fire the crack event only when the ownership-verifying UPDATE
+  // confirmed this agent still owns the task. The plaintext was already
+  // persisted above regardless — this call attributes the find to the live task.
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
-    try {
-      await db
-        .insert(hashItems)
-        .values(
-          data.results.map((r) => ({
-            hashListId: taskRow.hashListId,
-            hashValue: r.hashValue,
-            plaintext: r.plaintext,
-            crackedAt: new Date(),
-            campaignId: taskRow.campaignId,
-            attackId: taskRow.attackId,
-            taskId,
-            agentId,
-          }))
-        )
-        .onConflictDoUpdate({
-          target: [hashItems.hashListId, hashItems.hashValue],
-          set: {
-            plaintext: sql`EXCLUDED.plaintext`,
-            crackedAt: sql`EXCLUDED.cracked_at`,
-            campaignId: sql`EXCLUDED.campaign_id`,
-            attackId: sql`EXCLUDED.attack_id`,
-            taskId: sql`EXCLUDED.task_id`,
-            agentId: sql`EXCLUDED.agent_id`,
-          },
-        })
-
-      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
-    } catch (err) {
-      logger.error(
-        {
-          err,
-          taskId,
-          agentId,
-          hashListId: taskRow.hashListId,
-          resultCount: data.results.length,
-        },
-        'Failed to insert crack results'
-      )
-      return { error: 'Failed to store crack results' }
-    }
+    emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
   }
 
   // Emit events and update campaign progress (no duplicate campaign fetch)
