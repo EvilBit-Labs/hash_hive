@@ -3,6 +3,7 @@ import type { AssignedTask } from '@hashhive/shared'
 import { agentBenchmarks, agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared'
 import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
+import { env } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { updateAgentObservedRate } from './agent-rate.js'
@@ -335,16 +336,36 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   const agentCaps = (agent.capabilities ?? {}) as Record<string, unknown>
   const capabilityPredicate = buildCapabilityPredicate(agentCaps)
 
-  // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED
+  const leaseDurationMs = env.TASK_LEASE_DURATION_MS
+
+  // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED.
+  //
+  // U11 (KTD-5): The candidate predicate now covers two cases:
+  //   1. Truly idle tasks (pending, no owner).
+  //   2. Expired-lease tasks (assigned/running but lease_expires_at < NOW()).
+  //
+  // A NOT EXISTS subquery enforces the one-active-lease-per-agent invariant:
+  // an agent that already holds a live lease cannot claim a second task.
+  //
+  // The SET clause stamps a fresh lease_expires_at so the lessee must report
+  // progress within TASK_LEASE_DURATION_MS or lose the task to reclaim.
   const result = await db.execute(sql`
     WITH candidate AS (
       SELECT ${tasks.id} AS task_id
       FROM ${tasks}
       INNER JOIN ${campaigns} ON ${tasks.campaignId} = ${campaigns.id}
-      WHERE ${tasks.status} = 'pending'
-        AND ${tasks.agentId} IS NULL
+      WHERE (
+        (${tasks.status} = 'pending' AND ${tasks.agentId} IS NULL)
+        OR (${tasks.status} IN ('assigned', 'running') AND ${tasks.leaseExpiresAt} < NOW())
+      )
         AND ${campaigns.projectId} = ${projectId}
         AND ${capabilityPredicate}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${tasks} t2
+          WHERE t2.agent_id = ${agentId}
+            AND t2.status IN ('assigned', 'running')
+            AND t2.lease_expires_at > NOW()
+        )
       ORDER BY ${campaigns.priority}, ${tasks.id}
       LIMIT 1
       FOR UPDATE OF ${tasks} SKIP LOCKED
@@ -354,7 +375,8 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       agent_id = ${agentId},
       status = 'assigned',
       assigned_at = NOW(),
-      updated_at = NOW()
+      updated_at = NOW(),
+      lease_expires_at = NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond')
     FROM candidate
     WHERE ${tasks.id} = candidate.task_id
     RETURNING ${tasks.id}, ${tasks.attackId}, ${tasks.campaignId}, ${tasks.agentId},
@@ -597,10 +619,37 @@ export async function updateTaskProgress(
     updates['completedAt'] = new Date()
   }
 
+  // U11 (KTD-5): extend the lease only when the keyspace watermark strictly
+  // advances. The CASE expression evaluates the OLD progress JSONB value
+  // (PostgreSQL guarantees SET RHS sees the pre-update row) so the comparison
+  // is always against the previously committed position.
+  //
+  // Binding as a string and casting ::numeric avoids JS number precision loss
+  // on bigint-scale keyspace positions.
+  const rawKp = data.progress?.keyspaceProgress
+  const kpIsFinite =
+    rawKp != null &&
+    (typeof rawKp === 'number' ? Number.isFinite(rawKp) : String(rawKp).trim() !== '')
+  if (kpIsFinite) {
+    const kpStr = String(rawKp)
+    const leaseDurationMs = env.TASK_LEASE_DURATION_MS
+    updates['leaseExpiresAt'] = sql`
+      CASE
+        WHEN COALESCE((${tasks.progress} ->> 'keyspaceProgress')::numeric, -1) < ${kpStr}::numeric
+          THEN NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond')
+        ELSE ${tasks.leaseExpiresAt}
+      END`
+  }
+
   // Update task status and append one telemetry row in a single transaction
   // so the two stores never diverge. The status guard (TOCTOU defense for
   // #97 U4) means a row paused between the read above and this write is
   // left untouched rather than resurrected to the reported status.
+  //
+  // U11 lapsed-lease race guard: add (lease_expires_at IS NULL OR
+  // lease_expires_at > NOW()) so a late report from an agent whose lease
+  // already expired matches zero rows — a no-op — rather than resurrecting
+  // stale state. IS NULL keeps legacy pre-U10 rows (no lease column) updatable.
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
       .update(tasks)
@@ -609,7 +658,8 @@ export async function updateTaskProgress(
         and(
           eq(tasks.id, taskId),
           eq(tasks.agentId, agentId),
-          inArray(tasks.status, ['assigned', 'running'])
+          inArray(tasks.status, ['assigned', 'running']),
+          sql`(${tasks.leaseExpiresAt} IS NULL OR ${tasks.leaseExpiresAt} > NOW())`
         )
       )
       .returning()

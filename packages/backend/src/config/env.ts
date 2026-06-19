@@ -71,6 +71,13 @@ const envSchema = z.object({
   TELEMETRY_1M_RETENTION: z.string().default('24 hours'),
   TELEMETRY_5M_RETENTION: z.string().default('7 days'),
   TELEMETRY_1H_RETENTION: z.string().default('30 days'),
+
+  // Task lease duration in milliseconds (U11, KTD-5).
+  // The claim CTE sets lease_expires_at = NOW() + this interval so a
+  // task is reclaimed by the next claimant if the lessee stops reporting.
+  // 90 s is comfortably above the ~3 s agent report cadence; operators
+  // can lower it for tighter reclaim windows or raise it for slow tasks.
+  TASK_LEASE_DURATION_MS: z.coerce.number().int().positive().default(90_000),
 })
 
 export type Env = z.infer<typeof envSchema>

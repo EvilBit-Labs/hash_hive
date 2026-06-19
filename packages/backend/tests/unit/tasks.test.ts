@@ -36,6 +36,8 @@ if (isIsolated) {
       S3_SECRET_KEY: 'test',
       BETTER_AUTH_SECRET: 'test-betterauth-secret-must-be-at-least-32-characters',
       NODE_ENV: 'test',
+      // U11: lease duration used in assignNextTask CTE and updateTaskProgress
+      TASK_LEASE_DURATION_MS: 90_000,
     },
   }))
 

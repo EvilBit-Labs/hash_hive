@@ -234,8 +234,12 @@ async function terminalFailStaleTask(
 }
 
 /**
- * Reassigns tasks from agents that have gone offline. Called periodically
- * by a background job (every 2 minutes via BullMQ).
+ * Backstop sweep for legacy pre-U10 tasks (lease_expires_at IS NULL).
+ *
+ * Since U11, expired-lease tasks (lease_expires_at < NOW()) are reclaimed
+ * atomically by the claim CTE in assignNextTask — no sweep needed for them.
+ * This function now targets only tasks that predate the lease column (NULL
+ * lease_expires_at) and whose owning agent has gone offline.
  *
  * Rebalance policy when a stale task carries non-zero
  * `progress.keyspaceProgress`:
@@ -289,7 +293,15 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // IS NULL branch keeps legacy/migrated rows (status='assigned' with
         // no assigned_at) selectable instead of stranding them forever
         // (NULL < timestamp evaluates to NULL, which the filter rejects).
-        sql`(${tasks.assignedAt} IS NULL OR ${tasks.assignedAt} < ${threshold})`
+        sql`(${tasks.assignedAt} IS NULL OR ${tasks.assignedAt} < ${threshold})`,
+        // U11 (KTD-5): expired-lease tasks are now reclaimed atomically by the
+        // claim CTE in assignNextTask. This sweep only handles legacy pre-U10
+        // rows that predate the lease column (lease_expires_at IS NULL).
+        // NULL < NOW() evaluates to NULL (rejected by WHERE), so without this
+        // predicate NULL-lease rows would correctly pass through — but being
+        // explicit here documents the partition and prevents accidental
+        // double-reclaim if the semantics of the CTE change in future units.
+        sql`${tasks.leaseExpiresAt} IS NULL`
       )
     )
 
