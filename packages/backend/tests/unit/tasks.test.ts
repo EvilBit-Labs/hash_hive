@@ -17,6 +17,10 @@ let mockUpdateSet: ReturnType<typeof mock>
 let mockUpdateWhere: ReturnType<typeof mock>
 let mockEmitTaskUpdate: ReturnType<typeof mock>
 let mockUpdateCampaignProgress: ReturnType<typeof mock>
+// updateTaskProgress now wraps the hot-row UPDATE + telemetry INSERT (U4) in
+// db.transaction; the mock invokes the callback with a tx that delegates to the
+// same update mocks and a no-op telemetry insert.
+let mockTransaction: ReturnType<typeof mock>
 
 if (isIsolated) {
   // ─── Config / logger mocks (prevent env validation during import) ──
@@ -56,6 +60,16 @@ if (isIsolated) {
     returning: mock(() => Promise.resolve([])),
   }))
 
+  // Invokes the callback with a tx that delegates `update` to the shared
+  // update mocks (so the hot-row UPDATE assertions still hold) and provides a
+  // no-op `insert(...).values(...)` for the appended telemetry row.
+  mockTransaction = mock((cb: (tx: unknown) => unknown) =>
+    cb({
+      update: () => ({ set: mockUpdateSet }),
+      insert: () => ({ values: () => Promise.resolve(undefined) }),
+    })
+  )
+
   mock.module('../../src/db/index.js', () => ({
     db: {
       select: mockSelect,
@@ -64,7 +78,7 @@ if (isIsolated) {
         values: mock(() => ({ returning: mock(() => Promise.resolve([])) })),
       })),
       update: mock(() => ({ set: mockUpdateSet })),
-      transaction: mock(),
+      transaction: mockTransaction,
     },
   }))
 
@@ -146,6 +160,9 @@ if (isIsolated) {
       mockLimit.mockReset().mockImplementation(() => Promise.resolve([]))
       mockExecute.mockReset().mockImplementation(() => Promise.resolve([]))
       mockGetAgentBenchmarkForMode.mockReset().mockImplementation(() => Promise.resolve(null))
+      // assignNextTask must not use db.transaction; clear leaked calls from the
+      // updateTaskProgress suite (the transaction mock is created once).
+      mockTransaction.mockClear()
     })
 
     test('returns null when agent does not exist', async () => {

@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  real,
   serial,
   text,
   timestamp,
@@ -642,5 +643,50 @@ export const crackerBinaries = pgTable(
     ),
     index('cracker_binaries_engine_platform_idx').on(table.engine, table.platform),
     index('cracker_binaries_is_active_idx').on(table.isActive),
+  ]
+)
+
+// ─── Task Telemetry ─────────────────────────────────────────────────
+//
+// Append-only time-series store for per-progress-report telemetry (U4).
+// Plain Postgres table for now; becomes a TimescaleDB hypertable in U8
+// via `create_hypertable('task_telemetry', 'time', migrate_data => true)`.
+//
+// CRITICAL: No `id serial primaryKey()` and no UNIQUE constraints that
+// exclude `time`. TimescaleDB's create_hypertable rejects any PRIMARY KEY
+// or UNIQUE that does not include the partition column — adding one here
+// would block the U8 migration.
+export const taskTelemetry = pgTable(
+  'task_telemetry',
+  {
+    // Partition key / event timestamp. Defaults to `now()` so inserts
+    // that omit it land at wall-clock time.
+    time: timestamp('time', { withTimezone: true }).notNull().defaultNow(),
+    // FK to tasks.id — ON DELETE CASCADE so telemetry is cleaned up with
+    // the task row rather than left orphaned.
+    taskId: integer('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // FK to agents.id — ON DELETE SET NULL so telemetry survives agent
+    // deregistration with its linkage cleared (mirrors task_events).
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    // Absolute keyspace position reported by the agent. bigint with
+    // mode:'bigint' preserves precision above Number.MAX_SAFE_INTEGER
+    // (mask attacks with large character classes can exceed 2^53).
+    keyspaceProgress: bigint('keyspace_progress', { mode: 'bigint' }).notNull(),
+    // Hash rate in hashes/second. bigint with mode:'number' mirrors
+    // agentBenchmarks.speedHs; agent reports are always <= ~2^31 in
+    // practice so JS number precision is fine here.
+    speedHs: bigint('speed_hs', { mode: 'number' }),
+    // GPU temperature in degrees Celsius. Nullable — not all agents
+    // report temperature.
+    temperature: real('temperature'),
+  },
+  (table) => [
+    // Primary lookup: all telemetry for a task in chronological order.
+    index('task_telemetry_task_id_time_idx').on(table.taskId, table.time.desc()),
+    // Partition-friendly index for time-range queries (used by TimescaleDB
+    // chunk exclusion after U8 converts this to a hypertable).
+    index('task_telemetry_time_idx').on(table.time.desc()),
   ]
 )

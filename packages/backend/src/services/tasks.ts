@@ -11,6 +11,7 @@ import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns
 import { pickChunkSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { jsonSafeBigint } from './tasks/_internals.js'
+import { appendTaskTelemetry } from './telemetry.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
 
@@ -521,21 +522,35 @@ export async function updateTaskProgress(
     updates['completedAt'] = new Date()
   }
 
-  // Update task status — re-verify ownership AND that the task is still
-  // active in the write path. The status guard (TOCTOU defense for #97 U4)
-  // means a row paused between the read above and this write is left
-  // untouched rather than resurrected to the reported status.
-  const [updated] = await db
-    .update(tasks)
-    .set(updates)
-    .where(
-      and(
-        eq(tasks.id, taskId),
-        eq(tasks.agentId, agentId),
-        inArray(tasks.status, ['assigned', 'running'])
+  // Update task status and append one telemetry row in a single transaction
+  // so the two stores never diverge. The status guard (TOCTOU defense for
+  // #97 U4) means a row paused between the read above and this write is
+  // left untouched rather than resurrected to the reported status.
+  const [updated] = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(tasks)
+      .set(updates)
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.agentId, agentId),
+          inArray(tasks.status, ['assigned', 'running'])
+        )
       )
-    )
-    .returning()
+      .returning()
+
+    if (rows[0]) {
+      await appendTaskTelemetry(tx, {
+        taskId,
+        agentId,
+        keyspaceProgress: data.progress?.keyspaceProgress,
+        speedHs: data.progress?.speed ?? null,
+        temperature: data.progress?.temperature ?? null,
+      })
+    }
+
+    return rows
+  })
 
   if (!updated) {
     return { error: 'Task was reassigned during update' }
