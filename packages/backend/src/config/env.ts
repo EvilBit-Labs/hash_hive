@@ -56,6 +56,11 @@ const envSchema = z.object({
   HEALTH_QUEUE_WARN_FAILED: z.coerce.number().int().nonnegative().default(100),
   HEALTH_DB_CONNECTION_WARN_PCT: z.coerce.number().min(0).max(100).default(80),
   HEALTH_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+
+  // Per-agent EWMA smoothing factor for observed_speed_hs (U6).
+  // Lower values smooth more aggressively; higher values track recent samples
+  // faster. The default 0.125 (1/8) is a conventional starting point.
+  AGENT_RATE_EWMA_ALPHA: z.coerce.number().min(0).max(1).default(0.125),
 })
 
 export type Env = z.infer<typeof envSchema>

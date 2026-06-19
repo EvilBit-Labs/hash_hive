@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { updateAgentObservedRate } from './agent-rate.js'
 import { getAgentBenchmarkForMode } from './agents.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
 import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
@@ -478,6 +479,10 @@ export async function updateTaskProgress(
       startedAt: tasks.startedAt,
       projectId: campaigns.projectId,
       hashListId: campaigns.hashListId,
+      // Extract the hashcat mode stored in required_capabilities at task
+      // generation time (deriveRequiredCapabilities sets caps['hashcatMode']).
+      // Cast to int; null when the JSONB key is absent.
+      hashcatMode: sql<number | null>`(${tasks.requiredCapabilities} ->> 'hashcatMode')::int`,
     })
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
@@ -631,6 +636,25 @@ export async function updateTaskProgress(
   // persisted above regardless — this call attributes the find to the live task.
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
     emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
+  }
+
+  // U6: update per-agent observed-rate EWMA from the reported speed.
+  // Gated on: ownership confirmed (updated is truthy), running status,
+  // a finite positive speed sample, and a resolved hashcatMode.
+  // Observe-only — a failure here must never break the report.
+  if (
+    data.status === 'running' &&
+    data.progress?.speed != null &&
+    Number.isFinite(data.progress.speed) &&
+    data.progress.speed > 0 &&
+    taskRow.hashcatMode != null
+  ) {
+    updateAgentObservedRate(agentId, taskRow.hashcatMode, data.progress.speed).catch((err) => {
+      logger.warn(
+        { err, agentId, hashcatMode: taskRow.hashcatMode, speed: data.progress?.speed },
+        'Failed to update agent observed rate EWMA (non-fatal)'
+      )
+    })
   }
 
   // Emit events and update campaign progress (no duplicate campaign fetch)

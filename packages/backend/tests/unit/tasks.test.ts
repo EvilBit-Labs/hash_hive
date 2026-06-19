@@ -19,6 +19,7 @@ let mockEmitTaskUpdate: ReturnType<typeof mock>
 let mockEmitCrackResult: ReturnType<typeof mock>
 let mockInsert: ReturnType<typeof mock>
 let mockUpdateCampaignProgress: ReturnType<typeof mock>
+let mockUpdateAgentObservedRate: ReturnType<typeof mock>
 // updateTaskProgress now wraps the hot-row UPDATE + telemetry INSERT (U4) in
 // db.transaction; the mock invokes the callback with a tx that delegates to the
 // same update mocks and a no-op telemetry insert.
@@ -110,6 +111,14 @@ if (isIsolated) {
   mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null))
   mock.module('../../src/services/agents.js', () => ({
     getAgentBenchmarkForMode: mockGetAgentBenchmarkForMode,
+  }))
+
+  // updateTaskProgress now calls updateAgentObservedRate (U6, observe-only EWMA)
+  // on the running path. Mock it so the real atomic UPDATE doesn't run against
+  // the db mock and pollute mockUpdateSet call counts.
+  mockUpdateAgentObservedRate = mock(() => Promise.resolve())
+  mock.module('../../src/services/agent-rate.js', () => ({
+    updateAgentObservedRate: mockUpdateAgentObservedRate,
   }))
 
   const { assignNextTask, handleTaskFailure, reassignStaleTasks, updateTaskProgress } =

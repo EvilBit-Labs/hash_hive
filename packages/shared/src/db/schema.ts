@@ -276,6 +276,10 @@ export const agentBenchmarks = pgTable(
     hashcatMode: integer('hashcat_mode').notNull(),
     hashType: varchar('hash_type', { length: 255 }).notNull(),
     speedHs: bigint('speed_hs', { mode: 'number' }).notNull(),
+    // EWMA of observed throughput from live progress reports (U6).
+    // Null until the agent sends at least one speed sample.
+    // Seeded from speed_hs on the first sample via atomic SQL COALESCE.
+    observedSpeedHs: bigint('observed_speed_hs', { mode: 'number' }),
     deviceName: varchar('device_name', { length: 255 }).notNull(),
     benchmarkedAt: timestamp('benchmarked_at', { withTimezone: true }).notNull().defaultNow(),
   },
