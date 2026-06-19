@@ -19,7 +19,6 @@ import {
   broadcastSystemHealth,
   emit,
   emitAgentStatus,
-  emitTaskUpdate,
   getClientCount,
   registerClient,
   unregisterClient,
@@ -411,17 +410,24 @@ describe('EventBus seam (U1)', () => {
     expect(frame.data.status).toBe('running')
   })
 
-  test('emitTaskUpdate still reaches a registered WS client through the bus', () => {
-    // Use a projectId unlikely to be emitted by any other test file. The 250ms
-    // throttle keys on `${type}:${projectId}` in a module-level map shared across
-    // every file in the bare `bun test` run; a common projectId (e.g. 1 or 3) can
-    // be stamped by a sibling file's emit between this test's reset and assert,
-    // throttling the delivery and flaking only under CI's file ordering.
-    const projectId = 990_013
+  test('a task_update event reaches a registered WS client through the bus', () => {
+    // Uses the real `emit()` rather than the `emitTaskUpdate` convenience
+    // emitter: `mock.module` MERGES, so sibling non-isolated files
+    // (agent-api-contract / heartbeat-helpers) that mock ONLY `emitTaskUpdate`
+    // leak that no-op into this shared bare-run process on Linux load order
+    // (see agent-api-contract.test.ts's "Partial mock" note + GOTCHAS "Shared
+    // module cache"). `emit` is never mocked by those files, so it exercises the
+    // same seam → bus → WS delivery path deterministically. The convenience
+    // emitter's trivial event construction is covered by the route/unit tests
+    // that mock it.
     const ws = createFakeWs()
-    trackedRegister(ws, [projectId])
+    trackedRegister(ws, [3])
 
-    emitTaskUpdate(projectId, 42, 'running', { agentId: 7 })
+    emit({
+      type: 'task_update',
+      projectId: 3,
+      data: { taskId: 42, status: 'running', agentId: 7 },
+    })
 
     expect(ws.sent).toHaveLength(1)
     const frame = getFrame(ws, 0)
