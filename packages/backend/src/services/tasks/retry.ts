@@ -241,6 +241,13 @@ async function terminalFailStaleTask(
  * This function now targets only tasks that predate the lease column (NULL
  * lease_expires_at) and whose owning agent has gone offline.
  *
+ * KNOWN GAP (resolved in U12): lease-bearing tasks reclaimed by the CTE no
+ * longer pass through this function's retry-count increment / MAX_RETRIES
+ * terminal-fail, so a poison task that no agent can progress would reclaim
+ * forever. U12's committed_keyspace_offset supplies the missing signal — a
+ * reclaim that did not advance the committed offset since claim is a retry
+ * (count it; fail at MAX_RETRIES), versus a legitimate resume (do not penalize).
+ *
  * Rebalance policy when a stale task carries non-zero
  * `progress.keyspaceProgress`:
  *
