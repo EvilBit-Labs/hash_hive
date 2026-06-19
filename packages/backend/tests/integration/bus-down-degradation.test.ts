@@ -114,6 +114,7 @@ if (!IS_ISOLATED) {
   }))
   mock.module('../../src/services/chunk-sizing.js', () => ({
     pickChunkSize: mock(() => 1000n),
+    pickParcelSize: mock(() => '1000'),
   }))
   mock.module('../../src/services/events.js', () => ({
     emitCrackResult: mock(() => Promise.resolve()),

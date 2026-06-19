@@ -10,9 +10,9 @@ import { updateAgentObservedRate } from './agent-rate.js'
 import { getAgentBenchmarkForMode } from './agents.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
 import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
-import { pickChunkSize } from './chunk-sizing.js'
+import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
-import { jsonSafeBigint } from './tasks/_internals.js'
+import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
 import { MAX_RETRIES } from './tasks/retry.js'
 import { appendTaskTelemetry } from './telemetry.js'
 
@@ -220,11 +220,17 @@ export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQ
 
   // Hash mode check: the task's required hashcatMode must be in the agent's hashModes array.
   // If agent advertises no hashModes (or all were invalid), only tasks without a hashcatMode requirement pass.
+  // Build the int[] as an inline ARRAY literal rather than a bound JS-array
+  // parameter: postgres.js mis-binds a JS array passed for `::int[]`
+  // (ERR_INVALID_ARG_TYPE on the array elements). `hashModes` is already
+  // sanitized to finite integers above, so interpolating them as a literal is
+  // injection-safe. Surfaced by the U13 real-DB lane (mocked tests never bound
+  // a real array).
   const hashModeCondition =
     hashModes.length > 0
       ? sql`(
           ${tasks.requiredCapabilities}->>'hashcatMode' IS NULL
-          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${hashModes}::int[])
+          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${sql.raw(`ARRAY[${hashModes.join(',')}]`)}::int[])
         )`
       : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`
 
@@ -454,17 +460,86 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   // Wrapped in try-catch because the task is already claimed via FOR UPDATE SKIP LOCKED -
   // a benchmark lookup failure must not orphan the assigned task.
   let agentSpeedHs = DEFAULT_AGENT_SPEED_HS
+  // U13: the rate used to size the claim-time parcel. Prefers the live
+  // observed-speed EWMA (U6); falls back to the static registration benchmark,
+  // then DEFAULT_AGENT_SPEED_HS on cold start so a null/zero rate never produces
+  // BigInt(NaN) or a starved 0-size parcel.
+  let sizingSpeedHs = DEFAULT_AGENT_SPEED_HS
   if (taskHashcatMode !== null) {
     try {
       const benchmark = await getAgentBenchmarkForMode(agentId, taskHashcatMode)
       if (benchmark) {
         agentSpeedHs = benchmark.speedHs
+        const observed = benchmark.observedSpeedHs
+        sizingSpeedHs =
+          observed != null && observed > 0
+            ? observed
+            : benchmark.speedHs > 0
+              ? benchmark.speedHs
+              : DEFAULT_AGENT_SPEED_HS
       }
     } catch (err: unknown) {
       logger.warn(
         { err, agentId, hashcatMode: taskHashcatMode },
         'Benchmark lookup failed after task assignment - using default speed'
       )
+    }
+  }
+
+  // U13 split-on-claim: if the claimed range exceeds a target-duration parcel at
+  // this agent's rate, trim this task to the parcel and re-pend the remainder as
+  // a new pending task — atomically, so a remainder-insert failure rolls back the
+  // trim and leaves the claimed task whole (no lost keyspace). Generation-time
+  // sizing can stay coarse since claim-time split now adapts per agent.
+  const claimedRange = (row['work_range'] as {
+    start: number | string
+    end: number | string
+    total: number | string
+  } | null) ?? { start: 0, end: 0, total: 0 }
+  let finalRange: { start: number | string; end: number | string; total: number | string } =
+    claimedRange
+  const claimStart = readWorkRangeField(claimedRange, 'start')
+  const claimEnd = readWorkRangeField(claimedRange, 'end')
+  const remaining = claimEnd > claimStart ? claimEnd - claimStart : 0n
+  if (remaining > 0n) {
+    const parcel = BigInt(
+      pickParcelSize(sizingSpeedHs, env.TASK_TARGET_DURATION_SECONDS, remaining)
+    )
+    if (parcel < remaining) {
+      // MAX_CHUNKS_PER_ATTACK guard (mirrors generateTasksForAttack): at the cap,
+      // assign the whole remaining range instead of creating another task row.
+      const [{ taskCount } = { taskCount: 0 }] = await db
+        .select({ taskCount: sql<number>`count(*)::int` })
+        .from(tasks)
+        .where(eq(tasks.attackId, row['attack_id'] as number))
+      if (taskCount < 100_000) {
+        const parcelEnd = claimStart + parcel
+        const trimmed = {
+          start: jsonSafeBigint(claimStart),
+          end: jsonSafeBigint(parcelEnd),
+          total: jsonSafeBigint(parcel),
+        }
+        const remainder = {
+          start: jsonSafeBigint(parcelEnd),
+          end: jsonSafeBigint(claimEnd),
+          total: jsonSafeBigint(claimEnd - parcelEnd),
+        }
+        await db.transaction(async (tx) => {
+          await tx
+            .update(tasks)
+            .set({ workRange: trimmed })
+            .where(eq(tasks.id, row['id'] as number))
+          await tx.insert(tasks).values({
+            attackId: row['attack_id'] as number,
+            campaignId: row['campaign_id'] as number,
+            status: 'pending',
+            workRange: remainder,
+            requiredCapabilities:
+              (row['required_capabilities'] as Record<string, unknown> | null) ?? {},
+          })
+        })
+        finalRange = trimmed
+      }
     }
   }
 
@@ -476,15 +551,9 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     agentId: row['agent_id'] as number,
     status: row['status'] as string,
     workRange: {
-      ...((row['work_range'] as {
-        start: number | string
-        end: number | string
-        total: number | string
-      } | null) ?? {
-        start: 0,
-        end: 0,
-        total: 0,
-      }),
+      // U13: finalRange is the trimmed parcel when split-on-claim fired, else
+      // the full claimed range.
+      ...finalRange,
       agentSpeedHs,
     },
     progress: row['progress'],

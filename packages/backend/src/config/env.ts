@@ -78,6 +78,11 @@ const envSchema = z.object({
   // 90 s is comfortably above the ~3 s agent report cadence; operators
   // can lower it for tighter reclaim windows or raise it for slow tasks.
   TASK_LEASE_DURATION_MS: z.coerce.number().int().positive().default(90_000),
+  // Target wall-clock duration for a claimed parcel (U13 split-on-claim). At
+  // claim, an oversized range is trimmed to ~this many seconds of work at the
+  // agent's observed-speed EWMA; the remainder is re-pended. Default 300 s
+  // (>= ~20x hashcat startup cost so per-task overhead stays amortized).
+  TASK_TARGET_DURATION_SECONDS: z.coerce.number().int().positive().default(300),
 })
 
 export type Env = z.infer<typeof envSchema>

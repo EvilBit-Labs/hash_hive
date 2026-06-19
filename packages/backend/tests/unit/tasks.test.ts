@@ -38,6 +38,8 @@ if (isIsolated) {
       NODE_ENV: 'test',
       // U11: lease duration used in assignNextTask CTE and updateTaskProgress
       TASK_LEASE_DURATION_MS: 90_000,
+      // U13: target parcel duration used in assignNextTask split-on-claim
+      TASK_TARGET_DURATION_SECONDS: 300,
     },
   }))
 
