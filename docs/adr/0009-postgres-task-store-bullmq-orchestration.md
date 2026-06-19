@@ -1,8 +1,18 @@
 # ADR-0009: PostgreSQL as task store, BullMQ for orchestration only
 
 **Date**: 2026-06-18
-**Status**: accepted
+**Status**: accepted — validated and extended 2026-06-19 by ADR-0015/0016/0017
 **Deciders**: Project owner (@unclesp1d3r)
+
+> **Update (2026-06-19):** This decision is validated, not overturned.
+> Horizontal scaling lives in the control plane (stateless replicas + a
+> server↔server fan-out bus + BullMQ), not by relocating the store — see
+> [ADR-0016](0016-server-fanout-bus.md). The append-only telemetry write path is
+> [ADR-0015](0015-append-only-telemetry-timescaledb-rrd.md); adaptive sizing and
+> leasing is [ADR-0017](0017-adaptive-task-sizing-lease.md). The Redis-down
+> "degradation policy candidate (ADR-015 if recorded)" noted below is resolved in
+> ADR-0016/0017; no separate degradation-policy ADR is planned. Full synthesis:
+> `docs/brainstorms/2026-06-19-task-distribution-architecture.md`.
 
 ## Context
 
