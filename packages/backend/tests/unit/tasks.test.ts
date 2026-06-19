@@ -620,12 +620,20 @@ if (isIsolated) {
     // The default mock above only handles a single innerJoin, so we wire a
     // two-step chain that returns the seeded stale-task array from the final
     // .where() call.
-    function seedStaleTasks(rows: unknown[]) {
+    function seedStaleTasks(rows: unknown[], poisonRows: unknown[] = []) {
+      // 1st select: staleTasks — .from(tasks).innerJoin(agents).innerJoin(campaigns).where()
       const whereReturning = mock(() => Promise.resolve(rows))
       const secondInnerJoin = mock(() => ({ where: whereReturning }))
       const firstInnerJoin = mock(() => ({ innerJoin: secondInnerJoin }))
       mockFrom.mockImplementationOnce(() => ({
         innerJoin: firstInnerJoin,
+        where: mock(),
+      }))
+      // 2nd select (U12 poison sweep): .from(tasks).innerJoin(campaigns).where()
+      const poisonWhere = mock(() => Promise.resolve(poisonRows))
+      const poisonInnerJoin = mock(() => ({ where: poisonWhere }))
+      mockFrom.mockImplementationOnce(() => ({
+        innerJoin: poisonInnerJoin,
         where: mock(),
       }))
     }

@@ -13,6 +13,7 @@ import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns
 import { pickChunkSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { jsonSafeBigint } from './tasks/_internals.js'
+import { MAX_RETRIES } from './tasks/retry.js'
 import { appendTaskTelemetry } from './telemetry.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
@@ -351,12 +352,20 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   // progress within TASK_LEASE_DURATION_MS or lose the task to reclaim.
   const result = await db.execute(sql`
     WITH candidate AS (
-      SELECT ${tasks.id} AS task_id
+      SELECT ${tasks.id} AS task_id,
+             ${tasks.status} AS prior_status,
+             ${tasks.committedKeyspaceOffset} AS committed_offset
       FROM ${tasks}
       INNER JOIN ${campaigns} ON ${tasks.campaignId} = ${campaigns.id}
       WHERE (
         (${tasks.status} = 'pending' AND ${tasks.agentId} IS NULL)
-        OR (${tasks.status} IN ('assigned', 'running') AND ${tasks.leaseExpiresAt} < NOW())
+        OR (
+          ${tasks.status} IN ('assigned', 'running')
+          AND ${tasks.leaseExpiresAt} < NOW()
+          -- U12: a task reclaimed MAX_RETRIES times without progress is a poison
+          -- task; stop reclaiming it so the backstop can fail it terminally.
+          AND ${tasks.retryCount} < ${MAX_RETRIES}
+        )
       )
         AND ${campaigns.projectId} = ${projectId}
         AND ${capabilityPredicate}
@@ -376,7 +385,25 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       status = 'assigned',
       assigned_at = NOW(),
       updated_at = NOW(),
-      lease_expires_at = NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond')
+      lease_expires_at = NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond'),
+      -- U12: on RECLAIM (prior status assigned/running), resume from the
+      -- committed offset so only un-committed keyspace is redone. committed_offset
+      -- is an ABSOLUTE coordinate in the same space as workRange.start, so it is
+      -- written straight into work_range.start (as text to preserve bigint-scale
+      -- precision; readers accept number|string). end/total are unchanged. A NULL
+      -- committed_offset (no prior progress) leaves the range at its original start.
+      work_range = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running') AND candidate.committed_offset IS NOT NULL
+          THEN jsonb_set(${tasks.workRange}, '{start}', to_jsonb(candidate.committed_offset::text))
+        ELSE ${tasks.workRange}
+      END,
+      -- U12: count a retry on every reclaim; updateTaskProgress resets it to 0
+      -- when the watermark advances, so only no-progress reclaims accumulate.
+      retry_count = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running')
+          THEN ${tasks.retryCount} + 1
+        ELSE ${tasks.retryCount}
+      END
     FROM candidate
     WHERE ${tasks.id} = candidate.task_id
     RETURNING ${tasks.id}, ${tasks.attackId}, ${tasks.campaignId}, ${tasks.agentId},
@@ -633,12 +660,33 @@ export async function updateTaskProgress(
   if (kpIsFinite) {
     const kpStr = String(rawKp)
     const leaseDurationMs = env.TASK_LEASE_DURATION_MS
+    // The "watermark advanced" predicate, reused below. `keyspaceProgress` in the
+    // report is RELATIVE to this task's range; the stored progress JSONB holds the
+    // previously committed relative position. SET RHS sees the pre-update row.
+    const watermarkAdvanced = sql`COALESCE((${tasks.progress} ->> 'keyspaceProgress')::numeric, -1) < ${kpStr}::numeric`
     updates['leaseExpiresAt'] = sql`
       CASE
-        WHEN COALESCE((${tasks.progress} ->> 'keyspaceProgress')::numeric, -1) < ${kpStr}::numeric
+        WHEN ${watermarkAdvanced}
           THEN NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond')
         ELSE ${tasks.leaseExpiresAt}
       END`
+    // U12: advance the committed-offset cursor. It is an ABSOLUTE keyspace
+    // coordinate — the same space as workRange.start — NOT the relative
+    // `keyspaceProgress`. absolute = workRange.start + keyspaceProgress.
+    // GREATEST keeps it monotonic against out-of-order reports. ::numeric for
+    // the arithmetic (bigint-scale mask keyspaces), ::bigint for the column.
+    updates['committedKeyspaceOffset'] = sql`
+      GREATEST(
+        COALESCE(${tasks.committedKeyspaceOffset}, 0)::numeric,
+        COALESCE((${tasks.workRange} ->> 'start')::numeric, 0) + ${kpStr}::numeric
+      )::bigint`
+    // U12 (poison-task resolution, carried from U11): a report that advances the
+    // watermark is healthy progress, so reset retry_count to 0. Only reclaims
+    // that make NO progress accumulate retries toward MAX_RETRIES (incremented in
+    // the assignNextTask reclaim branch), so a legitimate resume is never
+    // penalized while a task no agent can progress eventually fails.
+    updates['retryCount'] = sql`
+      CASE WHEN ${watermarkAdvanced} THEN 0 ELSE ${tasks.retryCount} END`
   }
 
   // Update task status and append one telemetry row in a single transaction
