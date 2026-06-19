@@ -634,6 +634,13 @@ export async function updateTaskProgress(
     updatedAt: new Date(),
   }
 
+  // NOTE (U9 deferred): this hot-row `progress` write is intentionally still
+  // here. U4 made it a dual-write alongside the telemetry INSERT; U9 was to
+  // remove it and cut reads to telemetry, but the read-cutover blast radius is
+  // larger than planned — preemption.ts and attacks/runtime.ts read
+  // tasks.progress for live keyspace position and must first migrate to
+  // committed_keyspace_offset. Until that lands, the dual-write stays (the
+  // plan's safe window). See task U9 / the PR's deferred-work section.
   if (data.progress) {
     updates['progress'] = data.progress
   }
