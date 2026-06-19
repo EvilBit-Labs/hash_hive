@@ -1,0 +1,13 @@
+-- Enable the TimescaleDB extension on a fresh data directory.
+--
+-- Mounted into /docker-entrypoint-initdb.d/, this runs ONLY when the Postgres
+-- data directory is first initialized (a fresh volume). The timescale/timescaledb
+-- image already preloads the extension on a fresh init, so this is belt-and-
+-- suspenders: it makes the extension guarantee explicit and independent of the
+-- image's default behaviour.
+--
+-- On an EXISTING volume this script does NOT run (initdb.d only fires on init).
+-- For that path see KTD-2 / the telemetry hypertable migration, which adds
+-- `shared_preload_libraries=timescaledb` (via the compose `command:` override)
+-- + a restart + `CREATE EXTENSION IF NOT EXISTS timescaledb`.
+CREATE EXTENSION IF NOT EXISTS timescaledb;
