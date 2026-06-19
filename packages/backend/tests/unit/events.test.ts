@@ -412,10 +412,16 @@ describe('EventBus seam (U1)', () => {
   })
 
   test('emitTaskUpdate still reaches a registered WS client through the bus', () => {
+    // Use a projectId unlikely to be emitted by any other test file. The 250ms
+    // throttle keys on `${type}:${projectId}` in a module-level map shared across
+    // every file in the bare `bun test` run; a common projectId (e.g. 1 or 3) can
+    // be stamped by a sibling file's emit between this test's reset and assert,
+    // throttling the delivery and flaking only under CI's file ordering.
+    const projectId = 990_013
     const ws = createFakeWs()
-    trackedRegister(ws, [3])
+    trackedRegister(ws, [projectId])
 
-    emitTaskUpdate(3, 42, 'running', { agentId: 7 })
+    emitTaskUpdate(projectId, 42, 'running', { agentId: 7 })
 
     expect(ws.sent).toHaveLength(1)
     const frame = getFrame(ws, 0)
