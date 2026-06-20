@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Button } from '../components/ui/button'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
+import { CopyableBlock } from '../components/ui/copyable-block'
 import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { useApiKeyMetadata, useIssueApiKey, useRevokeApiKey } from '../hooks/use-api-key'
@@ -175,39 +176,12 @@ function ExistingKeyView({
 }
 
 function RawTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false)
-  const [copyError, setCopyError] = useState<string | null>(null)
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(token)
-      setCopied(true)
-      setCopyError(null)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Most often: insecure context (bare-IP HTTP), missing permission,
-      // or a sandboxed iframe. Tell the user to copy manually instead of
-      // failing silently — the token is shown only once.
-      setCopied(false)
-      setCopyError('Could not copy automatically. Select the token above and copy manually.')
-    }
-  }
-
   return (
-    <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-      <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+    <div className="space-y-3 rounded-md border border-warning/40 bg-warning/10 p-3">
+      <p className="text-xs font-semibold text-warning">
         Save this token now. It will not be shown again.
       </p>
-      <div className="flex items-center gap-2">
-        {/* select-all on click so the manual-copy fallback is one gesture */}
-        <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs select-all">
-          {token}
-        </code>
-        <Button onClick={handleCopy} variant="secondary" className="text-xs">
-          {copied ? 'Copied' : 'Copy'}
-        </Button>
-      </div>
-      {copyError && <p className="text-xs text-amber-700 dark:text-amber-300">{copyError}</p>}
+      <CopyableBlock value={token} ariaLabel="Copy API key" oneLine />
       <p className="text-xs text-muted-foreground">
         Store it in a password manager or your tool's secret store. Treat it like a password; anyone
         with this token can act as you against the Control API.

@@ -103,7 +103,7 @@ export function AgentsPage() {
                       </div>
                     </Td>
                     <Td>
-                      <StatusBadge status={agent.status} />
+                      <StatusBadge status={agent.status} pulseOnOnline />
                     </Td>
                     <Td className="text-xs text-muted-foreground">
                       {agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : 'Never'}

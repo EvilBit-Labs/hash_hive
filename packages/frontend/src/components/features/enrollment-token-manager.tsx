@@ -1,6 +1,6 @@
 import type { CreateEnrollmentTokenRequest, EnrollmentTokenMetadata } from '@hashhive/shared'
 
-import { Check, Copy, KeyRound } from 'lucide-react'
+import { KeyRound } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -9,15 +9,13 @@ import {
   useRevokeEnrollmentToken,
 } from '../../hooks/use-enrollment-tokens'
 import { buildAgentEnrollCommand } from '../../lib/agent-enroll-command'
-import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
+import { CopyableBlock } from '../ui/copyable-block'
 import { ErrorBanner } from '../ui/error-banner'
 import { Input } from '../ui/input'
 import { SegmentedControl } from '../ui/segmented-control'
 import { Table, TableBody, TableHead, Td, Th } from '../ui/table'
-
-const COPIED_FLASH_MS = 1_500
 
 interface EnrollmentTokenManagerProps {
   /** Dashboard origin used in the agent command (pass window.location.origin). */
@@ -296,8 +294,8 @@ function RawEnrollmentTokenReveal({
 }) {
   const command = buildAgentEnrollCommand(serverOrigin, token)
   return (
-    <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-      <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+    <div className="space-y-3 rounded-md border border-warning/40 bg-warning/10 p-3">
+      <p className="text-xs font-semibold text-warning">
         Here's your enrollment token — copy it now, it won't be shown again.
       </p>
       <CopyableBlock value={token} ariaLabel="Copy enrollment token" oneLine />
@@ -309,70 +307,6 @@ function RawEnrollmentTokenReveal({
       <Button onClick={onDismiss} variant="secondary" className="text-xs">
         Done
       </Button>
-    </div>
-  )
-}
-
-function CopyableBlock({
-  value,
-  ariaLabel,
-  oneLine = false,
-}: {
-  value: string
-  ariaLabel: string
-  oneLine?: boolean
-}) {
-  const [copied, setCopied] = useState(false)
-  const [copyFailed, setCopyFailed] = useState(false)
-
-  const onCopy = () => {
-    // navigator.clipboard is undefined in insecure contexts (plain http,
-    // some webviews); short-circuit so the click is a no-op instead of
-    // throwing. The text stays selectable for manual copy.
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return
-    void navigator.clipboard.writeText(value).then(
-      () => {
-        setCopied(true)
-        setCopyFailed(false)
-        setTimeout(() => setCopied(false), COPIED_FLASH_MS)
-      },
-      () => {
-        setCopyFailed(true)
-      }
-    )
-  }
-
-  return (
-    <div className="relative">
-      <pre
-        className={cn(
-          'overflow-x-auto rounded border border-surface-1 bg-surface-0/70 p-3 pr-12 font-mono text-xs text-foreground/90 select-all',
-          oneLine ? 'whitespace-nowrap' : 'leading-relaxed'
-        )}
-      >
-        <code>{value}</code>
-      </pre>
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label={copied ? 'Copied' : ariaLabel}
-        className={cn(
-          'absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded',
-          'border border-surface-1 bg-surface-0/95 transition-colors hover:bg-surface-1',
-          'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-        )}
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-success" />
-        ) : (
-          <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-        )}
-      </button>
-      {copyFailed && (
-        <p className="mt-1 text-xs text-warning">
-          Copy failed - select the text and copy manually.
-        </p>
-      )}
     </div>
   )
 }
