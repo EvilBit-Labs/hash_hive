@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+// A simple Postgres interval literal: "<n> <unit>" (e.g. "30 days", "2 hours").
+// Used to validate telemetry retention windows that are interpolated into raw
+// SQL, so a malformed value is rejected at startup rather than swallowed later.
+const INTERVAL_LITERAL = /^\d+\s+(second|minute|hour|day|week|month|year)s?$/i
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -56,6 +61,39 @@ const envSchema = z.object({
   HEALTH_QUEUE_WARN_FAILED: z.coerce.number().int().nonnegative().default(100),
   HEALTH_DB_CONNECTION_WARN_PCT: z.coerce.number().min(0).max(100).default(80),
   HEALTH_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+
+  // Per-agent EWMA smoothing factor for observed_speed_hs (U6).
+  // Lower values smooth more aggressively; higher values track recent samples
+  // faster. The default 0.125 (1/8) is a conventional starting point.
+  AGENT_RATE_EWMA_ALPHA: z.coerce.number().min(0).max(1).default(0.125),
+
+  // Telemetry RRD retention windows (U8, KTD-7).
+  // Postgres interval literals — e.g. "2 hours", "7 days".
+  // applyTelemetryRetentionPolicies() re-applies these at startup so operators
+  // can change the windows without a migration. Defaults match the 0022
+  // migration, which sets the initial policies; a no-op re-apply is harmless.
+  //
+  // The values are interpolated into a raw `add_retention_policy(... ::interval)`
+  // statement (telemetry-retention.ts), so constrain them to a simple
+  // "<n> <unit>" interval shape: a misconfiguration fails loudly at startup here
+  // rather than as a swallowed SQL error later, and the regex closes the raw-SQL
+  // interpolation vector even though the source is operator-controlled env.
+  TELEMETRY_FULLRES_RETENTION: z.string().regex(INTERVAL_LITERAL).default('1 hour'),
+  TELEMETRY_1M_RETENTION: z.string().regex(INTERVAL_LITERAL).default('24 hours'),
+  TELEMETRY_5M_RETENTION: z.string().regex(INTERVAL_LITERAL).default('7 days'),
+  TELEMETRY_1H_RETENTION: z.string().regex(INTERVAL_LITERAL).default('30 days'),
+
+  // Task lease duration in milliseconds (U11, KTD-5).
+  // The claim CTE sets lease_expires_at = NOW() + this interval so a
+  // task is reclaimed by the next claimant if the lessee stops reporting.
+  // 90 s is comfortably above the ~3 s agent report cadence; operators
+  // can lower it for tighter reclaim windows or raise it for slow tasks.
+  TASK_LEASE_DURATION_MS: z.coerce.number().int().positive().default(90_000),
+  // Target wall-clock duration for a claimed parcel (U13 split-on-claim). At
+  // claim, an oversized range is trimmed to ~this many seconds of work at the
+  // agent's observed-speed EWMA; the remainder is re-pended. Default 300 s
+  // (>= ~20x hashcat startup cost so per-task overhead stays amortized).
+  TASK_TARGET_DURATION_SECONDS: z.coerce.number().int().positive().default(300),
 })
 
 export type Env = z.infer<typeof envSchema>

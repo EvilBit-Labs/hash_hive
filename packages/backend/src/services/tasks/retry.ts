@@ -230,12 +230,27 @@ async function terminalFailStaleTask(
     campaignId: staleTask.campaignId,
   })
   await updateCampaignProgress(staleTask.campaignId)
+  // A terminally-failed task frees its agent — re-evaluate preemption so paused
+  // lower-priority victims can resume. Mirrors handleTaskFailure's terminal
+  // branch; without it, sweep/poison-failed tasks would orphan paused campaigns.
+  await enqueuePreemptionEvaluation(staleTask.projectId)
   return true
 }
 
 /**
- * Reassigns tasks from agents that have gone offline. Called periodically
- * by a background job (every 2 minutes via BullMQ).
+ * Backstop sweep for legacy pre-U10 tasks (lease_expires_at IS NULL).
+ *
+ * Since U11, expired-lease tasks (lease_expires_at < NOW()) are reclaimed
+ * atomically by the claim CTE in assignNextTask — no sweep needed for them.
+ * This function now targets only tasks that predate the lease column (NULL
+ * lease_expires_at) and whose owning agent has gone offline.
+ *
+ * KNOWN GAP (resolved in U12): lease-bearing tasks reclaimed by the CTE no
+ * longer pass through this function's retry-count increment / MAX_RETRIES
+ * terminal-fail, so a poison task that no agent can progress would reclaim
+ * forever. U12's committed_keyspace_offset supplies the missing signal — a
+ * reclaim that did not advance the committed offset since claim is a retry
+ * (count it; fail at MAX_RETRIES), versus a legitimate resume (do not penalize).
  *
  * Rebalance policy when a stale task carries non-zero
  * `progress.keyspaceProgress`:
@@ -255,7 +270,11 @@ async function terminalFailStaleTask(
  * does not strand the rest of the batch until the next sweep tick.
  */
 export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
-  const threshold = new Date(Date.now() - staleThresholdMs)
+  // ISO string, not a Date object: these comparisons are interpolated into raw
+  // `sql` templates, and postgres.js binds a JS Date as a prepared-statement
+  // parameter incorrectly (ERR_INVALID_ARG_TYPE). An ISO timestamp string binds
+  // cleanly. Surfaced by the U12 real-DB lane (the mocked tests never ran it).
+  const threshold = new Date(Date.now() - staleThresholdMs).toISOString()
 
   // Find tasks assigned to agents that haven't checked in. Carry workRange,
   // progress, projectId, campaignId, and retryCount so the rebalance branches
@@ -289,7 +308,15 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
         // IS NULL branch keeps legacy/migrated rows (status='assigned' with
         // no assigned_at) selectable instead of stranding them forever
         // (NULL < timestamp evaluates to NULL, which the filter rejects).
-        sql`(${tasks.assignedAt} IS NULL OR ${tasks.assignedAt} < ${threshold})`
+        sql`(${tasks.assignedAt} IS NULL OR ${tasks.assignedAt} < ${threshold})`,
+        // U11 (KTD-5): expired-lease tasks are now reclaimed atomically by the
+        // claim CTE in assignNextTask. This sweep only handles legacy pre-U10
+        // rows that predate the lease column (lease_expires_at IS NULL).
+        // NULL < NOW() evaluates to NULL (rejected by WHERE), so without this
+        // predicate NULL-lease rows would correctly pass through — but being
+        // explicit here documents the partition and prevents accidental
+        // double-reclaim if the semantics of the CTE change in future units.
+        sql`${tasks.leaseExpiresAt} IS NULL`
       )
     )
 
@@ -426,6 +453,48 @@ export async function reassignStaleTasks(staleThresholdMs = 5 * 60 * 1000) {
           projectId: staleTask.projectId,
         },
         'reassignStaleTasks: per-task processing threw — sibling stale tasks continue'
+      )
+    }
+  }
+
+  // U12 poison-task fail: terminally fail tasks the claim CTE now refuses to
+  // reclaim (lease expired AND retry_count >= MAX_RETRIES). These carry a
+  // non-NULL (expired) lease, so the legacy NULL-lease sweep above skips them;
+  // without this they would sit orphaned and the campaign could never complete.
+  // A task that ever resumes resets retry_count to 0 (updateTaskProgress on
+  // watermark advance), so only tasks no agent can progress reach MAX_RETRIES.
+  const poisonTasks = await db
+    .select({
+      taskId: tasks.id,
+      agentId: tasks.agentId,
+      campaignId: tasks.campaignId,
+      workRange: tasks.workRange,
+      progress: tasks.progress,
+      projectId: campaigns.projectId,
+      retryCount: tasks.retryCount,
+    })
+    .from(tasks)
+    .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
+    .where(
+      and(
+        sql`${tasks.status} IN ('assigned', 'running')`,
+        sql`${tasks.leaseExpiresAt} < NOW()`,
+        sql`${tasks.retryCount} >= ${MAX_RETRIES}`
+      )
+    )
+  for (const poison of poisonTasks) {
+    try {
+      if (await terminalFailStaleTask(poison, 'max_retries_exceeded')) {
+        // terminalFailStaleTask already emits the failed event, recomputes the
+        // campaign aggregate, and enqueues preemption re-evaluation — do not
+        // duplicate them here (matches the main-sweep call sites above).
+        failedMaxRetries++
+      }
+    } catch (err) {
+      errored += 1
+      logger.error(
+        { err, taskId: poison.taskId, campaignId: poison.campaignId },
+        'reassignStaleTasks: poison-task terminal-fail threw'
       )
     }
   }

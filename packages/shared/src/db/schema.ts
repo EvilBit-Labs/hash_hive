@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  real,
   serial,
   text,
   timestamp,
@@ -275,6 +276,10 @@ export const agentBenchmarks = pgTable(
     hashcatMode: integer('hashcat_mode').notNull(),
     hashType: varchar('hash_type', { length: 255 }).notNull(),
     speedHs: bigint('speed_hs', { mode: 'number' }).notNull(),
+    // EWMA of observed throughput from live progress reports (U6).
+    // Null until the agent sends at least one speed sample.
+    // Seeded from speed_hs on the first sample via atomic SQL COALESCE.
+    observedSpeedHs: bigint('observed_speed_hs', { mode: 'number' }),
     deviceName: varchar('device_name', { length: 255 }).notNull(),
     benchmarkedAt: timestamp('benchmarked_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -516,11 +521,29 @@ export const tasks = pgTable(
     }),
     pausedAt: timestamp('paused_at', { withTimezone: true }),
     resumedAt: timestamp('resumed_at', { withTimezone: true }),
+    // Task lease + committed-offset (ADR-0017, U10). `leaseExpiresAt` is extended
+    // only when the keyspace watermark advances (U11); a lapsed lease makes the
+    // task reclaimable inside the assignNextTask claim CTE even when Redis is
+    // down. `committedKeyspaceOffset` is the BOINC-style resume cursor (U12) —
+    // an ABSOLUTE keyspace coordinate (same space as workRange.start),
+    // authoritative state exempt from RRD downsampling. bigint mode preserves
+    // mask keyspaces beyond Number.MAX_SAFE_INTEGER. Both nullable: legacy rows
+    // carry NULL lease and are swept by the demoted BullMQ backstop until they
+    // cycle.
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    committedKeyspaceOffset: bigint('committed_keyspace_offset', { mode: 'bigint' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('tasks_campaign_id_idx').on(table.campaignId),
+    // U11 reclaim hot path: assignNextTask scans non-terminal leased tasks for
+    // expired leases. The predicate cannot include `lease_expires_at < NOW()`
+    // (NOW() is not immutable), so bound the partial index to the leasable
+    // statuses and index `lease_expires_at` for the range scan.
+    index('tasks_expired_lease_idx')
+      .on(table.leaseExpiresAt)
+      .where(sql`status IN ('assigned', 'running')`),
     // The read-time attack-runtime aggregate (issue #99) filters
     // `WHERE attack_id IN (...) GROUP BY attack_id` with no campaign predicate,
     // so the campaign indexes below can't serve it. Postgres does not
@@ -642,5 +665,50 @@ export const crackerBinaries = pgTable(
     ),
     index('cracker_binaries_engine_platform_idx').on(table.engine, table.platform),
     index('cracker_binaries_is_active_idx').on(table.isActive),
+  ]
+)
+
+// ─── Task Telemetry ─────────────────────────────────────────────────
+//
+// Append-only time-series store for per-progress-report telemetry (U4).
+// Plain Postgres table for now; becomes a TimescaleDB hypertable in U8
+// via `create_hypertable('task_telemetry', 'time', migrate_data => true)`.
+//
+// CRITICAL: No `id serial primaryKey()` and no UNIQUE constraints that
+// exclude `time`. TimescaleDB's create_hypertable rejects any PRIMARY KEY
+// or UNIQUE that does not include the partition column — adding one here
+// would block the U8 migration.
+export const taskTelemetry = pgTable(
+  'task_telemetry',
+  {
+    // Partition key / event timestamp. Defaults to `now()` so inserts
+    // that omit it land at wall-clock time.
+    time: timestamp('time', { withTimezone: true }).notNull().defaultNow(),
+    // FK to tasks.id — ON DELETE CASCADE so telemetry is cleaned up with
+    // the task row rather than left orphaned.
+    taskId: integer('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // FK to agents.id — ON DELETE SET NULL so telemetry survives agent
+    // deregistration with its linkage cleared (mirrors task_events).
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    // Absolute keyspace position reported by the agent. bigint with
+    // mode:'bigint' preserves precision above Number.MAX_SAFE_INTEGER
+    // (mask attacks with large character classes can exceed 2^53).
+    keyspaceProgress: bigint('keyspace_progress', { mode: 'bigint' }).notNull(),
+    // Hash rate in hashes/second. bigint with mode:'number' mirrors
+    // agentBenchmarks.speedHs; agent reports are always <= ~2^31 in
+    // practice so JS number precision is fine here.
+    speedHs: bigint('speed_hs', { mode: 'number' }),
+    // GPU temperature in degrees Celsius. Nullable — not all agents
+    // report temperature.
+    temperature: real('temperature'),
+  },
+  (table) => [
+    // Primary lookup: all telemetry for a task in chronological order.
+    index('task_telemetry_task_id_time_idx').on(table.taskId, table.time.desc()),
+    // Partition-friendly index for time-range queries (used by TimescaleDB
+    // chunk exclusion after U8 converts this to a hypertable).
+    index('task_telemetry_time_idx').on(table.time.desc()),
   ]
 )

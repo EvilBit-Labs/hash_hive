@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
 import {
   type AppEvent,
+  EVENT_TYPES,
   isKnownEventType,
   routeEvent,
   sanitizeEventType,
@@ -204,5 +205,52 @@ describe('routeEvent: invariants', () => {
     const snapshot = JSON.stringify(f)
     routeEvent(f, qc, SESSION_PROJECT_ID)
     expect(JSON.stringify(f)).toBe(snapshot)
+  })
+})
+
+// ─── EVENT_TYPES completeness guard ──────────────────────────────────────────
+//
+// U2 introduced NotifyBus which transports existing AppEvent types — it did
+// NOT add new variants. This guard asserts that the frontend EVENT_TYPES tuple
+// covers the full backend event vocabulary (ProjectEventType + SystemEventType)
+// so a backend addition that forgets to update the frontend is caught in CI.
+//
+// Note: this is a runtime list guard, not a cross-package type check. If the
+// backend event union ever moves to a shared Zod schema exported from
+// @hashhive/shared, replace these hardcoded strings with an import from that
+// schema and assert set-equality against EVENT_TYPES.
+
+describe('EVENT_TYPES completeness guard', () => {
+  // Backend ProjectEventType members (from packages/backend/src/services/events.ts)
+  const BACKEND_PROJECT_EVENT_TYPES = [
+    'agent_status',
+    'agent_error',
+    'campaign_status',
+    'task_update',
+    'crack_result',
+    'resource_update',
+  ] as const
+
+  // Backend SystemEventType members
+  const BACKEND_SYSTEM_EVENT_TYPES = ['system_health'] as const
+
+  const ALL_BACKEND_TYPES = [...BACKEND_PROJECT_EVENT_TYPES, ...BACKEND_SYSTEM_EVENT_TYPES] as const
+
+  it('EVENT_TYPES covers every backend ProjectEventType', () => {
+    for (const backendType of BACKEND_PROJECT_EVENT_TYPES) {
+      expect(EVENT_TYPES).toContain(backendType)
+    }
+  })
+
+  it('EVENT_TYPES covers every backend SystemEventType', () => {
+    for (const backendType of BACKEND_SYSTEM_EVENT_TYPES) {
+      expect(EVENT_TYPES).toContain(backendType)
+    }
+  })
+
+  it('EVENT_TYPES length matches the full backend union (no orphaned frontend-only types)', () => {
+    // If this fails, either the backend grew a new event type and the frontend
+    // needs updating, or the frontend has a type with no backend counterpart.
+    expect(EVENT_TYPES).toHaveLength(ALL_BACKEND_TYPES.length)
   })
 })

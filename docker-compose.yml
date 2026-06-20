@@ -1,6 +1,12 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 16 + TimescaleDB. The image is PG16-compatible, so the existing
+    # pgdata volume mounts unchanged — only the telemetry hypertable is Timescale-
+    # managed; authoritative tables stay plain Postgres. The command override sets
+    # shared_preload_libraries so `CREATE EXTENSION timescaledb` can load even on a
+    # pre-existing volume (the image's auto-tune only runs on a fresh data dir).
+    image: timescale/timescaledb:2.17.2-pg16
+    command: ['postgres', '-c', 'shared_preload_libraries=timescaledb']
     ports:
       - '5432:5432'
     environment:
@@ -9,6 +15,7 @@ services:
       POSTGRES_DB: hashhive
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init-timescaledb.sql:/docker-entrypoint-initdb.d/init-timescaledb.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U hashhive']
       interval: 5s

@@ -3,6 +3,7 @@ import { createBunWebSocket } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
+import type { NotifyBus } from './services/events/notify-bus.js'
 import type { AppEnv } from './types.js'
 
 import { env } from './config/env.js'
@@ -200,10 +201,58 @@ queueManager.init().catch((err) => {
   logger.error({ err }, 'Queue manager init failed — queues unavailable')
 })
 
+// ─── Telemetry Retention Policy Init (non-blocking, U8) ─────────────────────
+//
+// Gated on NODE_ENV !== 'test' so the mocked default test lane and
+// non-TimescaleDB CI environments never attempt policy catalog writes.
+// The real-DB lane tests this independently in telemetry-retention.db.test.ts.
+//
+// Non-fatal: a policy failure (e.g. TimescaleDB not yet loaded on the volume)
+// does not prevent the API from serving requests — retention defaults set by
+// the 0022 migration remain in effect. Errors are logged but swallowed.
+
+if (env.NODE_ENV !== 'test') {
+  import('./services/telemetry-retention.js')
+    .then(({ applyTelemetryRetentionPolicies }) => applyTelemetryRetentionPolicies())
+    .catch((err) => {
+      logger.error(
+        { err },
+        'Telemetry retention policy init failed — migration defaults remain in effect'
+      )
+    })
+}
+
+// ─── NotifyBus Init (non-blocking, API role: publisher + subscriber) ────────
+//
+// Gated on NODE_ENV !== 'test' so the mocked default test lane never opens
+// a real Postgres LISTEN connection. Real-DB tests wire their own instances.
+//
+// Non-fatal startup: mirrors the QueueManager .catch pattern. The API
+// degrades to in-process-only event delivery (the pre-U2 posture) if the
+// bus fails to start — worker-emitted events are dropped, but the API
+// itself continues serving requests.
+
+let notifyBus: NotifyBus<object> | null = null
+
+if (env.NODE_ENV !== 'test') {
+  import('./services/events/notify-bus.js')
+    .then(({ createNotifyBus }) => createNotifyBus('api'))
+    .then((bus) => {
+      notifyBus = bus
+      return bus.start()
+    })
+    .catch((err) => {
+      logger.error({ err }, 'NotifyBus init failed — cross-process events unavailable')
+    })
+}
+
 // ─── Graceful Shutdown ──────────────────────────────────────────────
 
 async function handleShutdown(signal: string) {
   logger.info({ signal }, 'received shutdown signal, closing gracefully')
+  if (notifyBus) {
+    await notifyBus.stop()
+  }
   const qm = getQueueManager()
   if (qm) {
     await qm.shutdown()

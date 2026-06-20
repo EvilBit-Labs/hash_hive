@@ -1,3 +1,5 @@
+import type { NotifyBus } from './services/events/notify-bus.js'
+
 import { logger } from './config/logger.js'
 import { createRedisClient } from './config/redis.js'
 import { setQueueManager } from './queue/context.js'
@@ -10,9 +12,23 @@ import { createPreemptionWorker } from './queue/workers/preemption.js'
 
 const connection = createRedisClient('jobs-worker')
 
+let notifyBus: NotifyBus<object> | null = null
+
 async function main() {
   await connection.connect()
   logger.info('Jobs worker connected to Redis')
+
+  // Publisher-only NotifyBus: forwards locally-emitted events (preemption,
+  // heartbeat checks, health) to the API process via pg_notify. No listen
+  // connection is opened — worker processes never hold WS clients.
+  try {
+    const { createNotifyBus } = await import('./services/events/notify-bus.js')
+    notifyBus = await createNotifyBus('worker')
+    await notifyBus.start()
+    logger.info('NotifyBus started (worker/publisher role)')
+  } catch (err) {
+    logger.error({ err }, 'NotifyBus init failed — worker events will not reach API process')
+  }
 
   // The health-monitor worker calls getSystemHealth() →
   // getQueueManager(); without a QueueManager in the worker process the
@@ -54,6 +70,9 @@ async function main() {
 
   async function shutdown(signal: string) {
     logger.info({ signal }, 'Shutting down job workers')
+    if (notifyBus) {
+      await notifyBus.stop()
+    }
     await Promise.all(workers.map((w) => w.close()))
     await queueManager.shutdown()
     connection.disconnect()

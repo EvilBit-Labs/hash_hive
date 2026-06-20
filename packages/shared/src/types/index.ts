@@ -373,3 +373,12 @@ export type SessionUser = z.infer<typeof sessionUserSchema>
  * stores in a single round-trip.
  */
 export type MeResponse = z.infer<typeof meResponseSchema>
+
+// ─── Task Telemetry ─────────────────────────────────────────────────
+// Drizzle-inferred types for the append-only task_telemetry table (U4).
+// Not exposed via any API route; used internally by the telemetry service.
+
+import type { taskTelemetry } from '../db/schema.js'
+
+export type TaskTelemetry = typeof taskTelemetry.$inferSelect
+export type InsertTaskTelemetry = typeof taskTelemetry.$inferInsert

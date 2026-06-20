@@ -1,6 +1,15 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 16 + TimescaleDB (PG16-compatible; existing pgdata mounts
+    # unchanged). The command override sets shared_preload_libraries so the
+    # extension loads on a pre-existing prod volume. PROD CUTOVER on an existing
+    # volume (KTD-2): deploy this command override, restart the container, then
+    # the telemetry hypertable migration runs `CREATE EXTENSION IF NOT EXISTS
+    # timescaledb`. The init script only fires on a fresh volume. Note the libc
+    # change (alpine/musl -> debian/glibc) may require a one-time REINDEX of text
+    # indexes after the swap.
+    image: timescale/timescaledb:2.17.2-pg16
+    command: ['postgres', '-c', 'shared_preload_libraries=timescaledb']
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hashhive}
@@ -8,6 +17,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-hashhive}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init-timescaledb.sql:/docker-entrypoint-initdb.d/init-timescaledb.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-hashhive}']
       interval: 10s

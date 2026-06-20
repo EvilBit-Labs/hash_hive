@@ -107,6 +107,16 @@ test:
 test-backend:
     {{ mise_exec }} bun --filter @hashhive/backend test
 
+# Run real-DB integration tests (tests/db) against a live Postgres/TimescaleDB.
+# Prepares the hashhive_test database (create + migrate) then runs the lane.
+# These tests connect for real and do NOT mock the DB — requires a running
+# Postgres (e.g. `docker compose up -d`). Verifies behaviour only a live
+# database can prove: LISTEN/NOTIFY, the SKIP LOCKED claim CTE, lease reclaim,
+# and the telemetry hypertable.
+test-db:
+    {{ mise_exec }} bun --filter @hashhive/backend db:test:prepare
+    {{ mise_exec }} bun --filter @hashhive/backend test:db
+
 # Run frontend tests
 test-frontend:
     {{ mise_exec }} bun --filter @hashhive/frontend test
@@ -230,11 +240,12 @@ backfill-line-count:
 
 # Run the full pre-push gate locally. Stricter than the GitHub `ci-check`
 # job — this is what you run before pushing to catch everything CI catches
-# plus the e2e job. Backend tests use bun:test with mocked services
-# (no docker-compose required); e2e needs Playwright browsers
-# (`just test-e2e-install` once after `just install`).
-# Order: lint → format → types → build (catches Tailwind generation) → unit → e2e
-ci-check: check test test-e2e
+# plus the e2e job. The default backend lane (`test`) uses bun:test with
+# mocked services (no docker-compose required); the real-DB lane (`test-db`)
+# needs a running Postgres/TimescaleDB (`docker compose up -d`); e2e needs
+# Playwright browsers (`just test-e2e-install` once after `just install`).
+# Order: lint → format → types → build (catches Tailwind generation) → unit → real-DB → e2e
+ci-check: check test test-db test-e2e
 
 # Quick quality gate — run after every task (no tests, faster than ci-check).
 # `pre-commit` runs format-check + oxlint + type-check via its hooks.
