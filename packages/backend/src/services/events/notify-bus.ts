@@ -259,7 +259,7 @@ export class NotifyBus<TEvent extends object> {
  */
 export async function createNotifyBus(role: 'api' | 'worker'): Promise<NotifyBus<object>> {
   // Dynamic imports break the circular-dependency risk between this factory
-  // and src/db/index.ts. They also enable jest/bun mock.module to intercept
+  // and src/db/index.ts. They also enable bun:test mock.module to intercept
   // the db import without touching the class definition.
   const { appBus } = await import('./bus.js')
   const { client, createListenConnection } = await import('../../db/index.js')

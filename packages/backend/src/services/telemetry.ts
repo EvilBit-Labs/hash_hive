@@ -42,14 +42,13 @@ function coerceToBigint(raw: unknown): bigint {
 /**
  * Insert one telemetry row for a progress report.
  *
- * The insert is intentionally fire-and-forget from the caller's
- * perspective (the caller wraps it in a transaction alongside the hot-row
- * UPDATE); this function does no retry logic and lets any DB error
- * propagate so the transaction can roll both writes back atomically.
+ * The insert is not retried; any DB error propagates to the caller's
+ * transaction so both writes roll back atomically (the caller wraps it in a
+ * transaction alongside the hot-row UPDATE).
  *
- * @param tx - A drizzle transaction object (or the default `db` client).
- *             Callers MUST pass the transaction handle so both the hot-row
- *             UPDATE and this insert share the same transaction boundary.
+ * @param tx - The drizzle transaction handle from `db.transaction(async (tx) => …)`.
+ *             Callers MUST pass it so both the hot-row UPDATE and this insert
+ *             share the same transaction boundary.
  * @param row - The telemetry fields to persist.  `time` defaults to
  *              `now()` at the DB level when omitted.
  */
