@@ -312,7 +312,7 @@ function RawEnrollmentTokenReveal({
       </p>
       <CopyableBlock value={command} ariaLabel="Copy agent command" />
       <Button onClick={onDismiss} variant="secondary" className="text-xs">
-        Done
+        I've saved it
       </Button>
     </div>
   )

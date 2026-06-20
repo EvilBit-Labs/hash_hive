@@ -122,7 +122,7 @@ describe('EnrollmentTokenManager', () => {
     await waitFor(() => expect(screen.getByText('etk_1_brave-coral-otter-47')).toBeTruthy())
 
     // Dismiss the reveal.
-    fireEvent.click(screen.getByText('Done'))
+    fireEvent.click(screen.getByText("I've saved it"))
 
     // The exact token string (in its standalone <code> block) must be gone.
     // Use queryByText with the exact string — not a regex — to avoid matching
