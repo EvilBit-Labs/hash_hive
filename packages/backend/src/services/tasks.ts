@@ -152,16 +152,16 @@ export async function generateTasksForAttack(
   // keep generation finite - the trailing remainder becomes a single
   // oversized task that the heartbeat-monitor rebalance branch will split
   // further as agents make progress against it.
-  const MAX_CHUNKS_PER_ATTACK = 100_000n
+  const maxChunks = BigInt(MAX_CHUNKS_PER_ATTACK)
   // Ceiling-div: the actual loop emits `ceil(totalKeyspace / chunkSize)`
   // chunks, so the comparison must use the same ceiling. With plain floor
   // div, `totalKeyspace = MAX*chunkSize + 1` would test as `> MAX_CHUNKS`
   // false (floor div gives exactly MAX) but the loop would emit MAX+1
   // chunks, blowing past the documented cap.
   const projectedChunks = totalKeyspace / chunkSize + (totalKeyspace % chunkSize === 0n ? 0n : 1n)
-  if (projectedChunks > MAX_CHUNKS_PER_ATTACK) {
-    chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK
-    if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n
+  if (projectedChunks > maxChunks) {
+    chunkSize = totalKeyspace / maxChunks
+    if (totalKeyspace % maxChunks !== 0n) chunkSize += 1n
   }
 
   const chunks: Array<{
@@ -238,6 +238,11 @@ export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQ
 }
 
 const DEFAULT_AGENT_SPEED_HS = 1_000_000 // 1 MH/s fallback when no benchmark exists
+
+// Hard cap on tasks per attack — bounds memory + row count at generation time
+// and at claim-time split. Both `generateTasksForAttack` and the split-on-claim
+// remainder INSERT enforce it so the two paths can never disagree.
+const MAX_CHUNKS_PER_ATTACK = 100_000
 
 /**
  * When `assignNextTask`'s atomic claim returns no rows, decide why so the
@@ -524,52 +529,58 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       pickParcelSize(sizingSpeedHs, env.TASK_TARGET_DURATION_SECONDS, remaining)
     )
     if (parcel < remaining) {
-      // MAX_CHUNKS_PER_ATTACK guard (mirrors generateTasksForAttack): at the cap,
-      // assign the whole remaining range instead of creating another task row.
-      const [{ taskCount } = { taskCount: 0 }] = await db
-        .select({ taskCount: sql<number>`count(*)::int` })
-        .from(tasks)
-        .where(eq(tasks.attackId, row['attack_id'] as number))
-      if (taskCount < 100_000) {
-        const parcelEnd = claimStart + parcel
-        const trimmed = {
-          start: jsonSafeBigint(claimStart),
-          end: jsonSafeBigint(parcelEnd),
-          total: jsonSafeBigint(parcel),
-        }
-        const remainder = {
-          start: jsonSafeBigint(parcelEnd),
-          end: jsonSafeBigint(claimEnd),
-          total: jsonSafeBigint(claimEnd - parcelEnd),
-        }
-        try {
-          await db.transaction(async (tx) => {
-            await tx
-              .update(tasks)
-              .set({ workRange: trimmed })
-              .where(eq(tasks.id, row['id'] as number))
-            await tx.insert(tasks).values({
-              attackId: row['attack_id'] as number,
-              campaignId: row['campaign_id'] as number,
-              status: 'pending',
-              workRange: remainder,
-              requiredCapabilities:
-                (row['required_capabilities'] as Record<string, unknown> | null) ?? {},
-            })
-          })
+      const parcelEnd = claimStart + parcel
+      const trimmed = {
+        start: jsonSafeBigint(claimStart),
+        end: jsonSafeBigint(parcelEnd),
+        total: jsonSafeBigint(parcel),
+      }
+      const remainder = {
+        start: jsonSafeBigint(parcelEnd),
+        end: jsonSafeBigint(claimEnd),
+        total: jsonSafeBigint(claimEnd - parcelEnd),
+      }
+      const splitAttackId = row['attack_id'] as number
+      const remainderJson = JSON.stringify(remainder)
+      const capsJson = JSON.stringify(
+        (row['required_capabilities'] as Record<string, unknown> | null) ?? {}
+      )
+      try {
+        const didSplit = await db.transaction(async (tx) => {
+          // Atomic MAX_CHUNKS_PER_ATTACK guard: insert the remainder only if the
+          // attack is under the cap, checked in the SAME statement (the count
+          // subquery in the INSERT WHERE) so two concurrent claims can't both
+          // exceed it. RETURNING is empty when the cap is hit -> no remainder,
+          // and the claimed task keeps its full range.
+          const inserted = await tx.execute(sql`
+            INSERT INTO tasks (attack_id, campaign_id, status, work_range, required_capabilities)
+            SELECT ${splitAttackId}, ${row['campaign_id'] as number}, 'pending',
+                   ${remainderJson}::jsonb, ${capsJson}::jsonb
+            WHERE (SELECT count(*) FROM tasks WHERE attack_id = ${splitAttackId}) < ${MAX_CHUNKS_PER_ATTACK}
+            RETURNING id
+          `)
+          if (inserted.length === 0) {
+            return false // at the cap — assign the whole range, no split
+          }
+          await tx
+            .update(tasks)
+            .set({ workRange: trimmed })
+            .where(eq(tasks.id, row['id'] as number))
+          return true
+        })
+        if (didSplit) {
           finalRange = trimmed
-        } catch (err: unknown) {
-          // The split is best-effort: the task is already claimed (the CTE
-          // committed). If the trim+remainder transaction fails it rolls back
-          // atomically — the claimed task keeps its FULL range and no orphan
-          // remainder is created (no lost keyspace). Assign the whole range
-          // rather than failing the claim; the heartbeat rebalance can re-split
-          // later. finalRange stays the full claimed range.
-          logger.warn(
-            { err, taskId: row['id'], agentId },
-            'split-on-claim failed; assigning the full claimed range (no keyspace lost)'
-          )
         }
+      } catch (err: unknown) {
+        // The split is best-effort: the task is already claimed (the CTE
+        // committed). If the trim+remainder transaction fails it rolls back
+        // atomically — the claimed task keeps its FULL range and no orphan
+        // remainder is created (no lost keyspace). Assign the whole range rather
+        // than failing the claim; the heartbeat rebalance can re-split later.
+        logger.warn(
+          { err, taskId: row['id'], agentId },
+          'split-on-claim failed; assigning the full claimed range (no keyspace lost)'
+        )
       }
     }
   }
