@@ -276,10 +276,13 @@ describe('task_telemetry_1m CAGG materialization (U8)', () => {
 })
 
 describe('telemetry retention policies (U8, KTD-7)', () => {
-  it('raw hypertable has a retention policy with the default drop_after', async () => {
-    // Query the job catalog to find the policy for task_telemetry.
-    const rows = await db.execute<{ drop_after: string }>(sql`
-      SELECT j.config->>'drop_after' AS drop_after
+  it('raw hypertable retention drop_after is the 1-hour default (magnitude-checked)', async () => {
+    // Convert the stored duration to seconds in SQL so the assertion is
+    // format-independent (Timescale stores '01:00:00' or '1 hour') AND magnitude-
+    // checked: a regression to e.g. '1 day' or '10 years' fails here, unlike the
+    // prior defined/non-empty check.
+    const rows = await db.execute<{ drop_after_seconds: number }>(sql`
+      SELECT EXTRACT(EPOCH FROM (j.config->>'drop_after')::interval) AS drop_after_seconds
       FROM timescaledb_information.jobs j
       JOIN _timescaledb_catalog.hypertable h
         ON (j.config->>'hypertable_id')::int = h.id
@@ -288,12 +291,7 @@ describe('telemetry retention policies (U8, KTD-7)', () => {
         AND h.table_name  = 'task_telemetry'
     `)
     expect(rows.length).toBe(1)
-    // Default is '1 hour'; Timescale stores it as a duration string.
-    // The stored form varies ('01:00:00' or '1 hour'); convert both to compare.
-    const dropAfter = rows[0]!.drop_after
-    // Parse duration: any of '01:00:00', '1:00:00', '1 hour' represent 1 hour.
-    expect(dropAfter).toBeDefined()
-    expect(dropAfter).not.toBe('')
+    expect(Number(rows[0]!.drop_after_seconds)).toBe(3600) // 1 hour
   })
 
   it('applyTelemetryRetentionPolicies() re-applies env windows without error', async () => {

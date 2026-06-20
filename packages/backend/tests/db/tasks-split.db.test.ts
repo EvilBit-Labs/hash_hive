@@ -157,6 +157,24 @@ describe('U13 split-on-claim', () => {
     expect(Number(wr.start)).toBe(0)
   })
 
+  it('does NOT split when the attack is at MAX_CHUNKS_PER_ATTACK (assigns the whole range)', async () => {
+    // Push the attack to the cap with completed filler rows (one statement), then
+    // a claimable pending task. The split's count subquery sees >= 100k and skips
+    // the remainder INSERT, so the claimed range is assigned whole.
+    await db.execute(sql`
+      INSERT INTO tasks (attack_id, campaign_id, status, work_range, required_capabilities)
+      SELECT ${attackId}, ${campaignId}, 'completed', '{"start":0,"end":1,"total":1}'::jsonb, '{}'::jsonb
+      FROM generate_series(1, 100000)
+    `)
+    const agentId = await seedAgent('fast', 100_000) // parcel 30M, range 100M -> would split if under cap
+    await insertTask(100_000_000)
+    const claimed = await assignNextTask(agentId)
+    expect(claimed).not.toBeNull()
+    const wr = claimed!.workRange as { end: number | string }
+    expect(Number(wr.end)).toBe(100_000_000) // full range — no split at the cap
+    expect(await pendingRemainders()).toHaveLength(0) // no remainder created
+  })
+
   it('rolls back the trim and assigns the full range when the remainder insert fails (no lost keyspace)', async () => {
     const agentId = await seedAgent('fast', 100_000) // parcel 30,000,000
     const id = await insertTask(100_000_000) // remainder would start at 30,000,000

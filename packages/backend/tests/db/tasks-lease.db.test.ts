@@ -391,4 +391,30 @@ describe('U11 concurrency — only one agent wins an expired-lease task', () => 
 
     await db.delete(tasks).where(eq(tasks.id, taskId))
   })
+
+  it('concurrent claims (Promise.all) on one expired-lease task: exactly one wins', async () => {
+    const expiredLease = new Date(Date.now() - 1_000)
+    const taskId = await insertAssignedTask(
+      fix.attackId,
+      fix.campaignId,
+      fix.agentAId,
+      expiredLease
+    )
+
+    // Two agents race concurrently (separate pool connections). SKIP LOCKED must
+    // let exactly one claim the single expired-lease task — never a double-claim.
+    const results = await Promise.all([assignNextTask(fix.agentBId), assignNextTask(fix.agentAId)])
+    const winners = results.filter((r) => r !== null)
+    expect(winners).toHaveLength(1)
+    expect(winners[0]!.id).toBe(taskId)
+
+    // The row ends owned by exactly one agent.
+    const [owned] = await db
+      .select({ owner: tasks.agentId })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+    expect([fix.agentAId, fix.agentBId]).toContain(owned!.owner)
+
+    await db.delete(tasks).where(eq(tasks.id, taskId))
+  })
 })
