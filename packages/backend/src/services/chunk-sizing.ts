@@ -82,6 +82,26 @@ function clampChunkSize(candidate: bigint, totalOrRemaining: bigint): bigint {
   return result
 }
 
+/**
+ * Per-agent split-on-claim sizing (U13). Unlike `pickChunkSize` (which medians
+ * a fleet benchmark ARRAY at generation time), this takes a SCALAR rate — the
+ * claiming agent's observed-speed EWMA — and sizes a parcel to `targetSeconds`
+ * of wall-clock work, clamped to the remaining keyspace and the policy bounds.
+ *
+ * `speedHs` non-finite or <= 0 (e.g. EWMA cold start) yields a 0 candidate that
+ * the clamp floors to MIN_CHUNK_SIZE — never `BigInt(NaN)` (throws) nor a 0-size
+ * parcel (starves the agent). Callers should still seed from a sane default
+ * (DEFAULT_AGENT_SPEED_HS) so cold-start parcels aren't pinned to the floor.
+ */
+export function pickParcelSize(speedHs: number, targetSeconds: number, remaining: bigint): string {
+  if (!Number.isFinite(targetSeconds) || targetSeconds <= 0) {
+    throw new Error('pickParcelSize: targetSeconds must be a finite positive number')
+  }
+  const safeSpeed = Number.isFinite(speedHs) && speedHs > 0 ? speedHs : 0
+  const candidate = BigInt(Math.floor(safeSpeed * targetSeconds))
+  return clampChunkSize(candidate, remaining).toString()
+}
+
 export function pickChunkSize(input: PickChunkSizeInput): string {
   if (input.benchmarks.length === 0) {
     return FALLBACK_CHUNK_SIZE

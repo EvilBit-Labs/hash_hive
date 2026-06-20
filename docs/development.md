@@ -135,6 +135,18 @@ Generate `BETTER_AUTH_SECRET` with: `openssl rand -base64 32`
 
 **Database reset:** `docker compose down -v && docker compose up -d && just db-migrate`
 
+**TimescaleDB:** the `postgres` service runs `timescale/timescaledb:2.17.2-pg16`
+(PostgreSQL 16 + the TimescaleDB extension) for RRD-style telemetry retention.
+The image is PG16-compatible, so an existing `pgdata` volume mounts unchanged.
+On a fresh volume (`docker compose down -v` then `up -d`) the extension is created
+automatically (via `docker/postgres/init-timescaledb.sql`). On an existing volume,
+the compose `command:` override sets `shared_preload_libraries=timescaledb` so a
+restart + the telemetry migration's `CREATE EXTENSION IF NOT EXISTS timescaledb`
+enables it without a wipe. Authoritative tables stay plain Postgres; only the
+`task_telemetry` hypertable is Timescale-managed. After swapping the image on an
+existing volume, watch for libc/collation warnings (alpine/musl → debian/glibc) —
+a one-time `REINDEX` of text indexes may be needed.
+
 **Dependency issues:** `just clean && bun install`
 
 **Build fails after schema change:** Delete `**/tsconfig.tsbuildinfo` and rebuild.

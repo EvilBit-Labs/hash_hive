@@ -3,6 +3,7 @@ import type { ResourceUpdateEventData } from '@hashhive/shared'
 import type { ComponentName, ComponentStatus } from './health.js'
 
 import { logger } from '../config/logger.js'
+import { type EventBus, appBus } from './events/bus.js'
 
 /**
  * FUTURE: Redis Pub/Sub Extension for Multi-Instance Deployments
@@ -94,6 +95,17 @@ export type AppEvent =
 
 export type ProjectAppEvent = Extract<AppEvent, { type: ProjectEventType }>
 
+// ─── Event Bus ──────────────────────────────────────────────────────
+
+/**
+ * Module-level bus, typed against `AppEvent`. The singleton itself lives
+ * in `./events/bus.ts` so tests can call `appBus.publish(event)` directly
+ * and U2 can swap transports at that single export point. Intentionally
+ * NOT re-exported here — new exports on `events.ts` break existing
+ * `mock.module('.../events.js')` registrations (GOTCHAS §148).
+ */
+const bus: EventBus<AppEvent> = appBus
+
 // ─── Connection Registry ────────────────────────────────────────────
 
 interface WebSocketClient {
@@ -177,7 +189,9 @@ pruneInterval.unref()
  * Test-only: clears the module-level client registry and throttle map
  * so each test starts from a clean slate. Production callers must not
  * use this - clearing the client map mid-broadcast would drop active
- * WS subscribers.
+ * WS subscribers. The bus subscription registered below is intentionally
+ * NOT cleared here — dropping it would silently break all delivery after
+ * the first reset.
  */
 export function __resetEventsForTesting(): void {
   clients.clear()
@@ -185,14 +199,27 @@ export function __resetEventsForTesting(): void {
   clientIdCounter = 0
 }
 
+// ─── Bus Subscriber (delivery to local WebSocket clients) ────────────
+
 /**
- * Emits a project-scoped event to all connected clients that are
- * subscribed to the event's project and type. Applies per-type
- * throttling. System events must use `broadcastSystemEvent` instead;
- * routing one through here would silently drop because no client has
- * SYSTEM_EVENT_PROJECT_ID in its projectIds set.
+ * Single subscriber that fans bus events out to the local `clients` Map.
+ * Project-scoped events go through the throttle + project-filter path;
+ * system events bypass both and go to every subscribed client.
+ *
+ * Registered once at module load and intentionally never unsubscribed:
+ * `__resetEventsForTesting` must NOT drop this subscription, only clear
+ * `clients` and `lastEmitTimes`, so that tests run with a clean client
+ * slate while the delivery path stays wired.
  */
-export function emit(event: ProjectAppEvent) {
+bus.subscribe((event: AppEvent) => {
+  if (event.projectId === SYSTEM_EVENT_PROJECT_ID) {
+    deliverSystemEvent(event)
+  } else {
+    deliverProjectEvent(event as ProjectAppEvent)
+  }
+})
+
+function deliverProjectEvent(event: ProjectAppEvent): void {
   const throttleKey = `${event.type}:${event.projectId}`
   const now = Date.now()
   const lastEmit = lastEmitTimes.get(throttleKey) ?? 0
@@ -237,6 +264,43 @@ export function emit(event: ProjectAppEvent) {
   if (delivered > 0) {
     logger.debug({ type: event.type, projectId: event.projectId, delivered }, 'event broadcasted')
   }
+}
+
+function deliverSystemEvent(event: AppEvent): void {
+  const payload = JSON.stringify(event)
+  let delivered = 0
+
+  for (const [clientId, client] of clients) {
+    if (!client.subscribedTypes.has(event.type)) {
+      continue
+    }
+    if (client.ws.readyState !== 1) {
+      clients.delete(clientId)
+      continue
+    }
+    try {
+      client.ws.send(payload)
+      delivered++
+    } catch (err) {
+      logger.warn({ err, clientId, type: event.type }, 'WebSocket send failed; dropping client')
+      clients.delete(clientId)
+    }
+  }
+
+  if (delivered > 0) {
+    logger.debug({ type: event.type, delivered }, 'system event broadcasted')
+  }
+}
+
+/**
+ * Emits a project-scoped event to all connected clients that are
+ * subscribed to the event's project and type. Applies per-type
+ * throttling. System events must use `broadcastSystemEvent` instead;
+ * routing one through here would silently drop because no client has
+ * SYSTEM_EVENT_PROJECT_ID in its projectIds set.
+ */
+export function emit(event: ProjectAppEvent): void {
+  void bus.publish(event)
 }
 
 // ─── Convenience Emitters ───────────────────────────────────────────
@@ -400,29 +464,7 @@ export function broadcastSystemEvent(type: SystemEventType, data: Record<string,
     data,
     timestamp: new Date().toISOString(),
   }
-  const payload = JSON.stringify(event)
-  let delivered = 0
-
-  for (const [clientId, client] of clients) {
-    if (!client.subscribedTypes.has(type)) {
-      continue
-    }
-    if (client.ws.readyState !== 1) {
-      clients.delete(clientId)
-      continue
-    }
-    try {
-      client.ws.send(payload)
-      delivered++
-    } catch (err) {
-      logger.warn({ err, clientId, type }, 'WebSocket send failed; dropping client')
-      clients.delete(clientId)
-    }
-  }
-
-  if (delivered > 0) {
-    logger.debug({ type, delivered }, 'system event broadcasted')
-  }
+  void bus.publish(event)
 }
 
 /**

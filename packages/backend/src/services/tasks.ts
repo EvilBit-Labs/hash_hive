@@ -3,14 +3,18 @@ import type { AssignedTask } from '@hashhive/shared'
 import { agentBenchmarks, agents, attacks, campaigns, hashItems, tasks } from '@hashhive/shared'
 import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 
+import { env } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { updateAgentObservedRate } from './agent-rate.js'
 import { getAgentBenchmarkForMode } from './agents.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
 import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
-import { pickChunkSize } from './chunk-sizing.js'
+import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
-import { jsonSafeBigint } from './tasks/_internals.js'
+import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
+import { MAX_RETRIES } from './tasks/retry.js'
+import { appendTaskTelemetry } from './telemetry.js'
 
 // ─── Task Generation ────────────────────────────────────────────────
 
@@ -148,16 +152,16 @@ export async function generateTasksForAttack(
   // keep generation finite - the trailing remainder becomes a single
   // oversized task that the heartbeat-monitor rebalance branch will split
   // further as agents make progress against it.
-  const MAX_CHUNKS_PER_ATTACK = 100_000n
+  const maxChunks = BigInt(MAX_CHUNKS_PER_ATTACK)
   // Ceiling-div: the actual loop emits `ceil(totalKeyspace / chunkSize)`
   // chunks, so the comparison must use the same ceiling. With plain floor
   // div, `totalKeyspace = MAX*chunkSize + 1` would test as `> MAX_CHUNKS`
   // false (floor div gives exactly MAX) but the loop would emit MAX+1
   // chunks, blowing past the documented cap.
   const projectedChunks = totalKeyspace / chunkSize + (totalKeyspace % chunkSize === 0n ? 0n : 1n)
-  if (projectedChunks > MAX_CHUNKS_PER_ATTACK) {
-    chunkSize = totalKeyspace / MAX_CHUNKS_PER_ATTACK
-    if (totalKeyspace % MAX_CHUNKS_PER_ATTACK !== 0n) chunkSize += 1n
+  if (projectedChunks > maxChunks) {
+    chunkSize = totalKeyspace / maxChunks
+    if (totalKeyspace % maxChunks !== 0n) chunkSize += 1n
   }
 
   const chunks: Array<{
@@ -216,11 +220,17 @@ export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQ
 
   // Hash mode check: the task's required hashcatMode must be in the agent's hashModes array.
   // If agent advertises no hashModes (or all were invalid), only tasks without a hashcatMode requirement pass.
+  // Build the int[] as an inline ARRAY literal rather than a bound JS-array
+  // parameter: postgres.js mis-binds a JS array passed for `::int[]`
+  // (ERR_INVALID_ARG_TYPE on the array elements). `hashModes` is already
+  // sanitized to finite integers above, so interpolating them as a literal is
+  // injection-safe. Surfaced by the U13 real-DB lane (mocked tests never bound
+  // a real array).
   const hashModeCondition =
     hashModes.length > 0
       ? sql`(
           ${tasks.requiredCapabilities}->>'hashcatMode' IS NULL
-          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${hashModes}::int[])
+          OR (${tasks.requiredCapabilities}->>'hashcatMode')::int = ANY(${sql.raw(`ARRAY[${hashModes.join(',')}]`)}::int[])
         )`
       : sql`(${tasks.requiredCapabilities}->>'hashcatMode' IS NULL)`
 
@@ -228,6 +238,11 @@ export function buildCapabilityPredicate(agentCaps: Record<string, unknown>): SQ
 }
 
 const DEFAULT_AGENT_SPEED_HS = 1_000_000 // 1 MH/s fallback when no benchmark exists
+
+// Hard cap on tasks per attack — bounds memory + row count at generation time
+// and at claim-time split. Both `generateTasksForAttack` and the split-on-claim
+// remainder INSERT enforce it so the two paths can never disagree.
+const MAX_CHUNKS_PER_ATTACK = 100_000
 
 /**
  * When `assignNextTask`'s atomic claim returns no rows, decide why so the
@@ -333,16 +348,44 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   const agentCaps = (agent.capabilities ?? {}) as Record<string, unknown>
   const capabilityPredicate = buildCapabilityPredicate(agentCaps)
 
-  // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED
+  const leaseDurationMs = env.TASK_LEASE_DURATION_MS
+
+  // Atomic candidate selection + claim via raw SQL with FOR UPDATE SKIP LOCKED.
+  //
+  // U11 (KTD-5): The candidate predicate now covers two cases:
+  //   1. Truly idle tasks (pending, no owner).
+  //   2. Expired-lease tasks (assigned/running but lease_expires_at < NOW()).
+  //
+  // A NOT EXISTS subquery enforces the one-active-lease-per-agent invariant:
+  // an agent that already holds a live lease cannot claim a second task.
+  //
+  // The SET clause stamps a fresh lease_expires_at so the lessee must report
+  // progress within TASK_LEASE_DURATION_MS or lose the task to reclaim.
   const result = await db.execute(sql`
     WITH candidate AS (
-      SELECT ${tasks.id} AS task_id
+      SELECT ${tasks.id} AS task_id,
+             ${tasks.status} AS prior_status,
+             ${tasks.committedKeyspaceOffset} AS committed_offset
       FROM ${tasks}
       INNER JOIN ${campaigns} ON ${tasks.campaignId} = ${campaigns.id}
-      WHERE ${tasks.status} = 'pending'
-        AND ${tasks.agentId} IS NULL
+      WHERE (
+        (${tasks.status} = 'pending' AND ${tasks.agentId} IS NULL)
+        OR (
+          ${tasks.status} IN ('assigned', 'running')
+          AND ${tasks.leaseExpiresAt} < NOW()
+          -- U12: a task reclaimed MAX_RETRIES times without progress is a poison
+          -- task; stop reclaiming it so the backstop can fail it terminally.
+          AND ${tasks.retryCount} < ${MAX_RETRIES}
+        )
+      )
         AND ${campaigns.projectId} = ${projectId}
         AND ${capabilityPredicate}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${tasks} t2
+          WHERE t2.agent_id = ${agentId}
+            AND t2.status IN ('assigned', 'running')
+            AND t2.lease_expires_at > NOW()
+        )
       ORDER BY ${campaigns.priority}, ${tasks.id}
       LIMIT 1
       FOR UPDATE OF ${tasks} SKIP LOCKED
@@ -352,7 +395,44 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       agent_id = ${agentId},
       status = 'assigned',
       assigned_at = NOW(),
-      updated_at = NOW()
+      updated_at = NOW(),
+      lease_expires_at = NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond'),
+      -- U12: on RECLAIM (prior status assigned/running), resume from the
+      -- committed offset so only un-committed keyspace is redone. committed_offset
+      -- is an ABSOLUTE coordinate in the same space as workRange.start, so it is
+      -- written straight into work_range.start (as text to preserve bigint-scale
+      -- precision; readers accept number|string). total is rebased to
+      -- (end - committed_offset) so the remaining range is reported correctly.
+      -- A NULL committed_offset (no prior progress) leaves the range unchanged.
+      work_range = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running') AND candidate.committed_offset IS NOT NULL
+          THEN jsonb_set(
+                 jsonb_set(${tasks.workRange}, '{start}', to_jsonb(candidate.committed_offset::text)),
+                 '{total}',
+                 to_jsonb((((${tasks.workRange} ->> 'end')::numeric) - (candidate.committed_offset::numeric))::text)
+               )
+        ELSE ${tasks.workRange}
+      END,
+      -- U12 (coordinate-frame fix): reset progress.keyspaceProgress to 0 on
+      -- reclaim. keyspaceProgress is RELATIVE to work_range.start; rebasing start
+      -- to the committed offset without resetting it would leave the stale
+      -- old-agent value, so the watermark predicate (which compares the resuming
+      -- agent's fresh near-zero reports against tasks.progress) would read "no
+      -- advance", failing to extend the lease (risking a false reclaim loop) and
+      -- failing to reset retry_count. Zeroing it gives the new agent a clean
+      -- baseline. Other progress fields (speed/temperature) are preserved.
+      progress = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running') AND candidate.committed_offset IS NOT NULL
+          THEN jsonb_set(COALESCE(${tasks.progress}, '{}'::jsonb), '{keyspaceProgress}', '0'::jsonb)
+        ELSE ${tasks.progress}
+      END,
+      -- U12: count a retry on every reclaim; updateTaskProgress resets it to 0
+      -- when the watermark advances, so only no-progress reclaims accumulate.
+      retry_count = CASE
+        WHEN candidate.prior_status IN ('assigned', 'running')
+          THEN ${tasks.retryCount} + 1
+        ELSE ${tasks.retryCount}
+      END
     FROM candidate
     WHERE ${tasks.id} = candidate.task_id
     RETURNING ${tasks.id}, ${tasks.attackId}, ${tasks.campaignId}, ${tasks.agentId},
@@ -403,17 +483,105 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   // Wrapped in try-catch because the task is already claimed via FOR UPDATE SKIP LOCKED -
   // a benchmark lookup failure must not orphan the assigned task.
   let agentSpeedHs = DEFAULT_AGENT_SPEED_HS
+  // U13: the rate used to size the claim-time parcel. Prefers the live
+  // observed-speed EWMA (U6); falls back to the static registration benchmark,
+  // then DEFAULT_AGENT_SPEED_HS on cold start so a null/zero rate never produces
+  // BigInt(NaN) or a starved 0-size parcel.
+  let sizingSpeedHs = DEFAULT_AGENT_SPEED_HS
   if (taskHashcatMode !== null) {
     try {
       const benchmark = await getAgentBenchmarkForMode(agentId, taskHashcatMode)
       if (benchmark) {
         agentSpeedHs = benchmark.speedHs
+        const observed = benchmark.observedSpeedHs
+        sizingSpeedHs =
+          observed != null && observed > 0
+            ? observed
+            : benchmark.speedHs > 0
+              ? benchmark.speedHs
+              : DEFAULT_AGENT_SPEED_HS
       }
     } catch (err: unknown) {
       logger.warn(
         { err, agentId, hashcatMode: taskHashcatMode },
         'Benchmark lookup failed after task assignment - using default speed'
       )
+    }
+  }
+
+  // U13 split-on-claim: if the claimed range exceeds a target-duration parcel at
+  // this agent's rate, trim this task to the parcel and re-pend the remainder as
+  // a new pending task — atomically, so a remainder-insert failure rolls back the
+  // trim and leaves the claimed task whole (no lost keyspace). Generation-time
+  // sizing can stay coarse since claim-time split now adapts per agent.
+  const claimedRange = (row['work_range'] as {
+    start: number | string
+    end: number | string
+    total: number | string
+  } | null) ?? { start: 0, end: 0, total: 0 }
+  let finalRange: { start: number | string; end: number | string; total: number | string } =
+    claimedRange
+  const claimStart = readWorkRangeField(claimedRange, 'start')
+  const claimEnd = readWorkRangeField(claimedRange, 'end')
+  const remaining = claimEnd > claimStart ? claimEnd - claimStart : 0n
+  if (remaining > 0n) {
+    const parcel = BigInt(
+      pickParcelSize(sizingSpeedHs, env.TASK_TARGET_DURATION_SECONDS, remaining)
+    )
+    if (parcel < remaining) {
+      const parcelEnd = claimStart + parcel
+      const trimmed = {
+        start: jsonSafeBigint(claimStart),
+        end: jsonSafeBigint(parcelEnd),
+        total: jsonSafeBigint(parcel),
+      }
+      const remainder = {
+        start: jsonSafeBigint(parcelEnd),
+        end: jsonSafeBigint(claimEnd),
+        total: jsonSafeBigint(claimEnd - parcelEnd),
+      }
+      const splitAttackId = row['attack_id'] as number
+      const remainderJson = JSON.stringify(remainder)
+      const capsJson = JSON.stringify(
+        (row['required_capabilities'] as Record<string, unknown> | null) ?? {}
+      )
+      try {
+        const didSplit = await db.transaction(async (tx) => {
+          // Atomic MAX_CHUNKS_PER_ATTACK guard: insert the remainder only if the
+          // attack is under the cap, checked in the SAME statement (the count
+          // subquery in the INSERT WHERE) so two concurrent claims can't both
+          // exceed it. RETURNING is empty when the cap is hit -> no remainder,
+          // and the claimed task keeps its full range.
+          const inserted = await tx.execute(sql`
+            INSERT INTO tasks (attack_id, campaign_id, status, work_range, required_capabilities)
+            SELECT ${splitAttackId}, ${row['campaign_id'] as number}, 'pending',
+                   ${remainderJson}::jsonb, ${capsJson}::jsonb
+            WHERE (SELECT count(*) FROM tasks WHERE attack_id = ${splitAttackId}) < ${MAX_CHUNKS_PER_ATTACK}
+            RETURNING id
+          `)
+          if (inserted.length === 0) {
+            return false // at the cap — assign the whole range, no split
+          }
+          await tx
+            .update(tasks)
+            .set({ workRange: trimmed })
+            .where(eq(tasks.id, row['id'] as number))
+          return true
+        })
+        if (didSplit) {
+          finalRange = trimmed
+        }
+      } catch (err: unknown) {
+        // The split is best-effort: the task is already claimed (the CTE
+        // committed). If the trim+remainder transaction fails it rolls back
+        // atomically — the claimed task keeps its FULL range and no orphan
+        // remainder is created (no lost keyspace). Assign the whole range rather
+        // than failing the claim; the heartbeat rebalance can re-split later.
+        logger.warn(
+          { err, taskId: row['id'], agentId },
+          'split-on-claim failed; assigning the full claimed range (no keyspace lost)'
+        )
+      }
     }
   }
 
@@ -425,15 +593,9 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     agentId: row['agent_id'] as number,
     status: row['status'] as string,
     workRange: {
-      ...((row['work_range'] as {
-        start: number | string
-        end: number | string
-        total: number | string
-      } | null) ?? {
-        start: 0,
-        end: 0,
-        total: 0,
-      }),
+      // U13: finalRange is the trimmed parcel when split-on-claim fired, else
+      // the full claimed range.
+      ...finalRange,
       agentSpeedHs,
     },
     progress: row['progress'],
@@ -477,6 +639,10 @@ export async function updateTaskProgress(
       startedAt: tasks.startedAt,
       projectId: campaigns.projectId,
       hashListId: campaigns.hashListId,
+      // Extract the hashcat mode stored in required_capabilities at task
+      // generation time (deriveRequiredCapabilities sets caps['hashcatMode']).
+      // Cast to int; null when the JSONB key is absent.
+      hashcatMode: sql<number | null>`(${tasks.requiredCapabilities} ->> 'hashcatMode')::int`,
     })
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
@@ -487,80 +653,23 @@ export async function updateTaskProgress(
     return { error: 'Task not found or not assigned to this agent' }
   }
 
-  // Preemption (#97 U4): a paused task still carries this agent_id (so the
-  // heartbeat stop-signal stays derivable), but the agent is reporting
-  // progress on work it should abandon. Do NOT resurrect the row to the
-  // reported status — tell the agent to stop. The status guard folded into
-  // the UPDATE below closes the residual TOCTOU window where a pause lands
-  // between this read and the write.
+  // Persist-first (U5, KTD-8): move the hash_items upsert ABOVE the paused
+  // guard so preemption or agent death between report and ack never drops a
+  // found plaintext. The upsert is idempotent on (hash_list_id, hash_value),
+  // so persisting before the guard is safe to repeat on resume.
   //
-  // Trade-off (review #221): a final report that also carries newly cracked
-  // results drops them here. This is recoverable — resume re-pends from the
-  // stored `workRange.start + keyspaceProgress`, so the un-acked range is
-  // re-scanned and any crack is re-found (the hash_items upsert is
-  // idempotent). Persisting on this branch was considered but kept out to
-  // avoid a write on the abandon path; the re-scan is the safety net.
-  if (taskRow.status === 'paused') {
-    return { stopped: true as const }
-  }
-
-  const updates: Record<string, unknown> = {
-    status: data.status,
-    updatedAt: new Date(),
-  }
-
-  if (data.progress) {
-    updates['progress'] = data.progress
-  }
-
-  if (data.status === 'running' && !taskRow.startedAt) {
-    updates['startedAt'] = new Date()
-  }
-
-  if (data.status === 'completed' || data.status === 'exhausted') {
-    updates['completedAt'] = new Date()
-  }
-
-  // Update task status — re-verify ownership AND that the task is still
-  // active in the write path. The status guard (TOCTOU defense for #97 U4)
-  // means a row paused between the read above and this write is left
-  // untouched rather than resurrected to the reported status.
-  const [updated] = await db
-    .update(tasks)
-    .set(updates)
-    .where(
-      and(
-        eq(tasks.id, taskId),
-        eq(tasks.agentId, agentId),
-        inArray(tasks.status, ['assigned', 'running'])
-      )
-    )
-    .returning()
-
-  if (!updated) {
-    return { error: 'Task was reassigned during update' }
-  }
-
-  // Insert cracked hash results if submitted.
+  // The hashListId-missing guard stays ahead of the insert: a campaign with no
+  // hash list still surfaces the configuration error immediately (no insert).
   //
-  // **Data-integrity gate.** When the agent submits cracked results
-  // but the task's campaign has no associated `hashListId`, the
-  // results cannot be stored — there is no hash list row to attach
-  // them to. The prior implementation only LOGGED this and fell
-  // through to a successful `{ task: updated }` return, leaving the
-  // agent with no signal that its cracked hashes were dropped on the
-  // floor. That silently lost work — exactly the failure class the
-  // agent contract was built to prevent.
+  // Attribution side-effects (emitCrackResult) remain gated on the
+  // ownership-verifying UPDATE below — if the UPDATE matches zero rows
+  // (task paused or reassigned), the plaintext is already persisted but no
+  // crack event fires and no cursor advances. This closes the TOCTOU gap that
+  // moving the insert alone would open: a concurrently cancelled task still
+  // gets its plaintext saved, but does not generate a misattributed event.
   //
-  // The corrected behavior surfaces an `{ error }` envelope so the
-  // route's `'error' in result` branch returns a 400 + `TASK_ERROR`
-  // and the agent can quarantine the report (or escalate the
-  // campaign-misconfiguration alert) rather than mark the task done
-  // with phantom progress. The task-row update above is allowed to
-  // stand — `data.status` and `data.progress` are still meaningful
-  // signal — but the results-loss branch returns instead of falling
-  // through to `updateCampaignProgress` so the campaign aggregate
-  // doesn't tick forward on dropped work.
+  // The hash_items FK to tasks is ON DELETE SET NULL, so a concurrent task
+  // delete leaves the plaintext with a null task_id rather than an FK error.
   if (data.results && data.results.length > 0 && !taskRow.hashListId) {
     logger.error(
       {
@@ -603,8 +712,6 @@ export async function updateTaskProgress(
             agentId: sql`EXCLUDED.agent_id`,
           },
         })
-
-      emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
     } catch (err) {
       logger.error(
         {
@@ -618,6 +725,152 @@ export async function updateTaskProgress(
       )
       return { error: 'Failed to store crack results' }
     }
+  }
+
+  // Preemption (#97 U4): a paused task still carries this agent_id (so the
+  // heartbeat stop-signal stays derivable), but the agent is reporting
+  // progress on work it should abandon. Do NOT resurrect the row to the
+  // reported status — tell the agent to stop. The status guard folded into
+  // the UPDATE below closes the residual TOCTOU window where a pause lands
+  // between this read and the write.
+  //
+  // Crack results from a paused report are now persisted above (U5) before
+  // reaching this guard, so no plaintext is dropped on the abandon path.
+  if (taskRow.status === 'paused') {
+    return { stopped: true as const }
+  }
+
+  const updates: Record<string, unknown> = {
+    status: data.status,
+    updatedAt: new Date(),
+  }
+
+  // NOTE (U9 deferred): this hot-row `progress` write is intentionally still
+  // here. U4 made it a dual-write alongside the telemetry INSERT; U9 was to
+  // remove it and cut reads to telemetry, but the read-cutover blast radius is
+  // larger than planned — preemption.ts and attacks/runtime.ts read
+  // tasks.progress for live keyspace position and must first migrate to
+  // committed_keyspace_offset. Until that lands, the dual-write stays (the
+  // plan's safe window). See task U9 / the PR's deferred-work section.
+  if (data.progress) {
+    updates['progress'] = data.progress
+  }
+
+  if (data.status === 'running' && !taskRow.startedAt) {
+    updates['startedAt'] = new Date()
+  }
+
+  if (data.status === 'completed' || data.status === 'exhausted') {
+    updates['completedAt'] = new Date()
+  }
+
+  // U11 (KTD-5): extend the lease only when the keyspace watermark strictly
+  // advances. The CASE expression evaluates the OLD progress JSONB value
+  // (PostgreSQL guarantees SET RHS sees the pre-update row) so the comparison
+  // is always against the previously committed position.
+  //
+  // Binding as a string and casting ::numeric avoids JS number precision loss
+  // on bigint-scale keyspace positions.
+  const rawKp = data.progress?.keyspaceProgress
+  const kpIsFinite =
+    rawKp != null &&
+    (typeof rawKp === 'number' ? Number.isFinite(rawKp) : String(rawKp).trim() !== '')
+  if (kpIsFinite) {
+    const kpStr = String(rawKp)
+    const leaseDurationMs = env.TASK_LEASE_DURATION_MS
+    // The "watermark advanced" predicate, reused below. `keyspaceProgress` in the
+    // report is RELATIVE to this task's range; the stored progress JSONB holds the
+    // previously committed relative position. SET RHS sees the pre-update row.
+    const watermarkAdvanced = sql`COALESCE((${tasks.progress} ->> 'keyspaceProgress')::numeric, -1) < ${kpStr}::numeric`
+    updates['leaseExpiresAt'] = sql`
+      CASE
+        WHEN ${watermarkAdvanced}
+          THEN NOW() + (${leaseDurationMs}::bigint * INTERVAL '1 millisecond')
+        ELSE ${tasks.leaseExpiresAt}
+      END`
+    // U12: advance the committed-offset cursor. It is an ABSOLUTE keyspace
+    // coordinate — the same space as workRange.start — NOT the relative
+    // `keyspaceProgress`. absolute = workRange.start + keyspaceProgress.
+    // GREATEST keeps it monotonic against out-of-order reports. ::numeric for
+    // the arithmetic (bigint-scale mask keyspaces), ::bigint for the column.
+    updates['committedKeyspaceOffset'] = sql`
+      GREATEST(
+        COALESCE(${tasks.committedKeyspaceOffset}, 0)::numeric,
+        COALESCE((${tasks.workRange} ->> 'start')::numeric, 0) + ${kpStr}::numeric
+      )::bigint`
+    // U12 (poison-task resolution, carried from U11): a report that advances the
+    // watermark is healthy progress, so reset retry_count to 0. Only reclaims
+    // that make NO progress accumulate retries toward MAX_RETRIES (incremented in
+    // the assignNextTask reclaim branch), so a legitimate resume is never
+    // penalized while a task no agent can progress eventually fails.
+    updates['retryCount'] = sql`
+      CASE WHEN ${watermarkAdvanced} THEN 0 ELSE ${tasks.retryCount} END`
+  }
+
+  // Update task status and append one telemetry row in a single transaction
+  // so the two stores never diverge. The status guard (TOCTOU defense for
+  // #97 U4) means a row paused between the read above and this write is
+  // left untouched rather than resurrected to the reported status.
+  //
+  // U11 lapsed-lease race guard: add (lease_expires_at IS NULL OR
+  // lease_expires_at > NOW()) so a late report from an agent whose lease
+  // already expired matches zero rows — a no-op — rather than resurrecting
+  // stale state. IS NULL keeps legacy pre-U10 rows (no lease column) updatable.
+  const [updated] = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(tasks)
+      .set(updates)
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.agentId, agentId),
+          inArray(tasks.status, ['assigned', 'running']),
+          sql`(${tasks.leaseExpiresAt} IS NULL OR ${tasks.leaseExpiresAt} > NOW())`
+        )
+      )
+      .returning()
+
+    if (rows[0]) {
+      await appendTaskTelemetry(tx, {
+        taskId,
+        agentId,
+        keyspaceProgress: data.progress?.keyspaceProgress,
+        speedHs: data.progress?.speed ?? null,
+        temperature: data.progress?.temperature ?? null,
+      })
+    }
+
+    return rows
+  })
+
+  if (!updated) {
+    return { error: 'Task was reassigned during update' }
+  }
+
+  // Attribution: fire the crack event only when the ownership-verifying UPDATE
+  // confirmed this agent still owns the task. The plaintext was already
+  // persisted above regardless — this call attributes the find to the live task.
+  if (data.results && data.results.length > 0 && taskRow.hashListId) {
+    emitCrackResult(taskRow.projectId, taskRow.hashListId, data.results.length)
+  }
+
+  // U6: update per-agent observed-rate EWMA from the reported speed.
+  // Gated on: ownership confirmed (updated is truthy), running status,
+  // a finite positive speed sample, and a resolved hashcatMode.
+  // Observe-only — a failure here must never break the report.
+  if (
+    data.status === 'running' &&
+    data.progress?.speed != null &&
+    Number.isFinite(data.progress.speed) &&
+    data.progress.speed > 0 &&
+    taskRow.hashcatMode != null
+  ) {
+    updateAgentObservedRate(agentId, taskRow.hashcatMode, data.progress.speed).catch((err) => {
+      logger.warn(
+        { err, agentId, hashcatMode: taskRow.hashcatMode, speed: data.progress?.speed },
+        'Failed to update agent observed rate EWMA (non-fatal)'
+      )
+    })
   }
 
   // Emit events and update campaign progress (no duplicate campaign fetch)

@@ -1,6 +1,6 @@
 {
-  "id": "c3321cff-7e75-4467-8f95-19b44f8f30f8",
-  "prevId": "975bef6b-3904-4ca4-b0e7-8f0518ed9c0a",
+  "id": "9a708714-7f27-4690-8005-e81b0d6a8c7a",
+  "prevId": "35c13de0-5422-49f1-8cab-04ac801af018",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -37,6 +37,12 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "observed_speed_hs": {
+          "name": "observed_speed_hs",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "device_name": {
           "name": "device_name",
@@ -292,18 +298,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "enrollment_client_id": {
-          "name": "enrollment_client_id",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enrolled_by_token_id": {
-          "name": "enrolled_by_token_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "last_seen_at": {
           "name": "last_seen_at",
           "type": "timestamp with time zone",
@@ -352,28 +346,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agents_project_enrollment_client_unique": {
-          "name": "agents_project_enrollment_client_unique",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "enrollment_client_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"agents\".\"enrollment_client_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -430,19 +402,6 @@
           "tableTo": "operating_systems",
           "columnsFrom": [
             "operating_system_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "agents_enrolled_by_token_id_enrollment_tokens_id_fk": {
-          "name": "agents_enrolled_by_token_id_enrollment_tokens_id_fk",
-          "tableFrom": "agents",
-          "tableTo": "enrollment_tokens",
-          "columnsFrom": [
-            "enrolled_by_token_id"
           ],
           "columnsTo": [
             "id"
@@ -1494,161 +1453,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.enrollment_tokens": {
-      "name": "enrollment_tokens",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "label": {
-          "name": "label",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "secret_hash": {
-          "name": "secret_hash",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "is_reusable": {
-          "name": "is_reusable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "max_uses": {
-          "name": "max_uses",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "use_count": {
-          "name": "use_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_user_id": {
-          "name": "created_by_user_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_used_at": {
-          "name": "last_used_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "enrollment_tokens_project_id_idx": {
-          "name": "enrollment_tokens_project_id_idx",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "enrollment_tokens_project_id_projects_id_fk": {
-          "name": "enrollment_tokens_project_id_projects_id_fk",
-          "tableFrom": "enrollment_tokens",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "enrollment_tokens_created_by_user_id_users_id_fk": {
-          "name": "enrollment_tokens_created_by_user_id_users_id_fk",
-          "tableFrom": "enrollment_tokens",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "enrollment_tokens_use_count_chk": {
-          "name": "enrollment_tokens_use_count_chk",
-          "value": "\"enrollment_tokens\".\"use_count\" >= 0"
-        },
-        "enrollment_tokens_max_uses_chk": {
-          "name": "enrollment_tokens_max_uses_chk",
-          "value": "\"enrollment_tokens\".\"max_uses\" IS NULL OR \"enrollment_tokens\".\"max_uses\" > 0"
-        },
-        "enrollment_tokens_reusable_max_uses_chk": {
-          "name": "enrollment_tokens_reusable_max_uses_chk",
-          "value": "\"enrollment_tokens\".\"is_reusable\" OR \"enrollment_tokens\".\"max_uses\" IS NULL"
-        },
-        "enrollment_tokens_use_count_le_max_uses_chk": {
-          "name": "enrollment_tokens_use_count_le_max_uses_chk",
-          "value": "\"enrollment_tokens\".\"max_uses\" IS NULL OR \"enrollment_tokens\".\"use_count\" <= \"enrollment_tokens\".\"max_uses\""
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.hash_items": {
       "name": "hash_items",
       "schema": "",
@@ -2590,6 +2394,120 @@
           "value": "\"task_events\".\"reason\" IS NULL OR \"task_events\".\"reason\" IN ('preempted', 'campaign_paused')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.task_telemetry": {
+      "name": "task_telemetry",
+      "schema": "",
+      "columns": {
+        "time": {
+          "name": "time",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "keyspace_progress": {
+          "name": "keyspace_progress",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "speed_hs": {
+          "name": "speed_hs",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "temperature": {
+          "name": "temperature",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "task_telemetry_task_id_time_idx": {
+          "name": "task_telemetry_task_id_time_idx",
+          "columns": [
+            {
+              "expression": "task_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "time",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_telemetry_time_idx": {
+          "name": "task_telemetry_time_idx",
+          "columns": [
+            {
+              "expression": "time",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "task_telemetry_task_id_tasks_id_fk": {
+          "name": "task_telemetry_task_id_tasks_id_fk",
+          "tableFrom": "task_telemetry",
+          "tableTo": "tasks",
+          "columnsFrom": [
+            "task_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "task_telemetry_agent_id_agents_id_fk": {
+          "name": "task_telemetry_agent_id_agents_id_fk",
+          "tableFrom": "task_telemetry",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.tasks": {

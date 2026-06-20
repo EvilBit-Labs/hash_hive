@@ -1,6 +1,6 @@
 {
-  "id": "35c13de0-5422-49f1-8cab-04ac801af018",
-  "prevId": "73591ae3-888d-44ff-be15-9ecaa73e3f87",
+  "id": "7c193082-92fc-41bf-942f-c0b3a30e0b61",
+  "prevId": "54ed5e05-3dcd-48ff-a1c9-4a611416c7e5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -37,6 +37,12 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "observed_speed_hs": {
+          "name": "observed_speed_hs",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "device_name": {
           "name": "device_name",
@@ -2622,6 +2628,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "committed_keyspace_offset": {
+          "name": "committed_keyspace_offset",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2649,6 +2667,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "tasks_expired_lease_idx": {
+          "name": "tasks_expired_lease_idx",
+          "columns": [
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status IN ('assigned', 'running')",
           "concurrently": false,
           "method": "btree",
           "with": {}

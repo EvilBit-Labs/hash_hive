@@ -13,11 +13,15 @@ CREATE TABLE "enrollment_tokens" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "enrollment_tokens_use_count_chk" CHECK ("enrollment_tokens"."use_count" >= 0),
-	CONSTRAINT "enrollment_tokens_max_uses_chk" CHECK ("enrollment_tokens"."max_uses" IS NULL OR "enrollment_tokens"."max_uses" > 0)
+	CONSTRAINT "enrollment_tokens_max_uses_chk" CHECK ("enrollment_tokens"."max_uses" IS NULL OR "enrollment_tokens"."max_uses" > 0),
+	CONSTRAINT "enrollment_tokens_reusable_max_uses_chk" CHECK ("enrollment_tokens"."is_reusable" OR "enrollment_tokens"."max_uses" IS NULL),
+	CONSTRAINT "enrollment_tokens_use_count_le_max_uses_chk" CHECK ("enrollment_tokens"."max_uses" IS NULL OR "enrollment_tokens"."use_count" <= "enrollment_tokens"."max_uses")
 );
 --> statement-breakpoint
 ALTER TABLE "agents" ADD COLUMN "enrollment_client_id" varchar(255);--> statement-breakpoint
+ALTER TABLE "agents" ADD COLUMN "enrolled_by_token_id" integer;--> statement-breakpoint
 ALTER TABLE "enrollment_tokens" ADD CONSTRAINT "enrollment_tokens_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "enrollment_tokens" ADD CONSTRAINT "enrollment_tokens_created_by_user_id_users_id_fk" FOREIGN KEY ("created_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "enrollment_tokens_project_id_idx" ON "enrollment_tokens" USING btree ("project_id");--> statement-breakpoint
+ALTER TABLE "agents" ADD CONSTRAINT "agents_enrolled_by_token_id_enrollment_tokens_id_fk" FOREIGN KEY ("enrolled_by_token_id") REFERENCES "public"."enrollment_tokens"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "agents_project_enrollment_client_unique" ON "agents" USING btree ("project_id","enrollment_client_id") WHERE "agents"."enrollment_client_id" IS NOT NULL;

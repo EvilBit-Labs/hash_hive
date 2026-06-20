@@ -145,15 +145,36 @@
     {
       "idx": 20,
       "version": "7",
-      "when": 1781792730174,
-      "tag": "0020_great_namorita",
+      "when": 1781890188954,
+      "tag": "0020_abnormal_grey_gargoyle",
       "breakpoints": true
     },
     {
       "idx": 21,
       "version": "7",
-      "when": 1781831052440,
-      "tag": "0021_old_union_jack",
+      "when": 1781892604913,
+      "tag": "0021_awesome_maddog",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1781894775162,
+      "tag": "0022_telemetry_hypertable",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781899915147,
+      "tag": "0023_ambiguous_steel_serpent",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781925522036,
+      "tag": "0024_past_sally_floyd",
       "breakpoints": true
     }
   ]

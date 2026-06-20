@@ -389,3 +389,12 @@ export type CreateEnrollmentTokenResponse = z.infer<typeof createEnrollmentToken
 export type ListEnrollmentTokensResponse = z.infer<typeof listEnrollmentTokensResponseSchema>
 export type EnrollAgentRequest = z.infer<typeof enrollAgentRequestSchema>
 export type EnrollAgentResponse = z.infer<typeof enrollAgentResponseSchema>
+
+// ─── Task Telemetry ─────────────────────────────────────────────────
+// Drizzle-inferred types for the append-only task_telemetry table (U4).
+// Not exposed via any API route; used internally by the telemetry service.
+
+import type { taskTelemetry } from '../db/schema.js'
+
+export type TaskTelemetry = typeof taskTelemetry.$inferSelect
+export type InsertTaskTelemetry = typeof taskTelemetry.$inferInsert
