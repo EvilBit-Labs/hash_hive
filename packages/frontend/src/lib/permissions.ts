@@ -10,6 +10,9 @@ export const Permission = {
   TEMPLATE_VIEW: 'template:view',
   TEMPLATE_MANAGE: 'template:manage',
   CRACKER_MANAGE: 'cracker:manage',
+  // Mint / list / revoke agent enrollment tokens. Admin-only — mirrors the
+  // backend's requireMembershipRole('admin') on the enrollment-token routes.
+  ENROLLMENT_TOKEN_MANAGE: 'enrollment_token:manage',
 } as const
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission]

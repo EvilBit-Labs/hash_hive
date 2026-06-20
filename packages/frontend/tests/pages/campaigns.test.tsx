@@ -57,7 +57,7 @@ describe('CampaignsPage', () => {
     expect(screen.getByText('draft')).toBeDefined()
   })
 
-  it('shows no campaigns message when API returns empty list', async () => {
+  it('shows the on-brand empty state when API returns empty list', async () => {
     fetchMock = mockFetch({
       '/dashboard/campaigns': { status: 200, body: { campaigns: [], total: 0 } },
     })
@@ -66,7 +66,7 @@ describe('CampaignsPage', () => {
     renderWithProviders(<CampaignsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('No campaigns found.')).toBeDefined()
+      expect(screen.getByText('No campaigns yet')).toBeDefined()
     })
   })
 

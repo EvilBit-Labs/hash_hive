@@ -327,7 +327,18 @@ export function AttackTemplatesPage() {
         {isLoading ? (
           <EmptyState message="Loading..." />
         ) : !data?.templates.length ? (
-          <EmptyState message="No attack templates found." />
+          <div className="space-y-3 rounded-md border border-surface-1 bg-surface-0/40 p-6 text-center">
+            <p className="text-sm font-medium text-foreground">No attack templates yet</p>
+            <p className="mx-auto max-w-prose text-xs text-muted-foreground">
+              Templates are reusable attack presets - a dictionary, mask, or rule setup you save
+              once and drop into any campaign instead of rebuilding it each time.
+            </p>
+            <PermissionGuard permission={Permission.TEMPLATE_MANAGE}>
+              <Button size="sm" onClick={openCreateForm}>
+                Create your first template
+              </Button>
+            </PermissionGuard>
+          </div>
         ) : (
           <Table>
             <TableHead>

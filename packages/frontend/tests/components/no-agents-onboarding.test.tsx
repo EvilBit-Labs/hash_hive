@@ -19,32 +19,39 @@ describe('NoAgentsOnboarding', () => {
     expect(screen.getByText('Awaiting first agent')).toBeDefined()
   })
 
-  it('embeds the provided serverOrigin into the command', () => {
+  it('embeds the provided serverOrigin into the enroll command', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://hashhive.lab" />)
     const block = screen.getByTestId('dashboard-no-agents-onboarding')
-    expect(block.textContent ?? '').toContain('https://hashhive.lab/install.sh')
-    expect(block.textContent ?? '').toContain('HASHHIVE_SERVER=https://hashhive.lab')
+    expect(block.textContent ?? '').toContain('hashhive-agent enroll')
+    expect(block.textContent ?? '').toContain('--server https://hashhive.lab')
   })
 
-  it('uses an obvious placeholder for the agent token', () => {
+  it('uses an obvious placeholder for the enrollment token (no dishonest install.sh)', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-    // <AGENT_TOKEN> appears twice: once in the command, once in the
-    // "Replace <AGENT_TOKEN> with a token from the agents page" tip.
-    // The structural test is that it appears at all.
     const block = screen.getByTestId('dashboard-no-agents-onboarding')
-    expect(block.textContent ?? '').toContain('<AGENT_TOKEN>')
+    expect(block.textContent ?? '').toContain('<ENROLLMENT_TOKEN>')
+    // The previous curl|sh install.sh command pointed at a 404 — it's gone.
+    expect(block.textContent ?? '').not.toContain('install.sh')
   })
 
-  it('links to the agents management page via an inline "agents page" link', () => {
+  it('makes "Generate enrollment token" the primary action, routing to the agents page', () => {
+    // The first real action is minting a token, which only happens on the
+    // agents page. The hero leads with that CTA rather than a command that
+    // can't run until a token exists.
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-    const link = screen.getByRole('link', { name: 'agents page' })
-    expect(link.getAttribute('href')).toBe('/agents')
+    const cta = screen.getByRole('link', { name: /generate enrollment token/i })
+    expect(cta.getAttribute('href')).toBe('/agents')
   })
 
-  it('renders a focus-visible ring class on the agents-page link for keyboard nav', () => {
+  it('renders a focus-visible ring on the primary CTA for keyboard nav', () => {
     renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-    const link = screen.getByRole('link', { name: 'agents page' })
-    expect(link.className).toContain('focus-visible:ring-2')
+    const cta = screen.getByRole('link', { name: /generate enrollment token/i })
+    expect(cta.className).toContain('focus-visible:ring-2')
+  })
+
+  it('shows the command as a labeled preview beneath the CTA, not as the hero', () => {
+    renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
+    expect(screen.getByText(/you'll then run this on each worker/i)).toBeDefined()
   })
 
   describe('copy button', () => {
@@ -77,26 +84,26 @@ describe('NoAgentsOnboarding', () => {
       expect(writeText).toHaveBeenCalledTimes(1)
       const calls = writeText.mock.calls
       const argument = calls.length > 0 && calls[0] ? calls[0][0] : ''
-      expect(String(argument)).toContain('curl -fsSL https://hashhive.lab/install.sh')
-      expect(String(argument)).toContain('HASHHIVE_TOKEN=<AGENT_TOKEN>')
+      expect(String(argument)).toContain('hashhive-agent enroll')
+      expect(String(argument)).toContain('--server https://hashhive.lab')
+      expect(String(argument)).toContain('--token <ENROLLMENT_TOKEN>')
     })
 
-    it('flips the button label to "Command copied" after a successful copy', async () => {
+    it('flips the button label to "Copied" after a successful copy', async () => {
       renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
       fireEvent.click(screen.getByRole('button', { name: /copy command to clipboard/i }))
       await waitFor(() => {
-        expect(screen.getByRole('button', { name: 'Command copied' })).toBeDefined()
+        expect(screen.getByRole('button', { name: 'Copied' })).toBeDefined()
       })
     })
 
-    it('swallows clipboard write rejections silently (non-blocking action)', async () => {
+    it('does not flip to "Copied" when the clipboard write rejects', async () => {
       writeText.mockImplementation(() => Promise.reject(new Error('denied')))
       renderWithProviders(<NoAgentsOnboarding serverOrigin="https://example.test" />)
-      // Should not throw, should not flip to "Command copied".
       fireEvent.click(screen.getByRole('button', { name: /copy command to clipboard/i }))
       // Yield so the rejection settles.
       await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(screen.queryByRole('button', { name: 'Command copied' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
     })
   })
 })

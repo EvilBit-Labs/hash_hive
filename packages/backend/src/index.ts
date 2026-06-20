@@ -93,6 +93,7 @@ app.on(['POST', 'GET'], '/api/auth/*', async (c) => {
 app.use('/api/v1/dashboard/auth/*', requireSameOrigin())
 app.use('/api/v1/dashboard/projects/*', requireSameOrigin())
 app.use('/api/v1/dashboard/agents/*', requireSameOrigin())
+app.use('/api/v1/dashboard/enrollment-tokens/*', requireSameOrigin())
 app.use('/api/v1/dashboard/resources/*', requireSameOrigin())
 app.use('/api/v1/dashboard/hashes/*', requireSameOrigin())
 app.use('/api/v1/dashboard/attack-templates/*', requireSameOrigin())

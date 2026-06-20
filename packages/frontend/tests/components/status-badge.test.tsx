@@ -26,4 +26,28 @@ describe('StatusBadge', () => {
       expect(badge.className).toContain('rounded-full')
     }
   )
+
+  describe('online-transition pulse', () => {
+    it('does not play the halo on mount, even when already online', () => {
+      // A page load showing already-online agents is not a transition —
+      // pulsing them all would be chrome noise, not a real operator moment.
+      const { container } = renderWithProviders(<StatusBadge status="online" pulseOnOnline />)
+      expect(container.querySelector('.animate-ping')).toBeNull()
+    })
+
+    it('plays a one-shot halo when status transitions offline -> online', () => {
+      const { container, rerender } = renderWithProviders(
+        <StatusBadge status="offline" pulseOnOnline />
+      )
+      expect(container.querySelector('.animate-ping')).toBeNull()
+      rerender(<StatusBadge status="online" pulseOnOnline />)
+      expect(container.querySelector('.animate-ping')).not.toBeNull()
+    })
+
+    it('does not pulse on transition when pulseOnOnline is not set', () => {
+      const { container, rerender } = renderWithProviders(<StatusBadge status="offline" />)
+      rerender(<StatusBadge status="online" />)
+      expect(container.querySelector('.animate-ping')).toBeNull()
+    })
+  })
 })

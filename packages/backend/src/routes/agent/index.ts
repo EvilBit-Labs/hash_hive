@@ -69,6 +69,7 @@ import {
   updateTaskProgress,
 } from '../../services/tasks.js'
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
+import { registerEnrollRoute } from './enroll.js'
 import { agentInternalError } from './helpers.js'
 
 const agentRoutes = new OpenAPIHono<AppEnv>(agentOpenApiHonoOptions)
@@ -132,6 +133,10 @@ agentRoutes.use('/errors', requireAgentToken)
 agentRoutes.use('/benchmark', requireAgentToken)
 agentRoutes.use('/resources/*', requireAgentToken)
 agentRoutes.use('/cracker/*', requireAgentToken)
+
+// ─── POST /enroll — anonymous agent enrollment (#233 / #114) ─────────
+// Route definition, handler, and local schemas live in ./enroll.ts (I5).
+registerEnrollRoute(agentRoutes)
 
 // ─── Local schema annotations ───────────────────────────────────────
 //

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router'
 import { ConnectionIndicator } from '../components/features/connection-indicator'
 import { CrackRateTrendChart } from '../components/features/crack-rate-chart'
 import { useEventsConnection } from '../components/features/events-provider'
+import { FirstRunChecklist } from '../components/features/first-run-checklist'
 import { NoAgentsOnboarding } from '../components/features/no-agents-onboarding'
 import { StatCard } from '../components/features/stat-card'
 import { SystemHealthCard } from '../components/features/system-health-card'
@@ -196,6 +197,9 @@ export function DashboardPage() {
           <NoAgentsOnboarding serverOrigin={window.location.origin} />
         ) : (
           <>
+            {/* Guides the rest of the first-run arc once an agent exists;
+                self-hides when the arc is complete. */}
+            <FirstRunChecklist />
             {/*
               Cracked + crack-rate trend form one editorial block on row 1:
               "here is the number, here is its recent shape" rather than the

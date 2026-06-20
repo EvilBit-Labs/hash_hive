@@ -105,6 +105,13 @@ import type {
   // Hash-lists listing schemas (issue #165 / U2)
   hashListListResponseSchema,
   hashListSummarySchema,
+  // Enrollment tokens (#233 / #114)
+  createEnrollmentTokenRequestSchema,
+  createEnrollmentTokenResponseSchema,
+  enrollAgentRequestSchema,
+  enrollAgentResponseSchema,
+  enrollmentTokenMetadataSchema,
+  listEnrollmentTokensResponseSchema,
 } from '../schemas/index.js'
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -373,6 +380,15 @@ export type SessionUser = z.infer<typeof sessionUserSchema>
  * stores in a single round-trip.
  */
 export type MeResponse = z.infer<typeof meResponseSchema>
+
+// ─── Enrollment tokens (#233 / #114) ────────────────────────────────
+
+export type EnrollmentTokenMetadata = z.infer<typeof enrollmentTokenMetadataSchema>
+export type CreateEnrollmentTokenRequest = z.infer<typeof createEnrollmentTokenRequestSchema>
+export type CreateEnrollmentTokenResponse = z.infer<typeof createEnrollmentTokenResponseSchema>
+export type ListEnrollmentTokensResponse = z.infer<typeof listEnrollmentTokensResponseSchema>
+export type EnrollAgentRequest = z.infer<typeof enrollAgentRequestSchema>
+export type EnrollAgentResponse = z.infer<typeof enrollAgentResponseSchema>
 
 // ─── Task Telemetry ─────────────────────────────────────────────────
 // Drizzle-inferred types for the append-only task_telemetry table (U4).
