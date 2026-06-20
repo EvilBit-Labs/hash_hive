@@ -94,5 +94,12 @@ export class InProcessBus<TEvent> implements EventBus<TEvent> {
  * event type when subscribing. Tests that need the typed `AppEvent` should
  * import `AppEvent` from `services/events.js` and cast accordingly.
  */
-// biome-ignore lint/suspicious/noExplicitAny: singleton must be untyped at declaration; callers cast
+// Intentionally `any`, not `unknown`: the singleton is decoupled from AppEvent
+// at declaration and the production consumer narrows it via
+// `const bus: EventBus<AppEvent> = appBus` (events.ts). `unknown` does NOT work
+// here — EventBus<unknown> is not assignable to EventBus<AppEvent> because the
+// generic flows through the `subscribe(handler)` parameter (contravariant), so
+// the assignment in events.ts would fail to type-check. `any` is the escape
+// hatch; the single immediate re-narrowing keeps it contained.
+// biome-ignore lint/suspicious/noExplicitAny: see above — unknown breaks the EventBus<AppEvent> narrowing
 export const appBus = new InProcessBus<any>()

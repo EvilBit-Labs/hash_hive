@@ -229,6 +229,19 @@ export class NotifyBus<TEvent extends object> {
       return
     }
 
+    // Validate the inner event at the cross-process boundary before
+    // republishing to local WS clients (AGENTS.md: never trust external data).
+    // Every AppEvent carries a string `type`; a payload from a mismatched
+    // rolling-deploy schema that lacks it is dropped rather than delivered.
+    if (
+      typeof parsed.event !== 'object' ||
+      parsed.event === null ||
+      typeof (parsed.event as { type?: unknown }).type !== 'string'
+    ) {
+      this.opts.logger.warn({ parsed }, 'NotifyBus: inbound event has no string `type`; skipping')
+      return
+    }
+
     const event = parsed.event as TEvent
 
     // Mark the event object before publishing so the publisher subscriber
