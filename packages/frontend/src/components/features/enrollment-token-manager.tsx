@@ -16,6 +16,7 @@ import { ErrorBanner } from '../ui/error-banner'
 import { Input } from '../ui/input'
 import { SegmentedControl } from '../ui/segmented-control'
 import { Table, TableBody, TableHead, Td, Th } from '../ui/table'
+import { StatusBadge } from './status-badge'
 
 interface EnrollmentTokenManagerProps {
   /** Dashboard origin used in the agent command (pass window.location.origin). */
@@ -252,7 +253,9 @@ function TokenList({
                 {token.useCount}
                 {token.maxUses ? ` / ${token.maxUses}` : token.isReusable ? ' / ∞' : ''}
               </Td>
-              <Td className="text-xs">{status.label}</Td>
+              <Td>
+                <StatusBadge status={status.key} />
+              </Td>
               <Td className="text-right">
                 {status.active && (
                   <Button
@@ -273,14 +276,18 @@ function TokenList({
   )
 }
 
-/** Derive a labelled status (color is never the only signal — principle 3). */
-function tokenStatus(token: EnrollmentTokenMetadata): { label: string; active: boolean } {
-  if (token.revokedAt) return { label: 'Revoked', active: false }
+/**
+ * Derive the token's lifecycle status as a `StatusBadge` key (color + dot +
+ * capitalized label — never color alone, principle 3). `active` also gates
+ * the Revoke action.
+ */
+function tokenStatus(token: EnrollmentTokenMetadata): { key: string; active: boolean } {
+  if (token.revokedAt) return { key: 'revoked', active: false }
   if (token.expiresAt && new Date(token.expiresAt).getTime() <= Date.now()) {
-    return { label: 'Expired', active: false }
+    return { key: 'expired', active: false }
   }
-  if (!token.isReusable && token.useCount > 0) return { label: 'Used', active: false }
-  return { label: 'Active', active: true }
+  if (!token.isReusable && token.useCount > 0) return { key: 'used', active: false }
+  return { key: 'active', active: true }
 }
 
 function RawEnrollmentTokenReveal({

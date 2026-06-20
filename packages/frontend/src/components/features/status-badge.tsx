@@ -27,6 +27,14 @@ const STATUS_STYLES: Record<string, string> = {
   uploaded: 'bg-info/15 text-info border-info/20',
   processing: 'bg-warning/15 text-warning border-warning/20',
   ready: 'bg-success/15 text-success border-success/20',
+  // Enrollment-token lifecycle (#233). `active` is live (success); `used`
+  // is a spent one-time token — terminal but not a failure, so neutral;
+  // `expired` lapsed unused (warning); `revoked` was deliberately killed
+  // (destructive).
+  active: 'bg-success/15 text-success border-success/20',
+  used: 'bg-surface-1/50 text-muted-foreground border-surface-1',
+  expired: 'bg-warning/15 text-warning border-warning/20',
+  revoked: 'bg-destructive/15 text-destructive border-destructive/20',
 }
 
 /** How long the one-shot "came online" halo plays before it's removed. */

@@ -60,7 +60,8 @@ describe('EnrollmentTokenManager', () => {
 
     await waitFor(() => expect(screen.getByText('rack-3 rigs')).toBeTruthy())
     expect(screen.getByText('old token')).toBeTruthy()
-    expect(screen.getByText('Revoked')).toBeTruthy()
+    // Status renders via StatusBadge (lowercase text, capitalized in CSS).
+    expect(screen.getByText('revoked')).toBeTruthy()
     // One active token -> exactly one Revoke button.
     expect(screen.getAllByText('Revoke')).toHaveLength(1)
   })

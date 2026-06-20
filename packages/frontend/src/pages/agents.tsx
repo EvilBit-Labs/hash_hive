@@ -1,3 +1,4 @@
+import { Server } from 'lucide-react'
 import { useState } from 'react'
 
 import { AgentErrorBadge } from '../components/features/agent-error-badge'
@@ -6,13 +7,13 @@ import { EnrollmentTokenManager } from '../components/features/enrollment-token-
 import { PermissionGuard } from '../components/features/permission-guard'
 import { StatusBadge } from '../components/features/status-badge'
 import { EmptyState } from '../components/ui/empty-state'
+import { OnboardingHero } from '../components/ui/onboarding-hero'
 import { PageHeader } from '../components/ui/page-header'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { TextLink } from '../components/ui/text-link'
 import { useAgents } from '../hooks/use-dashboard'
 import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities'
 import { Permission } from '../lib/permissions'
-import { cn } from '../lib/utils'
 import { useUiStore } from '../stores/ui'
 
 function gpuCount(hardwareProfile: Record<string, unknown> | null | undefined): number | null {
@@ -135,39 +136,23 @@ export function AgentsPage() {
  */
 function NoAgentsState() {
   return (
-    <section
-      aria-labelledby="agents-empty-title"
-      className={cn(
-        'relative overflow-hidden rounded-md border p-6 sm:p-8',
-        'bg-gradient-to-b from-[hsl(var(--ctp-peach)/0.16)] to-[hsl(var(--ctp-peach)/0.04)]',
-        'border-[hsl(var(--ctp-peach)/0.35)]'
-      )}
+    <OnboardingHero
+      titleId="agents-empty-title"
+      title="No agents yet"
+      icon={<Server className="h-6 w-6" />}
+      description="Agents are the workers that actually crack hashes. Register your first one and it'll show up here within a few seconds."
     >
-      <div className="space-y-5">
-        <div className="space-y-2">
-          <h2
-            id="agents-empty-title"
-            className="text-xl font-semibold tracking-tight text-[hsl(var(--ctp-peach))]"
-          >
-            No agents yet
-          </h2>
-          <p className="max-w-prose text-sm text-foreground/80">
-            Agents are the workers that actually crack hashes. Register your first one and it'll
-            show up here within a few seconds.
+      <PermissionGuard
+        permission={Permission.ENROLLMENT_TOKEN_MANAGE}
+        fallback={
+          <p className="max-w-prose text-sm text-muted-foreground">
+            Ask a project admin to generate an enrollment token, then run the agent on your worker
+            machine to register it.
           </p>
-        </div>
-        <PermissionGuard
-          permission={Permission.ENROLLMENT_TOKEN_MANAGE}
-          fallback={
-            <p className="max-w-prose text-sm text-muted-foreground">
-              Ask a project admin to generate an enrollment token, then run the agent on your worker
-              machine to register it.
-            </p>
-          }
-        >
-          <EnrollmentTokenManager serverOrigin={window.location.origin} />
-        </PermissionGuard>
-      </div>
-    </section>
+        }
+      >
+        <EnrollmentTokenManager serverOrigin={window.location.origin} />
+      </PermissionGuard>
+    </OnboardingHero>
   )
 }
