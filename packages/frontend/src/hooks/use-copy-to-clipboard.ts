@@ -39,6 +39,7 @@ export function useCopyToClipboard(flashMs: number = COPIED_FLASH_MS): UseCopyTo
   const copy = useCallback(
     (value: string) => {
       if (typeof navigator === 'undefined' || !navigator.clipboard) {
+        setCopied(false)
         setCopyFailed(true)
         return
       }
@@ -50,6 +51,9 @@ export function useCopyToClipboard(flashMs: number = COPIED_FLASH_MS): UseCopyTo
           timeoutRef.current = setTimeout(() => setCopied(false), flashMs)
         },
         () => {
+          // Clear any lingering "copied" flash from a prior success so the UI
+          // never shows "Copied" and the failure hint at the same time.
+          setCopied(false)
           setCopyFailed(true)
         }
       )

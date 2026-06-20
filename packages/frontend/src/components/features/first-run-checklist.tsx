@@ -36,7 +36,12 @@ export function FirstRunChecklist() {
   // stop polling resources — important for a wall-display dashboard that
   // stays mounted indefinitely.
   const statAgents = stats?.agents.total ?? 0
-  const statLaunched = (stats?.campaigns.running ?? 0) > 0 || (stats?.campaigns.completed ?? 0) > 0
+  // A paused campaign was already launched (and its prerequisites exist), so
+  // it counts as "launched" for both the polling gate and the arc's last step.
+  const statLaunched =
+    (stats?.campaigns.running ?? 0) > 0 ||
+    (stats?.campaigns.paused ?? 0) > 0 ||
+    (stats?.campaigns.completed ?? 0) > 0
   const resourcesEnabled = statAgents > 0 && !statLaunched
 
   const { data: hashLists, isError: hashListsError } = useHashLists({ enabled: resourcesEnabled })
@@ -54,7 +59,8 @@ export function FirstRunChecklist() {
   const hasResource =
     statLaunched || (wordlists?.resources.length ?? 0) > 0 || (rulelists?.resources.length ?? 0) > 0
   const hasCampaign = stats.campaigns.total > 0
-  const hasLaunched = stats.campaigns.running > 0 || stats.campaigns.completed > 0
+  const hasLaunched =
+    stats.campaigns.running > 0 || stats.campaigns.paused > 0 || stats.campaigns.completed > 0
 
   const steps: Step[] = [
     { label: 'Register an agent', hint: 'A worker connected', href: '/agents', done: hasAgent },
@@ -138,7 +144,7 @@ export function FirstRunChecklist() {
                 </span>
                 {isActive && (
                   <span className="shrink-0 text-xs font-medium text-[hsl(var(--ctp-peach))]">
-                    Start →
+                    {'Start ->'}
                   </span>
                 )}
               </Link>

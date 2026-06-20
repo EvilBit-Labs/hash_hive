@@ -269,7 +269,7 @@ export function CampaignsPage() {
           <div className="space-y-3 rounded-md border border-surface-1 bg-surface-0/40 p-6 text-center">
             <p className="text-sm font-medium text-foreground">No campaigns yet</p>
             <p className="mx-auto max-w-prose text-xs text-muted-foreground">
-              A campaign points attacks — dictionary, mask, or rules — at a hash list and hands the
+              A campaign points attacks - dictionary, mask, or rules - at a hash list and hands the
               work to your agents. Create one to start cracking.
             </p>
             <PermissionGuard permission={Permission.CAMPAIGN_CREATE}>
@@ -347,7 +347,7 @@ export function CampaignsPage() {
         title="Start campaign?"
         message={
           confirm.campaign
-            ? `"${confirm.campaign.name}" — Hash list #${confirm.campaign.hashListId}, priority ${confirm.campaign.priority}.`
+            ? `"${confirm.campaign.name}" - Hash list #${confirm.campaign.hashListId}, priority ${confirm.campaign.priority}.`
             : ''
         }
         confirmLabel="Confirm Start"

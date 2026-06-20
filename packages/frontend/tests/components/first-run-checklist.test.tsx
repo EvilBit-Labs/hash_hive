@@ -81,7 +81,7 @@ describe('FirstRunChecklist', () => {
     expect(screen.getByText('1 of 5 done')).toBeTruthy()
     // First incomplete step (hash list) is the active one.
     expect(screen.getByText('Add a hash list')).toBeTruthy()
-    expect(screen.getByText('Start →')).toBeTruthy()
+    expect(screen.getByText('Start ->')).toBeTruthy()
   })
 
   it('reflects partial progress in the count', async () => {

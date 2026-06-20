@@ -86,7 +86,7 @@ export function EnrollmentTokenManager({ serverOrigin }: EnrollmentTokenManagerP
       <ConfirmDialog
         open={confirmRevoke !== null}
         title="Revoke enrollment token?"
-        message="Agents that haven't enrolled yet won't be able to use it. Already-enrolled agents keep working — they have their own tokens."
+        message="Agents that haven't enrolled yet won't be able to use it. Already-enrolled agents keep working - they have their own tokens."
         confirmLabel="Revoke"
         destructive
         busy={revokeMutation.isPending}
@@ -163,14 +163,14 @@ function MintForm({
         <p className="text-xs text-muted-foreground">
           {kind === 'one-time'
             ? 'Registers a single agent, then stops working.'
-            : 'Registers many agents — good for bringing up a rack at once.'}
+            : 'Registers many agents - good for bringing up a rack at once.'}
         </p>
       </div>
 
       {kind === 'reusable' && (
         <div className="space-y-1.5">
           <label htmlFor="etk-max-uses" className="text-xs font-medium text-foreground/80">
-            Max uses <span className="text-muted-foreground">(optional — blank = unlimited)</span>
+            Max uses <span className="text-muted-foreground">(optional - blank = unlimited)</span>
           </label>
           <Input
             id="etk-max-uses"
@@ -185,7 +185,7 @@ function MintForm({
 
       <div className="space-y-1.5">
         <label htmlFor="etk-expiry" className="text-xs font-medium text-foreground/80">
-          Expires in days <span className="text-muted-foreground">(optional — blank = never)</span>
+          Expires in days <span className="text-muted-foreground">(optional - blank = never)</span>
         </label>
         <Input
           id="etk-expiry"
@@ -244,14 +244,14 @@ function TokenList({
           return (
             <tr key={token.id} className="border-t border-surface-1">
               <Td className="text-sm">
-                {token.label ?? <span className="text-muted-foreground">—</span>}
+                {token.label ?? <span className="text-muted-foreground">-</span>}
               </Td>
               <Td className="text-xs text-muted-foreground">
                 {token.isReusable ? 'Reusable' : 'One-time'}
               </Td>
               <Td className="text-xs text-muted-foreground">
                 {token.useCount}
-                {token.maxUses ? ` / ${token.maxUses}` : token.isReusable ? ' / ∞' : ''}
+                {token.maxUses ? ` / ${token.maxUses}` : token.isReusable ? ' / unlimited' : ''}
               </Td>
               <Td>
                 <StatusBadge status={status.key} />
@@ -286,6 +286,10 @@ function tokenStatus(token: EnrollmentTokenMetadata): { key: string; active: boo
   if (token.expiresAt && new Date(token.expiresAt).getTime() <= Date.now()) {
     return { key: 'expired', active: false }
   }
+  // A reusable token that hit its cap is spent, not active.
+  if (token.isReusable && token.maxUses != null && token.useCount >= token.maxUses) {
+    return { key: 'exhausted', active: false }
+  }
   if (!token.isReusable && token.useCount > 0) return { key: 'used', active: false }
   return { key: 'active', active: true }
 }
@@ -303,7 +307,7 @@ function RawEnrollmentTokenReveal({
   return (
     <div className="space-y-3 rounded-md border border-warning/40 bg-warning/10 p-3">
       <p className="text-xs font-semibold text-warning">
-        Here's your enrollment token — copy it now, it won't be shown again.
+        Here's your enrollment token - copy it now, it won't be shown again.
       </p>
       <CopyableBlock value={token} ariaLabel="Copy enrollment token" oneLine />
       <p className="text-xs text-muted-foreground">

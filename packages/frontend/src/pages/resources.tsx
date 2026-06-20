@@ -263,7 +263,7 @@ const RESOURCE_EMPTY_COPY: Record<UploadableTab, { title: string; description: s
   rulelists: {
     title: 'No rule lists yet',
     description:
-      'Rules mutate wordlist entries — capitalize, append digits, leetspeak. Upload a .rule file to widen coverage.',
+      'Rules mutate wordlist entries - capitalize, append digits, leetspeak. Upload a .rule file to widen coverage.',
   },
   masklists: {
     title: 'No mask lists yet',

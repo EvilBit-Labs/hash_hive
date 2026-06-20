@@ -39,14 +39,16 @@ export function useEnrollmentTokens() {
 
 export function useCreateEnrollmentToken({ onError }: MutationCallbacks) {
   const qc = useQueryClient()
-  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   return useMutation<CreateEnrollmentTokenResponse, unknown, CreateEnrollmentTokenRequest>({
     mutationFn: (input) =>
       api.post<CreateEnrollmentTokenResponse>('/dashboard/enrollment-tokens', input),
     // The raw token is handed to the caller (shown once); only the list
     // metadata is durable, so we refetch rather than cache the response.
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKey(selectedProjectId) })
+    // Invalidate the project the token actually belongs to (from the
+    // response), not the store's selected project, which can drift if the
+    // operator switches projects while the mutation is in flight.
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: queryKey(data.metadata.projectId) })
     },
     onError: (err) => onError(errorMessage(err, 'Failed to mint enrollment token')),
   })
@@ -54,11 +56,12 @@ export function useCreateEnrollmentToken({ onError }: MutationCallbacks) {
 
 export function useRevokeEnrollmentToken({ onError }: MutationCallbacks) {
   const qc = useQueryClient()
-  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   return useMutation<EnrollmentTokenMetadata, unknown, number>({
     mutationFn: (id) => api.delete<EnrollmentTokenMetadata>(`/dashboard/enrollment-tokens/${id}`),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKey(selectedProjectId) })
+    // Invalidate the token's own project (from the response) rather than the
+    // store's selected project — see useCreateEnrollmentToken.
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: queryKey(data.projectId) })
     },
     onError: (err) => onError(errorMessage(err, 'Failed to revoke enrollment token')),
   })

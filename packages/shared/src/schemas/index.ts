@@ -984,10 +984,10 @@ export const enrollmentTokenMetadataSchema = z
     // null = unlimited (reusable) or unused (one-time).
     maxUses: z.number().int().positive().nullable(),
     useCount: z.number().int().nonnegative(),
-    expiresAt: z.string().nullable(),
-    revokedAt: z.string().nullable(),
-    lastUsedAt: z.string().nullable(),
-    createdAt: z.string(),
+    expiresAt: z.iso.datetime().nullable(),
+    revokedAt: z.iso.datetime().nullable(),
+    lastUsedAt: z.iso.datetime().nullable(),
+    createdAt: z.iso.datetime(),
   })
   .openapi('EnrollmentTokenMetadata')
 
