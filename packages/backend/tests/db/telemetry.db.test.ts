@@ -175,6 +175,35 @@ describe('appendTaskTelemetry', () => {
     seed = await seedMinimal()
   })
 
+  it('dual-write: a failing telemetry insert rolls back the sibling task UPDATE (no divergence)', async () => {
+    // The U4 dual-write wraps the hot-row task UPDATE and the telemetry INSERT in
+    // one transaction so the two stores never diverge. Force the telemetry INSERT
+    // to fail (non-existent taskId -> FK violation) alongside a valid task UPDATE,
+    // and assert the UPDATE rolled back.
+    await db
+      .update(tasks)
+      .set({ progress: { keyspaceProgress: 111 } })
+      .where(eq(tasks.id, seed.taskId))
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx
+          .update(tasks)
+          .set({ progress: { keyspaceProgress: 999 } })
+          .where(eq(tasks.id, seed.taskId))
+        // taskId 2_147_000_000 does not exist -> task_telemetry.task_id FK fails.
+        await appendTaskTelemetry(tx, { taskId: 2_147_000_000, agentId: null, keyspaceProgress: 5 })
+      })
+    ).rejects.toThrow()
+
+    const [row] = await db
+      .select({ progress: tasks.progress })
+      .from(tasks)
+      .where(eq(tasks.id, seed.taskId))
+    // The UPDATE to 999 rolled back; progress is still 111.
+    expect((row!.progress as { keyspaceProgress: number }).keyspaceProgress).toBe(111)
+  })
+
   it('inserts a telemetry row inside a transaction', async () => {
     await db.transaction(async (tx) => {
       await appendTaskTelemetry(tx, {

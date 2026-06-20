@@ -20,7 +20,7 @@ import {
   tasks,
 } from '@hashhive/shared'
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { assignNextTask } from '../../src/services/tasks.js'
@@ -155,6 +155,40 @@ describe('U13 split-on-claim', () => {
     // DEFAULT 1,000,000 H/s * 300 = 300,000,000, clamped to MAX_CHUNK_SIZE 1e9 -> 3e8
     expect(Number(wr.end)).toBe(300_000_000)
     expect(Number(wr.start)).toBe(0)
+  })
+
+  it('rolls back the trim and assigns the full range when the remainder insert fails (no lost keyspace)', async () => {
+    const agentId = await seedAgent('fast', 100_000) // parcel 30,000,000
+    const id = await insertTask(100_000_000) // remainder would start at 30,000,000
+    // Inject a fault: reject the remainder INSERT (a new pending task starting at
+    // the parcel boundary). The trim+remainder run in one transaction, so this
+    // forces the trim to roll back.
+    await db.execute(sql`
+      CREATE OR REPLACE FUNCTION _reject_split_remainder() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.status = 'pending' AND NEW.work_range->>'start' = '30000000' THEN
+          RAISE EXCEPTION 'injected split remainder failure';
+        END IF;
+        RETURN NEW;
+      END; $$ LANGUAGE plpgsql;
+    `)
+    await db.execute(
+      sql`CREATE TRIGGER _reject_split BEFORE INSERT ON tasks FOR EACH ROW EXECUTE FUNCTION _reject_split_remainder()`
+    )
+    try {
+      const claimed = await assignNextTask(agentId)
+      // The claim still succeeds (the CTE committed before the split); the split
+      // rolled back atomically, so the task keeps its FULL range and no orphan
+      // remainder exists — no keyspace lost.
+      expect(claimed).not.toBeNull()
+      expect(claimed!.id).toBe(id)
+      const wr = claimed!.workRange as { start: number | string; end: number | string }
+      expect(Number(wr.end)).toBe(100_000_000) // full range retained (trim rolled back)
+      expect(await pendingRemainders()).toHaveLength(0) // no orphan remainder created
+    } finally {
+      await db.execute(sql`DROP TRIGGER IF EXISTS _reject_split ON tasks`)
+      await db.execute(sql`DROP FUNCTION IF EXISTS _reject_split_remainder()`)
+    }
   })
 
   it('splits a bigint-scale keyspace without precision loss', async () => {

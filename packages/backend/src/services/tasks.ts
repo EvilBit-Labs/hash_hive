@@ -542,21 +542,34 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
           end: jsonSafeBigint(claimEnd),
           total: jsonSafeBigint(claimEnd - parcelEnd),
         }
-        await db.transaction(async (tx) => {
-          await tx
-            .update(tasks)
-            .set({ workRange: trimmed })
-            .where(eq(tasks.id, row['id'] as number))
-          await tx.insert(tasks).values({
-            attackId: row['attack_id'] as number,
-            campaignId: row['campaign_id'] as number,
-            status: 'pending',
-            workRange: remainder,
-            requiredCapabilities:
-              (row['required_capabilities'] as Record<string, unknown> | null) ?? {},
+        try {
+          await db.transaction(async (tx) => {
+            await tx
+              .update(tasks)
+              .set({ workRange: trimmed })
+              .where(eq(tasks.id, row['id'] as number))
+            await tx.insert(tasks).values({
+              attackId: row['attack_id'] as number,
+              campaignId: row['campaign_id'] as number,
+              status: 'pending',
+              workRange: remainder,
+              requiredCapabilities:
+                (row['required_capabilities'] as Record<string, unknown> | null) ?? {},
+            })
           })
-        })
-        finalRange = trimmed
+          finalRange = trimmed
+        } catch (err: unknown) {
+          // The split is best-effort: the task is already claimed (the CTE
+          // committed). If the trim+remainder transaction fails it rolls back
+          // atomically — the claimed task keeps its FULL range and no orphan
+          // remainder is created (no lost keyspace). Assign the whole range
+          // rather than failing the claim; the heartbeat rebalance can re-split
+          // later. finalRange stays the full claimed range.
+          logger.warn(
+            { err, taskId: row['id'], agentId },
+            'split-on-claim failed; assigning the full claimed range (no keyspace lost)'
+          )
+        }
       }
     }
   }
