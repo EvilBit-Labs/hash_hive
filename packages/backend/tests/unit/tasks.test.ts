@@ -24,6 +24,9 @@ let mockUpdateAgentObservedRate: ReturnType<typeof mock>
 // db.transaction; the mock invokes the callback with a tx that delegates to the
 // same update mocks and a no-op telemetry insert.
 let mockTransaction: ReturnType<typeof mock>
+// Rows returned by the split-on-claim conditional remainder INSERT (tx.execute).
+// Default = under the cap (split proceeds); set to [] to simulate a cap hit.
+let splitInsertRows: unknown[] = [{ id: 1 }]
 
 if (isIsolated) {
   // ─── Config / logger mocks (prevent env validation during import) ──
@@ -70,10 +73,14 @@ if (isIsolated) {
   // Invokes the callback with a tx that delegates `update` to the shared
   // update mocks (so the hot-row UPDATE assertions still hold) and provides a
   // no-op `insert(...).values(...)` for the appended telemetry row.
+  // `execute` backs the split-on-claim conditional remainder INSERT. Default
+  // returns one row (under the cap -> split proceeds); the cap-hit test sets
+  // `splitInsertRows = []` to simulate the count subquery blocking the insert.
   mockTransaction = mock((cb: (tx: unknown) => unknown) =>
     cb({
       update: () => ({ set: mockUpdateSet }),
       insert: () => ({ values: () => Promise.resolve(undefined) }),
+      execute: () => Promise.resolve(splitInsertRows),
     })
   )
 
@@ -587,6 +594,43 @@ if (isIsolated) {
       const result = await assignNextTask(1)
       expect(result).not.toBeNull()
       expect(result!.workRange.agentSpeedHs).toBe(1_000_000)
+    })
+
+    test('does NOT split at the MAX_CHUNKS cap (remainder INSERT blocked) — assigns full range', async () => {
+      const now = new Date()
+      const rawDbRow = {
+        id: 62,
+        attack_id: 14,
+        campaign_id: 9,
+        agent_id: 1,
+        status: 'assigned',
+        work_range: { start: 0, end: 100_000_000, total: 100_000_000 },
+        progress: {},
+        result_stats: {},
+        required_capabilities: { hashcatMode: 9000 },
+        assigned_at: now,
+        started_at: null,
+        completed_at: null,
+        failure_reason: null,
+        created_at: now,
+        updated_at: now,
+      }
+      mockLimit.mockResolvedValueOnce([
+        { id: 1, projectId: 1, status: 'online', capabilities: { gpu: true, hashModes: [9000] } },
+      ])
+      mockExecute.mockResolvedValueOnce([rawDbRow])
+      // 100k H/s -> 30M parcel < 100M remaining, so it WOULD split...
+      mockGetAgentBenchmarkForMode.mockResolvedValueOnce({ speedHs: 100_000 })
+      // ...but the conditional remainder INSERT returns no rows (count subquery at
+      // the cap), so the split is skipped and the full range is assigned.
+      splitInsertRows = []
+      try {
+        const result = await assignNextTask(1)
+        expect(result).not.toBeNull()
+        expect(Number(result!.workRange.end)).toBe(100_000_000)
+      } finally {
+        splitInsertRows = [{ id: 1 }]
+      }
     })
 
     test('uses SQL-level predicate, not app-layer filtering', async () => {
