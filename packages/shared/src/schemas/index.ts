@@ -831,6 +831,9 @@ export const campaignArchiveOutcomeSchema = z.enum([
   'not_found',
   'not_archivable',
   'already_archived',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
 ])
 
 export const campaignArchiveResponseSchema = z.object({
@@ -839,7 +842,13 @@ export const campaignArchiveResponseSchema = z.object({
   ),
 })
 
-export const campaignRestoreOutcomeSchema = z.enum(['restored', 'not_found', 'not_archived'])
+export const campaignRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Per-id failure (see campaignArchiveOutcomeSchema).
+  'error',
+])
 
 export const campaignRestoreResponseSchema = z.object({
   results: z.array(

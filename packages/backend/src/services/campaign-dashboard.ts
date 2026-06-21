@@ -253,30 +253,37 @@ export async function archiveCampaigns(
   // than serially — bulk batches are capped at 200 by the request schema.
   return Promise.all(
     ids.map(async (id): Promise<CampaignArchiveResponse['results'][number]> => {
-      const updated = await db
-        .update(campaigns)
-        .set({ archivedAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            eq(campaigns.id, id),
-            eq(campaigns.projectId, projectId),
-            inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
-            isNull(campaigns.archivedAt)
+      try {
+        const updated = await db
+          .update(campaigns)
+          .set({ archivedAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaigns.id, id),
+              eq(campaigns.projectId, projectId),
+              inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
+              isNull(campaigns.archivedAt)
+            )
           )
-        )
-        .returning({ id: campaigns.id })
-      if (updated[0]) {
-        return { id, outcome: 'archived' }
+          .returning({ id: campaigns.id })
+        if (updated[0]) {
+          return { id, outcome: 'archived' }
+        }
+        // Classify the miss against the project-scoped row.
+        const [row] = await db
+          .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+        if (!row) return { id, outcome: 'not_found' }
+        if (row.archivedAt) return { id, outcome: 'already_archived' }
+        return { id, outcome: 'not_archivable' }
+      } catch (err) {
+        // One id failing must not fail the whole batch with a 500 — report it
+        // per-id and keep going.
+        logger.error({ err, campaignId: id, projectId }, 'archiveCampaigns: per-id failure')
+        return { id, outcome: 'error' }
       }
-      // Classify the miss against the project-scoped row.
-      const [row] = await db
-        .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
-        .from(campaigns)
-        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
-        .limit(1)
-      if (!row) return { id, outcome: 'not_found' }
-      if (row.archivedAt) return { id, outcome: 'already_archived' }
-      return { id, outcome: 'not_archivable' }
     })
   )
 }
@@ -287,26 +294,31 @@ export async function restoreCampaigns(
 ): Promise<CampaignRestoreResponse['results']> {
   return Promise.all(
     ids.map(async (id): Promise<CampaignRestoreResponse['results'][number]> => {
-      const updated = await db
-        .update(campaigns)
-        .set({ archivedAt: null, updatedAt: new Date() })
-        .where(
-          and(
-            eq(campaigns.id, id),
-            eq(campaigns.projectId, projectId),
-            isNotNull(campaigns.archivedAt)
+      try {
+        const updated = await db
+          .update(campaigns)
+          .set({ archivedAt: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaigns.id, id),
+              eq(campaigns.projectId, projectId),
+              isNotNull(campaigns.archivedAt)
+            )
           )
-        )
-        .returning({ id: campaigns.id })
-      if (updated[0]) {
-        return { id, outcome: 'restored' }
+          .returning({ id: campaigns.id })
+        if (updated[0]) {
+          return { id, outcome: 'restored' }
+        }
+        const [row] = await db
+          .select({ id: campaigns.id })
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+        return { id, outcome: row ? 'not_archived' : 'not_found' }
+      } catch (err) {
+        logger.error({ err, campaignId: id, projectId }, 'restoreCampaigns: per-id failure')
+        return { id, outcome: 'error' }
       }
-      const [row] = await db
-        .select({ id: campaigns.id })
-        .from(campaigns)
-        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
-        .limit(1)
-      return { id, outcome: row ? 'not_archived' : 'not_found' }
     })
   )
 }
