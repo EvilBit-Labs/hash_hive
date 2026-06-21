@@ -247,3 +247,36 @@ describe('archive / restore (U5, R5, R6, R7, R8)', () => {
     expect(byId.get(missing)).toBe('not_found')
   })
 })
+
+// ─── U6: list show-archived filter ────────────────────────────────────────────
+
+describe('list show-archived filter (U6, R10)', () => {
+  it('excludes archived by default and includes them with showArchived', async () => {
+    // Isolated project so totals are deterministic regardless of other tests.
+    const [proj] = await db
+      .insert(projects)
+      .values({ name: 'campaigns-archive-list-test', slug: 'campaigns-archive-list-test' })
+      .returning({ id: projects.id })
+    const projectId = proj!.id
+    try {
+      await insertCampaign({ projectId, status: 'completed', isPermanent: true })
+      await insertCampaign({
+        projectId,
+        status: 'completed',
+        isPermanent: true,
+        archivedAt: new Date(),
+      })
+
+      const { listCampaigns } = await import('../../src/services/campaigns.js')
+
+      const def = await listCampaigns({ projectId })
+      expect(def.total).toBe(1)
+      expect(def.campaigns.every((row) => row.archivedAt === null)).toBe(true)
+
+      const all = await listCampaigns({ projectId, showArchived: true })
+      expect(all.total).toBe(2)
+    } finally {
+      await db.delete(projects).where(eq(projects.id, projectId))
+    }
+  })
+})

@@ -6,7 +6,7 @@ import {
   campaigns,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -195,6 +195,7 @@ export async function listCampaigns(filters: {
   projectId?: number | undefined
   status?: string | undefined
   priority?: number | undefined
+  showArchived?: boolean | undefined
   sort?: CampaignSortField | undefined
   order?: CampaignSortOrder | undefined
   limit?: number | undefined
@@ -211,6 +212,12 @@ export async function listCampaigns(filters: {
   }
   if (filters.priority !== undefined) {
     conditions.push(eq(campaigns.priority, filters.priority))
+  }
+  // Archived campaigns are excluded from active list views by default
+  // (ADR-0019); pass showArchived to include them. Applies to both the data
+  // and count queries since they share this conditions array.
+  if (!filters.showArchived) {
+    conditions.push(isNull(campaigns.archivedAt))
   }
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
