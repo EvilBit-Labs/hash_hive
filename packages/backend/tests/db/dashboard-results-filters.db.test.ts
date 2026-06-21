@@ -10,9 +10,9 @@
  * every file in the lane.
  */
 
-import { campaigns, hashItems, hashLists, hashTypes, projects } from '@hashhive/shared'
+import { attacks, campaigns, hashItems, hashLists, hashTypes, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { buildResultFilters } from '../../src/routes/dashboard/results.js'
@@ -121,7 +121,10 @@ async function runFilter(
     .from(hashItems)
     .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
     .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+    .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
     .where(and(...conditions))
+    // Deterministic order so single-row toEqual assertions stay order-stable.
+    .orderBy(asc(hashItems.id))
   return rows.map((r) => r.id)
 }
 
@@ -199,6 +202,21 @@ beforeAll(async () => {
     plaintext: 'axb',
     crackedAt: DMID,
   })
+  // %-escape decoy: an unescaped `%` (wildcard) in q='50%off' would also match
+  // '50zoff'; a correctly-escaped literal `%` must not.
+  ids['r10'] = await insertItem({
+    hashListId: listAId,
+    hashValue: 'ddd10',
+    plaintext: '50zoff',
+    crackedAt: DMID,
+  })
+  // literal backslash, for the \-escape test
+  ids['r11'] = await insertItem({
+    hashListId: listAId,
+    hashValue: 'eee11',
+    plaintext: 'a\\b',
+    crackedAt: DMID,
+  })
   // Project A / list A2 (hashListId narrowing)
   ids['r8'] = await insertItem({
     hashListId: listA2Id,
@@ -272,8 +290,14 @@ describe('Results filters: q ILIKE + escapeLike (R3)', () => {
   })
 
   it('treats % as a literal, not a wildcard (escapeLike)', async () => {
+    // r10 ('50zoff') is the decoy a wildcard `%` would also match.
     const got = await runFilter(seed.projectAId, { q: '50%off' })
     expect(got).toEqual([seed.ids['r5']])
+  })
+
+  it('treats a literal backslash as data, not an escape char (escapeLike)', async () => {
+    const got = await runFilter(seed.projectAId, { q: 'a\\b' })
+    expect(got).toEqual([seed.ids['r11']])
   })
 
   it('treats _ as a literal, not a single-char wildcard (escapeLike)', async () => {
@@ -297,5 +321,17 @@ describe('Results filters: campaign / hash-list narrowing (R4)', () => {
     expect(await runFilter(seed.projectAId, { hashListId: seed.listA2Id })).toEqual([
       seed.ids['r8'],
     ])
+  })
+})
+
+describe('Results filters: combined predicates', () => {
+  it('ANDs campaign + date range + q together', async () => {
+    const got = await runFilter(seed.projectAId, {
+      campaignId: seed.cActiveId,
+      startDate: D1.toISOString(),
+      endDate: D2.toISOString(),
+      q: 'secret',
+    })
+    expect(got).toEqual([seed.ids['r1']])
   })
 })
