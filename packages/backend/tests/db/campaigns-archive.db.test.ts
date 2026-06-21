@@ -128,3 +128,31 @@ describe('campaign permanence latch (U3, R1)', () => {
     expect(row?.isPermanent).toBe(false)
   })
 })
+
+// ─── U4: delete-guard hardening ───────────────────────────────────────────────
+
+describe('delete guard hardening (U4, R2, R3)', () => {
+  it('deletes a pristine draft (not permanent)', async () => {
+    const id = await insertCampaign({ status: 'draft', isPermanent: false })
+    const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
+    const res = await deleteCampaign(id)
+    expect(res.kind).toBe('deleted')
+    expect(await readCampaign(id)).toBeUndefined()
+  })
+
+  it('rejects deleting a started-then-edited campaign (draft + permanent)', async () => {
+    const id = await insertCampaign({ status: 'draft', isPermanent: true, startedAt: new Date() })
+    const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
+    const res = await deleteCampaign(id)
+    expect(res.kind).toBe('not_permanent')
+    expect(await readCampaign(id)).toBeDefined()
+  })
+
+  it('rejects deleting a completed campaign', async () => {
+    const id = await insertCampaign({ status: 'completed', isPermanent: true })
+    const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
+    const res = await deleteCampaign(id)
+    expect(res.kind).toBe('not_draft')
+    expect(await readCampaign(id)).toBeDefined()
+  })
+})

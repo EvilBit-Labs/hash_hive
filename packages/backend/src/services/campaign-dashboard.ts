@@ -135,6 +135,9 @@ export type DeleteCampaignResult =
   | { kind: 'deleted'; id: number; projectId: number }
   | { kind: 'not_found' }
   | { kind: 'not_draft'; status: string }
+  // A campaign that has ever left draft is permanent (ADR-0019): it can be
+  // archived but never hard-deleted, even after editing returns it to draft.
+  | { kind: 'not_permanent' }
 
 /**
  * Delete a campaign if and only if its status is `draft`. Attacks and
@@ -150,7 +153,10 @@ export type DeleteCampaignResult =
  */
 export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
   class StatusFlippedDuringDelete extends Error {
-    constructor(public readonly observedStatus: string) {
+    constructor(
+      public readonly observedStatus: string,
+      public readonly observedPermanent: boolean
+    ) {
       super('campaign status flipped before draft-only delete completed')
     }
   }
@@ -158,7 +164,7 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
   try {
     const result = await db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ status: campaigns.status })
+        .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
         .from(campaigns)
         .where(eq(campaigns.id, id))
         .limit(1)
@@ -168,28 +174,40 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
       if (existing.status !== 'draft') {
         return { kind: 'not_draft', status: existing.status } as const
       }
+      // A started-then-edited campaign sits at status='draft' but is
+      // permanent. Status alone would let it through — reject on the latch.
+      if (existing.isPermanent) {
+        return { kind: 'not_permanent' } as const
+      }
 
       // Remove child rows (FKs are RESTRICT by default).
       await tx.delete(tasks).where(eq(tasks.campaignId, id))
       await tx.delete(attacks).where(eq(attacks.campaignId, id))
 
-      // Atomic guard: only delete the campaign row if it is *still*
-      // in draft. A concurrent transition that flipped the status
-      // between the pre-check and this statement returns zero rows
-      // and we abort the transaction so the child deletes also roll
-      // back.
+      // Atomic guard: only delete the campaign row if it is *still* a
+      // pristine draft (draft AND not permanent). A concurrent transition
+      // that flipped the status or latched permanence between the pre-check
+      // and this statement returns zero rows and we abort the transaction
+      // so the child deletes also roll back.
       const deleted = await tx
         .delete(campaigns)
-        .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
+        .where(
+          and(eq(campaigns.id, id), eq(campaigns.status, 'draft'), eq(campaigns.isPermanent, false))
+        )
         .returning()
       const row = deleted[0]
       if (!row) {
         const [current] = await tx
-          .select({ status: campaigns.status })
+          .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
           .from(campaigns)
           .where(eq(campaigns.id, id))
           .limit(1)
-        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown')
+        // Throw (not return) so the child deletes above roll back. The catch
+        // maps to not_permanent or not_draft based on what changed.
+        throw new StatusFlippedDuringDelete(
+          current?.status ?? 'unknown',
+          current?.isPermanent ?? false
+        )
       }
       return { kind: 'deleted', id: row.id, projectId: row.projectId } as const
     })
@@ -203,7 +221,9 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
     return result
   } catch (err) {
     if (err instanceof StatusFlippedDuringDelete) {
-      return { kind: 'not_draft', status: err.observedStatus }
+      return err.observedPermanent
+        ? { kind: 'not_permanent' }
+        : { kind: 'not_draft', status: err.observedStatus }
     }
     throw err
   }

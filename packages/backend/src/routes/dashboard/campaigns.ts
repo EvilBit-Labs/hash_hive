@@ -389,6 +389,17 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
         },
         409
       )
+    case 'not_permanent':
+      return c.json(
+        {
+          error: {
+            code: 'NOT_DELETABLE',
+            message:
+              'Campaign has run and is now permanent; it cannot be deleted, only archived once completed or cancelled.',
+          },
+        },
+        409
+      )
     case 'deleted':
       return c.json({ deleted: true as const, id: result.id }, 200)
   }
