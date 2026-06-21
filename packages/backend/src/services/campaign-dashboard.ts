@@ -12,6 +12,8 @@ import {
   agents,
   attacks,
   type CampaignActiveAgent,
+  type CampaignArchiveOutcome,
+  type CampaignRestoreOutcome,
   type CampaignTaskStats,
   campaigns,
   TASK_DB_TO_BUCKET,
@@ -19,7 +21,7 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -227,4 +229,83 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
     }
     throw err
   }
+}
+
+// ─── Archive / restore (ADR-0019) ───────────────────────────────────
+//
+// Archivable = the done states (`completed`, `cancelled`). Live campaigns
+// (`running`/`paused`) and `draft` (pristine or reopened for editing) are not
+// archivable. Project scope is folded into each guarded UPDATE so a
+// cross-project id simply reports `not_found` rather than mutating another
+// project's row. Bulk by design: a single archive/restore is `ids: [one]`.
+const ARCHIVABLE_STATUSES = ['completed', 'cancelled'] as const
+
+export async function archiveCampaigns(
+  projectId: number,
+  ids: number[]
+): Promise<{ id: number; outcome: CampaignArchiveOutcome }[]> {
+  const results: { id: number; outcome: CampaignArchiveOutcome }[] = []
+  for (const id of ids) {
+    const updated = await db
+      .update(campaigns)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(campaigns.id, id),
+          eq(campaigns.projectId, projectId),
+          inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
+          isNull(campaigns.archivedAt)
+        )
+      )
+      .returning({ id: campaigns.id })
+    if (updated[0]) {
+      results.push({ id, outcome: 'archived' })
+      continue
+    }
+    // Classify the miss against the project-scoped row.
+    const [row] = await db
+      .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+      .limit(1)
+    if (!row) {
+      results.push({ id, outcome: 'not_found' })
+    } else if (row.archivedAt) {
+      results.push({ id, outcome: 'already_archived' })
+    } else {
+      results.push({ id, outcome: 'not_archivable' })
+    }
+  }
+  return results
+}
+
+export async function restoreCampaigns(
+  projectId: number,
+  ids: number[]
+): Promise<{ id: number; outcome: CampaignRestoreOutcome }[]> {
+  const results: { id: number; outcome: CampaignRestoreOutcome }[] = []
+  for (const id of ids) {
+    const updated = await db
+      .update(campaigns)
+      .set({ archivedAt: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(campaigns.id, id),
+          eq(campaigns.projectId, projectId),
+          isNotNull(campaigns.archivedAt)
+        )
+      )
+      .returning({ id: campaigns.id })
+    if (updated[0]) {
+      results.push({ id, outcome: 'restored' })
+      continue
+    }
+    const [row] = await db
+      .select({ id: campaigns.id })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+      .limit(1)
+    results.push({ id, outcome: row ? 'not_archived' : 'not_found' })
+  }
+  return results
 }

@@ -156,3 +156,94 @@ describe('delete guard hardening (U4, R2, R3)', () => {
     expect(await readCampaign(id)).toBeDefined()
   })
 })
+
+// ─── U5: archive / restore ─────────────────────────────────────────────────────
+
+describe('archive / restore (U5, R5, R6, R7, R8)', () => {
+  async function archive(ids: number[], projectId = ctx.projectId) {
+    const { archiveCampaigns } = await import('../../src/services/campaign-dashboard.js')
+    return archiveCampaigns(projectId, ids)
+  }
+  async function restore(ids: number[], projectId = ctx.projectId) {
+    const { restoreCampaigns } = await import('../../src/services/campaign-dashboard.js')
+    return restoreCampaigns(projectId, ids)
+  }
+
+  it('archives a completed campaign and sets archived_at', async () => {
+    const id = await insertCampaign({ status: 'completed', isPermanent: true })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('archived')
+    expect((await readCampaign(id))?.archivedAt).not.toBeNull()
+  })
+
+  it('archives a cancelled campaign', async () => {
+    const id = await insertCampaign({ status: 'cancelled', isPermanent: true })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('archived')
+  })
+
+  it('rejects archiving a running campaign (not_archivable)', async () => {
+    const id = await insertCampaign({ status: 'running', isPermanent: true })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('not_archivable')
+    expect((await readCampaign(id))?.archivedAt).toBeNull()
+  })
+
+  it('rejects archiving a paused campaign (not_archivable)', async () => {
+    const id = await insertCampaign({ status: 'paused', isPermanent: true })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('not_archivable')
+  })
+
+  it('rejects archiving a pristine draft (not_archivable)', async () => {
+    const id = await insertCampaign({ status: 'draft', isPermanent: false })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('not_archivable')
+  })
+
+  it('reports already_archived when archiving an archived campaign', async () => {
+    const id = await insertCampaign({
+      status: 'completed',
+      isPermanent: true,
+      archivedAt: new Date(),
+    })
+    const [res] = await archive([id])
+    expect(res?.outcome).toBe('already_archived')
+  })
+
+  it('restores an archived campaign and clears archived_at', async () => {
+    const id = await insertCampaign({
+      status: 'completed',
+      isPermanent: true,
+      archivedAt: new Date(),
+    })
+    const [res] = await restore([id])
+    expect(res?.outcome).toBe('restored')
+    expect((await readCampaign(id))?.archivedAt).toBeNull()
+  })
+
+  it('reports not_archived when restoring a non-archived campaign', async () => {
+    const id = await insertCampaign({ status: 'completed', isPermanent: true })
+    const [res] = await restore([id])
+    expect(res?.outcome).toBe('not_archived')
+  })
+
+  it('reports not_found for a cross-project id (scope enforced in the UPDATE)', async () => {
+    const id = await insertCampaign({ status: 'completed', isPermanent: true })
+    // A different project must not be able to archive this campaign.
+    const [res] = await archive([id], ctx.projectId + 100_000)
+    expect(res?.outcome).toBe('not_found')
+    expect((await readCampaign(id))?.archivedAt).toBeNull()
+  })
+
+  it('handles a bulk mixed batch with per-id outcomes', async () => {
+    const completed = await insertCampaign({ status: 'completed', isPermanent: true })
+    const running = await insertCampaign({ status: 'running', isPermanent: true })
+    const missing = ctx.projectId + 200_000
+    const results = await archive([completed, running, missing])
+    const byId = new Map(results.map((r) => [r.id, r.outcome]))
+    expect(byId.get(completed)).toBe('archived')
+    expect(byId.get(running)).toBe('not_archivable')
+    expect(byId.get(missing)).toBe('not_found')
+  })
+})
