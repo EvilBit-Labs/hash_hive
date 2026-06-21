@@ -11,13 +11,13 @@ Add campaign archiving as the first implementation of a general lifecycle rule:
 a draft, unused record can be hard-deleted, but once it leaves draft it becomes a
 permanent record - archivable to clear it from active views, never deletable, with
 all data and crack attribution preserved and restore available. Draft campaigns keep
-their existing hard-delete; running or paused campaigns must be stopped before they
-can be archived.
+their existing hard-delete; archive applies to the done states (`completed`, `cancelled`),
+so a campaign still in flight is cancelled or completed before it can be archived.
 
 ## Problem Frame
 
 Operators run many large, multi-stage campaigns concurrently across the fleet. Finished
-campaigns (completed, exhausted, failed, cancelled) accumulate in the active dashboard
+campaigns (completed or cancelled) accumulate in the active dashboard
 view with no way to clear them. Today the only removal path is `deleteCampaign`, which is
 draft-only (`packages/backend/src/services/campaign-dashboard.ts:151`): any non-draft
 campaign returns 409 "Only draft campaigns are deletable." So the active list grows
@@ -50,9 +50,12 @@ only be archived. Campaign archiving is where that rule first ships.
 - **Permanence governs deletion, not editing.** A non-draft campaign still accepts attacks being
   added and removed. It is the record's existence that is permanent, not its whole composition.
 
-- **Archive terminal campaigns only; keep draft-only hard-delete.** Delete discards worthless
-  drafts; archive retires finished work. Two paths, two purposes. Running or paused campaigns
-  reach a terminal state (stop) before they qualify for archive.
+- **Archive the done states (`completed`, `cancelled`); keep draft-only hard-delete.** Archive
+  means "I'm done with this campaign," so it applies only to the two done states. A `draft`
+  campaign (pristine or reopened for editing) and a live `running`/`paused` campaign are not
+  archivable. Delete discards worthless pristine drafts; archive retires finished work. The
+  permanence latch still blocks deleting a campaign that ran — including one reopened to `draft`
+  for editing — so deletability keys on the latch, not on status.
 
 - **Results need no query change.** The results query already scopes via `hash_lists.project_id`
   and LEFT JOINs campaigns (`packages/backend/src/routes/dashboard/results.ts:101-211`), so an
@@ -64,7 +67,7 @@ stateDiagram-v2
   [*] --> Draft
   Draft --> Deleted: hard-delete (permanence=false)
   Draft --> Active: first transition out of draft\n(permanence latches true)
-  Active --> Terminal: completed / exhausted / failed / cancelled
+  Active --> Terminal: completed / cancelled
   Terminal --> Archived: archive (sets archive timestamp)
   Archived --> Terminal: restore (clears archive timestamp)
   Deleted --> [*]
@@ -91,11 +94,12 @@ stateDiagram-v2
 
 ### Archive and restore
 
-- R5. A terminal campaign (`completed`, `exhausted`, `failed`, or `cancelled`) can be archived.
-  Archiving sets a nullable archive timestamp on the record.
-- R6. A `running` or `paused` campaign cannot be archived. It must first reach a terminal state.
+- R5. A `completed` or `cancelled` campaign can be archived, setting a nullable archive
+  timestamp on the record.
+- R6. A campaign that is `running`, `paused`, or in `draft` (pristine or reopened for editing)
+  cannot be archived; cancel it or let it complete first.
 - R7. An archived campaign can be restored. Restore clears the archive timestamp and returns the
-  campaign to active views in its existing terminal status.
+  campaign to active views in its prior status.
 - R8. Archive and restore support selecting and acting on multiple campaigns at once.
 - R9. Archive and restore are gated by the same project access controls as delete.
 
@@ -106,7 +110,7 @@ stateDiagram-v2
 - R11. The results view continues to show archived campaigns' cracked hashes with full
   attribution by default. No results-query change is required (see Key Decisions).
 - R12. Archived campaigns are not schedulable, and restoring one does not make it schedulable -
-  it returns to its terminal status, which is already non-schedulable.
+  it returns to its prior status, which is already non-schedulable.
 
 ### General rule
 
@@ -148,11 +152,13 @@ stateDiagram-v2
 
 ## Dependencies / Assumptions
 
-- Campaign status lifecycle is `draft`, `pending`, `running`, `paused`, `completed`, `exhausted`,
-  `failed`, `cancelled` (`packages/shared/src/db/schema.ts:534`). Only `draft` is non-permanent.
+- Campaign status lifecycle is `draft`, `running`, `paused`, `completed`, `cancelled`
+  (`packages/shared/src/schemas/dashboard.ts:18`); `exhausted`/`failed` are *task* statuses, not
+  campaign ones. Only a pristine `draft` (never started) is non-permanent; "stop" returns a live
+  campaign to `draft` but it stays permanent.
 - The results query already scopes via `hash_lists.project_id` and LEFT JOINs campaigns, so
   archived campaigns' cracks attribute correctly with no change.
-- The agent API is unaffected. Archived campaigns are terminal; agents never act on them. The
+- The agent API is unaffected. Archived campaigns are not live; agents never act on them. The
   agent surface stays untouched.
 - `hash_items.campaign_id` remains the attribution link. Under this rule it effectively never goes
   null through deletion, because any campaign with cracks is permanent and cannot be hard-deleted.
