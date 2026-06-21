@@ -398,7 +398,7 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
         },
         409
       )
-    case 'not_permanent':
+    case 'not_deletable':
       return c.json(
         {
           error: {

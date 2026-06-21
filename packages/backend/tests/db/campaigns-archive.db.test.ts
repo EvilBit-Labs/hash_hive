@@ -159,7 +159,7 @@ describe('delete guard hardening (U4, R2, R3)', () => {
     const id = await insertCampaign({ status: 'draft', isPermanent: true, startedAt: new Date() })
     const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
     const res = await deleteCampaign(id, ctx.projectId)
-    expect(res.kind).toBe('not_permanent')
+    expect(res.kind).toBe('not_deletable')
     expect(await readCampaign(id)).toBeDefined()
   })
 

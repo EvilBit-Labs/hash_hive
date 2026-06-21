@@ -562,7 +562,17 @@ export const campaigns = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('campaigns_project_id_status_idx').on(table.projectId, table.status)]
+  (table) => [
+    index('campaigns_project_id_status_idx').on(table.projectId, table.status),
+    // Couple the archive markers to the lifecycle at the DB level (ADR-0019):
+    // a row may only carry archived_at when it is permanent AND in a done
+    // state. Closes off illegal combinations (archived draft, archived
+    // non-permanent) that service logic alone could not prevent on a direct write.
+    check(
+      'campaigns_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} IN ('completed', 'cancelled'))`
+    ),
+  ]
 )
 
 export const attacks = pgTable(

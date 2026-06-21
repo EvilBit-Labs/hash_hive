@@ -139,7 +139,7 @@ export type DeleteCampaignResult =
   | { kind: 'not_draft'; status: string }
   // A campaign that has ever left draft is permanent (ADR-0019): it can be
   // archived but never hard-deleted, even after editing returns it to draft.
-  | { kind: 'not_permanent' }
+  | { kind: 'not_deletable' }
 
 /**
  * Delete a campaign if and only if its status is `draft`. Attacks and
@@ -179,7 +179,7 @@ export async function deleteCampaign(id: number, projectId: number): Promise<Del
       // A started-then-edited campaign sits at status='draft' but is
       // permanent. Status alone would let it through — reject on the latch.
       if (existing.isPermanent) {
-        return { kind: 'not_permanent' } as const
+        return { kind: 'not_deletable' } as const
       }
 
       // Remove child rows (FKs are RESTRICT by default).
@@ -210,7 +210,7 @@ export async function deleteCampaign(id: number, projectId: number): Promise<Del
           .where(eq(campaigns.id, id))
           .limit(1)
         // Throw (not return) so the child deletes above roll back. The catch
-        // maps to not_permanent or not_draft based on what changed.
+        // maps to not_deletable or not_draft based on what changed.
         throw new StatusFlippedDuringDelete(
           current?.status ?? 'unknown',
           current?.isPermanent ?? false
@@ -229,7 +229,7 @@ export async function deleteCampaign(id: number, projectId: number): Promise<Del
   } catch (err) {
     if (err instanceof StatusFlippedDuringDelete) {
       return err.observedPermanent
-        ? { kind: 'not_permanent' }
+        ? { kind: 'not_deletable' }
         : { kind: 'not_draft', status: err.observedStatus }
     }
     throw err
@@ -249,68 +249,64 @@ export async function archiveCampaigns(
   projectId: number,
   ids: number[]
 ): Promise<CampaignArchiveResponse['results']> {
-  const results: CampaignArchiveResponse['results'] = []
-  for (const id of ids) {
-    const updated = await db
-      .update(campaigns)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
-      .where(
-        and(
-          eq(campaigns.id, id),
-          eq(campaigns.projectId, projectId),
-          inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
-          isNull(campaigns.archivedAt)
+  // Each id is independent (per-id outcomes), so run them concurrently rather
+  // than serially — bulk batches are capped at 200 by the request schema.
+  return Promise.all(
+    ids.map(async (id): Promise<CampaignArchiveResponse['results'][number]> => {
+      const updated = await db
+        .update(campaigns)
+        .set({ archivedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(campaigns.id, id),
+            eq(campaigns.projectId, projectId),
+            inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
+            isNull(campaigns.archivedAt)
+          )
         )
-      )
-      .returning({ id: campaigns.id })
-    if (updated[0]) {
-      results.push({ id, outcome: 'archived' })
-      continue
-    }
-    // Classify the miss against the project-scoped row.
-    const [row] = await db
-      .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
-      .from(campaigns)
-      .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
-      .limit(1)
-    if (!row) {
-      results.push({ id, outcome: 'not_found' })
-    } else if (row.archivedAt) {
-      results.push({ id, outcome: 'already_archived' })
-    } else {
-      results.push({ id, outcome: 'not_archivable' })
-    }
-  }
-  return results
+        .returning({ id: campaigns.id })
+      if (updated[0]) {
+        return { id, outcome: 'archived' }
+      }
+      // Classify the miss against the project-scoped row.
+      const [row] = await db
+        .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
+        .from(campaigns)
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+        .limit(1)
+      if (!row) return { id, outcome: 'not_found' }
+      if (row.archivedAt) return { id, outcome: 'already_archived' }
+      return { id, outcome: 'not_archivable' }
+    })
+  )
 }
 
 export async function restoreCampaigns(
   projectId: number,
   ids: number[]
 ): Promise<CampaignRestoreResponse['results']> {
-  const results: CampaignRestoreResponse['results'] = []
-  for (const id of ids) {
-    const updated = await db
-      .update(campaigns)
-      .set({ archivedAt: null, updatedAt: new Date() })
-      .where(
-        and(
-          eq(campaigns.id, id),
-          eq(campaigns.projectId, projectId),
-          isNotNull(campaigns.archivedAt)
+  return Promise.all(
+    ids.map(async (id): Promise<CampaignRestoreResponse['results'][number]> => {
+      const updated = await db
+        .update(campaigns)
+        .set({ archivedAt: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(campaigns.id, id),
+            eq(campaigns.projectId, projectId),
+            isNotNull(campaigns.archivedAt)
+          )
         )
-      )
-      .returning({ id: campaigns.id })
-    if (updated[0]) {
-      results.push({ id, outcome: 'restored' })
-      continue
-    }
-    const [row] = await db
-      .select({ id: campaigns.id })
-      .from(campaigns)
-      .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
-      .limit(1)
-    results.push({ id, outcome: row ? 'not_archived' : 'not_found' })
-  }
-  return results
+        .returning({ id: campaigns.id })
+      if (updated[0]) {
+        return { id, outcome: 'restored' }
+      }
+      const [row] = await db
+        .select({ id: campaigns.id })
+        .from(campaigns)
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+        .limit(1)
+      return { id, outcome: row ? 'not_archived' : 'not_found' }
+    })
+  )
 }

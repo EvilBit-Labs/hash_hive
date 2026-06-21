@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_archive_consistency_chk" CHECK ("campaigns"."archived_at" IS NULL OR ("campaigns"."is_permanent" = true AND "campaigns"."status" IN ('completed', 'cancelled')));

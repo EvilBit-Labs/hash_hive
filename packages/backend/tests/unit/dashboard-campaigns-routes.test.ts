@@ -34,6 +34,7 @@ if (!IS_ISOLATED) {
   // ─── Mock BetterAuth ─────────────────────────────────────────────────
 
   const ADMIN_COOKIE = 'hh.session_token=valid-admin-session'
+  const VIEWER_COOKIE = 'hh.session_token=valid-viewer-session'
 
   mock.module('../../src/lib/auth.js', () => ({
     auth: {
@@ -60,6 +61,25 @@ if (!IS_ISOLATED) {
               },
             }
           }
+          if (cookie.includes('valid-viewer-session')) {
+            return {
+              user: {
+                id: '2',
+                email: 'viewer@test.local',
+                name: 'Viewer',
+                emailVerified: true,
+                image: null,
+                roles: [],
+              },
+              session: {
+                id: 'sess-viewer',
+                userId: '2',
+                token: 'tok-viewer',
+                expiresAt: new Date(Date.now() + 3600000),
+                projectId: 1,
+              },
+            }
+          }
           return null
         },
       },
@@ -72,11 +92,15 @@ if (!IS_ISOLATED) {
       if (userId === 1) {
         return { id: 1, projects: [{ projectId: 1, roles: ['admin'] }] }
       }
+      if (userId === 2) {
+        return { id: 2, projects: [{ projectId: 1, roles: ['viewer'] }] }
+      }
       return null
     },
     findProjectMembership: async (userId: number, projectId: number) => {
       if (projectId !== 1) return null
       if (userId === 1) return { projectId: 1, roles: ['admin'] }
+      if (userId === 2) return { projectId: 1, roles: ['viewer'] }
       return null
     },
     // Issue #159 U3 / U6: stub the preference helpers so projects.ts
@@ -125,6 +149,8 @@ if (!IS_ISOLATED) {
     completedAt: null,
     updatedAt: new Date('2026-01-01'),
     createdBy: 1,
+    isPermanent: false,
+    archivedAt: null,
     ...overrides,
   })
 
@@ -139,8 +165,8 @@ if (!IS_ISOLATED) {
   const mockDeleteCampaign = mock<CampaignsService['deleteCampaign']>(async (id) => {
     if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
     if (id === 101) return { kind: 'not_draft', status: 'running' }
-    // A campaign that has run is permanent: deletable returns not_permanent.
-    if (id === 102) return { kind: 'not_permanent' }
+    // A campaign that has run is permanent: deletable returns not_deletable.
+    if (id === 102) return { kind: 'not_deletable' }
     return { kind: 'not_found' }
   })
 
@@ -304,6 +330,26 @@ if (!IS_ISOLATED) {
     _deps: {},
   }))
 
+  // Archive/restore live in campaign-dashboard.js and the archive route imports
+  // them directly (not via the campaigns.js facade), so mock that module too.
+  // Only these two exports are imported directly outside the already-mocked
+  // campaigns.js, so a partial mock is safe.
+  type CampaignDashboardService = typeof import('../../src/services/campaign-dashboard.js')
+  const mockArchiveCampaigns = mock<CampaignDashboardService['archiveCampaigns']>(
+    async (_projectId, ids) =>
+      ids.map((id) => ({
+        id,
+        outcome: id === 100 ? ('archived' as const) : ('not_archivable' as const),
+      }))
+  )
+  const mockRestoreCampaigns = mock<CampaignDashboardService['restoreCampaigns']>(
+    async (_projectId, ids) => ids.map((id) => ({ id, outcome: 'restored' as const }))
+  )
+  mock.module('../../src/services/campaign-dashboard.js', () => ({
+    archiveCampaigns: mockArchiveCampaigns,
+    restoreCampaigns: mockRestoreCampaigns,
+  }))
+
   // Dynamically import so the app module loads AFTER the mock.module calls
   // above. A static `import { app }` would still resolve as part of the same
   // module-graph evaluation pass, before mock.module hoisting takes effect.
@@ -315,9 +361,9 @@ if (!IS_ISOLATED) {
   // dashboard surface (PR review S-H4 follow-up). The fixture uses
   // matching values; tests intentionally exercising a cross-origin
   // attempt would override these.
-  function makeHeaders() {
+  function makeHeaders(cookie: string = ADMIN_COOKIE) {
     return {
-      cookie: ADMIN_COOKIE,
+      cookie,
       'x-project-id': '1',
       origin: 'http://lab.local',
       host: 'lab.local',
@@ -325,6 +371,17 @@ if (!IS_ISOLATED) {
   }
 
   describe('Dashboard campaigns list: query params', () => {
+    it('passes showArchived=true through to the service', async () => {
+      mockListCampaigns.mockClear()
+      const res = await app.request(`${DASH_CAMPAIGNS}?showArchived=true`, {
+        headers: makeHeaders(),
+      })
+      expect(res.status).toBe(200)
+      expect(mockListCampaigns).toHaveBeenCalledWith(
+        expect.objectContaining({ showArchived: true })
+      )
+    })
+
     it('accepts the default request and passes projectId to the service', async () => {
       mockListCampaigns.mockClear()
       const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
@@ -532,6 +589,53 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400)
       const body = (await res.json()) as { error?: { code?: string } }
       expect(body.error?.code).toBe('VALIDATION_ERROR')
+    })
+  })
+
+  describe('Dashboard campaigns archive/restore (ADR-0019)', () => {
+    it('archives campaigns and returns per-id outcomes (admin)', async () => {
+      mockArchiveCampaigns.mockClear()
+      const res = await app.request(`${DASH_CAMPAIGNS}/archive`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [100, 101] }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { results?: { id: number; outcome: string }[] }
+      expect(body.results).toEqual([
+        { id: 100, outcome: 'archived' },
+        { id: 101, outcome: 'not_archivable' },
+      ])
+      expect(mockArchiveCampaigns).toHaveBeenCalledWith(1, [100, 101])
+    })
+
+    it('restores campaigns (admin)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/restore`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [100] }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { results?: { id: number; outcome: string }[] }
+      expect(body.results).toEqual([{ id: 100, outcome: 'restored' }])
+    })
+
+    it('returns 403 when a viewer attempts to archive', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/archive`, {
+        method: 'POST',
+        headers: { ...makeHeaders(VIEWER_COOKIE), 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [100] }),
+      })
+      expect(res.status).toBe(403)
+    })
+
+    it('returns 400 on an empty ids array', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/archive`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [] }),
+      })
+      expect(res.status).toBe(400)
     })
   })
 
