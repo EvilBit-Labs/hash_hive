@@ -544,16 +544,35 @@ export const campaigns = pgTable(
       .notNull()
       .references(() => hashLists.id, { onDelete: 'restrict' }),
     status: varchar('status', { length: 20 }).notNull().default('draft'),
+    // Latches true the first time a campaign leaves `draft` (see
+    // services/campaigns.ts transitionCampaign) and is never cleared. Governs
+    // deletability: a campaign is hard-deletable only while this is false.
+    // Cannot be derived from `status` because editing returns a permanent
+    // campaign to `draft` (running/paused -> draft). See ADR-0019.
+    isPermanent: boolean('is_permanent').notNull().default(false),
     priority: integer('priority').notNull().default(5),
     progress: jsonb('progress').default({}),
     metadata: jsonb('metadata').default({}),
     createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    // Set when a completed/cancelled campaign is archived (retired from active
+    // views), cleared on restore. NULL = not archived. See ADR-0019.
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('campaigns_project_id_status_idx').on(table.projectId, table.status)]
+  (table) => [
+    index('campaigns_project_id_status_idx').on(table.projectId, table.status),
+    // Couple the archive markers to the lifecycle at the DB level (ADR-0019):
+    // a row may only carry archived_at when it is permanent AND in a done
+    // state. Closes off illegal combinations (archived draft, archived
+    // non-permanent) that service logic alone could not prevent on a direct write.
+    check(
+      'campaigns_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} IN ('completed', 'cancelled'))`
+    ),
+  ]
 )
 
 export const attacks = pgTable(

@@ -12,6 +12,8 @@ import {
   agents,
   attacks,
   type CampaignActiveAgent,
+  type CampaignArchiveResponse,
+  type CampaignRestoreResponse,
   type CampaignTaskStats,
   campaigns,
   TASK_DB_TO_BUCKET,
@@ -19,7 +21,7 @@ import {
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -135,6 +137,9 @@ export type DeleteCampaignResult =
   | { kind: 'deleted'; id: number; projectId: number }
   | { kind: 'not_found' }
   | { kind: 'not_draft'; status: string }
+  // A campaign that has ever left draft is permanent (ADR-0019): it can be
+  // archived but never hard-deleted, even after editing returns it to draft.
+  | { kind: 'not_deletable' }
 
 /**
  * Delete a campaign if and only if its status is `draft`. Attacks and
@@ -148,9 +153,12 @@ export type DeleteCampaignResult =
  * parent DELETE returns zero rows we abort the transaction via a
  * thrown sentinel, leaving the child rows intact.
  */
-export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
+export async function deleteCampaign(id: number, projectId: number): Promise<DeleteCampaignResult> {
   class StatusFlippedDuringDelete extends Error {
-    constructor(public readonly observedStatus: string) {
+    constructor(
+      public readonly observedStatus: string,
+      public readonly observedPermanent: boolean
+    ) {
       super('campaign status flipped before draft-only delete completed')
     }
   }
@@ -158,9 +166,9 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
   try {
     const result = await db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ status: campaigns.status })
+        .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
         .from(campaigns)
-        .where(eq(campaigns.id, id))
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
         .limit(1)
       if (!existing) {
         return { kind: 'not_found' } as const
@@ -168,28 +176,45 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
       if (existing.status !== 'draft') {
         return { kind: 'not_draft', status: existing.status } as const
       }
+      // A started-then-edited campaign sits at status='draft' but is
+      // permanent. Status alone would let it through — reject on the latch.
+      if (existing.isPermanent) {
+        return { kind: 'not_deletable' } as const
+      }
 
       // Remove child rows (FKs are RESTRICT by default).
       await tx.delete(tasks).where(eq(tasks.campaignId, id))
       await tx.delete(attacks).where(eq(attacks.campaignId, id))
 
-      // Atomic guard: only delete the campaign row if it is *still*
-      // in draft. A concurrent transition that flipped the status
-      // between the pre-check and this statement returns zero rows
-      // and we abort the transaction so the child deletes also roll
-      // back.
+      // Atomic guard: only delete the campaign row if it is *still* a
+      // pristine draft (draft AND not permanent). A concurrent transition
+      // that flipped the status or latched permanence between the pre-check
+      // and this statement returns zero rows and we abort the transaction
+      // so the child deletes also roll back.
       const deleted = await tx
         .delete(campaigns)
-        .where(and(eq(campaigns.id, id), eq(campaigns.status, 'draft')))
+        .where(
+          and(
+            eq(campaigns.id, id),
+            eq(campaigns.projectId, projectId),
+            eq(campaigns.status, 'draft'),
+            eq(campaigns.isPermanent, false)
+          )
+        )
         .returning()
       const row = deleted[0]
       if (!row) {
         const [current] = await tx
-          .select({ status: campaigns.status })
+          .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
           .from(campaigns)
           .where(eq(campaigns.id, id))
           .limit(1)
-        throw new StatusFlippedDuringDelete(current?.status ?? 'unknown')
+        // Throw (not return) so the child deletes above roll back. The catch
+        // maps to not_deletable or not_draft based on what changed.
+        throw new StatusFlippedDuringDelete(
+          current?.status ?? 'unknown',
+          current?.isPermanent ?? false
+        )
       }
       return { kind: 'deleted', id: row.id, projectId: row.projectId } as const
     })
@@ -203,8 +228,97 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
     return result
   } catch (err) {
     if (err instanceof StatusFlippedDuringDelete) {
-      return { kind: 'not_draft', status: err.observedStatus }
+      return err.observedPermanent
+        ? { kind: 'not_deletable' }
+        : { kind: 'not_draft', status: err.observedStatus }
     }
     throw err
   }
+}
+
+// ─── Archive / restore (ADR-0019) ───────────────────────────────────
+//
+// Archivable = the done states (`completed`, `cancelled`). Live campaigns
+// (`running`/`paused`) and `draft` (pristine or reopened for editing) are not
+// archivable. Project scope is folded into each guarded UPDATE so a
+// cross-project id simply reports `not_found` rather than mutating another
+// project's row. Bulk by design: a single archive/restore is `ids: [one]`.
+const ARCHIVABLE_STATUSES = ['completed', 'cancelled'] as const
+
+export async function archiveCampaigns(
+  projectId: number,
+  ids: number[]
+): Promise<CampaignArchiveResponse['results']> {
+  // Each id is independent (per-id outcomes), so run them concurrently rather
+  // than serially — bulk batches are capped at 200 by the request schema.
+  return Promise.all(
+    ids.map(async (id): Promise<CampaignArchiveResponse['results'][number]> => {
+      try {
+        const updated = await db
+          .update(campaigns)
+          .set({ archivedAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaigns.id, id),
+              eq(campaigns.projectId, projectId),
+              inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
+              isNull(campaigns.archivedAt)
+            )
+          )
+          .returning({ id: campaigns.id })
+        if (updated[0]) {
+          return { id, outcome: 'archived' }
+        }
+        // Classify the miss against the project-scoped row.
+        const [row] = await db
+          .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+        if (!row) return { id, outcome: 'not_found' }
+        if (row.archivedAt) return { id, outcome: 'already_archived' }
+        return { id, outcome: 'not_archivable' }
+      } catch (err) {
+        // One id failing must not fail the whole batch with a 500 — report it
+        // per-id and keep going.
+        logger.error({ err, campaignId: id, projectId }, 'archiveCampaigns: per-id failure')
+        return { id, outcome: 'error' }
+      }
+    })
+  )
+}
+
+export async function restoreCampaigns(
+  projectId: number,
+  ids: number[]
+): Promise<CampaignRestoreResponse['results']> {
+  return Promise.all(
+    ids.map(async (id): Promise<CampaignRestoreResponse['results'][number]> => {
+      try {
+        const updated = await db
+          .update(campaigns)
+          .set({ archivedAt: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(campaigns.id, id),
+              eq(campaigns.projectId, projectId),
+              isNotNull(campaigns.archivedAt)
+            )
+          )
+          .returning({ id: campaigns.id })
+        if (updated[0]) {
+          return { id, outcome: 'restored' }
+        }
+        const [row] = await db
+          .select({ id: campaigns.id })
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+        return { id, outcome: row ? 'not_archived' : 'not_found' }
+      } catch (err) {
+        logger.error({ err, campaignId: id, projectId }, 'restoreCampaigns: per-id failure')
+        return { id, outcome: 'error' }
+      }
+    })
+  )
 }

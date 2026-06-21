@@ -6,7 +6,7 @@ import {
   campaigns,
   tasks,
 } from '@hashhive/shared'
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
@@ -195,6 +195,7 @@ export async function listCampaigns(filters: {
   projectId?: number | undefined
   status?: string | undefined
   priority?: number | undefined
+  showArchived?: boolean | undefined
   sort?: CampaignSortField | undefined
   order?: CampaignSortOrder | undefined
   limit?: number | undefined
@@ -211,6 +212,12 @@ export async function listCampaigns(filters: {
   }
   if (filters.priority !== undefined) {
     conditions.push(eq(campaigns.priority, filters.priority))
+  }
+  // Archived campaigns are excluded from active list views by default
+  // (ADR-0019); pass showArchived to include them. Applies to both the data
+  // and count queries since they share this conditions array.
+  if (!filters.showArchived) {
+    conditions.push(isNull(campaigns.archivedAt))
   }
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
@@ -717,6 +724,13 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   if (targetStatus === 'completed' || targetStatus === 'cancelled') {
     updates['completedAt'] = new Date()
   }
+  // Permanence latch (ADR-0019): the first time a campaign leaves draft it
+  // becomes a permanent record — archive-only, never hard-deleted. Set in the
+  // same atomic UPDATE; idempotent on later transitions (re-editing returns a
+  // permanent campaign to draft, but the flag is never cleared).
+  if (campaign.status === 'draft' && targetStatus !== 'draft') {
+    updates['isPermanent'] = true
+  }
   // Stop resets timestamps
   if (targetStatus === 'draft') {
     updates['startedAt'] = null
@@ -769,7 +783,11 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
         try {
           const { generateTasksForAttack } = await _deps.getTasksModule()
           await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)))
-        } catch {
+        } catch (err) {
+          logger.error(
+            { err, campaignId: id, projectId: campaign.projectId },
+            'inline task generation failed during start, rolling back'
+          )
           // Roll back — inline task generation failed
           await db
             .update(campaigns)
@@ -778,9 +796,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return { error: 'Task generation failed', code: 'TASK_GENERATION_FAILED' as const }
         }
       } else {
@@ -798,9 +822,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return {
             error: 'Queue unavailable — cannot start campaign',
             code: 'QUEUE_UNAVAILABLE' as const,
@@ -830,9 +860,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return {
             error: 'Failed to enqueue task generation',
             code: 'QUEUE_UNAVAILABLE' as const,

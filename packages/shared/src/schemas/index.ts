@@ -811,6 +811,49 @@ export const useCampaignsOptionsSchema = z.object({
   order: campaignSortOrderSchema.optional(),
   limit: z.number().int().positive().optional(),
   offset: z.number().int().nonnegative().optional(),
+  // When falsy (default), archived campaigns are excluded from the list.
+  // Set true to include them (e.g. an "archived" dashboard view). See ADR-0019.
+  showArchived: z.boolean().optional(),
+})
+
+// ─── Campaign archive / restore (dashboard) ─────────────────────────
+//
+// Bulk-capable: a single archive/restore is just `ids: [one]`. Each id
+// gets an independent per-id outcome so a mixed batch reports which
+// succeeded and why the rest did not. See ADR-0019.
+
+export const campaignArchiveRequestSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200),
+})
+
+export const campaignArchiveOutcomeSchema = z.enum([
+  'archived',
+  'not_found',
+  'not_archivable',
+  'already_archived',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
+])
+
+export const campaignArchiveResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: campaignArchiveOutcomeSchema })
+  ),
+})
+
+export const campaignRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Per-id failure (see campaignArchiveOutcomeSchema).
+  'error',
+])
+
+export const campaignRestoreResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: campaignRestoreOutcomeSchema })
+  ),
 })
 
 /**

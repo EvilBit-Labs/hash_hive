@@ -28,6 +28,7 @@ import {
   updateCampaign,
   validateCampaignDAG,
 } from '../../services/campaigns.js'
+import { registerCampaignArchiveRoutes } from './campaigns-archive.js'
 import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
 import { registerCampaignLifecycleRoutes } from './campaigns-lifecycle.js'
 import { attackRowSchema, campaignIdParamSchema, campaignRowSchema } from './campaigns-shared.js'
@@ -59,6 +60,13 @@ const listCampaignsQuerySchema = z.object({
     .optional(),
   sort: z.enum(['name', 'createdAt', 'priority']).optional(),
   order: z.enum(['asc', 'desc']).optional(),
+  // Archived campaigns are excluded by default (ADR-0019); `?showArchived=true`
+  // includes them. Permissive coercion: only the literal "true" enables it,
+  // anything else (or absent) is false — never 400s the list request.
+  showArchived: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
   // Coerce-and-clamp pagination at the schema boundary so malformed
   // URL params fall back to safe defaults instead of 400-ing the
   // request. Mirrors the agents-list pattern at routes/dashboard/agents.ts.
@@ -137,12 +145,13 @@ const listCampaignsRoute = createRoute({
 
 campaignRoutes.openapi(listCampaignsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
-  const { status, priority, sort, order, limit, offset } = c.req.valid('query')
+  const { status, priority, sort, order, limit, offset, showArchived } = c.req.valid('query')
 
   const result = await listCampaigns({
     projectId,
     status,
     priority,
+    showArchived,
     sort,
     order,
     limit,
@@ -357,7 +366,7 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
 
   let result: Awaited<ReturnType<typeof deleteCampaign>>
   try {
-    result = await deleteCampaign(id)
+    result = await deleteCampaign(id, projectId)
   } catch (err) {
     // deleteCampaign runs a multi-statement transaction. Unexpected
     // failures (FK from a future child table, DB connectivity drop,
@@ -385,6 +394,17 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
           error: {
             code: 'NOT_DRAFT',
             message: `Campaign cannot be deleted in status "${result.status}". Only draft campaigns are deletable.`,
+          },
+        },
+        409
+      )
+    case 'not_deletable':
+      return c.json(
+        {
+          error: {
+            code: 'NOT_DELETABLE',
+            message:
+              'Campaign has run and is now permanent; it cannot be deleted, only archived once completed or cancelled.',
           },
         },
         409
@@ -640,5 +660,6 @@ campaignRoutes.openapi(validateCampaignRoute, async (c) => {
 
 registerCampaignLifecycleRoutes(campaignRoutes)
 registerCampaignAttackRoutes(campaignRoutes)
+registerCampaignArchiveRoutes(campaignRoutes)
 
 export { campaignRoutes }
