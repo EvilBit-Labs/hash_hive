@@ -717,6 +717,13 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
   if (targetStatus === 'completed' || targetStatus === 'cancelled') {
     updates['completedAt'] = new Date()
   }
+  // Permanence latch (ADR-0019): the first time a campaign leaves draft it
+  // becomes a permanent record — archive-only, never hard-deleted. Set in the
+  // same atomic UPDATE; idempotent on later transitions (re-editing returns a
+  // permanent campaign to draft, but the flag is never cleared).
+  if (campaign.status === 'draft' && targetStatus !== 'draft') {
+    updates['isPermanent'] = true
+  }
   // Stop resets timestamps
   if (targetStatus === 'draft') {
     updates['startedAt'] = null

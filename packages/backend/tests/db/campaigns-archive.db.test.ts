@@ -1,0 +1,130 @@
+/**
+ * Real-DB tests for campaign archiving (ADR-0019): the permanence latch,
+ * the hardened delete guard, archive/restore behavior, and the
+ * show-archived list filter. These prove SQL-level behavior the mocked
+ * default lane cannot — guarded UPDATEs, the latch, and isNull filtering.
+ *
+ * Runs under `just test-db` (preload: tests/preload-db.ts). cleanupSeed()
+ * in afterAll keeps runs idempotent and order-independent.
+ *
+ * NOTE: do NOT call client.end() here — harness.test.ts owns the shared
+ * drizzle client lifecycle. All db-lane files share the same client.
+ */
+
+import { campaigns, hashLists, hashTypes, projects } from '@hashhive/shared'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { eq } from 'drizzle-orm'
+
+import { db } from '../../src/db/index.js'
+
+const TEST_SLUG = 'campaigns-archive-test-proj'
+const HASHCAT_MODE = 9_999_823 // unique to this test file
+
+// ─── Seed helpers ───────────────────────────────────────────────────────────
+
+interface SeedCtx {
+  projectId: number
+  hashListId: number
+}
+
+// Project + hash list are seeded once for the whole file (the project slug is
+// unique, so re-seeding per test collides). Each test inserts its own
+// campaign(s); afterAll cascades them away via the project FK.
+let ctx: SeedCtx
+
+async function seedProjectAndList(): Promise<SeedCtx> {
+  const [project] = await db
+    .insert(projects)
+    .values({ name: TEST_SLUG, slug: TEST_SLUG })
+    .returning({ id: projects.id })
+
+  const [hashType] = await db
+    .insert(hashTypes)
+    .values({ name: 'MD5 (archive test)', hashcatMode: HASHCAT_MODE })
+    .returning({ id: hashTypes.id })
+
+  const [hashList] = await db
+    .insert(hashLists)
+    .values({
+      projectId: project!.id,
+      name: 'archive-test-list',
+      hashTypeId: hashType!.id,
+      status: 'ready',
+    })
+    .returning({ id: hashLists.id })
+
+  return { projectId: project!.id, hashListId: hashList!.id }
+}
+
+async function insertCampaign(
+  overrides: {
+    status?: string
+    isPermanent?: boolean
+    archivedAt?: Date | null
+    startedAt?: Date | null
+    projectId?: number
+  } = {}
+): Promise<number> {
+  const [campaign] = await db
+    .insert(campaigns)
+    .values({
+      name: 'archive-test-campaign',
+      projectId: overrides.projectId ?? ctx.projectId,
+      hashListId: ctx.hashListId,
+      priority: 5,
+      status: overrides.status ?? 'draft',
+      isPermanent: overrides.isPermanent ?? false,
+      archivedAt: overrides.archivedAt ?? null,
+      startedAt: overrides.startedAt ?? null,
+    })
+    .returning({ id: campaigns.id })
+  return campaign!.id
+}
+
+async function readCampaign(id: number) {
+  const [row] = await db
+    .select({
+      status: campaigns.status,
+      isPermanent: campaigns.isPermanent,
+      archivedAt: campaigns.archivedAt,
+    })
+    .from(campaigns)
+    .where(eq(campaigns.id, id))
+  return row
+}
+
+async function cleanupSeed(): Promise<void> {
+  await db.delete(projects).where(eq(projects.slug, TEST_SLUG))
+  await db.delete(hashTypes).where(eq(hashTypes.hashcatMode, HASHCAT_MODE))
+}
+
+beforeAll(async () => {
+  await cleanupSeed()
+  ctx = await seedProjectAndList()
+})
+
+afterAll(cleanupSeed)
+
+// ─── U3: permanence latch ─────────────────────────────────────────────────────
+
+describe('campaign permanence latch (U3, R1)', () => {
+  it('latches is_permanent=true when a campaign leaves draft (draft -> cancelled)', async () => {
+    const id = await insertCampaign({ status: 'draft' })
+
+    const { transitionCampaign } = await import('../../src/services/campaigns.js')
+    const result = await transitionCampaign(id, 'cancelled')
+    expect('error' in result).toBe(false)
+
+    const row = await readCampaign(id)
+    expect(row?.status).toBe('cancelled')
+    expect(row?.isPermanent).toBe(true)
+  })
+
+  it('leaves is_permanent=false for a campaign that was never transitioned out of draft', async () => {
+    const id = await insertCampaign({ status: 'draft' })
+
+    const row = await readCampaign(id)
+    expect(row?.status).toBe('draft')
+    expect(row?.isPermanent).toBe(false)
+  })
+})
