@@ -14,7 +14,7 @@ cracked hashes would destroy that link. The current schema guards against this c
 `deleteCampaign` is draft-only (`packages/backend/src/services/campaign-dashboard.ts:151`),
 so any non-draft campaign returns 409 and cannot be removed at all.
 
-The result is that finished campaigns (`completed`, `exhausted`, `failed`, `cancelled`)
+The result is that finished campaigns (`completed`, `cancelled`)
 accumulate in the active dashboard view with no way for an operator to retire them, even
 though operators run many concurrent campaigns and decluttering the active view is a real
 need. The intended design - always planned, not yet implemented - is an immutability-on-use
@@ -40,9 +40,11 @@ out of draft it becomes permanent and can only be archived.
 - **Permanence governs deletion, not editing.** A non-draft campaign still accepts attacks
   being added and removed; only deletion of the record is forbidden.
 
-- **Archive scope for campaigns**: terminal campaigns (`completed`, `exhausted`, `failed`,
-  `cancelled`) are archivable; `running`/`paused` must be stopped first; archive is reversible
-  via restore; draft-only hard-delete is preserved unchanged.
+- **Archive scope for campaigns**: the done states (`completed`, `cancelled`) are archivable;
+  `running`/`paused` (live) and `draft` (pristine or reopened for editing) are not — cancel or
+  complete the campaign first. `exhausted`/`failed` are *task* statuses, not campaign ones.
+  Archive is reversible via restore; draft-only hard-delete is preserved, tightened with an
+  `is_permanent = false` guard so a campaign reopened to `draft` for editing stays non-deletable.
 
 - **Results are unaffected at the query level.** The results query already scopes via
   `hash_lists.project_id` and LEFT JOINs campaigns
