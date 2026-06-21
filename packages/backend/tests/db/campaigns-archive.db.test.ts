@@ -25,6 +25,7 @@ const HASHCAT_MODE = 9_999_823 // unique to this test file
 interface SeedCtx {
   projectId: number
   hashListId: number
+  hashTypeId: number
 }
 
 // Project + hash list are seeded once for the whole file (the project slug is
@@ -53,7 +54,7 @@ async function seedProjectAndList(): Promise<SeedCtx> {
     })
     .returning({ id: hashLists.id })
 
-  return { projectId: project!.id, hashListId: hashList!.id }
+  return { projectId: project!.id, hashListId: hashList!.id, hashTypeId: hashType!.id }
 }
 
 async function insertCampaign(
@@ -63,6 +64,7 @@ async function insertCampaign(
     archivedAt?: Date | null
     startedAt?: Date | null
     projectId?: number
+    hashListId?: number
   } = {}
 ): Promise<number> {
   const [campaign] = await db
@@ -70,7 +72,7 @@ async function insertCampaign(
     .values({
       name: 'archive-test-campaign',
       projectId: overrides.projectId ?? ctx.projectId,
-      hashListId: ctx.hashListId,
+      hashListId: overrides.hashListId ?? ctx.hashListId,
       priority: 5,
       status: overrides.status ?? 'draft',
       isPermanent: overrides.isPermanent ?? false,
@@ -266,17 +268,29 @@ describe('archive / restore (U5, R5, R6, R7, R8)', () => {
 // ─── U6: list show-archived filter ────────────────────────────────────────────
 
 describe('list show-archived filter (U6, R10)', () => {
+  const LIST_TEST_SLUG = 'campaigns-archive-list-test'
+
   it('excludes archived by default and includes them with showArchived', async () => {
-    // Isolated project so totals are deterministic regardless of other tests.
+    // Isolated project with its OWN hash list so totals are deterministic and
+    // project/hash-list/campaign ownership stays consistent. Defensive
+    // delete-by-slug first so an interrupted prior run can't collide.
+    await db.delete(projects).where(eq(projects.slug, LIST_TEST_SLUG))
     const [proj] = await db
       .insert(projects)
-      .values({ name: 'campaigns-archive-list-test', slug: 'campaigns-archive-list-test' })
+      .values({ name: LIST_TEST_SLUG, slug: LIST_TEST_SLUG })
       .returning({ id: projects.id })
     const projectId = proj!.id
     try {
-      await insertCampaign({ projectId, status: 'completed', isPermanent: true })
+      const [list] = await db
+        .insert(hashLists)
+        .values({ projectId, name: 'list-test-list', hashTypeId: ctx.hashTypeId, status: 'ready' })
+        .returning({ id: hashLists.id })
+      const hashListId = list!.id
+
+      await insertCampaign({ projectId, hashListId, status: 'completed', isPermanent: true })
       await insertCampaign({
         projectId,
+        hashListId,
         status: 'completed',
         isPermanent: true,
         archivedAt: new Date(),

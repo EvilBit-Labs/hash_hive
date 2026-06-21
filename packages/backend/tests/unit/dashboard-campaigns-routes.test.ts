@@ -332,8 +332,10 @@ if (!IS_ISOLATED) {
 
   // Archive/restore live in campaign-dashboard.js and the archive route imports
   // them directly (not via the campaigns.js facade), so mock that module too.
-  // Only these two exports are imported directly outside the already-mocked
-  // campaigns.js, so a partial mock is safe.
+  // Spread the REAL module first so every other export (getCampaignTaskStats,
+  // deleteCampaign, ...) keeps real behavior — only archive/restore are stubbed
+  // (GOTCHAS.md backend-testing pattern; the db mock above is already in place,
+  // so importing the real module here is side-effect-free).
   type CampaignDashboardService = typeof import('../../src/services/campaign-dashboard.js')
   const mockArchiveCampaigns = mock<CampaignDashboardService['archiveCampaigns']>(
     async (_projectId, ids) =>
@@ -345,7 +347,9 @@ if (!IS_ISOLATED) {
   const mockRestoreCampaigns = mock<CampaignDashboardService['restoreCampaigns']>(
     async (_projectId, ids) => ids.map((id) => ({ id, outcome: 'restored' as const }))
   )
+  const realCampaignDashboard = await import('../../src/services/campaign-dashboard.js')
   mock.module('../../src/services/campaign-dashboard.js', () => ({
+    ...realCampaignDashboard,
     archiveCampaigns: mockArchiveCampaigns,
     restoreCampaigns: mockRestoreCampaigns,
   }))

@@ -1,7 +1,7 @@
 # ADR-0019: Immutable-on-use lifecycle - archive, never delete, once a record leaves draft
 
 **Date**: 2026-06-20
-**Status**: accepted (forward design; implementation pending)
+**Status**: accepted
 **Deciders**: Project owner (@unclesp1d3r), AI pair (Claude Code)
 **Relates to**: [ADR-0010](0010-schema-first-drizzle-zod.md); GitHub issue #207
 (Results-filter tests, parked behind this decision)
