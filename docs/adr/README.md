@@ -24,3 +24,4 @@ Each ADR is immutable once accepted — supersede rather than rewrite.
 | [0016](0016-server-fanout-bus.md)                   | Server-to-server fan-out bus (LISTEN/NOTIFY first) | accepted | 2026-06-19 |
 | [0017](0017-adaptive-task-sizing-lease.md)          | Adaptive task sizing with lease + committed-offset | accepted | 2026-06-19 |
 | [0018](0018-real-db-integration-test-lane.md)       | Real-DB integration test lane for DB-layer correctness | accepted | 2026-06-19 |
+| [0019](0019-campaign-archiving-immutable-lifecycle.md) | Immutable-on-use lifecycle: archive, never delete, once a record leaves draft | accepted | 2026-06-20 |
