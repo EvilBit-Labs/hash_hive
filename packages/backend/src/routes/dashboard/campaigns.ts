@@ -366,7 +366,7 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
 
   let result: Awaited<ReturnType<typeof deleteCampaign>>
   try {
-    result = await deleteCampaign(id)
+    result = await deleteCampaign(id, projectId)
   } catch (err) {
     // deleteCampaign runs a multi-statement transaction. Unexpected
     // failures (FK from a future child table, DB connectivity drop,

@@ -12,8 +12,8 @@ import {
   agents,
   attacks,
   type CampaignActiveAgent,
-  type CampaignArchiveOutcome,
-  type CampaignRestoreOutcome,
+  type CampaignArchiveResponse,
+  type CampaignRestoreResponse,
   type CampaignTaskStats,
   campaigns,
   TASK_DB_TO_BUCKET,
@@ -153,7 +153,7 @@ export type DeleteCampaignResult =
  * parent DELETE returns zero rows we abort the transaction via a
  * thrown sentinel, leaving the child rows intact.
  */
-export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> {
+export async function deleteCampaign(id: number, projectId: number): Promise<DeleteCampaignResult> {
   class StatusFlippedDuringDelete extends Error {
     constructor(
       public readonly observedStatus: string,
@@ -168,7 +168,7 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
       const [existing] = await tx
         .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
         .from(campaigns)
-        .where(eq(campaigns.id, id))
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
         .limit(1)
       if (!existing) {
         return { kind: 'not_found' } as const
@@ -194,7 +194,12 @@ export async function deleteCampaign(id: number): Promise<DeleteCampaignResult> 
       const deleted = await tx
         .delete(campaigns)
         .where(
-          and(eq(campaigns.id, id), eq(campaigns.status, 'draft'), eq(campaigns.isPermanent, false))
+          and(
+            eq(campaigns.id, id),
+            eq(campaigns.projectId, projectId),
+            eq(campaigns.status, 'draft'),
+            eq(campaigns.isPermanent, false)
+          )
         )
         .returning()
       const row = deleted[0]
@@ -243,8 +248,8 @@ const ARCHIVABLE_STATUSES = ['completed', 'cancelled'] as const
 export async function archiveCampaigns(
   projectId: number,
   ids: number[]
-): Promise<{ id: number; outcome: CampaignArchiveOutcome }[]> {
-  const results: { id: number; outcome: CampaignArchiveOutcome }[] = []
+): Promise<CampaignArchiveResponse['results']> {
+  const results: CampaignArchiveResponse['results'] = []
   for (const id of ids) {
     const updated = await db
       .update(campaigns)
@@ -282,8 +287,8 @@ export async function archiveCampaigns(
 export async function restoreCampaigns(
   projectId: number,
   ids: number[]
-): Promise<{ id: number; outcome: CampaignRestoreOutcome }[]> {
-  const results: { id: number; outcome: CampaignRestoreOutcome }[] = []
+): Promise<CampaignRestoreResponse['results']> {
+  const results: CampaignRestoreResponse['results'] = []
   for (const id of ids) {
     const updated = await db
       .update(campaigns)

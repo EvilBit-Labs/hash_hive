@@ -131,6 +131,7 @@ if (!IS_ISOLATED) {
   const mockGetCampaignById = mock<CampaignsService['getCampaignById']>(async (id) => {
     if (id === 100) return makeCampaign()
     if (id === 101) return makeCampaign({ id: 101, status: 'running' })
+    if (id === 102) return makeCampaign({ id: 102 })
     if (id === 200) return makeCampaign({ id: 200, projectId: 999 })
     return null
   })
@@ -138,6 +139,8 @@ if (!IS_ISOLATED) {
   const mockDeleteCampaign = mock<CampaignsService['deleteCampaign']>(async (id) => {
     if (id === 100) return { kind: 'deleted', id: 100, projectId: 1 }
     if (id === 101) return { kind: 'not_draft', status: 'running' }
+    // A campaign that has run is permanent: deletable returns not_permanent.
+    if (id === 102) return { kind: 'not_permanent' }
     return { kind: 'not_found' }
   })
 
@@ -499,6 +502,16 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(body.error?.code).toBe('NOT_DRAFT')
       expect(body.error?.message).toContain('running')
+    })
+
+    it('returns 409 with NOT_DELETABLE when the campaign is permanent', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/102`, {
+        method: 'DELETE',
+        headers: makeHeaders(),
+      })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('NOT_DELETABLE')
     })
 
     it('returns 404 when campaign belongs to a different project', async () => {

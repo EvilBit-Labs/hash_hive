@@ -127,6 +127,21 @@ describe('campaign permanence latch (U3, R1)', () => {
     expect(row?.status).toBe('draft')
     expect(row?.isPermanent).toBe(false)
   })
+
+  it('keeps is_permanent=true when an already-started campaign is edited back to draft', async () => {
+    // Editing returns a started campaign to draft (running -> draft) but must
+    // NOT clear the latch — otherwise the campaign would become hard-deletable
+    // again, losing crack attribution. Regression guard for ADR-0019.
+    const id = await insertCampaign({ status: 'running', isPermanent: true, startedAt: new Date() })
+
+    const { transitionCampaign } = await import('../../src/services/campaigns.js')
+    const result = await transitionCampaign(id, 'draft')
+    expect('error' in result).toBe(false)
+
+    const row = await readCampaign(id)
+    expect(row?.status).toBe('draft')
+    expect(row?.isPermanent).toBe(true)
+  })
 })
 
 // ─── U4: delete-guard hardening ───────────────────────────────────────────────
@@ -135,7 +150,7 @@ describe('delete guard hardening (U4, R2, R3)', () => {
   it('deletes a pristine draft (not permanent)', async () => {
     const id = await insertCampaign({ status: 'draft', isPermanent: false })
     const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
-    const res = await deleteCampaign(id)
+    const res = await deleteCampaign(id, ctx.projectId)
     expect(res.kind).toBe('deleted')
     expect(await readCampaign(id)).toBeUndefined()
   })
@@ -143,7 +158,7 @@ describe('delete guard hardening (U4, R2, R3)', () => {
   it('rejects deleting a started-then-edited campaign (draft + permanent)', async () => {
     const id = await insertCampaign({ status: 'draft', isPermanent: true, startedAt: new Date() })
     const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
-    const res = await deleteCampaign(id)
+    const res = await deleteCampaign(id, ctx.projectId)
     expect(res.kind).toBe('not_permanent')
     expect(await readCampaign(id)).toBeDefined()
   })
@@ -151,7 +166,7 @@ describe('delete guard hardening (U4, R2, R3)', () => {
   it('rejects deleting a completed campaign', async () => {
     const id = await insertCampaign({ status: 'completed', isPermanent: true })
     const { deleteCampaign } = await import('../../src/services/campaign-dashboard.js')
-    const res = await deleteCampaign(id)
+    const res = await deleteCampaign(id, ctx.projectId)
     expect(res.kind).toBe('not_draft')
     expect(await readCampaign(id)).toBeDefined()
   })

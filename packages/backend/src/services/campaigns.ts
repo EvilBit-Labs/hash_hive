@@ -783,7 +783,11 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
         try {
           const { generateTasksForAttack } = await _deps.getTasksModule()
           await Promise.all(campaignAttacks.map((atk) => generateTasksForAttack(atk.id)))
-        } catch {
+        } catch (err) {
+          logger.error(
+            { err, campaignId: id, projectId: campaign.projectId },
+            'inline task generation failed during start, rolling back'
+          )
           // Roll back — inline task generation failed
           await db
             .update(campaigns)
@@ -792,9 +796,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return { error: 'Task generation failed', code: 'TASK_GENERATION_FAILED' as const }
         }
       } else {
@@ -812,9 +822,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return {
             error: 'Queue unavailable — cannot start campaign',
             code: 'QUEUE_UNAVAILABLE' as const,
@@ -844,9 +860,15 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
               startedAt: campaign.startedAt,
               completedAt: campaign.completedAt,
               progress: campaign.progress ?? {},
+              // Restore the permanence latch too (ADR-0019): a failed start did
+              // not successfully leave draft, so a pristine draft must not be
+              // left permanent — otherwise it becomes silently undeletable.
+              isPermanent: campaign.isPermanent,
               updatedAt: new Date(),
             })
-            .where(eq(campaigns.id, id))
+            // Guard on the status we just set so a concurrent transition (e.g.
+            // auto-complete) is not clobbered by this rollback.
+            .where(and(eq(campaigns.id, id), eq(campaigns.status, 'running')))
           return {
             error: 'Failed to enqueue task generation',
             code: 'QUEUE_UNAVAILABLE' as const,
