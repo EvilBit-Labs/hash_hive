@@ -31,6 +31,11 @@ import type {
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
   changeCampaignPriorityRequestSchema,
+  campaignArchiveOutcomeSchema,
+  campaignArchiveRequestSchema,
+  campaignArchiveResponseSchema,
+  campaignRestoreOutcomeSchema,
+  campaignRestoreResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
@@ -188,6 +193,11 @@ export type CampaignSortOrder = z.infer<typeof campaignSortOrderSchema>
 export type CampaignLifecycleAction = z.infer<typeof campaignLifecycleActionSchema>
 export type CampaignPriorityBucket = z.infer<typeof campaignPriorityBucketSchema>
 export type UseCampaignsOptions = z.infer<typeof useCampaignsOptionsSchema>
+export type CampaignArchiveRequest = z.infer<typeof campaignArchiveRequestSchema>
+export type CampaignArchiveOutcome = z.infer<typeof campaignArchiveOutcomeSchema>
+export type CampaignArchiveResponse = z.infer<typeof campaignArchiveResponseSchema>
+export type CampaignRestoreOutcome = z.infer<typeof campaignRestoreOutcomeSchema>
+export type CampaignRestoreResponse = z.infer<typeof campaignRestoreResponseSchema>
 export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>
