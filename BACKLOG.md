@@ -20,7 +20,7 @@ Work is in two phases:
 ├── Phase 1 step-issues #155–#165 .................... ✅ all closed
 ├── #154  CipherSwarm → HashHive migration tool ...... open (standalone)
 ├── #117  Core Data Flow ............................. ✅ closed (delivered)
-├── #118  Intelligent Scheduling .................... 1/3  → open: #97, #99
+├── #118  Intelligent Scheduling .................... ✅ closed (3/3: #96, #97, #99 delivered)
 ├── #119  Operational Polish ....................... 0/7  → open: #100, #102, #104, #105, #106, #108, #124
 ├── #120  Advanced Features ........................ 1/4  → open: #101, #103, #107
 └── #121  Visualization & Stretch .................. 0/7  → open: #110, #111, #112, #113, #114, #115, #116
@@ -85,11 +85,11 @@ Begins after Phase 1 lands. These assume Task Distribution, the Resource Pipelin
 | Order |    Issue | Title                                                             | Notes                                                     |
 | ----: | -------: | ----------------------------------------------------------------- | --------------------------------------------------------- |
 |     1 | **#100** | Campaign ETA Calculator Service                                   | 3 SP. Powers ETA accuracy metric from STRATEGY.md.        |
-|     2 |  **#97** | Task Preemption for Priority-Based Workload Balancing             | P0. Makes the strategy's "mode B" rebalance trigger real. |
-|     3 |  **#99** | Attack Complexity Calculation & State Machine                     | Feeds keyspace + ETA.                                     |
+|     ✅ |  **#97** | Task Preemption for Priority-Based Workload Balancing             | ✅ Delivered (closed). The strategy's "mode B" rebalance trigger is now real. |
+|     ✅ |  **#99** | Attack Complexity Calculation & State Machine                     | ✅ Delivered (closed). Feeds keyspace + ETA. |
 |     4 | **#103** | Advanced Attack Types (Combinator, Association, PRINCE, Keyboard) | Sequence after #99.                                       |
 |     — |     #115 | Attack Playbooks — Grouped Template Deployment                    | P2. Defer.                                                |
-|     — |     #118 | Epic: Intelligent Scheduling                                      | GitHub children: #96 (closed), #97, #99. (#100 lives under #119, #103 under #120 — grouped here by scheduler leverage.) |
+|     ✅ |     #118 | Epic: Intelligent Scheduling                                      | ✅ Delivered. All children closed (#96, #97, #99); epic closing via wrap-up PR. (#100 lives under #119, #103 under #120 — grouped here by scheduler leverage.) |
 
 ### Track 2 — Agent Protocol & Fleet Health
 
