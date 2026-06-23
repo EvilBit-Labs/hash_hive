@@ -438,4 +438,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   })
 })
 
-export { resultsRoutes }
+// `buildResultFilters` is exported as the testing seam for the real-DB lane
+// (tests/db/dashboard-results-filters.db.test.ts): the predicate logic is the
+// thing under test, and the db lane has no HTTP app to drive the route.
+export { buildResultFilters, resultsRoutes }
