@@ -59,7 +59,15 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   e2e-tests:
-    runs-on: ubuntu-latest
+    # Pinned to a dated image, NOT ubuntu-latest: this job validates the
+    # committed Playwright visual baseline (packages/frontend/e2e/*-snapshots),
+    # whose pixels depend on the runner's system font stack (freetype,
+    # fontconfig). ubuntu-latest is a rolling alias; an alias migration would
+    # change the font stack and make the frozen baseline self-diff with no code
+    # to blame. Keep this in lockstep with regenerate-visual-baselines.yml —
+    # bump both together and regenerate the baseline when changing the image.
+    # See docs/solutions/conventions/playwright-visual-baselines.md.
+    runs-on: ubuntu-24.04
     needs: ci-check
     steps:
       - name: Checkout code

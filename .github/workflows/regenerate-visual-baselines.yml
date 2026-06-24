@@ -1,0 +1,88 @@
+name: Regenerate visual baselines
+
+# Generates the canonical Linux Playwright visual baseline(s) on a GitHub
+# runner — the ONLY environment whose font stack the committed PNGs must
+# match (macOS/Windows local renders differ and must never be committed).
+#
+# Two triggers, one job:
+#   - pull_request (label-gated): bootstrap / on-branch regeneration. A
+#     same-repo PR runs the workflow version from the PR head branch, so this
+#     works before the workflow ever reaches main. Add the `regen-baselines`
+#     label to a PR to fire it; remove the label once the PNG is committed.
+#   - workflow_dispatch: steady-state intentional updates, available once this
+#     workflow is on the default branch.
+#
+# The job NEVER commits. It uploads the generated snapshot directory as an
+# artifact; a human downloads it (`gh run download -n visual-baselines`) and
+# commits the PNG alongside the unskip. See
+# docs/solutions/conventions/playwright-visual-baselines.md.
+'on':
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+# A label-driven push storm should not pile up runner slots; cancel a
+# superseded run. workflow_dispatch falls back to run_id (no cross-run cancel).
+concurrency:
+  group: regen-baselines-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Read-only: the job generates and uploads an artifact; it never pushes.
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    # Only run on explicit dispatch or when the gate label is present.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'regen-baselines')
+    # MUST match the e2e-tests job image in ci.yml — generation and validation
+    # render against the same system font stack. Bump both together.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          install: true
+          cache: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: just install
+      - run: just build
+
+      # Pinned-Playwright install (never `bunx playwright install`) — same
+      # rationale as the e2e-tests job in ci.yml.
+      - name: Install Playwright browsers
+        run: mise x -- bun --filter @hashhive/frontend test:e2e:install
+
+      # Ephemeral unskip — CI workspace only, NEVER committed. `--update-snapshots`
+      # does not run a `test.skip` test, so the visual baseline test must be
+      # active for generation. Assert exactly one skipped marker so a future
+      # second skip in the file can't silently change what gets generated.
+      - name: Ephemeral unskip of visual baseline test
+        run: |
+          set -euo pipefail
+          SPEC=packages/frontend/e2e/zz-dashboard.spec.ts
+          count=$(grep -cF "test.skip('dashboard visual baseline" "$SPEC" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly 1 skipped visual baseline marker, found $count in $SPEC" >&2
+            exit 1
+          fi
+          sed -i "s/test\.skip('dashboard visual baseline/test('dashboard visual baseline/" "$SPEC"
+          if grep -qF "test.skip('dashboard visual baseline" "$SPEC"; then
+            echo "::error::Ephemeral unskip failed — marker still present in $SPEC" >&2
+            exit 1
+          fi
+
+      - name: Generate dashboard visual baseline
+        run: mise x -- bun --filter @hashhive/frontend test:e2e:update:dashboard
+
+      - name: Upload generated baseline(s)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-baselines
+          path: packages/frontend/e2e/zz-dashboard.spec.ts-snapshots/
+          if-no-files-found: error
