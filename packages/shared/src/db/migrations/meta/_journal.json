@@ -190,6 +190,13 @@
       "when": 1782014942521,
       "tag": "0026_silly_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1782340087650,
+      "tag": "0027_sticky_hammerhead",
+      "breakpoints": true
     }
   ]
 }
