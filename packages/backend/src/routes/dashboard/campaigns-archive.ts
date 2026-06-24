@@ -67,16 +67,16 @@ const restoreRoute = createRoute({
 
 export function registerCampaignArchiveRoutes(router: OpenAPIHono<AppEnv>): void {
   router.openapi(archiveRoute, async (c) => {
-    const { projectId } = c.get('scopedUser')!
+    const { projectId, userId } = c.get('scopedUser')!
     const { ids } = c.req.valid('json')
-    const results = await archiveCampaigns(projectId, ids)
+    const results = await archiveCampaigns(projectId, ids, { actorType: 'user', actorId: userId })
     return c.json({ results }, 200)
   })
 
   router.openapi(restoreRoute, async (c) => {
-    const { projectId } = c.get('scopedUser')!
+    const { projectId, userId } = c.get('scopedUser')!
     const { ids } = c.req.valid('json')
-    const results = await restoreCampaigns(projectId, ids)
+    const results = await restoreCampaigns(projectId, ids, { actorType: 'user', actorId: userId })
     return c.json({ results }, 200)
   })
 }

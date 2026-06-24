@@ -446,7 +446,7 @@ const updateCampaignHandler = async (
     priority?: number | undefined
   }
 ) => {
-  const { projectId } = c.get('scopedUser')!
+  const { projectId, userId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
   if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
@@ -455,7 +455,7 @@ const updateCampaignHandler = async (
   // PUT's `description` can be the literal `null` ("explicit clear");
   // updateCampaign accepts `undefined` to mean "leave alone", so we
   // pass null through unchanged and let the service write it.
-  const result = await updateCampaign(id, projectId, data)
+  const result = await updateCampaign(id, projectId, data, { actorType: 'user', actorId: userId })
 
   switch (result.kind) {
     case 'not_found':
@@ -588,8 +588,11 @@ const changePriorityRoute = createRoute({
 campaignRoutes.openapi(changePriorityRoute, async (c) => {
   const { id } = c.req.valid('param')
   const { priority } = c.req.valid('json')
-  const { projectId } = c.get('scopedUser')!
-  const result = await changeRunningCampaignPriority(id, projectId, priority)
+  const { projectId, userId } = c.get('scopedUser')!
+  const result = await changeRunningCampaignPriority(id, projectId, priority, {
+    actorType: 'user',
+    actorId: userId,
+  })
   switch (result.kind) {
     case 'not_found':
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')

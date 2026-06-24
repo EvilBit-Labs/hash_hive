@@ -11,6 +11,7 @@ import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
+import { recordAuditEvent } from './audit-log.js'
 import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
@@ -503,6 +504,8 @@ export type UpdateCampaignResult =
  * cannot flip the row out of `draft` between a separate read-time
  * check and the write below; the post-write recheck distinguishes
  * not_found from not_draft for accurate error reporting.
+ *
+ * Wrapped in a transaction so the audit row is atomic with the UPDATE.
  */
 export async function updateCampaign(
   id: number,
@@ -516,34 +519,65 @@ export async function updateCampaign(
     // persisted.
     description?: string | null | undefined
     priority?: number | undefined
+  },
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
   }
 ): Promise<UpdateCampaignResult> {
-  // `projectId` is part of the UPDATE WHERE so the project-scope
-  // check is atomic with the write. Callers' route-handler-level
-  // `existing.projectId === projectId` precheck is defense-in-depth;
-  // this clause is what actually keeps a contributor in project A
-  // from updating a campaign in project B by guessing its id.
-  const [updated] = await db
-    .update(campaigns)
-    .set({ ...data, updatedAt: new Date() })
-    .where(
-      and(eq(campaigns.id, id), eq(campaigns.projectId, projectId), eq(campaigns.status, 'draft'))
+  return db.transaction(async (tx) => {
+    // Fetch the old row inside the tx so we have it for the audit diff.
+    // The draft guard in the WHERE is what actually keeps a contributor
+    // in project A from updating a campaign in project B by guessing its id;
+    // this SELECT is the old-row snapshot for the audit trail.
+    const [oldRow] = await tx
+      .select()
+      .from(campaigns)
+      .where(
+        and(eq(campaigns.id, id), eq(campaigns.projectId, projectId), eq(campaigns.status, 'draft'))
+      )
+      .limit(1)
+
+    if (!oldRow) {
+      // Disambiguate: check whether the row exists at all (in this project)
+      // to distinguish not_found from not_draft for accurate error reporting.
+      const [existing] = await tx
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+        .limit(1)
+      if (!existing) return { kind: 'not_found' }
+      return { kind: 'not_draft', status: existing.status }
+    }
+
+    const [updated] = await tx
+      .update(campaigns)
+      .set({ ...data, updatedAt: new Date() })
+      .where(
+        and(eq(campaigns.id, id), eq(campaigns.projectId, projectId), eq(campaigns.status, 'draft'))
+      )
+      .returning()
+
+    if (!updated) {
+      // Race: draft guard lost between our SELECT and UPDATE.
+      return { kind: 'not_draft', status: oldRow.status }
+    }
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'campaign',
+        entityId: id,
+        action: 'updated',
+        oldRow: oldRow as Record<string, unknown>,
+        newRow: updated as Record<string, unknown>,
+      },
+      tx
     )
-    .returning()
 
-  if (updated) {
     return { kind: 'updated', campaign: updated }
-  }
-
-  // Disambiguate: if the row exists in some project (regardless of the
-  // caller's scope), `not_draft` is the accurate verdict only when the
-  // row IS in the caller's project. A cross-project row should look
-  // like `not_found` to keep id existence non-enumerable.
-  const existing = await getCampaignById(id)
-  if (!existing || existing.projectId !== projectId) {
-    return { kind: 'not_found' }
-  }
-  return { kind: 'not_draft', status: existing.status }
+  })
 }
 
 export type ChangePriorityResult =
@@ -559,34 +593,79 @@ export type ChangePriorityResult =
  * (mirroring the draft guard) so a campaign that transitioned to a terminal
  * state concurrently is not mutated. A successful change re-evaluates
  * preemption for the project (trigger a).
+ *
+ * Wrapped in a transaction so the audit row is atomic with the UPDATE.
+ * `enqueuePreemptionEvaluation` runs OUTSIDE the transaction (queue enqueue).
  */
 export async function changeRunningCampaignPriority(
   id: number,
   projectId: number,
-  priority: number
+  priority: number,
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
 ): Promise<ChangePriorityResult> {
-  const [updated] = await db
-    .update(campaigns)
-    .set({ priority, updatedAt: new Date() })
-    .where(
-      and(
-        eq(campaigns.id, id),
-        eq(campaigns.projectId, projectId),
-        inArray(campaigns.status, ['running', 'paused'])
+  const result = await db.transaction(async (tx) => {
+    const [oldRow] = await tx
+      .select()
+      .from(campaigns)
+      .where(
+        and(
+          eq(campaigns.id, id),
+          eq(campaigns.projectId, projectId),
+          inArray(campaigns.status, ['running', 'paused'])
+        )
       )
+      .limit(1)
+
+    if (!oldRow) {
+      const [existing] = await tx
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+        .limit(1)
+      if (!existing) return { kind: 'not_found' as const }
+      return { kind: 'not_active' as const, status: existing.status }
+    }
+
+    const [updated] = await tx
+      .update(campaigns)
+      .set({ priority, updatedAt: new Date() })
+      .where(
+        and(
+          eq(campaigns.id, id),
+          eq(campaigns.projectId, projectId),
+          inArray(campaigns.status, ['running', 'paused'])
+        )
+      )
+      .returning()
+
+    if (!updated) {
+      return { kind: 'not_active' as const, status: oldRow.status }
+    }
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'campaign',
+        entityId: id,
+        action: 'updated',
+        oldRow: oldRow as Record<string, unknown>,
+        newRow: updated as Record<string, unknown>,
+      },
+      tx
     )
-    .returning()
 
-  if (updated) {
+    return { kind: 'updated' as const, campaign: updated }
+  })
+
+  // enqueuePreemptionEvaluation must run outside the transaction
+  if (result.kind === 'updated') {
     await enqueuePreemptionEvaluation(projectId)
-    return { kind: 'updated', campaign: updated }
   }
-
-  const existing = await getCampaignById(id)
-  if (!existing || existing.projectId !== projectId) {
-    return { kind: 'not_found' }
-  }
-  return { kind: 'not_active', status: existing.status }
+  return result
 }
 
 // ─── Campaign Lifecycle ─────────────────────────────────────────────
@@ -616,11 +695,21 @@ const VALID_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
   cancelled: [],
 }
 
-export async function transitionCampaign(id: number, targetStatus: CampaignStatus) {
+export async function transitionCampaign(
+  id: number,
+  targetStatus: CampaignStatus,
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
+) {
   const campaign = await getCampaignById(id)
   if (!campaign) {
     return { error: 'Campaign not found' }
   }
+
+  // Capture before any mutation so the audit trail records the real pre-image.
+  const fromStatus = campaign.status
 
   // `campaign.status` is typed `string` from the DB row but the
   // transition table is keyed by `CampaignStatus`. Cast at the lookup
@@ -887,6 +976,23 @@ export async function transitionCampaign(id: number, targetStatus: CampaignStatu
     }
   }
 
+  // Audit the committed transition. Uses db directly (no tx available here —
+  // the function's compensating-rollback choreography prevents wrapping the
+  // status UPDATE in a transaction). Errors propagate per R4. Only fires on
+  // the single committed-success path; all early-return and compensating-
+  // rollback paths return before reaching here.
+  await recordAuditEvent({
+    actor,
+    projectId: campaign.projectId,
+    entityType: 'campaign',
+    entityId: id,
+    action: 'status_changed',
+    fromStatus,
+    toStatus: targetStatus,
+    oldRow: campaign as Record<string, unknown>,
+    newRow: updated as Record<string, unknown>,
+  })
+
   return { campaign: updated }
 }
 
@@ -924,17 +1030,23 @@ export async function getAttackById(id: number) {
   return attack ?? null
 }
 
-export async function createAttack(data: {
-  campaignId: number
-  projectId: number
-  mode: number
-  hashTypeId?: number | undefined
-  wordlistId?: number | undefined
-  rulelistId?: number | undefined
-  masklistId?: number | undefined
-  advancedConfiguration?: Record<string, unknown> | undefined
-  dependencies?: number[] | undefined
-}) {
+export async function createAttack(
+  data: {
+    campaignId: number
+    projectId: number
+    mode: number
+    hashTypeId?: number | undefined
+    wordlistId?: number | undefined
+    rulelistId?: number | undefined
+    masklistId?: number | undefined
+    advancedConfiguration?: Record<string, unknown> | undefined
+    dependencies?: number[] | undefined
+  },
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
+) {
   const keyspace = await computeAttackKeyspace(data)
   const [attack] = await db
     .insert(attacks)
@@ -951,6 +1063,17 @@ export async function createAttack(data: {
       keyspace,
     })
     .returning()
+
+  if (attack) {
+    await recordAuditEvent({
+      actor,
+      projectId: attack.projectId,
+      entityType: 'attack',
+      entityId: attack.id,
+      action: 'created',
+      newRow: attack as Record<string, unknown>,
+    })
+  }
 
   // Keyspace couldn't be computed inline (referenced resource not counted yet):
   // enqueue a count job best-effort so it fills in once the resource is sized.
@@ -976,6 +1099,10 @@ export async function updateAttack(
     masklistId?: number | undefined
     advancedConfiguration?: Record<string, unknown> | undefined
     dependencies?: number[] | undefined
+  },
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
   }
 ) {
   // Recompute keyspace from the merged inputs so an edit that swaps a
@@ -997,6 +1124,18 @@ export async function updateAttack(
     .where(eq(attacks.id, id))
     .returning()
 
+  if (updated) {
+    await recordAuditEvent({
+      actor,
+      projectId: updated.projectId,
+      entityType: 'attack',
+      entityId: updated.id,
+      action: 'updated',
+      oldRow: existing as Record<string, unknown>,
+      newRow: updated as Record<string, unknown>,
+    })
+  }
+
   // A resource swap may point at an uncounted wordlist/rulelist: enqueue a
   // count job best-effort so keyspace fills in once the resource is sized.
   if (updated && keyspace === null) {
@@ -1011,7 +1150,23 @@ export async function updateAttack(
   return updated ?? null
 }
 
-export async function deleteAttack(id: number) {
+export async function deleteAttack(
+  id: number,
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
+) {
   const [deleted] = await db.delete(attacks).where(eq(attacks.id, id)).returning()
+  if (deleted) {
+    await recordAuditEvent({
+      actor,
+      projectId: deleted.projectId,
+      entityType: 'attack',
+      entityId: deleted.id,
+      action: 'deleted',
+      oldRow: deleted as Record<string, unknown>,
+    })
+  }
   return deleted ?? null
 }

@@ -25,6 +25,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { recordAuditEvent } from './audit-log.js'
 import { emitCampaignStatus } from './events.js'
 
 // ─── Task statistics ────────────────────────────────────────────────
@@ -247,29 +248,70 @@ const ARCHIVABLE_STATUSES = ['completed', 'cancelled'] as const
 
 export async function archiveCampaigns(
   projectId: number,
-  ids: number[]
+  ids: number[],
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
 ): Promise<CampaignArchiveResponse['results']> {
   // Each id is independent (per-id outcomes), so run them concurrently rather
   // than serially — bulk batches are capped at 200 by the request schema.
   return Promise.all(
     ids.map(async (id): Promise<CampaignArchiveResponse['results'][number]> => {
       try {
-        const updated = await db
-          .update(campaigns)
-          .set({ archivedAt: new Date(), updatedAt: new Date() })
-          .where(
-            and(
-              eq(campaigns.id, id),
-              eq(campaigns.projectId, projectId),
-              inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
-              isNull(campaigns.archivedAt)
-            )
-          )
-          .returning({ id: campaigns.id })
-        if (updated[0]) {
-          return { id, outcome: 'archived' }
+        // Pre-check the row before entering the transaction. This classification
+        // is a best-effort read; the transaction itself enforces atomicity.
+        const [oldRow] = await db
+          .select()
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+
+        if (!oldRow) return { id, outcome: 'not_found' }
+        if (oldRow.archivedAt) return { id, outcome: 'already_archived' }
+        if (!ARCHIVABLE_STATUSES.includes(oldRow.status as (typeof ARCHIVABLE_STATUSES)[number])) {
+          return { id, outcome: 'not_archivable' }
         }
-        // Classify the miss against the project-scoped row.
+
+        const result = await db.transaction(async (tx) => {
+          const archivedAt = new Date()
+          const updated = await tx
+            .update(campaigns)
+            .set({ archivedAt, updatedAt: new Date() })
+            .where(
+              and(
+                eq(campaigns.id, id),
+                eq(campaigns.projectId, projectId),
+                inArray(campaigns.status, [...ARCHIVABLE_STATUSES]),
+                isNull(campaigns.archivedAt)
+              )
+            )
+            .returning({ id: campaigns.id, archivedAt: campaigns.archivedAt })
+
+          if (!updated[0]) {
+            // Race: status or archivedAt changed between pre-check and UPDATE.
+            return null
+          }
+
+          await recordAuditEvent(
+            {
+              actor,
+              projectId,
+              entityType: 'campaign',
+              entityId: id,
+              action: 'updated',
+              oldRow: oldRow as Record<string, unknown>,
+              newRow: { ...oldRow, archivedAt } as Record<string, unknown>,
+            },
+            tx
+          )
+
+          return updated[0]
+        })
+
+        if (result) return { id, outcome: 'archived' }
+
+        // Re-classify the race-miss against the project-scoped row.
         const [row] = await db
           .select({ status: campaigns.status, archivedAt: campaigns.archivedAt })
           .from(campaigns)
@@ -290,25 +332,62 @@ export async function archiveCampaigns(
 
 export async function restoreCampaigns(
   projectId: number,
-  ids: number[]
+  ids: number[],
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
 ): Promise<CampaignRestoreResponse['results']> {
   return Promise.all(
     ids.map(async (id): Promise<CampaignRestoreResponse['results'][number]> => {
       try {
-        const updated = await db
-          .update(campaigns)
-          .set({ archivedAt: null, updatedAt: new Date() })
-          .where(
-            and(
-              eq(campaigns.id, id),
-              eq(campaigns.projectId, projectId),
-              isNotNull(campaigns.archivedAt)
+        // Pre-check the row before entering the transaction.
+        const [oldRow] = await db
+          .select()
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
+          .limit(1)
+
+        if (!oldRow) return { id, outcome: 'not_found' }
+        if (!oldRow.archivedAt) return { id, outcome: 'not_archived' }
+
+        const result = await db.transaction(async (tx) => {
+          const updated = await tx
+            .update(campaigns)
+            .set({ archivedAt: null, updatedAt: new Date() })
+            .where(
+              and(
+                eq(campaigns.id, id),
+                eq(campaigns.projectId, projectId),
+                isNotNull(campaigns.archivedAt)
+              )
             )
+            .returning({ id: campaigns.id })
+
+          if (!updated[0]) {
+            // Race: archivedAt was cleared between pre-check and UPDATE.
+            return null
+          }
+
+          await recordAuditEvent(
+            {
+              actor,
+              projectId,
+              entityType: 'campaign',
+              entityId: id,
+              action: 'updated',
+              oldRow: oldRow as Record<string, unknown>,
+              newRow: { ...oldRow, archivedAt: null } as Record<string, unknown>,
+            },
+            tx
           )
-          .returning({ id: campaigns.id })
-        if (updated[0]) {
-          return { id, outcome: 'restored' }
-        }
+
+          return updated[0]
+        })
+
+        if (result) return { id, outcome: 'restored' }
+
+        // Re-classify the race-miss.
         const [row] = await db
           .select({ id: campaigns.id })
           .from(campaigns)

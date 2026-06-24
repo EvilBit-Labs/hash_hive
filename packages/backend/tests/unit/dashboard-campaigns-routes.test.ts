@@ -610,7 +610,10 @@ if (!IS_ISOLATED) {
         { id: 100, outcome: 'archived' },
         { id: 101, outcome: 'not_archivable' },
       ])
-      expect(mockArchiveCampaigns).toHaveBeenCalledWith(1, [100, 101])
+      expect(mockArchiveCampaigns).toHaveBeenCalledWith(1, [100, 101], {
+        actorType: 'user',
+        actorId: 1,
+      })
     })
 
     it('restores campaigns (admin)', async () => {
