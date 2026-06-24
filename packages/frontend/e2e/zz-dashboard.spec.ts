@@ -94,22 +94,45 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
   })
 
   // Visual baseline: skipped until the Linux baseline PNG is committed.
-  // See issue #201 for the procedure (generate on Linux with
-  // --update-snapshots, commit the PNG, then unskip this test). Local macOS
-  // runs WILL diff on font rendering and must not update the baseline.
-  test.skip('dashboard visual baseline at 1440x900', async ({ page }) => {
-    // Wait for the page to settle: all four cards present, crack-rate region
-    // mounted. Sparklines will be empty on cold load (1 sample) — by design.
-    await expect(page.locator('[data-testid="stat-card"]')).toHaveCount(4)
-    await expect(page.getByRole('region', { name: /crack rate trend/i })).toBeVisible()
+  // The baseline is CI-Linux-canonical (pinned ubuntu-24.04). Generate it via
+  // the `regenerate-visual-baselines.yml` workflow (label a PR with
+  // `regen-baselines`, or `workflow_dispatch` once it's on main), download the
+  // artifact, commit the PNG, and unskip this test in the same commit. Local
+  // macOS runs WILL diff on font rendering and must NOT update the baseline —
+  // that mismatch message is expected, not a regression. Full procedure:
+  // docs/solutions/conventions/playwright-visual-baselines.md.
+  //
+  // Determinism (why this differs from a plain toHaveScreenshot):
+  //  - We wait for the `Live` (open) connection state before capturing. That
+  //    unmounts the conditional FreshnessLine ("Last updated X ago", a 1Hz
+  //    wall-clock ticker rendered as <p data-testid="dashboard-last-updated">),
+  //    which would otherwise reflow the bento grid and is NOT covered by the
+  //    output[aria-label] mask. It also fixes the indicator label width.
+  //  - `prefers-reduced-motion: reduce` resolves motion/react to its end state
+  //    (animations:'disabled' only fast-forwards CSS, not JS/rAF motion).
+  //  - The mask is belt-and-suspenders over any residual WS-status pixels;
+  //    masked regions render as magenta boxes in the committed PNG (expected).
+  //  - retries:0 (configured on this nested describe) makes the no-op re-run a
+  //    strict idempotency check; the file default is retries:2 in CI.
+  test.describe('visual baseline', () => {
+    test.describe.configure({ retries: 0 })
 
-    // Allow a brief settle so motion-cross-fade and any layout reflow finish.
-    await page.waitForTimeout(500)
+    test.skip('dashboard visual baseline at 1440x900', async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
 
-    await expect(page).toHaveScreenshot('dashboard-1440x900.png', {
-      maxDiffPixelRatio: 0.02,
-      fullPage: false,
-      animations: 'disabled',
+      // Drive to a single deterministic connection state: on `open` the
+      // indicators read "Live" and FreshnessLine does not mount.
+      await expect(page.locator('output[aria-label="Live"]').first()).toBeVisible()
+
+      await expect(page.locator('[data-testid="stat-card"]')).toHaveCount(4)
+      await expect(page.getByRole('region', { name: /crack rate trend/i })).toBeVisible()
+
+      await expect(page).toHaveScreenshot('dashboard-1440x900.png', {
+        maxDiffPixelRatio: 0.02,
+        fullPage: false,
+        animations: 'disabled',
+        mask: [page.locator('output[aria-label]')],
+      })
     })
   })
 

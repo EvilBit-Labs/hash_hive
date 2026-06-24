@@ -12,6 +12,7 @@
     "test": "bun test --preload ./tests/setup.ts tests/",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
+    "test:e2e:update:dashboard": "playwright test --update-snapshots zz-dashboard.spec.ts",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
