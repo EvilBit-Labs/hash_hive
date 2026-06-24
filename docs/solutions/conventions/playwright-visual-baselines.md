@@ -65,7 +65,11 @@ the PNG as an artifact — it never commits.
 1. **Trigger generation.**
    - On a branch / for a brand-new baseline: open the PR and add the
      `regen-baselines` label (a same-repo PR runs the workflow from the PR head
-     branch, so this works before the workflow is on `main`).
+     branch, so this works before the workflow is on `main`). Applying the label
+     runs the PR head's code on a runner — only label a PR (especially a fork PR)
+     after reviewing its code. The workflow uses `pull_request` (read-only token,
+     no secrets), so the blast radius is the ephemeral runner, but the label is
+     an intentional opt-in, not a rubber stamp.
    - For steady-state updates once the workflow is on `main`: run it via
      `workflow_dispatch` (`gh workflow run regenerate-visual-baselines.yml`).
 2. **Download the artifact:** `gh run download <run-id> -n visual-baselines`

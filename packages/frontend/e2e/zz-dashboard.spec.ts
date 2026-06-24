@@ -118,14 +118,34 @@ test.describe.serial('Dashboard delight pass (issue #162)', () => {
     test.describe.configure({ retries: 0 })
 
     test.skip('dashboard visual baseline at 1440x900', async ({ page }) => {
+      // emulateMedia must be followed by reload: motion/react reads matchMedia
+      // at mount, so already-mounted components from beforeEach won't honor a
+      // late reduced-motion switch. Mirror the sibling reduced-motion test.
       await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.reload()
+      if (page.url().includes('/select-project')) {
+        await page.click('button:has-text("Test Project")')
+        await page.waitForURL('/', { timeout: 10_000 })
+      }
 
       // Drive to a single deterministic connection state: on `open` the
-      // indicators read "Live" and FreshnessLine does not mount.
-      await expect(page.locator('output[aria-label="Live"]').first()).toBeVisible()
+      // indicators read "Live" and FreshnessLine does not mount. A generous
+      // timeout absorbs a slow CI WebSocket handshake (connecting ->
+      // authenticating -> open) — important because retries:0 gives the first
+      // run no recovery budget.
+      await expect(page.locator('output[aria-label="Live"]').first()).toBeVisible({
+        timeout: 20_000,
+      })
 
       await expect(page.locator('[data-testid="stat-card"]')).toHaveCount(4)
       await expect(page.getByRole('region', { name: /crack rate trend/i })).toBeVisible()
+
+      // Data-quiescence gate: the stat-card wrappers mount immediately, so a
+      // count assertion alone can fire while react-query is still loading and
+      // StatCard / CrackRateTrendChart render Skeletons (animate-pulse). Wait
+      // for all skeletons to clear so the baseline captures the loaded layout,
+      // never a frozen skeleton frame.
+      await expect(page.locator('.animate-pulse')).toHaveCount(0)
 
       await expect(page).toHaveScreenshot('dashboard-1440x900.png', {
         maxDiffPixelRatio: 0.02,
