@@ -143,6 +143,14 @@ if (!IS_ISOLATED) {
           roles: m.roles,
           createdAt: new Date(),
         })),
+    findUserProjectById: async () => null,
+    getUserProjectsPaginated: async () => ({ items: [], total: 0 }),
+    createProject: async () => null,
+    updateProject: async () => null,
+    addUserToProject: async () => null,
+    removeUserFromProject: async () => null,
+    updateMemberRoles: async () => null,
+    getProjectMembers: async () => [],
   }))
 
   // `transitionCampaign` returns `{campaign: <row>} | {error, code?}`.

@@ -70,6 +70,8 @@ mock.module('../../../src/services/projects.js', () => ({
     id === 1 ? { id: 1, name: 'P1', slug: 'p1', settings: {}, createdBy: null } : null,
   getUserProjects: async () => [],
   createProject: async () => null,
+  findUserProjectById: async () => null,
+  getUserProjectsPaginated: async () => ({ items: [], total: 0 }),
   getProjectMembers: async () => [],
   addUserToProject: async () => null,
   updateProject: async () => null,
