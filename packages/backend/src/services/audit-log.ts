@@ -52,8 +52,10 @@ import {
   maskLists,
   projects,
   ruleLists,
+  users,
   wordLists,
 } from '@hashhive/shared'
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 
@@ -408,6 +410,335 @@ export async function recordAuditEvent(input: RecordAuditEventInput, executor: E
     .returning()
 
   return row
+}
+
+// ─── Read service (shared by U7 dashboard + U8 control) ─────────────────────
+
+/**
+ * Filters accepted by `listAuditEvents`. All fields are truly optional —
+ * omitting a field means "no filter applied" for that dimension.
+ */
+export interface AuditLogFilters {
+  entityType?: string | undefined
+  entityId?: number | undefined
+  actorType?: string | undefined
+  action?: string | undefined
+  dateFrom?: string | undefined
+  dateTo?: string | undefined
+}
+
+/**
+ * Pagination params for `listAuditEvents`.
+ */
+export interface AuditLogPagination {
+  limit: number
+  offset: number
+}
+
+/**
+ * Single audit log row with resolved display labels.
+ * Matches the `auditLogSchema` wire shape so callers can parse through it.
+ */
+export interface AuditLogRow {
+  id: number
+  actorType: string
+  actorId: number | null
+  projectId: number | null
+  entityType: string
+  entityId: number
+  action: string
+  fromStatus: string | null
+  toStatus: string | null
+  reason: string | null
+  changes: Record<string, unknown> | null
+  createdAt: string
+  actorLabel: string
+  entityLabel: string
+}
+
+/**
+ * Response shape returned by `listAuditEvents`.
+ * Matches `auditLogListResponseSchema` exactly.
+ */
+export interface AuditLogListResult {
+  data: AuditLogRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// ─── Label resolution helpers ────────────────────────────────────────────────
+
+/**
+ * Batch-loads user display names for a set of user ids.
+ * Returns a map from id → name (never email).
+ * Missing ids produce '[deleted user]'.
+ */
+async function batchLoadUserNames(ids: Set<number>): Promise<Map<number, string>> {
+  if (ids.size === 0) return new Map()
+  const rows = await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(inArray(users.id, [...ids]))
+  const map = new Map<number, string>()
+  for (const row of rows) {
+    map.set(row.id, row.name)
+  }
+  return map
+}
+
+/**
+ * Batch-loads agent names for a set of agent ids.
+ * Returns a map from id → name.
+ * Missing ids produce '[deleted agent]'.
+ */
+async function batchLoadAgentNames(ids: Set<number>): Promise<Map<number, string>> {
+  if (ids.size === 0) return new Map()
+  const rows = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(inArray(agents.id, [...ids]))
+  const map = new Map<number, string>()
+  for (const row of rows) {
+    map.set(row.id, row.name)
+  }
+  return map
+}
+
+type EntityBatchResult = Map<number, string>
+
+/**
+ * Batch-loads entity display names for a set of (entityType, ids) pairs.
+ * Returns a map from entityId → label string.
+ *
+ * Entity name resolution per type:
+ *   project    → projects.name
+ *   campaign   → campaigns.name
+ *   attack     → 'Attack #<id>' (no name column on attacks)
+ *   hash_list  → hashLists.name
+ *   word_list  → wordLists.name
+ *   rule_list  → ruleLists.name
+ *   mask_list  → maskLists.name
+ *   agent      → agents.name
+ *
+ * Missing ids produce '[deleted]'.
+ */
+async function batchLoadEntityNames(
+  entityType: string,
+  ids: Set<number>
+): Promise<EntityBatchResult> {
+  if (ids.size === 0) return new Map()
+  const idList = [...ids]
+
+  switch (entityType) {
+    case 'project': {
+      const rows = await db
+        .select({ id: projects.id, name: projects.name })
+        .from(projects)
+        .where(inArray(projects.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'campaign': {
+      const rows = await db
+        .select({ id: campaigns.id, name: campaigns.name })
+        .from(campaigns)
+        .where(inArray(campaigns.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'attack': {
+      // attacks have no name column; use a synthetic label
+      const map = new Map<number, string>()
+      for (const id of idList) {
+        map.set(id, `Attack #${id}`)
+      }
+      return map
+    }
+    case 'hash_list': {
+      const rows = await db
+        .select({ id: hashLists.id, name: hashLists.name })
+        .from(hashLists)
+        .where(inArray(hashLists.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'word_list': {
+      const rows = await db
+        .select({ id: wordLists.id, name: wordLists.name })
+        .from(wordLists)
+        .where(inArray(wordLists.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'rule_list': {
+      const rows = await db
+        .select({ id: ruleLists.id, name: ruleLists.name })
+        .from(ruleLists)
+        .where(inArray(ruleLists.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'mask_list': {
+      const rows = await db
+        .select({ id: maskLists.id, name: maskLists.name })
+        .from(maskLists)
+        .where(inArray(maskLists.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    case 'agent': {
+      const rows = await db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, idList))
+      return new Map(rows.map((r) => [r.id, r.name]))
+    }
+    default: {
+      // Unknown entity type — return empty map; all rows fall back to '[deleted]'
+      return new Map()
+    }
+  }
+}
+
+// ─── Public read service ──────────────────────────────────────────────────────
+
+/**
+ * Returns a paginated, filtered page of audit log rows scoped to `projectId`,
+ * ordered newest-first (`created_at DESC`), with resolved `actorLabel` and
+ * `entityLabel` display strings.
+ *
+ * Label resolution uses batched follow-up lookups (one batch per actor type,
+ * one batch per entity type) rather than per-row N+1 or one wide multi-table
+ * join. Missing referents fall back gracefully:
+ *   - user actor  → display name or '[deleted user]'
+ *   - agent actor → agent name or '[deleted agent]'
+ *   - system      → 'System'
+ *   - entity      → entity name or '[deleted]'
+ *
+ * `actorLabel` is NEVER the user's email (R6 / KTD-8).
+ */
+export async function listAuditEvents(
+  projectId: number,
+  filters: AuditLogFilters,
+  pagination: AuditLogPagination
+): Promise<AuditLogListResult> {
+  const { limit, offset } = pagination
+
+  // Build WHERE conditions
+  const conditions: ReturnType<typeof eq>[] = [eq(auditLogs.projectId, projectId)]
+
+  if (filters.entityType) {
+    conditions.push(eq(auditLogs.entityType, filters.entityType))
+  }
+  if (filters.entityId !== undefined) {
+    conditions.push(eq(auditLogs.entityId, filters.entityId))
+  }
+  if (filters.actorType) {
+    conditions.push(eq(auditLogs.actorType, filters.actorType))
+  }
+  if (filters.action) {
+    conditions.push(eq(auditLogs.action, filters.action))
+  }
+  if (filters.dateFrom) {
+    conditions.push(gte(auditLogs.createdAt, new Date(filters.dateFrom)))
+  }
+  if (filters.dateTo) {
+    conditions.push(lte(auditLogs.createdAt, new Date(filters.dateTo)))
+  }
+
+  const whereClause = and(...conditions)
+
+  // Fetch the page and total count in parallel
+  const [rawRows, countResult] = await Promise.all([
+    db
+      .select()
+      .from(auditLogs)
+      .where(whereClause)
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(auditLogs)
+      .where(whereClause),
+  ])
+
+  const total = Number(countResult[0]?.count ?? 0)
+
+  if (rawRows.length === 0) {
+    return { data: [], total, limit, offset }
+  }
+
+  // Collect actor ids by type for batched resolution
+  const userActorIds = new Set<number>()
+  const agentActorIds = new Set<number>()
+  for (const row of rawRows) {
+    if (row.actorType === 'user' && row.actorId !== null) {
+      userActorIds.add(row.actorId)
+    } else if (row.actorType === 'agent' && row.actorId !== null) {
+      agentActorIds.add(row.actorId)
+    }
+  }
+
+  // Collect entity ids by type for batched resolution
+  const entityIdsByType = new Map<string, Set<number>>()
+  for (const row of rawRows) {
+    const existing = entityIdsByType.get(row.entityType)
+    if (existing) {
+      existing.add(row.entityId)
+    } else {
+      entityIdsByType.set(row.entityType, new Set([row.entityId]))
+    }
+  }
+
+  // Batch load all names in parallel
+  const entityNamePromises = [...entityIdsByType.entries()].map(
+    async ([type, ids]) => [type, await batchLoadEntityNames(type, ids)] as const
+  )
+
+  const [userNames, agentNames, ...entityNameResults] = await Promise.all([
+    batchLoadUserNames(userActorIds),
+    batchLoadAgentNames(agentActorIds),
+    ...entityNamePromises,
+  ])
+
+  const entityNamesByType = new Map<string, EntityBatchResult>(entityNameResults)
+
+  // Map rows to wire shape with resolved labels
+  const data: AuditLogRow[] = rawRows.map((row) => {
+    // Resolve actorLabel — never use email (R6 / KTD-8)
+    let actorLabel: string
+    if (row.actorType === 'user') {
+      actorLabel =
+        row.actorId !== null ? (userNames.get(row.actorId) ?? '[deleted user]') : '[deleted user]'
+    } else if (row.actorType === 'agent') {
+      actorLabel =
+        row.actorId !== null
+          ? (agentNames.get(row.actorId) ?? '[deleted agent]')
+          : '[deleted agent]'
+    } else {
+      // 'system'
+      actorLabel = 'System'
+    }
+
+    // Resolve entityLabel
+    const entityMap = entityNamesByType.get(row.entityType)
+    const entityLabel = entityMap?.get(row.entityId) ?? '[deleted]'
+
+    return {
+      id: row.id,
+      actorType: row.actorType,
+      actorId: row.actorId,
+      projectId: row.projectId,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      action: row.action,
+      fromStatus: row.fromStatus,
+      toStatus: row.toStatus,
+      reason: row.reason,
+      changes: row.changes as Record<string, unknown> | null,
+      createdAt: row.createdAt.toISOString(),
+      actorLabel,
+      entityLabel,
+    }
+  })
+
+  return { data, total, limit, offset }
 }
 
 // ─── Drift guard helpers (exported for the unit test) ───────────────────────

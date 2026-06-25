@@ -71,8 +71,12 @@ export interface AppEvent {
  * Project-scoped query keys: invalidated with `[key, sessionProjectId]`.
  */
 const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
-  agent_status: ['agents', 'dashboard-stats'],
-  campaign_status: ['campaigns', 'dashboard-stats'],
+  // audit-logs is included on events that produce audit rows (U3–U6 capture
+  // wiring): agent_status (agent edits/deletes), campaign_status (lifecycle
+  // transitions), resource_update (resource CRUD). task_update does not
+  // produce audit rows (tasks are system-derived; see plan scope boundaries).
+  agent_status: ['agents', 'dashboard-stats', 'audit-logs'],
+  campaign_status: ['campaigns', 'dashboard-stats', 'audit-logs'],
   // task_update refreshes the campaigns list too because each task
   // affects its campaign's progress percentage and task counts --
   // both of which appear in the list table. Without this, the list's
@@ -87,7 +91,14 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
     'hash-lists',
     'hash-list-summaries',
   ],
-  resource_update: ['hash-lists', 'hash-list-summaries', 'wordlists', 'rulelists', 'masklists'],
+  resource_update: [
+    'hash-lists',
+    'hash-list-summaries',
+    'wordlists',
+    'rulelists',
+    'masklists',
+    'audit-logs',
+  ],
 }
 
 /**
