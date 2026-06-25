@@ -3,7 +3,7 @@
  *
  * Project-scoped, paginated, filterable audit history. Access is gated to
  * admin and contributor roles (R11) via the sidebar permission check and the
- * backend's own middleware — no redundant page-level guard needed (Crackers
+ * backend's own middleware - no redundant page-level guard needed (Crackers
  * follows the same nav-only gate pattern).
  *
  * Changes cell rendering follows the diff shape produced by U2:
@@ -95,7 +95,7 @@ function rawToString(raw: unknown): string {
 function truncateValue(raw: unknown): { display: string; full: string; truncated: boolean } {
   const full = rawToString(raw)
   if (full.length <= FIELD_VALUE_DISPLAY_LIMIT) return { display: full, full, truncated: false }
-  return { display: `${full.slice(0, FIELD_VALUE_DISPLAY_LIMIT)}…`, full, truncated: true }
+  return { display: `${full.slice(0, FIELD_VALUE_DISPLAY_LIMIT)}...`, full, truncated: true }
 }
 
 // ─── Copy button (sub-component) ─────────────────────────────────────────────
@@ -169,7 +169,7 @@ function ChangesCell({
 }: ChangesCellProps) {
   // token_issued: changes is always null by design (R6)
   if (action === 'token_issued') {
-    return <span className="text-xs text-muted-foreground">Token issued — no field diff</span>
+    return <span className="text-xs text-muted-foreground">Token issued - no field diff</span>
   }
 
   // status_changed: render inline from top-level columns, no accordion
@@ -178,23 +178,23 @@ function ChangesCell({
       <span className="text-xs">
         <span className="font-mono text-muted-foreground">status</span>
         {': '}
-        <span className="font-mono text-warning/90">{fromStatus ?? '—'}</span>
-        <span className="text-muted-foreground"> → </span>
-        <span className="font-mono text-success/90">{toStatus ?? '—'}</span>
+        <span className="font-mono text-warning/90">{fromStatus ?? '-'}</span>
+        <span className="text-muted-foreground">{' -> '}</span>
+        <span className="font-mono text-success/90">{toStatus ?? '-'}</span>
       </span>
     )
   }
 
   // No changes recorded
   if (!changes || Object.keys(changes).length === 0) {
-    return <span className="text-xs text-muted-foreground">—</span>
+    return <span className="text-xs text-muted-foreground">-</span>
   }
 
   // Oversized payload: recorder replaced the diff with a truncation marker
   if (changes['_truncated'] === true) {
     return (
       <span className="text-xs text-muted-foreground italic">
-        Diff truncated — payload too large
+        Diff truncated - payload too large
       </span>
     )
   }
@@ -219,7 +219,7 @@ function ChangesCell({
           aria-hidden="true"
           className={`inline-block transition-transform ${isExpanded ? 'rotate-90' : ''}`}
         >
-          ›
+          {'>'}
         </span>
       </button>
 
@@ -400,7 +400,7 @@ export function AuditLogsPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        {/* Entity type filter — hidden when arriving via deep link with entityId */}
+        {/* Entity type filter - hidden when arriving via deep link with entityId */}
         {entityId === undefined && (
           <div className="flex flex-col gap-1">
             <label htmlFor="filter-entity-type" className="text-xs text-muted-foreground">
@@ -513,7 +513,7 @@ export function AuditLogsPage() {
                 }}
                 className="text-muted-foreground hover:text-foreground"
               >
-                ×
+                x
               </button>
             </span>
           </div>

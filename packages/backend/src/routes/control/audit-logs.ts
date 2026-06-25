@@ -26,7 +26,11 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../../types.js'
 
 import { paginate, paginationQuerySchema } from '../../lib/pagination.js'
-import { enumFilterQuery, isoDateTimeFilterQuery } from '../../openapi/coerced-query.js'
+import {
+  coercedOptionalPositiveIntegerQuery,
+  enumFilterQuery,
+  isoDateTimeFilterQuery,
+} from '../../openapi/coerced-query.js'
 import {
   CONTROL_RESPONSE_REFS,
   controlOpenApiHonoOptions,
@@ -63,7 +67,7 @@ const controlAuditLogPageSchema = z
 const controlAuditLogQuerySchema = paginationQuerySchema.merge(
   z.object({
     entityType: enumFilterQuery(AUDIT_ENTITY_TYPE_VALUES),
-    entityId: z.coerce.number().int().positive().optional().openapi({ type: 'integer' }),
+    entityId: coercedOptionalPositiveIntegerQuery(),
     actorType: enumFilterQuery(AUDIT_ACTOR_TYPE_VALUES),
     action: enumFilterQuery(AUDIT_ACTION_VALUES),
     dateFrom: isoDateTimeFilterQuery(),

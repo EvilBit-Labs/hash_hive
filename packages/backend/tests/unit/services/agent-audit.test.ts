@@ -80,12 +80,18 @@ if (!IS_ISOLATED) {
 
   // ─── DB mock ────────────────────────────────────────────────────────────────
 
+  const txState: { agentRow: Record<string, unknown>; notFound: boolean } = {
+    agentRow: makeAgentRow(),
+    notFound: false,
+  }
+
   const makeTxMock = (agentRow: Record<string, unknown> = makeAgentRow()) => ({
     select: () => ({
       from: () => ({
         where: () => ({
-          // updateAgent calls .limit(1) on the pre-mutation select
-          limit: () => Promise.resolve([agentRow]),
+          // updateAgent calls .limit(1) on the pre-mutation select;
+          // return [] when txState.notFound is set to simulate a missing row
+          limit: () => Promise.resolve(txState.notFound ? [] : [agentRow]),
         }),
       }),
     }),
@@ -108,8 +114,6 @@ if (!IS_ISOLATED) {
       where: () => Promise.resolve(),
     }),
   })
-
-  const txState: { agentRow: Record<string, unknown> } = { agentRow: makeAgentRow() }
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
@@ -197,6 +201,7 @@ if (!IS_ISOLATED) {
       generateAgentTokenMock.mockClear()
       generateEnrollmentTokenMock.mockClear()
       txState.agentRow = makeAgentRow()
+      txState.notFound = false
     })
 
     // ── updateAgent: config edit ─────────────────────────────────────────────
@@ -247,48 +252,14 @@ if (!IS_ISOLATED) {
       })
 
       it('returns null and records no audit event when agent not found', async () => {
-        // Override tx select to return empty so agent lookup fails
-        mock.module('../../../src/db/index.js', () => ({
-          db: {
-            select: () => ({
-              from: () => ({
-                where: () => Promise.resolve([]),
-              }),
-            }),
-            update: () => ({
-              set: () => ({
-                where: () => ({
-                  returning: () => Promise.resolve([]),
-                }),
-              }),
-            }),
-            insert: () => ({
-              values: () => ({
-                returning: () => Promise.resolve([]),
-                onConflictDoNothing: () => ({
-                  returning: () => Promise.resolve([]),
-                }),
-              }),
-            }),
-            delete: () => ({
-              where: () => Promise.resolve(),
-            }),
-            transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) =>
-              fn({
-                ...makeTxMock(makeAgentRow()),
-                select: () => ({
-                  from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }),
-                }),
-              }),
-            client: {},
-          },
-          client: {},
-        }))
+        // Arrange: make the in-tx select return [] so the agent lookup fails
+        txState.notFound = true
 
-        // Note: because mock.module replaces the module for subsequent imports,
-        // this test only asserts the shape the service would produce.
-        // The real guard is that oldRow not found => return null, no audit call.
-        // We assert via the spy that was already registered.
+        // Act
+        const result = await updateAgent(AGENT_ID, { name: 'ghost' }, PROJECT_ID, USER_ACTOR)
+
+        // Assert
+        expect(result).toBeNull()
         expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })

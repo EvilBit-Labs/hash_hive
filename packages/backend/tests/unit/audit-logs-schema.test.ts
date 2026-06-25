@@ -69,7 +69,7 @@ describe('auditLogSchema.parse()', () => {
       // changes is a permissive record at U1 — any shape is accepted.
       changes: { before: { status: 'pending' }, after: { status: 'running' } },
       createdAt: '2026-06-24T12:00:00.000Z',
-      actorLabel: 'alice@example.com',
+      actorLabel: 'alice',
       entityLabel: 'Summer Campaign',
     }
 
@@ -87,7 +87,7 @@ describe('auditLogSchema.parse()', () => {
     expect(parsed.reason).toBe('Manually started')
     expect(parsed.changes).toEqual({ before: { status: 'pending' }, after: { status: 'running' } })
     expect(parsed.createdAt).toBe('2026-06-24T12:00:00.000Z')
-    expect(parsed.actorLabel).toBe('alice@example.com')
+    expect(parsed.actorLabel).toBe('alice')
     expect(parsed.entityLabel).toBe('Summer Campaign')
   })
 

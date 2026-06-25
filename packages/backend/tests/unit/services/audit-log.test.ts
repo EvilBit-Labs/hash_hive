@@ -504,6 +504,51 @@ if (!IS_ISOLATED) {
 
       expect(capturedValues?.changes).toBeNull()
     })
+
+    it('status_changed: status key is absent from changes (travels in fromStatus/toStatus), but concurrent non-status field changes are still captured', async () => {
+      // Arrange: campaign row where status AND name both change simultaneously
+      const base = {
+        id: 1,
+        projectId: 1,
+        name: 'Campaign A',
+        description: 'original',
+        hashListId: 10,
+        status: 'draft',
+        isPermanent: false,
+        priority: 5,
+        progress: { percent: 0 },
+        metadata: {},
+        createdBy: 1,
+        startedAt: null,
+        completedAt: null,
+        archivedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      const oldRow = base
+      const newRow = { ...base, status: 'running', name: 'Campaign A (running)' }
+
+      // Act
+      await recordAuditEvent({
+        ...baseInput,
+        entityType: 'campaign',
+        action: 'status_changed',
+        fromStatus: 'draft',
+        toStatus: 'running',
+        oldRow,
+        newRow,
+      })
+
+      // Assert
+      const changes = capturedValues?.changes as Record<string, ChangedField> | null
+      // 'status' must NOT appear in changes for status_changed (it is in fromStatus/toStatus)
+      expect(changes).not.toHaveProperty('status')
+      // The concurrent non-status field change (name) must still appear
+      expect(changes).not.toBeNull()
+      const c = changes as Record<string, ChangedField>
+      expect((c.name as ChangedField).old).toBe('Campaign A')
+      expect((c.name as ChangedField).new).toBe('Campaign A (running)')
+    })
   })
 
   // ─── Executor forwarding ─────────────────────────────────────────────────────

@@ -244,6 +244,8 @@ describe('AuditLogsPage', () => {
       expect(screen.getByText('paused')).toBeDefined()
     })
     expect(screen.getByText('running')).toBeDefined()
+    // Bounded settle before absence assertion to avoid flakiness
+    await new Promise((r) => setTimeout(r, 80))
     // No expand button for status_changed
     expect(screen.queryByRole('button', { name: /field changed/i })).toBeNull()
   })
@@ -267,7 +269,7 @@ describe('AuditLogsPage', () => {
     renderWithMotion(<AuditLogsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('Token issued — no field diff')).toBeDefined()
+      expect(screen.getByText('Token issued - no field diff')).toBeDefined()
     })
   })
 
@@ -336,8 +338,10 @@ describe('AuditLogsPage', () => {
     renderWithMotion(<AuditLogsPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('Diff truncated — payload too large')).toBeDefined()
+      expect(screen.getByText('Diff truncated - payload too large')).toBeDefined()
     })
+    // Bounded settle before absence assertion to avoid flakiness
+    await new Promise((r) => setTimeout(r, 80))
     // No accordion button for the truncated case
     expect(screen.queryByRole('button', { name: /field changed/i })).toBeNull()
   })

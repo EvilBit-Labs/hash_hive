@@ -51,32 +51,36 @@ if (!IS_ISOLATED) {
   // The tx mock must support select/update/insert/delete so old-row
   // fetches, mutations, and recordAuditEvent inserts all succeed.
 
-  const makeTxMock = (rowOverride: Record<string, unknown> = {}) => ({
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve([makeHashListRow(rowOverride)]),
+  const makeTxMock = (rowOverride: Record<string, unknown> = {}) => {
+    const isNotFound = rowOverride['__notfound__'] === true
+    return {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            // Return [] when __notfound__ is set so the service receives null
+            limit: () => Promise.resolve(isNotFound ? [] : [makeHashListRow(rowOverride)]),
+          }),
         }),
       }),
-    }),
-    update: () => ({
-      set: () => ({
-        where: () => ({
+      update: () => ({
+        set: () => ({
+          where: () => ({
+            returning: () => Promise.resolve([makeHashListRow(rowOverride)]),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
           returning: () => Promise.resolve([makeHashListRow(rowOverride)]),
         }),
       }),
-    }),
-    insert: () => ({
-      values: () => ({
-        returning: () => Promise.resolve([makeHashListRow(rowOverride)]),
+      delete: () => ({
+        where: () => Promise.resolve(),
       }),
-    }),
-    delete: () => ({
-      where: () => Promise.resolve(),
-    }),
-    // tx.execute used by deleteHashItemsBatched (hash list cascade)
-    execute: async () => ({ rowCount: 0 }),
-  })
+      // tx.execute used by deleteHashItemsBatched (hash list cascade)
+      execute: async () => ({ rowCount: 0 }),
+    }
+  }
 
   const txState: { rowOverride: Record<string, unknown> } = { rowOverride: {} }
 
@@ -85,7 +89,12 @@ if (!IS_ISOLATED) {
       select: () => ({
         from: () => ({
           where: () => ({
-            limit: () => Promise.resolve([makeHashListRow(txState.rowOverride)]),
+            limit: () =>
+              Promise.resolve(
+                txState.rowOverride['__notfound__'] === true
+                  ? []
+                  : [makeHashListRow(txState.rowOverride)]
+              ),
           }),
         }),
       }),
@@ -249,9 +258,15 @@ if (!IS_ISOLATED) {
       })
 
       it('returns false and does not audit when hash list not found', async () => {
-        // Before any delete is invoked, no audit event has been recorded.
+        // Arrange: make the db select return [] so getHashListById resolves null
         txState.rowOverride = { __notfound__: true }
-        expect(recordAuditEventSpy).toHaveBeenCalledTimes(0)
+
+        // Act
+        const result = await deleteHashList(10, 5, USER_ACTOR)
+
+        // Assert
+        expect(result).toBe(false)
+        expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })
 

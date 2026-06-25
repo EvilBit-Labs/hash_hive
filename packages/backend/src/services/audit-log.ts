@@ -403,7 +403,19 @@ export async function recordAuditEvent(input: RecordAuditEventInput, executor: E
   const allowedOld = input.oldRow ? projectRow(input.oldRow, input.entityType) : null
   const allowedNew = input.newRow ? projectRow(input.newRow, input.entityType) : null
 
-  const rawDiff = computeDiff(input.action, allowedOld, allowedNew)
+  // status_changed: the from/to status travels in the dedicated fromStatus/toStatus
+  // columns. Strip 'status' from the projected rows before diffing so it does not
+  // also appear redundantly inside `changes`.
+  const diffOld =
+    input.action === 'status_changed' && allowedOld
+      ? Object.fromEntries(Object.entries(allowedOld).filter(([k]) => k !== 'status'))
+      : allowedOld
+  const diffNew =
+    input.action === 'status_changed' && allowedNew
+      ? Object.fromEntries(Object.entries(allowedNew).filter(([k]) => k !== 'status'))
+      : allowedNew
+
+  const rawDiff = computeDiff(input.action, diffOld, diffNew)
   const changes = capChanges(rawDiff)
 
   const [row] = await executor

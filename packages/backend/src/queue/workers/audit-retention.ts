@@ -61,8 +61,8 @@ export async function purgeExpiredAuditLogs({
   let totalDeleted = 0
   let passes = 0
 
-  // biome-ignore lint/correctness/noConstantCondition: deliberate loop
-  while (true) {
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- batches must be deleted sequentially
     const deleted = await db
       .delete(auditLogs)
       .where(
