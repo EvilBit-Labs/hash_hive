@@ -13,6 +13,9 @@ export const Permission = {
   // Mint / list / revoke agent enrollment tokens. Admin-only — mirrors the
   // backend's requireMembershipRole('admin') on the enrollment-token routes.
   ENROLLMENT_TOKEN_MANAGE: 'enrollment_token:manage',
+  // Browse project audit history. Admin and contributor only (R11) — mirrors
+  // the backend's requireMembershipRole('admin', 'contributor') gate.
+  AUDIT_LOG_VIEW: 'audit_log:view',
 } as const
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission]
@@ -29,6 +32,7 @@ const ROLE_PERMISSIONS: Record<string, ReadonlySet<PermissionKey>> = {
     Permission.AGENT_VIEW,
     Permission.TEMPLATE_VIEW,
     Permission.TEMPLATE_MANAGE,
+    Permission.AUDIT_LOG_VIEW,
   ]),
   viewer: new Set([
     Permission.CAMPAIGN_VIEW,

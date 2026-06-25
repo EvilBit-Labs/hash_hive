@@ -4,6 +4,7 @@
  */
 
 import type {
+  AuditLog,
   CampaignActiveAgent,
   CampaignAttackRow,
   CampaignTaskStats,
@@ -493,6 +494,42 @@ export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
   return {
     results,
     total: options.total ?? results.length,
+    limit: options.limit ?? 50,
+    offset: options.offset ?? 0,
+  }
+}
+
+// --- Audit log fixtures ---
+
+interface MockAuditLogOptions {
+  logs?: Array<Partial<AuditLog>>
+  total?: number
+  limit?: number
+  offset?: number
+}
+
+export function mockAuditLogsResponse(options: MockAuditLogOptions = {}) {
+  const count = options.logs ? options.logs.length : 2
+  const data: AuditLog[] = Array.from({ length: count }, (_, i) => ({
+    id: i + 1,
+    actorType: 'user' as const,
+    actorId: 1,
+    projectId: 1,
+    entityType: 'campaign' as const,
+    entityId: i + 1,
+    action: 'updated' as const,
+    fromStatus: null,
+    toStatus: null,
+    reason: null,
+    changes: { name: { old: `Old Name ${i + 1}`, new: `New Name ${i + 1}` } },
+    createdAt: new Date(Date.now() - i * 60_000).toISOString(),
+    actorLabel: 'admin',
+    entityLabel: `Campaign ${i + 1}`,
+    ...options.logs?.[i],
+  }))
+  return {
+    data,
+    total: options.total ?? data.length,
     limit: options.limit ?? 50,
     offset: options.offset ?? 0,
   }
