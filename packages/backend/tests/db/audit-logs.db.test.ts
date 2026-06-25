@@ -117,28 +117,31 @@ describe('audit_logs nominal insert', () => {
 describe('audit_logs CHECK constraints', () => {
   it('rejects an out-of-vocabulary actor_type', async () => {
     await expect(
-      db.execute(
-        sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
-            VALUES ('robot', 'campaign', 1, 'created')`
-      )
+      (async () =>
+        db.execute(
+          sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
+              VALUES ('robot', 'campaign', 1, 'created')`
+        ))()
     ).rejects.toThrow()
   })
 
   it('rejects an out-of-vocabulary entity_type', async () => {
     await expect(
-      db.execute(
-        sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
-            VALUES ('user', 'unknown_resource', 1, 'created')`
-      )
+      (async () =>
+        db.execute(
+          sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
+              VALUES ('user', 'unknown_resource', 1, 'created')`
+        ))()
     ).rejects.toThrow()
   })
 
   it('rejects an out-of-vocabulary action', async () => {
     await expect(
-      db.execute(
-        sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
-            VALUES ('user', 'campaign', 1, 'exploded')`
-      )
+      (async () =>
+        db.execute(
+          sql`INSERT INTO audit_logs (actor_type, entity_type, entity_id, action)
+              VALUES ('user', 'campaign', 1, 'exploded')`
+        ))()
     ).rejects.toThrow()
   })
 })
