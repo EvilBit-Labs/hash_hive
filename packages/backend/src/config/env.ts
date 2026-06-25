@@ -5,7 +5,7 @@ import { z } from 'zod'
 // SQL, so a malformed value is rejected at startup rather than swallowed later.
 const INTERVAL_LITERAL = /^\d+\s+(second|minute|hour|day|week|month|year)s?$/i
 
-const envSchema = z.object({
+export const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -94,6 +94,15 @@ const envSchema = z.object({
   // agent's observed-speed EWMA; the remainder is re-pended. Default 300 s
   // (>= ~20x hashcat startup cost so per-task overhead stays amortized).
   TASK_TARGET_DURATION_SECONDS: z.coerce.number().int().positive().default(300),
+
+  // Audit log retention window (U9, KTD-5).
+  // Postgres interval literal — e.g. "365 days", "90 days".
+  // The audit-retention worker runs a batched DELETE each day and purges
+  // audit_logs rows (including orphaned NULL-project_id rows) older than this
+  // window. A misconfiguration fails loudly here at startup rather than as a
+  // swallowed SQL error later, and the regex closes the bind-parameter
+  // interpolation vector even though the source is operator-controlled env.
+  AUDIT_LOG_RETENTION: z.string().regex(INTERVAL_LITERAL).default('365 days'),
 })
 
 export type Env = z.infer<typeof envSchema>
