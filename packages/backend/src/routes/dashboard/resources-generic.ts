@@ -94,7 +94,9 @@ export function registerGenericResourceRoutes(
   router.openapi(createResourceRoute, async (c) => {
     const data = c.req.valid('json')
     const { projectId } = c.get('scopedUser')!
-    const item = await createResource(table, { ...data, projectId })
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
+    const item = await createResource(table, { ...data, projectId }, actor)
     return c.json({ item }, 201)
   })
 
@@ -164,6 +166,8 @@ export function registerGenericResourceRoutes(
 
   router.openapi(uploadResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
     const id = Number(c.req.param('id'))
     const item = await getResourceById(table, id, projectId)
 
@@ -182,7 +186,7 @@ export function registerGenericResourceRoutes(
     }
 
     try {
-      const result = await uploadResourceFile(table, id, projectId, prefix, file)
+      const result = await uploadResourceFile(table, id, projectId, prefix, file, actor)
       return c.json(result, 200)
     } catch (err) {
       if (err instanceof UploadTooLargeError) {
@@ -223,9 +227,11 @@ export function registerGenericResourceRoutes(
 
   router.openapi(deleteResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
     const { id } = c.req.valid('param')
     try {
-      const deleted = await deleteResource(table, id, projectId, prefix)
+      const deleted = await deleteResource(table, id, projectId, prefix, actor)
       if (!deleted) {
         return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
       }
