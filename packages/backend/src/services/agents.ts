@@ -11,7 +11,17 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { type RecordAuditEventInput, recordAuditEvent } from './audit-log.js'
 import { emitAgentError, emitAgentStatus } from './events.js'
+
+// ─── Actor type ──────────────────────────────────────────────────────────────
+
+/**
+ * Who is performing an auditable mutation. Resolved from the request's auth
+ * context by the route handler and threaded into service functions — never
+ * derived from the request body (R5).
+ */
+export type Actor = RecordAuditEventInput['actor']
 
 // SelectAgent from @hashhive/shared is the zod-strict shape (jsonb as Json),
 // but Drizzle's row selection narrows jsonb to `unknown`. Deriving from
@@ -462,13 +472,43 @@ export async function updateAgent(
     name?: string | undefined
     status?: string | undefined
   },
-  projectId: number
+  projectId: number,
+  actor?: Actor
 ) {
-  const [updated] = await db
-    .update(agents)
-    .set({ ...data, updatedAt: new Date() })
-    .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
-    .returning()
+  const DEFAULT_SYSTEM_ACTOR: Actor = { actorType: 'system', actorId: null }
+  const resolvedActor = actor ?? DEFAULT_SYSTEM_ACTOR
+
+  const updated = await db.transaction(async (tx) => {
+    const [oldRow] = await tx
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+
+    if (!oldRow) return null
+
+    const [updatedRow] = await tx
+      .update(agents)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+      .returning()
+
+    if (!updatedRow) return null
+
+    await recordAuditEvent(
+      {
+        actor: resolvedActor,
+        projectId,
+        entityType: 'agent',
+        entityId: agentId,
+        action: 'updated',
+        oldRow,
+        newRow: updatedRow,
+      },
+      tx
+    )
+
+    return updatedRow
+  })
 
   if (updated && data.status) {
     emitAgentStatus(updated.projectId, updated.id, data.status)
