@@ -267,6 +267,17 @@ if (!IS_ISOLATED) {
     client: {},
   }))
 
+  // Stub audit-log service so the audit-logs route resolves without a DB.
+  // listAuditEvents must return the `AuditLogListResult` shape (`data`, not
+  // `items`) because the route maps via paginate() to produce `items`.
+  mock.module('../../src/services/audit-log.js', () => ({
+    listAuditEvents: async () => ({ data: [], total: 0, limit: 50, offset: 0 }),
+    recordAuditEvent: async () => ({}),
+    ENTITY_ALLOWLISTS: {},
+    AUDITED_TABLE_COLUMNS: {},
+    EXPLICITLY_EXCLUDED_COLUMNS: new Set<string>(),
+  }))
+
   // ─── Routes (dynamic imports so they pick up the mocks) ──────────
   // Bun's ESM loader hoists static imports above the describe blocks,
   // which would resolve to the unmocked services. Use require() (Bun
@@ -274,6 +285,7 @@ if (!IS_ISOLATED) {
   // after `mock.module` has run.
   const { controlAgentRoutes } = require('../../src/routes/control/agents.js')
   const { controlAttackRoutes } = require('../../src/routes/control/attacks.js')
+  const { controlAuditLogRoutes } = require('../../src/routes/control/audit-logs.js')
   const { controlCampaignRoutes } = require('../../src/routes/control/campaigns.js')
   const {
     requireProjectMembership,
@@ -580,6 +592,60 @@ if (!IS_ISOLATED) {
         expect(body.type).toBe('https://hashhive.dev/errors/validation')
         expect(Array.isArray(body.errors)).toBe(true)
         expect(body.errors?.[0]?.path).toBeDefined()
+      })
+    })
+
+    describe('audit-logs', () => {
+      it('returns 200 with real RFC 9457 envelope shape for admin', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['admin'] }]
+        activeProjectId = 1
+        const app = makeApp(controlAuditLogRoutes)
+        const res = await app.request('/', { headers: authHeaders() })
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(Array.isArray(body.items)).toBe(true)
+        expect(typeof body.total).toBe('number')
+      })
+
+      it('returns 403 RFC 9457 for viewer-role — real controlErrorResponse envelope', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['viewer'] }]
+        activeProjectId = 1
+        const app = makeApp(controlAuditLogRoutes)
+        const res = await app.request('/', { headers: authHeaders() })
+        expect(res.status).toBe(403)
+        expect(res.headers.get('content-type')).toContain('application/problem+json')
+        const body = await res.json()
+        expect(body.type).toBe('https://hashhive.dev/errors/forbidden')
+        expect(body.title).toBe('Forbidden')
+      })
+
+      it('returns 403 RFC 9457 for cross-project access', async () => {
+        // userId:1 is admin on project 1 — project 2 has no membership.
+        activeProjectId = 2
+        const app = makeApp(controlAuditLogRoutes)
+        const res = await app.request('/', { headers: authHeaders() })
+        expect(res.status).toBe(403)
+        expect(res.headers.get('content-type')).toContain('application/problem+json')
+        const body = await res.json()
+        expect(body.type).toBe('https://hashhive.dev/errors/forbidden')
+      })
+
+      it('returns 400 RFC 9457 when X-Project-Id header is missing', async () => {
+        activeProjectId = null
+        const app = makeApp(controlAuditLogRoutes)
+        const res = await app.request('/', { headers: authHeaders() })
+        expect(res.status).toBe(400)
+        expect(res.headers.get('content-type')).toContain('application/problem+json')
+        const body = await res.json()
+        expect(body.type).toBe('https://hashhive.dev/errors/project-not-selected')
+      })
+
+      it('returns 200 for contributor-role', async () => {
+        mockMemberships = [{ userId: 1, projectId: 1, roles: ['contributor'] }]
+        activeProjectId = 1
+        const app = makeApp(controlAuditLogRoutes)
+        const res = await app.request('/', { headers: authHeaders() })
+        expect(res.status).toBe(200)
       })
     })
   })
