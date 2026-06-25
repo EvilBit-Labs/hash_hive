@@ -83,7 +83,10 @@ if (!IS_ISOLATED) {
   const makeTxMock = (agentRow: Record<string, unknown> = makeAgentRow()) => ({
     select: () => ({
       from: () => ({
-        where: () => Promise.resolve([agentRow]),
+        where: () => ({
+          // updateAgent calls .limit(1) on the pre-mutation select
+          limit: () => Promise.resolve([agentRow]),
+        }),
       }),
     }),
     update: () => ({
@@ -273,7 +276,9 @@ if (!IS_ISOLATED) {
             transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) =>
               fn({
                 ...makeTxMock(makeAgentRow()),
-                select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+                select: () => ({
+                  from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }),
+                }),
               }),
             client: {},
           },

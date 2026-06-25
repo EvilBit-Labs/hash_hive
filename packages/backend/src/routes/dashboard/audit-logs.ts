@@ -9,7 +9,12 @@
  *   - `routes/dashboard/enrollment-tokens.ts` — requireMembershipRole gate
  *   - dashboard read-endpoint three-pillar convention (shared schema bound in route)
  */
-import { auditLogListResponseSchema, auditLogQuerySchema } from '@hashhive/shared'
+import {
+  AUDIT_ACTION_VALUES,
+  AUDIT_ACTOR_TYPE_VALUES,
+  AUDIT_ENTITY_TYPE_VALUES,
+  auditLogListResponseSchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -21,6 +26,8 @@ import { requireMembershipRole } from '../../middleware/rbac.js'
 import {
   coercedIntegerQuery,
   coercedOptionalPositiveIntegerQuery,
+  enumFilterQuery,
+  isoDateTimeFilterQuery,
 } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
@@ -44,43 +51,11 @@ const AUDIT_LIST_DEFAULT_LIMIT = 50
 
 // ─── Query schema ────────────────────────────────────────────────────────────
 
-/**
- * Filter helper for optional enum query params. Resolves to undefined on
- * missing or malformed input (no filter applied) rather than 400.
- *
- * The `.openapi({ type: 'string' })` annotation is required for spec-gen:
- * `@hono/zod-openapi`'s generator throws `UnknownZodTypeError` on any schema
- * that uses `.catch(...)` without an explicit hint, mirroring the same
- * constraint documented in `openapi/coerced-query.ts`.
- */
-function enumFilterQuery<T extends [string, ...string[]]>(values: T) {
-  return z.enum(values).optional().catch(undefined).openapi({ type: 'string', enum: values })
-}
-
-/**
- * ISO datetime filter — falls back to undefined (no filter) on bad input,
- * matching the dashboard surface's permissive filter posture.
- */
-function isoDateTimeFilterQuery() {
-  return z
-    .string()
-    .datetime()
-    .optional()
-    .catch(undefined)
-    .openapi({ type: 'string', format: 'date-time' })
-}
-
 const listAuditLogsQuerySchema = z.object({
-  entityType: enumFilterQuery(
-    auditLogQuerySchema.shape.entityType.unwrap().options as [string, ...string[]]
-  ),
+  entityType: enumFilterQuery(AUDIT_ENTITY_TYPE_VALUES),
   entityId: coercedOptionalPositiveIntegerQuery(),
-  actorType: enumFilterQuery(
-    auditLogQuerySchema.shape.actorType.unwrap().options as [string, ...string[]]
-  ),
-  action: enumFilterQuery(
-    auditLogQuerySchema.shape.action.unwrap().options as [string, ...string[]]
-  ),
+  actorType: enumFilterQuery(AUDIT_ACTOR_TYPE_VALUES),
+  action: enumFilterQuery(AUDIT_ACTION_VALUES),
   dateFrom: isoDateTimeFilterQuery(),
   dateTo: isoDateTimeFilterQuery(),
   limit: coercedIntegerQuery({

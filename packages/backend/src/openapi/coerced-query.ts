@@ -71,3 +71,33 @@ export function coercedOptionalPositiveIntegerQuery() {
     .catch(undefined)
     .openapi({ type: 'integer', minimum: 1 })
 }
+
+/**
+ * Filter helper for optional enum query params. Resolves to `undefined` on
+ * missing or malformed input (no filter applied) rather than 400.
+ *
+ * The `.openapi({ type: 'string' })` annotation is required for spec-gen:
+ * `@hono/zod-openapi`'s generator throws `UnknownZodTypeError` on any schema
+ * that uses `.catch(...)` without an explicit hint, mirroring the same
+ * constraint documented above.
+ */
+export function enumFilterQuery<T extends readonly [string, ...string[]]>(values: T) {
+  const mutable = values as unknown as [string, ...string[]]
+  return z.enum(mutable).optional().catch(undefined).openapi({ type: 'string', enum: mutable })
+}
+
+/**
+ * ISO datetime filter — falls back to `undefined` (no filter) on bad input,
+ * matching the dashboard and control surfaces' permissive filter posture.
+ *
+ * The `.openapi(...)` annotation is required for the same spec-gen reason
+ * as `enumFilterQuery` above.
+ */
+export function isoDateTimeFilterQuery() {
+  return z
+    .string()
+    .datetime()
+    .optional()
+    .catch(undefined)
+    .openapi({ type: 'string', format: 'date-time' })
+}

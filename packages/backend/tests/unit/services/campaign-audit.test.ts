@@ -58,9 +58,10 @@ const makeAttackRow = (overrides: Record<string, unknown> = {}) => ({
 
 // ─── DB mock ─────────────────────────────────────────────────────────────────
 //
-// updateCampaign and changeRunningCampaignPriority use db.transaction internally.
-// The tx mock must support select/update/insert so both the old-row fetch, the
-// mutation, and the recordAuditEvent insert (inside the transaction) all work.
+// updateCampaign, changeRunningCampaignPriority, createAttack, and deleteAttack
+// all use db.transaction internally. The tx mock must support select/update/
+// insert/delete so the mutation and the recordAuditEvent write (inside the
+// transaction) all work without a real DB.
 
 const makeTxMock = (campaignOverride: Record<string, unknown> = {}) => ({
   select: () => ({
@@ -78,9 +79,19 @@ const makeTxMock = (campaignOverride: Record<string, unknown> = {}) => ({
       }),
     }),
   }),
+  // insert is used by both attack creation (returns attack row) and by
+  // recordAuditEvent (returns audit row). Both callers only need a truthy
+  // result with the fields they inspect, so makeAttackRow() is a safe
+  // superset for both call sites.
   insert: () => ({
     values: () => ({
-      returning: () => Promise.resolve([{ id: 1 }]),
+      returning: () => Promise.resolve([makeAttackRow()]),
+    }),
+  }),
+  // delete is used by deleteAttack inside its transaction.
+  delete: () => ({
+    where: () => ({
+      returning: () => Promise.resolve([makeAttackRow()]),
     }),
   }),
 })
@@ -113,13 +124,15 @@ mock.module('../../../src/db/index.js', () => {
           }),
         }),
       }),
-      // top-level insert (used by recordAuditEvent when called without a tx)
+      // top-level insert (used by recordAuditEvent on non-transactional paths,
+      // e.g. transitionCampaign and updateAttack which pass no tx)
       insert: () => ({
         values: () => ({
           returning: () => Promise.resolve([{ id: 1 }]),
         }),
       }),
-      // top-level delete (used by deleteAttack)
+      // top-level delete (kept for completeness; deleteAttack now routes
+      // through db.transaction so tx.delete handles the real call)
       delete: () => ({
         where: () => ({
           returning: () => Promise.resolve([makeAttackRow()]),

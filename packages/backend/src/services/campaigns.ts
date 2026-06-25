@@ -1048,35 +1048,46 @@ export async function createAttack(
   }
 ) {
   const keyspace = await computeAttackKeyspace(data)
-  const [attack] = await db
-    .insert(attacks)
-    .values({
-      campaignId: data.campaignId,
-      projectId: data.projectId,
-      mode: data.mode,
-      hashTypeId: data.hashTypeId ?? null,
-      wordlistId: data.wordlistId ?? null,
-      rulelistId: data.rulelistId ?? null,
-      masklistId: data.masklistId ?? null,
-      advancedConfiguration: data.advancedConfiguration ?? {},
-      dependencies: data.dependencies ?? [],
-      keyspace,
-    })
-    .returning()
 
-  if (attack) {
-    await recordAuditEvent({
-      actor,
-      projectId: attack.projectId,
-      entityType: 'attack',
-      entityId: attack.id,
-      action: 'created',
-      newRow: attack as Record<string, unknown>,
-    })
-  }
+  // Insert and audit run in one transaction so a crash between the two
+  // cannot leave an attack with no audit record (R4 atomicity).
+  const attack = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(attacks)
+      .values({
+        campaignId: data.campaignId,
+        projectId: data.projectId,
+        mode: data.mode,
+        hashTypeId: data.hashTypeId ?? null,
+        wordlistId: data.wordlistId ?? null,
+        rulelistId: data.rulelistId ?? null,
+        masklistId: data.masklistId ?? null,
+        advancedConfiguration: data.advancedConfiguration ?? {},
+        dependencies: data.dependencies ?? [],
+        keyspace,
+      })
+      .returning()
+
+    if (inserted) {
+      await recordAuditEvent(
+        {
+          actor,
+          projectId: inserted.projectId,
+          entityType: 'attack',
+          entityId: inserted.id,
+          action: 'created',
+          newRow: inserted as Record<string, unknown>,
+        },
+        tx
+      )
+    }
+
+    return inserted ?? null
+  })
 
   // Keyspace couldn't be computed inline (referenced resource not counted yet):
   // enqueue a count job best-effort so it fills in once the resource is sized.
+  // Runs outside the transaction — queue enqueue is a post-commit side effect.
   if (attack && keyspace === null) {
     await enqueueLineCountForUncountedResources({
       wordlistId: attack.wordlistId,
@@ -1086,7 +1097,7 @@ export async function createAttack(
     })
   }
 
-  return attack ?? null
+  return attack
 }
 
 export async function updateAttack(
@@ -1157,16 +1168,23 @@ export async function deleteAttack(
     actorId: null,
   }
 ) {
-  const [deleted] = await db.delete(attacks).where(eq(attacks.id, id)).returning()
-  if (deleted) {
-    await recordAuditEvent({
-      actor,
-      projectId: deleted.projectId,
-      entityType: 'attack',
-      entityId: deleted.id,
-      action: 'deleted',
-      oldRow: deleted as Record<string, unknown>,
-    })
-  }
-  return deleted ?? null
+  // Delete and audit run in one transaction so a crash between the two
+  // cannot leave a deleted attack with no audit record (R4 atomicity).
+  return db.transaction(async (tx) => {
+    const [deleted] = await tx.delete(attacks).where(eq(attacks.id, id)).returning()
+    if (deleted) {
+      await recordAuditEvent(
+        {
+          actor,
+          projectId: deleted.projectId,
+          entityType: 'attack',
+          entityId: deleted.id,
+          action: 'deleted',
+          oldRow: deleted as Record<string, unknown>,
+        },
+        tx
+      )
+    }
+    return deleted ?? null
+  })
 }

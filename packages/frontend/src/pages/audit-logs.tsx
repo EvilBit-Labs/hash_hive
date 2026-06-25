@@ -25,6 +25,7 @@ import { PageHeader } from '../components/ui/page-header'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { useAuditLogs } from '../hooks/use-audit-logs'
 import { useCopyToClipboard } from '../hooks/use-copy-to-clipboard'
+import { safeNonNegativeInt, safePositiveInt } from '../lib/search-params'
 import { useUiStore } from '../stores/ui'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -62,18 +63,6 @@ interface FieldDiff {
 function safeDateRange(raw: string | null): DateRangeKey {
   if (raw && isDateRangeKey(raw)) return raw
   return DEFAULT_DATE_RANGE
-}
-
-function safePositiveInt(raw: string | null): number | undefined {
-  if (!raw) return undefined
-  const n = Number(raw)
-  return Number.isInteger(n) && n > 0 ? n : undefined
-}
-
-function safeNonNegativeInt(raw: string | null): number {
-  if (!raw) return 0
-  const n = Number(raw)
-  return Number.isInteger(n) && n >= 0 ? n : 0
 }
 
 function resolveDateWindow(range: DateRangeKey): { dateFrom?: string; dateTo?: string } {
@@ -249,17 +238,9 @@ function ChangesCell({
   )
 }
 
-// ─── Expanded diff row (inline accordion, spans all columns) ─────────────────
-
-// (accordion is rendered inside the ChangesCell itself — no separate <tr> needed)
-
 // ─── Entity link helper ───────────────────────────────────────────────────────
 
-function entityLink(entityType: string, entityId: number, label: string | undefined): string {
-  const fallback = `${entityType} #${entityId}`
-  const display = label ?? fallback
-  // We only return the display string here; callers decide whether to link
-  void display
+function entityLink(entityType: string, entityId: number): string {
   switch (entityType) {
     case 'campaign':
       return `/campaigns/${entityId}`
@@ -280,7 +261,7 @@ interface EntityCellProps {
 
 function EntityCell({ entityType, entityId, entityLabel }: EntityCellProps) {
   const display = entityLabel ?? `${entityType} #${entityId}`
-  const href = entityLink(entityType, entityId, entityLabel)
+  const href = entityLink(entityType, entityId)
   if (href) {
     return (
       <Link to={href} className="text-xs text-primary hover:underline">

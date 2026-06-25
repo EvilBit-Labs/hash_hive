@@ -483,6 +483,7 @@ export async function updateAgent(
       .select()
       .from(agents)
       .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+      .limit(1)
 
     if (!oldRow) return null
 
