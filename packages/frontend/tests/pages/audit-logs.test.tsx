@@ -317,6 +317,31 @@ describe('AuditLogsPage', () => {
     })
   })
 
+  it('renders truncated diff as static label without accordion when changes = { _truncated: true }', async () => {
+    const data = mockAuditLogsResponse({
+      logs: [
+        {
+          id: 8,
+          action: 'updated',
+          changes: { _truncated: true },
+          entityType: 'campaign',
+          entityId: 4,
+        },
+      ],
+      total: 1,
+    })
+
+    fetchMock = defaultMocks({ '/dashboard/audit-logs': { status: 200, body: data } })
+    selectProject()
+    renderWithMotion(<AuditLogsPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Diff truncated — payload too large')).toBeDefined()
+    })
+    // No accordion button for the truncated case
+    expect(screen.queryByRole('button', { name: /field changed/i })).toBeNull()
+  })
+
   it('passes entityType and entityId from URL deep link to the request', async () => {
     fetchMock = defaultMocks()
     selectProject()

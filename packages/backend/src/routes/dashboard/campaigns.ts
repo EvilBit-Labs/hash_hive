@@ -210,16 +210,21 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
   const data = c.req.valid('json')
   const { userId, projectId } = c.get('scopedUser')!
 
+  const actor = { actorType: 'user' as const, actorId: userId }
+
   // No attacks supplied → legacy single-row insert (backward compatible).
   if (!data.attacks || data.attacks.length === 0) {
-    const campaign = await createCampaign({
-      name: data.name,
-      description: data.description,
-      hashListId: data.hashListId,
-      priority: data.priority,
-      projectId,
-      createdBy: userId,
-    })
+    const campaign = await createCampaign(
+      {
+        name: data.name,
+        description: data.description,
+        hashListId: data.hashListId,
+        priority: data.priority,
+        projectId,
+        createdBy: userId,
+      },
+      actor
+    )
     return c.json({ campaign, attacks: [] }, 201)
   }
 
@@ -239,6 +244,7 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
       projectId,
       createdBy: userId,
       attacks: data.attacks,
+      actor,
     })
   } catch (err) {
     logger.error(
@@ -366,7 +372,7 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
 
   let result: Awaited<ReturnType<typeof deleteCampaign>>
   try {
-    result = await deleteCampaign(id, projectId)
+    result = await deleteCampaign(id, projectId, { actorType: 'user', actorId: userId })
   } catch (err) {
     // deleteCampaign runs a multi-statement transaction. Unexpected
     // failures (FK from a future child table, DB connectivity drop,

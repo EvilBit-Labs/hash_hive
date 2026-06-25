@@ -154,7 +154,14 @@ export type DeleteCampaignResult =
  * parent DELETE returns zero rows we abort the transaction via a
  * thrown sentinel, leaving the child rows intact.
  */
-export async function deleteCampaign(id: number, projectId: number): Promise<DeleteCampaignResult> {
+export async function deleteCampaign(
+  id: number,
+  projectId: number,
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
+): Promise<DeleteCampaignResult> {
   class StatusFlippedDuringDelete extends Error {
     constructor(
       public readonly observedStatus: string,
@@ -167,7 +174,7 @@ export async function deleteCampaign(id: number, projectId: number): Promise<Del
   try {
     const result = await db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ status: campaigns.status, isPermanent: campaigns.isPermanent })
+        .select()
         .from(campaigns)
         .where(and(eq(campaigns.id, id), eq(campaigns.projectId, projectId)))
         .limit(1)
@@ -217,6 +224,19 @@ export async function deleteCampaign(id: number, projectId: number): Promise<Del
           current?.isPermanent ?? false
         )
       }
+
+      await recordAuditEvent(
+        {
+          actor,
+          projectId,
+          entityType: 'campaign',
+          entityId: id,
+          action: 'deleted',
+          oldRow: existing as Record<string, unknown>,
+        },
+        tx
+      )
+
       return { kind: 'deleted', id: row.id, projectId: row.projectId } as const
     })
 

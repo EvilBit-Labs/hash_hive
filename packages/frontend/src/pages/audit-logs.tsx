@@ -190,6 +190,15 @@ function ChangesCell({
     return <span className="text-xs text-muted-foreground">—</span>
   }
 
+  // Oversized payload: recorder replaced the diff with a truncation marker
+  if (changes['_truncated'] === true) {
+    return (
+      <span className="text-xs text-muted-foreground italic">
+        Diff truncated — payload too large
+      </span>
+    )
+  }
+
   const fieldEntries = Object.entries(changes)
   const fieldCount = fieldEntries.length
   const isExpanded = expandedId === rowId

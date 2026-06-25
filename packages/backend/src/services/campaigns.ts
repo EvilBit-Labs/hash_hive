@@ -253,28 +253,50 @@ export async function getCampaignById(id: number) {
   return campaign ?? null
 }
 
-export async function createCampaign(data: {
-  projectId: number
-  name: string
-  description?: string | undefined
-  hashListId: number
-  priority?: number | undefined
-  createdBy?: number | undefined
-}) {
-  const [campaign] = await db
-    .insert(campaigns)
-    .values({
-      projectId: data.projectId,
-      name: data.name,
-      description: data.description ?? null,
-      hashListId: data.hashListId,
-      priority: data.priority ?? 5,
-      createdBy: data.createdBy ?? null,
-      status: 'draft',
-    })
-    .returning()
+export async function createCampaign(
+  data: {
+    projectId: number
+    name: string
+    description?: string | undefined
+    hashListId: number
+    priority?: number | undefined
+    createdBy?: number | undefined
+  },
+  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+    actorType: 'system',
+    actorId: null,
+  }
+) {
+  return db.transaction(async (tx) => {
+    const [campaign] = await tx
+      .insert(campaigns)
+      .values({
+        projectId: data.projectId,
+        name: data.name,
+        description: data.description ?? null,
+        hashListId: data.hashListId,
+        priority: data.priority ?? 5,
+        createdBy: data.createdBy ?? null,
+        status: 'draft',
+      })
+      .returning()
 
-  return campaign ?? null
+    if (!campaign) return null
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId: data.projectId,
+        entityType: 'campaign',
+        entityId: campaign.id,
+        action: 'created',
+        newRow: campaign as Record<string, unknown>,
+      },
+      tx
+    )
+
+    return campaign
+  })
 }
 
 /**
@@ -326,7 +348,9 @@ export async function createCampaignWithAttacks(input: {
   priority?: number | undefined
   createdBy?: number | undefined
   attacks: ReadonlyArray<InlineAttackInput>
+  actor?: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } | undefined
 }): Promise<CreateCampaignWithAttacksResult> {
+  const actor = input.actor ?? { actorType: 'system' as const, actorId: null }
   // First validate the proposed DAG using index-based IDs. We use the
   // input position as a stable proxy id; this catches cycles and
   // dangling references before we open the transaction so a failed
@@ -391,6 +415,18 @@ export async function createCampaignWithAttacks(input: {
         throw new Error('Campaign insert returned no row')
       }
 
+      await recordAuditEvent(
+        {
+          actor,
+          projectId: input.projectId,
+          entityType: 'campaign',
+          entityId: campaign.id,
+          action: 'created',
+          newRow: campaign as Record<string, unknown>,
+        },
+        tx
+      )
+
       if (input.attacks.length === 0) {
         return { kind: 'created' as const, campaign, attacks: [] }
       }
@@ -422,11 +458,23 @@ export async function createCampaignWithAttacks(input: {
             dependencies: [],
             keyspace: keyspaceByIndex[idx] ?? null,
           })
-          .returning({ id: attacks.id })
+          .returning()
         if (!row) {
           throw new Error('Attack insert returned no row — txn invariant violated')
         }
         realIdByIndex.push(row.id)
+
+        await recordAuditEvent(
+          {
+            actor,
+            projectId: input.projectId,
+            entityType: 'attack',
+            entityId: row.id,
+            action: 'created',
+            newRow: row as Record<string, unknown>,
+          },
+          tx
+        )
       }
 
       // Translate index-based deps → real-id deps and persist. The
@@ -1116,11 +1164,15 @@ export async function updateAttack(
     actorId: null,
   }
 ) {
+  // Fetch the existing row before opening the transaction so the
+  // keyspace recompute (which may do async resource lookups) runs
+  // outside the transaction and does not hold locks unnecessarily.
+  const [existing] = await db.select().from(attacks).where(eq(attacks.id, id)).limit(1)
+  if (!existing) return null
+
   // Recompute keyspace from the merged inputs so an edit that swaps a
   // wordlist/rulelist/mask refreshes the stored value (it tracks current
   // inputs, including back to null when a new resource isn't counted yet).
-  const [existing] = await db.select().from(attacks).where(eq(attacks.id, id)).limit(1)
-  if (!existing) return null
   const keyspace = await computeAttackKeyspace({
     mode: data.mode ?? existing.mode,
     wordlistId: data.wordlistId ?? existing.wordlistId,
@@ -1129,26 +1181,36 @@ export async function updateAttack(
     advancedConfiguration: data.advancedConfiguration ?? existing.advancedConfiguration,
   })
 
-  const [updated] = await db
-    .update(attacks)
-    .set({ ...data, keyspace, updatedAt: new Date() })
-    .where(eq(attacks.id, id))
-    .returning()
+  // UPDATE and audit run in one transaction so a crash between the two
+  // cannot leave an attack update with no audit record (R4 atomicity).
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(attacks)
+      .set({ ...data, keyspace, updatedAt: new Date() })
+      .where(eq(attacks.id, id))
+      .returning()
 
-  if (updated) {
-    await recordAuditEvent({
-      actor,
-      projectId: updated.projectId,
-      entityType: 'attack',
-      entityId: updated.id,
-      action: 'updated',
-      oldRow: existing as Record<string, unknown>,
-      newRow: updated as Record<string, unknown>,
-    })
-  }
+    if (row) {
+      await recordAuditEvent(
+        {
+          actor,
+          projectId: row.projectId,
+          entityType: 'attack',
+          entityId: row.id,
+          action: 'updated',
+          oldRow: existing as Record<string, unknown>,
+          newRow: row as Record<string, unknown>,
+        },
+        tx
+      )
+    }
+
+    return row ?? null
+  })
 
   // A resource swap may point at an uncounted wordlist/rulelist: enqueue a
   // count job best-effort so keyspace fills in once the resource is sized.
+  // Runs outside the transaction — queue enqueue is a post-commit side effect.
   if (updated && keyspace === null) {
     await enqueueLineCountForUncountedResources({
       wordlistId: updated.wordlistId,
@@ -1158,7 +1220,7 @@ export async function updateAttack(
     })
   }
 
-  return updated ?? null
+  return updated
 }
 
 export async function deleteAttack(

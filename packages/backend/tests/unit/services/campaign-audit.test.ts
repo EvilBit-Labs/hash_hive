@@ -199,9 +199,10 @@ mock.module('../../../src/config/logger.js', () => ({
   },
 }))
 
-// ─── Import module under test (after all mocks) ───────────────────────────────
+// ─── Import modules under test (after all mocks) ─────────────────────────────
 
 const {
+  createCampaign,
   updateCampaign,
   changeRunningCampaignPriority,
   transitionCampaign,
@@ -210,6 +211,8 @@ const {
   deleteAttack,
   _deps,
 } = await import('../../../src/services/campaigns.js')
+
+const { deleteCampaign } = await import('../../../src/services/campaign-dashboard.js')
 
 // Override _deps to inject no-op spies and bypass the queue/task dynamic imports
 _deps.getTasksModule = async () =>
@@ -236,6 +239,69 @@ describe('U3 — campaign audit capture', () => {
   afterEach(() => {
     recordAuditEventSpy.mockClear()
     campaignState.overrides = {}
+  })
+
+  // ── createCampaign ──────────────────────────────────────────────────────────
+
+  describe('createCampaign', () => {
+    it('calls recordAuditEvent with action=created and user actor', async () => {
+      const result = await createCampaign(
+        { projectId: 10, name: 'New Campaign', hashListId: 1 },
+        USER_ACTOR
+      )
+      expect(result).not.toBeNull()
+      expect(recordAuditEventSpy).toHaveBeenCalledTimes(1)
+      const [input] = recordAuditEventSpy.mock.calls[0]!
+      expect(input.action).toBe('created')
+      expect(input.entityType).toBe('campaign')
+      expect(input.actor).toEqual(USER_ACTOR)
+      expect(input.projectId).toBe(10)
+      expect(input.newRow).toBeDefined()
+      expect(input.oldRow).toBeUndefined()
+    })
+
+    it('uses system actor when called without actor param', async () => {
+      await createCampaign({ projectId: 10, name: 'New Campaign', hashListId: 1 })
+      expect(recordAuditEventSpy).toHaveBeenCalledTimes(1)
+      const [input] = recordAuditEventSpy.mock.calls[0]!
+      expect(input.actor).toEqual(SYSTEM_ACTOR)
+    })
+  })
+
+  // ── deleteCampaign ──────────────────────────────────────────────────────────
+
+  describe('deleteCampaign', () => {
+    it('calls recordAuditEvent with action=deleted and user actor on successful delete', async () => {
+      // The tx mock returns a 'running' campaign by default; set status=draft and
+      // isPermanent=false so the delete guard allows the operation through.
+      campaignState.overrides = { status: 'draft', isPermanent: false }
+      const result = await deleteCampaign(1, 10, USER_ACTOR)
+      expect(result.kind).toBe('deleted')
+      expect(recordAuditEventSpy).toHaveBeenCalledTimes(1)
+      const [input] = recordAuditEventSpy.mock.calls[0]!
+      expect(input.action).toBe('deleted')
+      expect(input.entityType).toBe('campaign')
+      expect(input.actor).toEqual(USER_ACTOR)
+      expect(input.projectId).toBe(10)
+      expect(input.oldRow).toBeDefined()
+      expect(input.newRow).toBeUndefined()
+    })
+
+    it('uses system actor when called without actor param', async () => {
+      campaignState.overrides = { status: 'draft', isPermanent: false }
+      await deleteCampaign(1, 10)
+      expect(recordAuditEventSpy).toHaveBeenCalledTimes(1)
+      const [input] = recordAuditEventSpy.mock.calls[0]!
+      expect(input.actor).toEqual(SYSTEM_ACTOR)
+    })
+
+    it('does NOT call recordAuditEvent when campaign is not_draft', async () => {
+      // Default overrides: status='running' — the guard returns not_draft early.
+      campaignState.overrides = { status: 'running', isPermanent: false }
+      const result = await deleteCampaign(1, 10, USER_ACTOR)
+      expect(result.kind).toBe('not_draft')
+      expect(recordAuditEventSpy).not.toHaveBeenCalled()
+    })
   })
 
   // ── updateCampaign ──────────────────────────────────────────────────────────

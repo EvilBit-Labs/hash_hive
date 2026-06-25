@@ -134,6 +134,13 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'slug',
     'settings',
     'createdBy',
+    // Synthetic keys used only by membership-change audit rows (never present
+    // on real project rows). They let addUserToProject / removeUserFromProject /
+    // updateMemberRoles capture the old→new role diff without polluting the
+    // project CRUD diff (these keys are absent from all real project rows so
+    // they only appear in the diff when explicitly supplied by the caller).
+    'memberUserId',
+    'memberRoles',
     // createdAt / updatedAt excluded: system-managed noise
   ]),
 
@@ -164,10 +171,13 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'wordlistId',
     'rulelistId',
     'masklistId',
-    'advancedConfiguration',
     'keyspace',
     'dependencies',
-    // createdAt / updatedAt excluded
+    // EXCLUDED:
+    //   advancedConfiguration — user-controlled passthrough hashcat blob
+    //     (z.record(z.string(), z.unknown())); storing it verbatim in audit
+    //     changes exposes an unbounded jsonb write channel.
+    //   createdAt / updatedAt — system-managed noise
   ]),
 
   hash_list: new Set([
@@ -221,10 +231,13 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'name',
     'projectId',
     'status',
-    'capabilities',
     'crackerVersion',
     'enrollmentClientId',
     // EXCLUDED (security / operational):
+    //   capabilities — agent-controlled free-form jsonb (set by the agent at
+    //     enrollment via the anonymous enrollment path); storing it verbatim
+    //     in the audit trail creates an injection/exfil channel through the
+    //     admin-readable changes column.
     //   authToken, authTokenHash, authTokenFormat — bearer credential columns
     //   lastSeenAt — heartbeat telemetry (operational, high-frequency)
     //   hardwareProfile — hardware/OS fingerprint
@@ -781,6 +794,10 @@ export const EXPLICITLY_EXCLUDED_COLUMNS: ReadonlySet<string> = new Set([
   'operatingSystemId',
   // Enrollment binding (audited via token_issued event, not a diff field)
   'enrolledByTokenId',
+  // Agent-controlled free-form jsonb (injection/exfil risk via enrollment path)
+  'capabilities',
+  // User-controlled passthrough hashcat blob (unbounded jsonb write channel)
+  'advancedConfiguration',
   // Resource storage path/URL — operational detail, not user-meaningful metadata
   'fileRef',
   // Drizzle internal RLS marker present on every table object's key enumeration

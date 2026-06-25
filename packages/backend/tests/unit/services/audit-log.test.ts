@@ -85,6 +85,75 @@ if (!IS_ISOLATED) {
     returningMock.mockReset().mockImplementation(() => Promise.resolve([{ id: 1 }]))
   })
 
+  // ─── Security: agent-controlled jsonb fields not in changes ──────────────────
+
+  describe('security: agent-controlled and user-controlled jsonb excluded from changes', () => {
+    it('excludes capabilities from agent changes (injection/exfil risk)', async () => {
+      const oldRow = {
+        id: 42,
+        name: 'rig-01',
+        projectId: 1,
+        authToken: null,
+        authTokenHash: null,
+        authTokenFormat: 'plaintext',
+        status: 'offline',
+        capabilities: { gpu: 'RTX 4090', injected: '<script>alert(1)</script>' },
+        crackerVersion: null,
+        enrollmentClientId: null,
+        lastSeenAt: null,
+        hardwareProfile: {},
+        operatingSystemId: null,
+        enrolledByTokenId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      const newRow = {
+        ...oldRow,
+        name: 'rig-01-updated',
+        capabilities: { gpu: 'RTX 4090', exfil: 'evil-data' },
+      }
+
+      await recordAuditEvent({ ...baseInput, oldRow, newRow })
+
+      const changes = capturedValues?.changes as Record<string, unknown> | null
+      const changedKeys = Object.keys(changes ?? {})
+      expect(changedKeys).not.toContain('capabilities')
+      // The allowed change (name) IS present
+      expect(changedKeys).toContain('name')
+    })
+
+    it('excludes advancedConfiguration from attack changes (user-controlled jsonb blob)', async () => {
+      const oldRow = {
+        id: 99,
+        campaignId: 1,
+        projectId: 10,
+        mode: 3,
+        hashTypeId: null,
+        wordlistId: null,
+        rulelistId: null,
+        masklistId: null,
+        advancedConfiguration: { mask: '?a?a?a?a' },
+        keyspace: '100',
+        dependencies: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      const newRow = {
+        ...oldRow,
+        mode: 0,
+        advancedConfiguration: { mask: '?d?d?d?d', injected: 'evil' },
+      }
+
+      await recordAuditEvent({ ...baseInput, entityType: 'attack', oldRow, newRow })
+
+      const changes = capturedValues?.changes as Record<string, unknown> | null
+      const changedKeys = Object.keys(changes ?? {})
+      expect(changedKeys).not.toContain('advancedConfiguration')
+      // The allowed change (mode) IS present
+      expect(changedKeys).toContain('mode')
+    })
+  })
+
   // ─── R6: secret fields never appear in changes ───────────────────────────────
 
   describe('R6: agent secret fields are excluded from changes', () => {
