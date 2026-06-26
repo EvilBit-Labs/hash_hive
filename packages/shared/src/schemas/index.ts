@@ -537,6 +537,9 @@ export const agentHeartbeatResponseSchema = z
  * on the worker rig. Enforced server-side at write time (R3).
  */
 export const RAW_FLAG_DENYLIST = [
+  // `-o` is hashcat's short form of `--outfile`; block it too (matched with
+  // attached-value awareness server-side so `-o/etc/passwd` cannot slip through).
+  '-o',
   '--outfile',
   '--outfile-format',
   '--outfile-autohex-disable',

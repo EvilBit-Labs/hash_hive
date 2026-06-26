@@ -1,24 +1,43 @@
 /**
- * Real-DB tests for the agent advanced-config storage layer (#104, U2):
- * the `agents.config` jsonb column and the `fleet_agent_config` singleton.
- * A mocked db cannot prove the singleton CHECK constraint or the jsonb
- * round-trip — the DDL itself is the thing under test.
+ * Real-DB tests for the agent advanced-config storage layer (#104, U2 + U3):
+ * the `agents.config` jsonb column, the `fleet_agent_config` singleton, and
+ * the service functions that read/write/resolve them.
+ * A mocked db cannot prove the singleton CHECK constraint, the jsonb
+ * round-trip, or the audit-event emission — the DDL and tx behaviour are
+ * what is under test.
  */
 
-import { agents, fleetAgentConfig, projects } from '@hashhive/shared'
+import { auditLogs, agents, fleetAgentConfig, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
+import {
+  getAgentConfig,
+  getFleetDefault,
+  resolveEffectiveConfig,
+  resolveEffectiveWhitelist,
+  updateAgentConfig,
+  updateFleetDefault,
+} from '../../src/services/agent-config.js'
 
 const SLUG = 'agent-config-u2-test'
 let projectId = 0
 let agentId = 0
 
+async function cleanupAuditRows(): Promise<void> {
+  // fleet_config audit rows use projectId=null so project cascade won't touch them.
+  // Clean them up explicitly to keep tests isolated across runs.
+  await db
+    .delete(auditLogs)
+    .where(and(eq(auditLogs.entityType, 'fleet_config'), eq(auditLogs.entityId, 1)))
+}
+
 async function cleanup(): Promise<void> {
-  // Deleting the project cascades to its agents.
+  // Deleting the project cascades to its agents and their audit rows.
   await db.delete(projects).where(eq(projects.slug, SLUG))
   await db.delete(fleetAgentConfig).where(inArray(fleetAgentConfig.id, [1, 2]))
+  await cleanupAuditRows()
 }
 
 beforeAll(async () => {
@@ -79,5 +98,193 @@ describe('fleet_agent_config singleton', () => {
       rejected = true
     }
     expect(rejected).toBe(true)
+  })
+})
+
+// ─── U3: Service-layer tests ──────────────────────────────────────────────────
+
+describe('updateFleetDefault', () => {
+  it('writes a fleet_config audit row with entityType fleet_config', async () => {
+    await cleanupAuditRows()
+
+    await updateFleetDefault(
+      { tuning: { hashcat: { workloadProfile: 3 } } },
+      { actorType: 'system', actorId: null }
+    )
+
+    const [auditRow] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityType, 'fleet_config'), eq(auditLogs.entityId, 1)))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(1)
+
+    expect(auditRow).toBeDefined()
+    expect(auditRow!.entityType).toBe('fleet_config')
+    expect(auditRow!.entityId).toBe(1)
+    expect(auditRow!.action).toBe('updated')
+    expect(auditRow!.projectId).toBeNull()
+  })
+
+  it('returns the new merged config', async () => {
+    // Seed a known fleet state.
+    await updateFleetDefault({ tuning: { hashcat: { workloadProfile: 2 } } })
+    const result = await updateFleetDefault({ tuning: { hashcat: { kernelAccel: 16 } } })
+    // kernelAccel patch is applied; workloadProfile persists from previous write.
+    expect(result.tuning?.hashcat?.kernelAccel).toBe(16)
+    expect(result.tuning?.hashcat?.workloadProfile).toBe(2)
+  })
+})
+
+describe('updateAgentConfig', () => {
+  it('persists config and returns merged result', async () => {
+    // Reset rig config to a known state.
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+
+    const result = await updateAgentConfig(
+      agentId,
+      { tuning: { hashcat: { workloadProfile: 4 } } },
+      { actorType: 'system', actorId: null }
+    )
+
+    expect(result.tuning?.hashcat?.workloadProfile).toBe(4)
+  })
+
+  it('merges successive patches — existing knobs are not wiped', async () => {
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+
+    await updateAgentConfig(agentId, { tuning: { hashcat: { workloadProfile: 3 } } })
+    const result = await updateAgentConfig(agentId, { tuning: { hashcat: { kernelLoops: 8 } } })
+
+    expect(result.tuning?.hashcat?.workloadProfile).toBe(3)
+    expect(result.tuning?.hashcat?.kernelLoops).toBe(8)
+  })
+
+  it('records an audit event with entityType agent', async () => {
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+
+    await updateAgentConfig(
+      agentId,
+      { tuning: { hashcat: { workloadProfile: 2 } } },
+      { actorType: 'system', actorId: null }
+    )
+
+    const [auditRow] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityType, 'agent'), eq(auditLogs.entityId, agentId)))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(1)
+
+    expect(auditRow).toBeDefined()
+    expect(auditRow!.entityType).toBe('agent')
+    expect(auditRow!.action).toBe('updated')
+    expect(auditRow!.projectId).toBe(projectId)
+  })
+})
+
+describe('resolveEffectiveConfig', () => {
+  it('returns fleet tuning value when rig has no override', async () => {
+    // Ensure rig has no tuning.
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+    // Set fleet default.
+    await updateFleetDefault({ tuning: { hashcat: { workloadProfile: 2 } } })
+
+    const effective = await resolveEffectiveConfig(agentId)
+    expect(effective.tuning.hashcat?.workloadProfile).toBe(2)
+  })
+
+  it('returns per-rig override when rig specifies a tuning knob', async () => {
+    await updateFleetDefault({ tuning: { hashcat: { workloadProfile: 2 } } })
+    await updateAgentConfig(agentId, { tuning: { hashcat: { workloadProfile: 4 } } })
+
+    const effective = await resolveEffectiveConfig(agentId)
+    expect(effective.tuning.hashcat?.workloadProfile).toBe(4)
+  })
+
+  it('hardware knob is never inherited from fleet', async () => {
+    // Fleet config has no hardware field — verify hardware comes only from rig.
+    await db
+      .update(agents)
+      .set({ config: { hardware: { deviceIds: [1], tempAbort: 85 } } })
+      .where(eq(agents.id, agentId))
+
+    const effective = await resolveEffectiveConfig(agentId)
+    expect(effective.hardware.deviceIds).toEqual([1])
+    expect(effective.hardware.tempAbort).toBe(85)
+  })
+
+  it('hardware is empty when rig has none set', async () => {
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+
+    const effective = await resolveEffectiveConfig(agentId)
+    expect(effective.hardware).toEqual({})
+  })
+
+  it('always returns both tuning and hardware keys', async () => {
+    const effective = await resolveEffectiveConfig(agentId)
+    expect('tuning' in effective).toBe(true)
+    expect('hardware' in effective).toBe(true)
+  })
+})
+
+describe('resolveEffectiveWhitelist', () => {
+  it('returns UNION of fleet and rig entries, deduped', async () => {
+    await updateFleetDefault({ errorWhitelist: ['fleet-pattern', 'shared'] })
+    await updateAgentConfig(agentId, { errorWhitelist: ['rig-pattern', 'shared'] })
+
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    expect(whitelist).toContain('fleet-pattern')
+    expect(whitelist).toContain('rig-pattern')
+    expect(whitelist.filter((e) => e === 'shared')).toHaveLength(1)
+  })
+
+  it('returns only fleet entries when rig has none', async () => {
+    await updateFleetDefault({ errorWhitelist: ['fleet-only'] })
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    expect(whitelist).toContain('fleet-only')
+  })
+
+  it('returns only rig entries when fleet has none', async () => {
+    await updateFleetDefault({})
+    await updateAgentConfig(agentId, { errorWhitelist: ['rig-only'] })
+
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    expect(whitelist).toContain('rig-only')
+  })
+})
+
+describe('getAgentConfig', () => {
+  it('returns parsed config', async () => {
+    const config = { tuning: { hashcat: { workloadProfile: 1 } } }
+    await db.update(agents).set({ config }).where(eq(agents.id, agentId))
+    const result = await getAgentConfig(agentId)
+    expect(result).toEqual(config)
+  })
+
+  it('returns {} when config is empty', async () => {
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agentId))
+    const result = await getAgentConfig(agentId)
+    expect(result).toEqual({})
+  })
+})
+
+describe('getFleetDefault', () => {
+  it('returns parsed fleet config', async () => {
+    const config = { tuning: { hashcat: { workloadProfile: 3 } } }
+    await db
+      .insert(fleetAgentConfig)
+      .values({ id: 1, config })
+      .onConflictDoUpdate({ target: fleetAgentConfig.id, set: { config } })
+    const result = await getFleetDefault()
+    expect(result.tuning?.hashcat?.workloadProfile).toBe(3)
+  })
+
+  it('returns {} when no fleet row exists', async () => {
+    await db.delete(fleetAgentConfig).where(eq(fleetAgentConfig.id, 1))
+    const result = await getFleetDefault()
+    expect(result).toEqual({})
   })
 })
