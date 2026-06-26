@@ -521,6 +521,126 @@ export const agentHeartbeatResponseSchema = z
   })
   .strict()
 
+// ─── Agent Advanced Configuration (#104) ────────────────────────────
+//
+// Per-rig hashcat configuration: tuning knobs that inherit from a single
+// fleet-wide default, hardware-bound knobs that are always per-rig, a
+// bounded raw-flags escape hatch, and a server-side error whitelist.
+// Engine-keyed (`tuning.hashcat`) so a future engine (John the Ripper)
+// adds a key rather than reshaping the surface. See origin requirements:
+// docs/brainstorms/2026-06-26-agent-advanced-configuration-requirements.md
+
+/**
+ * Hashcat flags an operator may never set through the raw-flags escape
+ * hatch — they redirect output, touch the filesystem, or hijack the
+ * session, turning operator-supplied config into a write/exfil primitive
+ * on the worker rig. Enforced server-side at write time (R3).
+ */
+export const RAW_FLAG_DENYLIST = [
+  '--outfile',
+  '--outfile-format',
+  '--outfile-autohex-disable',
+  '--potfile-path',
+  '--potfile-disable',
+  '--session',
+  '--restore-file-path',
+  '--logfile-disable',
+  '--debug-file',
+  '--induction-dir',
+  '--outfile-check-dir',
+  '--remove',
+] as const
+
+export const RAW_FLAGS_MAX_LEN = 512
+export const RAW_FLAGS_MAX_TOKENS = 16
+export const WORKLOAD_PROFILE_MIN = 1
+export const WORKLOAD_PROFILE_MAX = 4
+export const TEMP_ABORT_MIN = 0
+export const TEMP_ABORT_MAX = 150
+export const WHITELIST_PATTERN_MAX = 256
+export const WHITELIST_MAX_ENTRIES = 64
+
+/** Engine-specific hashcat tuning knobs. Inherit fleet default → per-rig. */
+export const agentHashcatTuningSchema = z
+  .object({
+    workloadProfile: z
+      .number()
+      .int()
+      .min(WORKLOAD_PROFILE_MIN)
+      .max(WORKLOAD_PROFILE_MAX)
+      .optional(),
+    kernelAccel: z.number().int().positive().optional(),
+    kernelLoops: z.number().int().positive().optional(),
+    rawFlags: z.string().max(RAW_FLAGS_MAX_LEN).optional(),
+  })
+  .strict()
+  .openapi('AgentHashcatTuning')
+
+/** Tuning keyed by engine so a second engine is an additive key (R4). */
+export const agentTuningSchema = z
+  .object({
+    hashcat: agentHashcatTuningSchema.optional(),
+  })
+  .strict()
+  .openapi('AgentTuning')
+
+/**
+ * Hardware-bound knobs — always per-rig, never inherited from the fleet
+ * default (R5). `deviceIds` index into the rig's detected hardware.
+ */
+export const agentHardwareKnobsSchema = z
+  .object({
+    deviceIds: z.array(z.number().int().positive()).optional(),
+    tempAbort: z.number().int().min(TEMP_ABORT_MIN).max(TEMP_ABORT_MAX).optional(),
+  })
+  .strict()
+  .openapi('AgentHardwareKnobs')
+
+/** Error patterns treated as non-critical; matched case-insensitively (R12). */
+export const agentErrorWhitelistSchema = z
+  .array(z.string().min(1).max(WHITELIST_PATTERN_MAX))
+  .max(WHITELIST_MAX_ENTRIES)
+  .openapi('AgentErrorWhitelist')
+
+/** Full per-rig configuration as stored on `agents.config`. */
+export const agentConfigSchema = z
+  .object({
+    tuning: agentTuningSchema.optional(),
+    hardware: agentHardwareKnobsSchema.optional(),
+    errorWhitelist: agentErrorWhitelistSchema.optional(),
+  })
+  .strict()
+  .openapi('AgentConfig')
+
+/**
+ * Fleet-wide default — tuning + whitelist only. Hardware-bound knobs are
+ * always per-rig (R5), so they are absent from the fleet default.
+ */
+export const fleetDefaultConfigSchema = z
+  .object({
+    tuning: agentTuningSchema.optional(),
+    errorWhitelist: agentErrorWhitelistSchema.optional(),
+  })
+  .strict()
+  .openapi('FleetDefaultConfig')
+
+/** Source of a resolved knob for the inherited-vs-overridden display (R11). */
+export const configValueSourceSchema = z
+  .enum(['override', 'fleet', 'engine'])
+  .openapi('ConfigValueSource')
+
+/**
+ * What the agent receives at `GET /api/v1/agent/config` — resolved tuning
+ * and hardware knobs only. The whitelist is evaluated server-side and is
+ * never delivered to the rig (R13).
+ */
+export const effectiveAgentConfigSchema = z
+  .object({
+    tuning: agentTuningSchema,
+    hardware: agentHardwareKnobsSchema,
+  })
+  .openapi('EffectiveAgentConfig')
+
 // ─── System Health API ─────────────────────────────────────────────
 
 /**
