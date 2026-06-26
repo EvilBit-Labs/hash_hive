@@ -119,5 +119,3 @@ auditLogRoutes.openapi(listAuditLogsRoute, async (c) => {
     return dashboardError(c, 500, 'AUDIT_LOG_LIST_FAILED', 'Failed to retrieve audit logs')
   }
 })
-
-export { auditLogRoutes as auditLogsRoutes }

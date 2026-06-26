@@ -187,11 +187,14 @@ controlCampaignRoutes.openapi(createCampaignRoute, async (c) => {
     const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
     const user = c.get('currentUser')
     const data = c.req.valid('json')
-    const campaign = await createCampaign({
-      projectId,
-      createdBy: user.userId,
-      ...data,
-    })
+    const campaign = await createCampaign(
+      {
+        projectId,
+        createdBy: user.userId,
+        ...data,
+      },
+      { actorType: 'user', actorId: user.userId }
+    )
     return c.json(campaign, 201)
   } catch (err) {
     return controlErrorResponse(c, err)

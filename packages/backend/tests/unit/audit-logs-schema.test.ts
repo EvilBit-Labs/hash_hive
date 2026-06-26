@@ -134,6 +134,8 @@ describe('auditLogSchema.parse()', () => {
       reason: null,
       changes: null,
       createdAt: '2026-06-24T00:00:00.000Z',
+      actorLabel: 'System',
+      entityLabel: '[deleted]',
     }
 
     expect(() => auditLogSchema.parse(raw)).toThrow()
@@ -153,6 +155,8 @@ describe('auditLogSchema.parse()', () => {
       reason: null,
       changes: null,
       createdAt: '2026-06-24T00:00:00.000Z',
+      actorLabel: 'System',
+      entityLabel: '[deleted]',
     }
 
     expect(() => auditLogSchema.parse(raw)).toThrow()
@@ -172,6 +176,8 @@ describe('auditLogSchema.parse()', () => {
       reason: null,
       changes: null,
       createdAt: '2026-06-24T00:00:00.000Z',
+      actorLabel: 'System',
+      entityLabel: '[deleted]',
     }
 
     expect(() => auditLogSchema.parse(raw)).toThrow()

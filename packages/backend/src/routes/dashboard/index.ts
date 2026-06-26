@@ -41,7 +41,7 @@ import { registerDashboardSecurity } from '../../openapi/security.js'
 import { mountCachedSpec } from '../../openapi/spec-cache.js'
 import { dashboardAgentRoutes } from './agents.js'
 import { attackTemplateRoutes } from './attack-templates.js'
-import { auditLogsRoutes } from './audit-logs.js'
+import { auditLogRoutes } from './audit-logs.js'
 import { authRoutes } from './auth.js'
 import { campaignRoutes } from './campaigns.js'
 import { crackerRoutes } from './crackers.js'
@@ -98,7 +98,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/tasks', taskRoutes)
   surface.route('/stats', statsRoutes)
   surface.route('/results', resultsRoutes)
-  surface.route('/audit-logs', auditLogsRoutes)
+  surface.route('/audit-logs', auditLogRoutes)
   surface.route('/hash-lists', hashListsRoutes)
   surface.route('/events', eventRoutes)
   surface.route('/crackers', crackerRoutes)
