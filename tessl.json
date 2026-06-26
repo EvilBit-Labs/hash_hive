@@ -37,6 +37,13 @@
     },
     "tessl-labs/devops-essentials": {
       "version": "0.1.1"
+    },
+    "secondsky/claude-skills": {
+      "version": "5e92b7170451adf347b8719ee984e147f3eabbea",
+      "source": "https://github.com/secondsky/claude-skills",
+      "include": {
+        "skills": ["motion"]
+      }
     }
   }
 }
