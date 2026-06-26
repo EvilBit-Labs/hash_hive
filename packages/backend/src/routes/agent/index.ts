@@ -53,7 +53,9 @@ import {
 } from '../../openapi/components.js'
 import { registerAgentSecurity } from '../../openapi/security.js'
 import { mountCachedSpec } from '../../openapi/spec-cache.js'
+import { resolveEffectiveWhitelist } from '../../services/agent-config.js'
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js'
+import { downgradeIfWhitelisted } from '../../services/agents/whitelist.js'
 import {
   compareCrackerVersions,
   getCrackerDownloadUrl,
@@ -438,13 +440,17 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
   const data = c.req.valid('json')
 
   try {
-    // Log any errors reported by the agent
+    // Log any errors reported by the agent, downgrading whitelisted ones.
     if (data.errors && data.errors.length > 0) {
+      const whitelist = await resolveEffectiveWhitelist(agentId)
       for (const errorMessage of data.errors) {
+        const raw = { severity: 'error', message: errorMessage }
+        const effective = downgradeIfWhitelisted(raw, whitelist)
         await logAgentError({
           agentId,
-          severity: 'error',
-          message: errorMessage,
+          severity: effective.severity,
+          message: effective.message,
+          context: effective.context,
           taskId,
         })
       }
@@ -572,7 +578,9 @@ agentRoutes.openapi(reportErrorRoute, async (c) => {
   const { agentId } = c.get('agent')
   const data = c.req.valid('json')
   try {
-    await logAgentError({ ...data, agentId })
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    const effective = downgradeIfWhitelisted(data, whitelist)
+    await logAgentError({ ...effective, agentId })
     return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
     return agentInternalError(

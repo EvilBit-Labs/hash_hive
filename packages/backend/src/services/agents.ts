@@ -11,6 +11,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { REVIEW_RECOMMENDED_THRESHOLD, WHITELISTED_SEVERITY } from './agents/whitelist.js'
 import { type RecordAuditEventInput, recordAuditEvent } from './audit-log.js'
 import { emitAgentError, emitAgentStatus } from './events.js'
 
@@ -33,6 +34,11 @@ export type AgentListRow = SelectedAgent & {
   errorCount24h: number
   worstSeverity24h: AgentWorstSeverity
   currentTask: AgentCurrentTask | null
+  /** True when the agent's whitelisted-error count in the 24h window meets
+   * or exceeds REVIEW_RECOMMENDED_THRESHOLD. Distinct from `error` status —
+   * a healthy agent can have reviewRecommended=true if its whitelist is
+   * absorbing too many errors (R18). */
+  reviewRecommended: boolean
 }
 
 // currentTask on the list response only shows tasks the agent is actively
@@ -185,12 +191,16 @@ export async function listAgents(filters: {
     fetchCurrentTasks(agentIds),
   ])
 
-  const enriched: AgentListRow[] = results.map((agent) => ({
-    ...agent,
-    errorCount24h: errorAggregates.get(agent.id)?.count ?? 0,
-    worstSeverity24h: errorAggregates.get(agent.id)?.worstSeverity ?? null,
-    currentTask: currentTasks.get(agent.id) ?? null,
-  }))
+  const enriched: AgentListRow[] = results.map((agent) => {
+    const agg = errorAggregates.get(agent.id)
+    return {
+      ...agent,
+      errorCount24h: agg?.count ?? 0,
+      worstSeverity24h: agg?.worstSeverity ?? null,
+      currentTask: currentTasks.get(agent.id) ?? null,
+      reviewRecommended: (agg?.whitelistedCount ?? 0) >= REVIEW_RECOMMENDED_THRESHOLD,
+    }
+  })
 
   return {
     agents: enriched,
@@ -200,10 +210,24 @@ export async function listAgents(filters: {
   }
 }
 
-async function aggregateRecentErrors(
-  agentIds: number[]
-): Promise<Map<number, { count: number; worstSeverity: AgentWorstSeverity }>> {
-  const map = new Map<number, { count: number; worstSeverity: AgentWorstSeverity }>()
+async function aggregateRecentErrors(agentIds: number[]): Promise<
+  Map<
+    number,
+    {
+      count: number
+      worstSeverity: AgentWorstSeverity
+      whitelistedCount: number
+    }
+  >
+> {
+  const map = new Map<
+    number,
+    {
+      count: number
+      worstSeverity: AgentWorstSeverity
+      whitelistedCount: number
+    }
+  >()
   if (agentIds.length === 0) {
     return map
   }
@@ -211,8 +235,11 @@ async function aggregateRecentErrors(
   // Server-side aggregation: bounded wire size at one row per agent, regardless
   // of how many errors a noisy agent emits. Unknown severities (info/debug/...)
   // are excluded from `count` and from the `hasWarning` / `hasFatal` flags.
+  // Whitelisted rows are counted separately via the `context.whitelisted` JSON
+  // marker written by `downgradeIfWhitelisted` at ingest time (R18).
   const fatalArray = sql`ARRAY[${sql.raw(FATAL_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`
   const warningArray = sql`ARRAY[${sql.raw(WARNING_SEVERITIES.map((s) => `'${s}'`).join(','))}]::text[]`
+  const whitelistedSeverity = sql.raw(`'${WHITELISTED_SEVERITY}'`)
 
   const rows = await db
     .select({
@@ -220,6 +247,7 @@ async function aggregateRecentErrors(
       count: sql<number>`count(*) FILTER (WHERE lower(${agentErrors.severity}) = ANY(${fatalArray}) OR lower(${agentErrors.severity}) = ANY(${warningArray}))`,
       hasFatal: sql<boolean>`bool_or(lower(${agentErrors.severity}) = ANY(${fatalArray}))`,
       hasWarning: sql<boolean>`bool_or(lower(${agentErrors.severity}) = ANY(${warningArray}))`,
+      whitelistedCount: sql<number>`count(*) FILTER (WHERE lower(${agentErrors.severity}) = ${whitelistedSeverity} AND (${agentErrors.context}->>'whitelisted')::boolean IS TRUE)`,
     })
     .from(agentErrors)
     .where(
@@ -232,13 +260,15 @@ async function aggregateRecentErrors(
 
   for (const row of rows) {
     const count = Number(row.count ?? 0)
-    if (count === 0) continue
+    const whitelistedCount = Number(row.whitelistedCount ?? 0)
+    if (count === 0 && whitelistedCount === 0) continue
     map.set(row.agentId, {
       count,
       worstSeverity: classifyWorstSeverity({
         hasFatal: Boolean(row.hasFatal),
         hasWarning: Boolean(row.hasWarning),
       }),
+      whitelistedCount,
     })
   }
 

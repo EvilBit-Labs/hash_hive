@@ -17,13 +17,14 @@
  * stay here so the circular-import workaround lives next to the only
  * code path that needs it).
  */
-import type { AgentHeartbeat } from '@hashhive/shared'
+import type { AgentHeartbeat, AgentHeartbeatError } from '@hashhive/shared'
 
 import { agents, campaigns, tasks } from '@hashhive/shared'
 import { and, eq, sql } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
+import { resolveEffectiveWhitelist } from '../agent-config.js'
 import {
   type DbClient,
   type HeartbeatTransition,
@@ -33,6 +34,7 @@ import {
   scrubAgentErrorContext,
 } from '../agents.js'
 import { emitAgentError, emitAgentStatus } from '../events.js'
+import { downgradeIfWhitelisted } from './whitelist.js'
 
 // ─── Module-scoped state (warn throttle + lazy-import caches) ────────
 
@@ -425,19 +427,43 @@ export async function computeHighPriorityHint(
  * savepoints inside this connection.
  */
 export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
+  // Resolve the effective whitelist before entering the transaction so the DB
+  // call does not nest inside the agent-row lock. The whitelist is evaluated
+  // against the raw reported error; if it matches, the severity is downgraded
+  // to a non-counting value and `context.whitelisted` is marked true. Both
+  // `decideHeartbeatTransition` and `persistHeartbeatError` receive the
+  // possibly-downgraded error so the downgrade is applied atomically at all
+  // sites inside the same heartbeat processing.
+  let effectiveError = data.error
+  if (data.error) {
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    const downgraded = downgradeIfWhitelisted(data.error, whitelist)
+    // `downgradeIfWhitelisted` returns a new object on match; if the reference
+    // changed, a downgrade occurred. Cast to the heartbeat error union shape —
+    // the severity string type is compatible (varchar(20) in the DB).
+    if (downgraded !== data.error) {
+      effectiveError = downgraded as NonNullable<AgentHeartbeat['error']>
+    }
+  }
+
   const txResult = await db.transaction(async (tx) => {
     const { priorRow, priorStatus } = await lockAgentRow(tx, agentId)
+    // `decideHeartbeatTransition` accepts the heartbeat severity union
+    // ('warning' | 'fatal'). A downgraded error carries 'info', which is
+    // not in that union but is safe: the function only checks `=== 'fatal'`,
+    // so any non-fatal string (including 'info') correctly resolves to
+    // isFatalError = false. We cast to satisfy the parameter type.
     const transition = decideHeartbeatTransition({
       payloadStatus: data.status,
-      errorSeverity: data.error?.severity,
+      errorSeverity: effectiveError?.severity as AgentHeartbeatError['severity'] | undefined,
       priorStatus,
     })
     const ownedTaskId = await verifyTaskOwnership(tx, agentId, data.currentTask?.taskId)
 
-    if (data.error) {
+    if (effectiveError) {
       await persistHeartbeatError(tx, {
         agentId,
-        error: data.error,
+        error: effectiveError,
         ownedTaskId,
         projectId: priorRow?.projectId,
       })
@@ -450,7 +476,7 @@ export async function processHeartbeat(agentId: number, data: AgentHeartbeat) {
   const { updated, transition } = txResult
 
   if (updated) {
-    emitHeartbeatPostCommit(updated, transition, data.error)
+    emitHeartbeatPostCommit(updated, transition, effectiveError)
   } else {
     // Auth middleware verified the agent's bearer token, so the row was
     // present a moment ago. A vanishing row mid-heartbeat means it was

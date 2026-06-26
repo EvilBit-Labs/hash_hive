@@ -7,7 +7,7 @@
  * what is under test.
  */
 
-import { auditLogs, agents, fleetAgentConfig, projects } from '@hashhive/shared'
+import { agentErrors, auditLogs, agents, fleetAgentConfig, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 
@@ -20,6 +20,12 @@ import {
   updateAgentConfig,
   updateFleetDefault,
 } from '../../src/services/agent-config.js'
+import { listAgents, logAgentError } from '../../src/services/agents.js'
+import { processHeartbeat } from '../../src/services/agents/heartbeat.js'
+import {
+  REVIEW_RECOMMENDED_THRESHOLD,
+  WHITELISTED_SEVERITY,
+} from '../../src/services/agents/whitelist.js'
 
 const SLUG = 'agent-config-u2-test'
 let projectId = 0
@@ -286,5 +292,212 @@ describe('getFleetDefault', () => {
     await db.delete(fleetAgentConfig).where(eq(fleetAgentConfig.id, 1))
     const result = await getFleetDefault()
     expect(result).toEqual({})
+  })
+})
+
+// ─── U4: Whitelist downgrade + reviewRecommended ──────────────────────────────
+
+describe('U4: whitelisted error downgrade (AE2)', () => {
+  async function clearErrors(): Promise<void> {
+    await db.delete(agentErrors).where(eq(agentErrors.agentId, agentId))
+  }
+
+  async function resetAgentStatus(status = 'online'): Promise<void> {
+    await db.update(agents).set({ status }).where(eq(agents.id, agentId))
+  }
+
+  // ── Heartbeat ingress (primary path) ────────────────────────────────
+
+  it('AE2: whitelisted fatal heartbeat error does NOT flip agent to error status', async () => {
+    await clearErrors()
+    await resetAgentStatus('online')
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'No hashes loaded' },
+    })
+
+    const [row] = await db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+    expect(row!.status).toBe('online')
+  })
+
+  it('AE2: whitelisted fatal heartbeat error is persisted with info severity and whitelisted marker', async () => {
+    await clearErrors()
+    await resetAgentStatus('online')
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'No hashes loaded' },
+    })
+
+    const [errorRow] = await db
+      .select()
+      .from(agentErrors)
+      .where(eq(agentErrors.agentId, agentId))
+      .limit(1)
+
+    expect(errorRow).toBeDefined()
+    expect(errorRow!.severity).toBe(WHITELISTED_SEVERITY)
+    expect((errorRow!.context as Record<string, unknown>)['whitelisted']).toBe(true)
+    expect(errorRow!.message).toBe('No hashes loaded')
+  })
+
+  it('AE2: whitelisted heartbeat error does NOT increment errorCount24h badge', async () => {
+    await clearErrors()
+    await resetAgentStatus('online')
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'No hashes loaded' },
+    })
+
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    expect(agent!.errorCount24h).toBe(0)
+    expect(agent!.worstSeverity24h).toBeNull()
+  })
+
+  it('contrast: a non-whitelisted fatal heartbeat error flips agent to error status', async () => {
+    await clearErrors()
+    await resetAgentStatus('online')
+    // Clear per-rig whitelist so nothing is whitelisted.
+    await updateAgentConfig(agentId, { errorWhitelist: [] })
+    await updateFleetDefault({ errorWhitelist: [] })
+
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'GPU out of memory' },
+    })
+
+    const [row] = await db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+    expect(row!.status).toBe('error')
+
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    expect(agent!.errorCount24h).toBe(1)
+    expect(agent!.worstSeverity24h).toBe('fatal')
+  })
+
+  // ── /errors path (standalone ingress) ───────────────────────────────
+
+  it('/errors path: logAgentError after downgrade persists whitelisted row', async () => {
+    await clearErrors()
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+    await updateFleetDefault({})
+
+    // Simulate the /errors handler calling resolveEffectiveWhitelist + downgradeIfWhitelisted
+    // then logAgentError — exactly what the route does.
+    const { resolveEffectiveWhitelist: resolveWL } =
+      await import('../../src/services/agent-config.js')
+    const { downgradeIfWhitelisted } = await import('../../src/services/agents/whitelist.js')
+
+    const whitelist = await resolveWL(agentId)
+    const raw = { severity: 'error', message: 'No hashes loaded' }
+    const effective = downgradeIfWhitelisted(raw, whitelist)
+    await logAgentError({ ...effective, agentId })
+
+    const [errorRow] = await db
+      .select()
+      .from(agentErrors)
+      .where(eq(agentErrors.agentId, agentId))
+      .limit(1)
+
+    expect(errorRow!.severity).toBe(WHITELISTED_SEVERITY)
+    expect((errorRow!.context as Record<string, unknown>)['whitelisted']).toBe(true)
+
+    // Badge not affected.
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    expect(agent!.errorCount24h).toBe(0)
+  })
+
+  // ── Union whitelist (fleet + rig) ────────────────────────────────────
+
+  it('union whitelist (fleet + rig) — patterns from both sources match and downgrade', async () => {
+    await clearErrors()
+    await resetAgentStatus('online')
+    await updateFleetDefault({ errorWhitelist: ['fleet-pattern'] })
+    await updateAgentConfig(agentId, { errorWhitelist: ['rig-pattern'] })
+
+    // Both whitelisted via heartbeat.
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'fleet-pattern hit' },
+    })
+    await processHeartbeat(agentId, {
+      status: 'online',
+      error: { severity: 'fatal', message: 'rig-pattern hit' },
+    })
+
+    const rows = await db.select().from(agentErrors).where(eq(agentErrors.agentId, agentId))
+    expect(rows.length).toBe(2)
+    for (const row of rows) {
+      expect(row.severity).toBe(WHITELISTED_SEVERITY)
+      expect((row.context as Record<string, unknown>)['whitelisted']).toBe(true)
+    }
+
+    // Agent stays online, badge stays at 0.
+    const [agentRow] = await db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+    expect(agentRow!.status).toBe('online')
+
+    const result = await listAgents({ projectId })
+    const listed = result.agents.find((a) => a.id === agentId)
+    expect(listed!.errorCount24h).toBe(0)
+  })
+
+  // ── R18: reviewRecommended signal ────────────────────────────────────
+
+  it('reviewRecommended is false when whitelisted count is below threshold', async () => {
+    await clearErrors()
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+    await updateFleetDefault({})
+
+    for (let i = 0; i < REVIEW_RECOMMENDED_THRESHOLD - 1; i++) {
+      await logAgentError({
+        agentId,
+        severity: WHITELISTED_SEVERITY,
+        message: 'No hashes loaded',
+        context: { whitelisted: true },
+      })
+    }
+
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    expect(agent!.reviewRecommended).toBe(false)
+    expect(agent!.errorCount24h).toBe(0)
+  })
+
+  it('reviewRecommended is true when whitelisted count meets threshold (R18)', async () => {
+    await clearErrors()
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+    await updateFleetDefault({})
+
+    for (let i = 0; i < REVIEW_RECOMMENDED_THRESHOLD; i++) {
+      await logAgentError({
+        agentId,
+        severity: WHITELISTED_SEVERITY,
+        message: 'No hashes loaded',
+        context: { whitelisted: true },
+      })
+    }
+
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    // R18: distinct from error status — healthy agent can have reviewRecommended=true.
+    expect(agent!.reviewRecommended).toBe(true)
+    expect(agent!.errorCount24h).toBe(0)
+    expect(agent!.worstSeverity24h).toBeNull()
   })
 })
