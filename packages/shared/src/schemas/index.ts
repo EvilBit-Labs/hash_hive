@@ -1318,3 +1318,102 @@ export const auditLogQuerySchema = z
     offset: z.number().int().min(0).optional(),
   })
   .openapi('AuditLogQuery')
+
+// ─── Agent List Row wire shape (#104 U5) ────────────────────────────
+//
+// Extends the DB-derived agent row with the computed enrichment fields
+// that `listAgents` adds: 24h error aggregates, the currently-running
+// task summary, and the `reviewRecommended` signal (R18). Defined here
+// (not as a local interface in the route file) so the frontend hook
+// can import the inferred type from @hashhive/shared.
+
+/**
+ * Wire shape for a single agent row returned by
+ * `GET /dashboard/agents`. Extends the select schema with computed
+ * enrichment fields added by `listAgents` in `services/agents.ts`.
+ * `reviewRecommended` is true when whitelisted-error absorptions in the
+ * 24h window meet or exceed REVIEW_RECOMMENDED_THRESHOLD (R18).
+ */
+export const agentListRowWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    projectId: z.number().int().positive().nullable(),
+    name: z.string(),
+    status: agentStatusSchema,
+    errorCount24h: z.number().int().nonnegative(),
+    worstSeverity24h: agentWorstSeveritySchema,
+    currentTask: agentCurrentTaskSchema.nullable(),
+    reviewRecommended: z.boolean(),
+    lastSeenAt: z.coerce.date().nullable(),
+    createdAt: z.coerce.date(),
+    updatedAt: z.coerce.date(),
+  })
+  .passthrough()
+  .openapi('AgentListRowWire')
+
+// ─── Agent Config Dashboard API (#104 U5) ────────────────────────────
+//
+// Wire shapes for the dashboard per-rig and fleet-wide config endpoints.
+// `AgentConfigSourceMap` carries the per-knob source so the UI can
+// render an "inherited" vs "overridden" badge for each tuning knob
+// (requirement R11). Knob names mirror `agentHashcatTuningSchema` so
+// a schema drift surfaces as a type error here.
+
+/**
+ * Per-knob source map returned by `GET /dashboard/agents/:id/config`.
+ * Each key in `tuning.hashcat` maps to the resolution source:
+ *   - `'override'` = rig has an explicit per-rig value
+ *   - `'fleet'`    = rig inherits from the fleet default
+ *   - `'engine'`   = neither rig nor fleet set this knob (engine default)
+ *
+ * Hardware knobs are always per-rig (R5); they always show `'override'`
+ * when present, `'engine'` when absent.
+ */
+export const agentConfigSourceMapSchema = z
+  .object({
+    tuning: z
+      .object({
+        hashcat: z
+          .object({
+            workloadProfile: configValueSourceSchema.optional(),
+            kernelAccel: configValueSourceSchema.optional(),
+            kernelLoops: configValueSourceSchema.optional(),
+            rawFlags: configValueSourceSchema.optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+    hardware: z
+      .object({
+        deviceIds: configValueSourceSchema.optional(),
+        tempAbort: configValueSourceSchema.optional(),
+      })
+      .optional(),
+    errorWhitelist: configValueSourceSchema.optional(),
+  })
+  .openapi('AgentConfigSourceMap')
+
+/**
+ * Response body for `GET /dashboard/agents/:id/config`.
+ * Returns the per-rig config, the resolved effective config, and a
+ * per-knob source map so the UI can display inherited-vs-overridden
+ * badges (R11).
+ */
+export const agentConfigResponseSchema = z
+  .object({
+    config: agentConfigSchema,
+    effective: effectiveAgentConfigSchema,
+    sources: agentConfigSourceMapSchema,
+  })
+  .openapi('AgentConfigResponse')
+
+/**
+ * Response body for `GET /dashboard/fleet-agent-config`.
+ * Wraps the fleet default config so the response shape is consistent
+ * with the agent-level endpoint.
+ */
+export const fleetConfigResponseSchema = z
+  .object({
+    config: fleetDefaultConfigSchema,
+  })
+  .openapi('FleetConfigResponse')
