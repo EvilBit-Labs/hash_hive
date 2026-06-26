@@ -19,6 +19,10 @@ export const QUEUE_NAMES = {
   // deterministic jobId. Counts the file once, then recomputes keyspace for
   // every dependent attack.
   LINE_COUNT: 'jobs-line-count',
+  // Audit log retention sweep (U9). Scheduled daily: deletes audit_logs rows
+  // older than AUDIT_LOG_RETENTION in bounded batches to avoid table-lock
+  // contention on large purges. Covers orphaned rows (project_id IS NULL).
+  AUDIT_RETENTION: 'jobs-audit-retention',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

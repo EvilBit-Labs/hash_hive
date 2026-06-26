@@ -8,6 +8,7 @@ import { env } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES, type QueueName } from '../config/queue.js'
 import { createRedisClient, getRedisStatus } from '../config/redis.js'
+import { AUDIT_RETENTION_SCHEDULER_INTERVAL_MS } from './workers/audit-retention.js'
 
 export interface QueueHealth {
   status: 'connected' | 'disconnected'
@@ -91,6 +92,16 @@ export class QueueManager {
       await healthQueue.upsertJobScheduler(
         'health-check',
         { every: env.HEALTH_MONITOR_INTERVAL_MS },
+        { data: { triggeredAt: new Date().toISOString() } }
+      )
+    }
+
+    // Schedule daily audit-log retention sweep (U9).
+    const auditRetentionQueue = this.queues.get(QUEUE_NAMES.AUDIT_RETENTION)
+    if (auditRetentionQueue) {
+      await auditRetentionQueue.upsertJobScheduler(
+        'audit-retention-sweep',
+        { every: AUDIT_RETENTION_SCHEDULER_INTERVAL_MS },
         { data: { triggeredAt: new Date().toISOString() } }
       )
     }

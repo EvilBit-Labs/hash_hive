@@ -31,6 +31,7 @@ import { registerControlSecurity } from '../../openapi/security.js'
 import { mountCachedSpec } from '../../openapi/spec-cache.js'
 import { controlAgentRoutes } from './agents.js'
 import { controlAttackRoutes } from './attacks.js'
+import { controlAuditLogRoutes } from './audit-logs.js'
 import { controlCampaignRoutes } from './campaigns.js'
 import { controlHashListRoutes } from './hashlists.js'
 import { controlHealthRoutes } from './health.js'
@@ -101,3 +102,4 @@ controlRoutes.route('/campaigns', controlCampaignRoutes)
 controlRoutes.route('/attacks', controlAttackRoutes)
 controlRoutes.route('/agents', controlAgentRoutes)
 controlRoutes.route('/tasks', controlTaskRoutes)
+controlRoutes.route('/audit-logs', controlAuditLogRoutes)

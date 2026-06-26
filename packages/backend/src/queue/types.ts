@@ -45,6 +45,10 @@ export interface LineCountJob {
   projectId: number
 }
 
+export interface AuditRetentionJob {
+  triggeredAt: string
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -60,4 +64,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HEALTH_MONITOR]: HealthMonitorJob
   [QUEUE_NAMES.PREEMPTION]: PreemptionJob
   [QUEUE_NAMES.LINE_COUNT]: LineCountJob
+  [QUEUE_NAMES.AUDIT_RETENTION]: AuditRetentionJob
 }

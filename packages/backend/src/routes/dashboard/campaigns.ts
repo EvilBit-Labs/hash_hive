@@ -210,16 +210,21 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
   const data = c.req.valid('json')
   const { userId, projectId } = c.get('scopedUser')!
 
+  const actor = { actorType: 'user' as const, actorId: userId }
+
   // No attacks supplied → legacy single-row insert (backward compatible).
   if (!data.attacks || data.attacks.length === 0) {
-    const campaign = await createCampaign({
-      name: data.name,
-      description: data.description,
-      hashListId: data.hashListId,
-      priority: data.priority,
-      projectId,
-      createdBy: userId,
-    })
+    const campaign = await createCampaign(
+      {
+        name: data.name,
+        description: data.description,
+        hashListId: data.hashListId,
+        priority: data.priority,
+        projectId,
+        createdBy: userId,
+      },
+      actor
+    )
     return c.json({ campaign, attacks: [] }, 201)
   }
 
@@ -239,6 +244,7 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
       projectId,
       createdBy: userId,
       attacks: data.attacks,
+      actor,
     })
   } catch (err) {
     logger.error(
@@ -366,7 +372,7 @@ campaignRoutes.openapi(deleteCampaignRoute, async (c) => {
 
   let result: Awaited<ReturnType<typeof deleteCampaign>>
   try {
-    result = await deleteCampaign(id, projectId)
+    result = await deleteCampaign(id, projectId, { actorType: 'user', actorId: userId })
   } catch (err) {
     // deleteCampaign runs a multi-statement transaction. Unexpected
     // failures (FK from a future child table, DB connectivity drop,
@@ -446,7 +452,7 @@ const updateCampaignHandler = async (
     priority?: number | undefined
   }
 ) => {
-  const { projectId } = c.get('scopedUser')!
+  const { projectId, userId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
   if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
@@ -455,7 +461,7 @@ const updateCampaignHandler = async (
   // PUT's `description` can be the literal `null` ("explicit clear");
   // updateCampaign accepts `undefined` to mean "leave alone", so we
   // pass null through unchanged and let the service write it.
-  const result = await updateCampaign(id, projectId, data)
+  const result = await updateCampaign(id, projectId, data, { actorType: 'user', actorId: userId })
 
   switch (result.kind) {
     case 'not_found':
@@ -588,8 +594,11 @@ const changePriorityRoute = createRoute({
 campaignRoutes.openapi(changePriorityRoute, async (c) => {
   const { id } = c.req.valid('param')
   const { priority } = c.req.valid('json')
-  const { projectId } = c.get('scopedUser')!
-  const result = await changeRunningCampaignPriority(id, projectId, priority)
+  const { projectId, userId } = c.get('scopedUser')!
+  const result = await changeRunningCampaignPriority(id, projectId, priority, {
+    actorType: 'user',
+    actorId: userId,
+  })
   switch (result.kind) {
     case 'not_found':
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')

@@ -1,4 +1,5 @@
 import {
+  ClipboardList,
   Cpu,
   Crosshair,
   KeyRound,
@@ -61,6 +62,12 @@ const navItems: readonly NavItem[] = [
     label: 'Results',
     href: '/results',
     icon: <Trophy className={ICON_CLASS} aria-hidden="true" />,
+  },
+  {
+    label: 'Audit Logs',
+    href: '/audit-logs',
+    icon: <ClipboardList className={ICON_CLASS} aria-hidden="true" />,
+    permission: Permission.AUDIT_LOG_VIEW,
   },
   {
     label: 'Crackers',

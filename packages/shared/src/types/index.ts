@@ -117,6 +117,13 @@ import type {
   enrollAgentResponseSchema,
   enrollmentTokenMetadataSchema,
   listEnrollmentTokensResponseSchema,
+  // Audit logs (#105)
+  auditActorTypeSchema,
+  auditEntityTypeSchema,
+  auditActionSchema,
+  auditLogSchema,
+  auditLogListResponseSchema,
+  auditLogQuerySchema,
 } from '../schemas/index.js'
 
 // ─── Identity & Access ──────────────────────────────────────────────
@@ -407,4 +414,15 @@ export type EnrollAgentResponse = z.infer<typeof enrollAgentResponseSchema>
 import type { taskTelemetry } from '../db/schema.js'
 
 export type TaskTelemetry = typeof taskTelemetry.$inferSelect
+
+// ─── Audit Logs (#105) ──────────────────────────────────────────────
+// z.infer types for the audit log wire shapes. Derived from schemas so
+// the type contract is always in sync with the Zod validator.
+
+export type AuditActorType = z.infer<typeof auditActorTypeSchema>
+export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>
+export type AuditAction = z.infer<typeof auditActionSchema>
+export type AuditLog = z.infer<typeof auditLogSchema>
+export type AuditLogListResponse = z.infer<typeof auditLogListResponseSchema>
+export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>
 export type InsertTaskTelemetry = typeof taskTelemetry.$inferInsert

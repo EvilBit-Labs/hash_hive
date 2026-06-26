@@ -15,6 +15,9 @@ import {
   agents,
   attacks,
   attackTemplates,
+  AUDIT_ACTION_VALUES,
+  AUDIT_ACTOR_TYPE_VALUES,
+  AUDIT_ENTITY_TYPE_VALUES,
   campaigns,
   crackerBinaries,
   hashItems,
@@ -1088,3 +1091,107 @@ export const enrollAgentResponseSchema = z
     token: z.string(),
   })
   .openapi('EnrollAgentResponse')
+
+// ─── Audit Logs (#105) ──────────────────────────────────────────────
+// Wire shapes for the audit log API surfaces (U7 dashboard, U8 control).
+// All three enum schemas are derived from the same const arrays as the
+// DB check constraints in `../db/schema.ts` so the vocabulary stays in
+// sync. The drift-guard unit test (tests/unit/audit-logs-schema.test.ts)
+// asserts that every Zod enum value appears in the corresponding check.
+
+/**
+ * Who triggered the event — a human user, a hashcat worker agent,
+ * or an internal system action (scheduler, retention worker, etc.).
+ * Sync with: AUDIT_ACTOR_TYPE_VALUES / audit_logs_actor_type_chk in db/schema.ts
+ */
+export const auditActorTypeSchema = z.enum(AUDIT_ACTOR_TYPE_VALUES).openapi('AuditActorType')
+
+/**
+ * The kind of resource the event was applied to. The value is a stable
+ * snake_case identifier that never changes even if the UI label does.
+ * Sync with: AUDIT_ENTITY_TYPE_VALUES / audit_logs_entity_type_chk in db/schema.ts
+ */
+export const auditEntityTypeSchema = z.enum(AUDIT_ENTITY_TYPE_VALUES).openapi('AuditEntityType')
+
+/**
+ * The operation that was performed on the entity.
+ * Sync with: AUDIT_ACTION_VALUES / audit_logs_action_chk in db/schema.ts
+ */
+export const auditActionSchema = z.enum(AUDIT_ACTION_VALUES).openapi('AuditAction')
+
+/**
+ * Wire shape for a single audit log row as returned by the API. Hand-written
+ * (not createSelectSchema) because:
+ * 1. `createdAt` must be an ISO string on the wire (DB returns Date).
+ * 2. `actorLabel` / `entityLabel` are joined display strings, not columns.
+ * 3. `changes` is intentionally a loose z.record so consumers do not break as
+ *    entity types and fields evolve. The encoding is defined by `recordAuditEvent`
+ *    in services/audit-log.ts; do not tighten this schema to mirror the diff
+ *    shape — use the service return type directly for internal consumers instead.
+ */
+export const auditLogSchema = z
+  .object({
+    id: z.number().int().positive(),
+    actorType: auditActorTypeSchema,
+    actorId: z.number().int().positive().nullable(),
+    projectId: z.number().int().positive().nullable(),
+    entityType: auditEntityTypeSchema,
+    entityId: z.number().int().positive(),
+    action: auditActionSchema,
+    fromStatus: z.string().nullable(),
+    toStatus: z.string().nullable(),
+    reason: z.string().max(40).nullable(),
+    // z.record stays intentionally loose so consumers do not break as entity
+    // types and fields grow. See comment 3 on this schema above.
+    changes: z.record(z.string(), z.unknown()).nullable(),
+    createdAt: z.iso.datetime(),
+    // Display-only labels resolved by the service layer (U7/U8).
+    // Not stored in the DB. The service always populates them with a fallback
+    // string ('[deleted user]', '[deleted]', 'System', etc.) so these are
+    // required on reads — never absent in a well-formed API response.
+    actorLabel: z.string(),
+    entityLabel: z.string(),
+  })
+  .openapi('AuditLog')
+
+/**
+ * Paginated list response for the audit log endpoints.
+ * Array key is `data` (distinct from `results` / `tokens` in sibling schemas)
+ * to match the plan's KTD-8 wire contract specification.
+ */
+export const auditLogListResponseSchema = z
+  .object({
+    data: z.array(auditLogSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .openapi('AuditLogListResponse')
+
+/**
+ * Query-string filters for the audit log list endpoints (U7 dashboard,
+ * U8 control). All fields are optional; omission means "no filter".
+ * Pagination mirrors the pattern in results.ts (coerced integers with
+ * sensible defaults handled at the route layer via coercedIntegerQuery).
+ */
+// NOTE (U7/U8): Do NOT add .catch()/.default() to `limit`/`offset` here.
+// The existing codebase pattern is: shared schemas express business
+// validation; routes use `coercedIntegerQuery()` from
+// `packages/backend/src/openapi/coerced-query.ts` for the coerce+catch+
+// openapi hint that zod-to-openapi requires.  Adding .catch() to a shared
+// schema without .openapi({ type: 'integer' }) causes UnknownZodTypeError
+// in spec-gen (see coerced-query.ts header for full explanation).
+export const auditLogQuerySchema = z
+  .object({
+    entityType: auditEntityTypeSchema.optional(),
+    entityId: z.coerce.number().int().positive().optional(),
+    actorType: auditActorTypeSchema.optional(),
+    action: auditActionSchema.optional(),
+    // ISO 8601 date-time strings; validated at query time.
+    dateFrom: z.iso.datetime().optional(),
+    dateTo: z.iso.datetime().optional(),
+    // Route layer wraps these with coercedIntegerQuery() for spec-gen compat.
+    limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .openapi('AuditLogQuery')

@@ -20,6 +20,7 @@ import { PageHeader } from '../components/ui/page-header'
 import { useKeyboardShortcut } from '../hooks/use-keyboard-shortcut'
 import { useResults } from '../hooks/use-results'
 import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
+import { safeNonNegativeInt, safePositiveInt } from '../lib/search-params'
 import { useUiStore } from '../stores/ui'
 
 const PAGE_SIZE = 100
@@ -40,18 +41,6 @@ function safeDateRange(raw: string | null): DateRangeFilter {
     return raw as DateRangeFilter
   }
   return DEFAULT_DATE_RANGE
-}
-
-function safePositiveInt(raw: string | null): number | undefined {
-  if (!raw) return undefined
-  const n = Number(raw)
-  return Number.isInteger(n) && n > 0 ? n : undefined
-}
-
-function safeNonNegativeInt(raw: string | null): number {
-  if (!raw) return 0
-  const n = Number(raw)
-  return Number.isInteger(n) && n >= 0 ? n : 0
 }
 
 interface DateWindow {
