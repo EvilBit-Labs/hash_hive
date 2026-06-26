@@ -196,6 +196,10 @@ export const agents = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
+    // Per-rig advanced hashcat configuration (#104): engine tuning knobs,
+    // hardware-bound knobs, and the per-rig error whitelist. Shape validated
+    // by agentConfigSchema in ../schemas; resolved against the fleet default.
+    config: jsonb('config').default({}),
     /**
      * @deprecated Use `capabilities.engines[]` (and the `cracker_binaries`
      * registry) for engine + version tracking. This column is kept for
@@ -840,6 +844,23 @@ export const taskTelemetry = pgTable(
 // The drift-guard unit test (packages/backend/tests/unit/audit-logs-schema.test.ts)
 // asserts that every Zod enum value appears in the corresponding IN-list.
 
+/**
+ * Single-row fleet-wide default agent configuration (#104). The `id = 1`
+ * CHECK plus the primary key enforce the singleton invariant. "Who changed
+ * it" is captured by the audit event's actor, so no `updatedBy` column is
+ * needed. Hardware-bound knobs are intentionally absent — those are always
+ * per-rig.
+ */
+export const fleetAgentConfig = pgTable(
+  'fleet_agent_config',
+  {
+    id: integer('id').primaryKey(),
+    config: jsonb('config').notNull().default({}),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check('fleet_agent_config_singleton_chk', sql`${table.id} = 1`)]
+)
+
 /** Vocabulary constants re-used in the check constraints and Zod enums. */
 export const AUDIT_ACTOR_TYPE_VALUES = ['user', 'agent', 'system'] as const
 export const AUDIT_ENTITY_TYPE_VALUES = [
@@ -851,6 +872,7 @@ export const AUDIT_ENTITY_TYPE_VALUES = [
   'rule_list',
   'mask_list',
   'agent',
+  'fleet_config',
 ] as const
 export const AUDIT_ACTION_VALUES = [
   'created',
@@ -912,7 +934,7 @@ export const auditLogs = pgTable(
     // Sync with: AUDIT_ENTITY_TYPE_VALUES / auditEntityTypeSchema in ../schemas/index.ts
     check(
       'audit_logs_entity_type_chk',
-      sql`${table.entityType} IN ('project', 'campaign', 'attack', 'hash_list', 'word_list', 'rule_list', 'mask_list', 'agent')`
+      sql`${table.entityType} IN ('project', 'campaign', 'attack', 'hash_list', 'word_list', 'rule_list', 'mask_list', 'agent', 'fleet_config')`
     ),
     // Sync with: AUDIT_ACTION_VALUES / auditActionSchema in ../schemas/index.ts
     check(

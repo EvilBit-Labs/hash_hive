@@ -204,6 +204,13 @@
       "when": 1782435956740,
       "tag": "0028_same_malice",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1782507350192,
+      "tag": "0029_spicy_doctor_spectrum",
+      "breakpoints": true
     }
   ]
 }
