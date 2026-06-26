@@ -220,9 +220,11 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
   router.openapi(initiateUploadRoute, async (c) => {
     const data = c.req.valid('json')
     const { projectId } = c.get('scopedUser')!
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
 
     try {
-      const result = await initiateChunkedUpload({ ...data, projectId })
+      const result = await initiateChunkedUpload({ ...data, projectId }, actor)
       return c.json(result, 201)
     } catch (err) {
       logger.error({ err }, 'Failed to initiate chunked upload')

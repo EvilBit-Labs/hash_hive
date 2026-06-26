@@ -148,7 +148,8 @@ const createProjectRoute = createRoute({
 projectRoutes.openapi(createProjectRoute, async (c) => {
   const { userId } = c.get('currentUser')
   const data = c.req.valid('json')
-  const project = await createProject({ ...data, createdBy: userId })
+  const actor = { actorType: 'user' as const, actorId: userId }
+  const project = await createProject({ ...data, createdBy: userId }, actor)
   return c.json({ project }, 201)
 })
 
@@ -331,9 +332,11 @@ const updateProjectRoute = createRoute({
 })
 
 projectRoutes.openapi(updateProjectRoute, async (c) => {
+  const { userId } = c.get('currentUser')
   const { projectId } = c.req.valid('param')
   const data = c.req.valid('json')
-  const project = await updateProject(projectId, data)
+  const actor = { actorType: 'user' as const, actorId: userId }
+  const project = await updateProject(projectId, data, actor)
 
   if (!project) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Project not found')
@@ -388,9 +391,11 @@ const addMemberRoute = createRoute({
 })
 
 projectRoutes.openapi(addMemberRoute, async (c) => {
+  const { userId: actorId } = c.get('currentUser')
   const { projectId } = c.req.valid('param')
   const { userId, roles } = c.req.valid('json')
-  const membership = await addUserToProject(projectId, userId, roles)
+  const actor = { actorType: 'user' as const, actorId: actorId }
+  const membership = await addUserToProject(projectId, userId, roles, actor)
   return c.json({ membership }, 201)
 })
 
@@ -417,9 +422,11 @@ const updateMemberRolesRoute = createRoute({
 })
 
 projectRoutes.openapi(updateMemberRolesRoute, async (c) => {
+  const { userId: actorId } = c.get('currentUser')
   const { projectId, userId } = c.req.valid('param')
   const { roles } = c.req.valid('json')
-  const membership = await updateMemberRoles(projectId, userId, roles)
+  const actor = { actorType: 'user' as const, actorId: actorId }
+  const membership = await updateMemberRoles(projectId, userId, roles, actor)
 
   if (!membership) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')
@@ -448,8 +455,10 @@ const removeMemberRoute = createRoute({
 })
 
 projectRoutes.openapi(removeMemberRoute, async (c) => {
+  const { userId: actorId } = c.get('currentUser')
   const { projectId, userId } = c.req.valid('param')
-  const removed = await removeUserFromProject(projectId, userId)
+  const actor = { actorType: 'user' as const, actorId: actorId }
+  const removed = await removeUserFromProject(projectId, userId, actor)
 
   if (!removed) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Membership not found')

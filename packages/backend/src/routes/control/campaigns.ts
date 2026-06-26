@@ -187,11 +187,14 @@ controlCampaignRoutes.openapi(createCampaignRoute, async (c) => {
     const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
     const user = c.get('currentUser')
     const data = c.req.valid('json')
-    const campaign = await createCampaign({
-      projectId,
-      createdBy: user.userId,
-      ...data,
-    })
+    const campaign = await createCampaign(
+      {
+        projectId,
+        createdBy: user.userId,
+        ...data,
+      },
+      { actorType: 'user', actorId: user.userId }
+    )
     return c.json(campaign, 201)
   } catch (err) {
     return controlErrorResponse(c, err)
@@ -238,7 +241,11 @@ controlCampaignRoutes.openapi(updateCampaignRoute, async (c) => {
     // gate is enforced at the service layer for both dashboard and
     // Control API consumers. Map each variant to the appropriate
     // Control-API RFC 9457 problem-details response.
-    const result = await updateCampaign(id, projectId, c.req.valid('json'))
+    const user = c.get('currentUser')
+    const result = await updateCampaign(id, projectId, c.req.valid('json'), {
+      actorType: 'user',
+      actorId: user.userId,
+    })
     switch (result.kind) {
       case 'updated':
         return c.json(result.campaign, 200)
@@ -295,7 +302,11 @@ controlCampaignRoutes.openapi(transitionCampaignRoute, async (c) => {
       return problemResponse(c, 404, 'not_found', 'campaign not found')
     }
     const { targetStatus } = c.req.valid('json')
-    const result = await transitionCampaign(id, targetStatus)
+    const user = c.get('currentUser')
+    const result = await transitionCampaign(id, targetStatus, {
+      actorType: 'user',
+      actorId: user.userId,
+    })
     if ('error' in result) {
       if ('code' in result) {
         if (result.code === 'QUEUE_UNAVAILABLE') {
@@ -358,7 +369,11 @@ controlCampaignRoutes.openapi(changePriorityRoute, async (c) => {
     const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
     const { id } = c.req.valid('param')
     const { priority } = c.req.valid('json')
-    const result = await changeRunningCampaignPriority(id, projectId, priority)
+    const user = c.get('currentUser')
+    const result = await changeRunningCampaignPriority(id, projectId, priority, {
+      actorType: 'user',
+      actorId: user.userId,
+    })
     switch (result.kind) {
       case 'updated':
         return c.json(result.campaign, 200)

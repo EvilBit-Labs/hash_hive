@@ -368,9 +368,16 @@ export function CampaignDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/campaigns" back>
-          Back to campaigns
-        </TextLink>
+        <div className="flex items-center gap-4">
+          <TextLink to="/campaigns" back>
+            Back to campaigns
+          </TextLink>
+          <PermissionGuard permission={Permission.AUDIT_LOG_VIEW}>
+            <TextLink to={`/audit-logs?entityType=campaign&entityId=${campaignId}`}>
+              Audit history
+            </TextLink>
+          </PermissionGuard>
+        </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">

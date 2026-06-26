@@ -65,6 +65,8 @@ export const DASHBOARD_ERROR_CODES = [
   'ENROLLMENT_TOKEN_CREATE_FAILED',
   'ENROLLMENT_TOKEN_LIST_FAILED',
   'ENROLLMENT_TOKEN_REVOKE_FAILED',
+  // ─── Audit logs ───────────────────────────────────────────────────
+  'AUDIT_LOG_LIST_FAILED',
   // ─── Generic ──────────────────────────────────────────────────────
   'INTERNAL_ERROR',
 ] as const

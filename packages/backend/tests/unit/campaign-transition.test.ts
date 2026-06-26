@@ -88,6 +88,41 @@ mock.module('../../src/db/index.js', () => ({
         onConflictDoNothing: mock(() => Promise.resolve()),
       })),
     })),
+    // changeRunningCampaignPriority wraps its SELECT + UPDATE in a transaction.
+    // The tx object re-uses the same select/update/insert mocks so existing
+    // test assertions on those mocks are unchanged.
+    transaction: mock(async (fn: (tx: Record<string, unknown>) => Promise<unknown>) => {
+      const tx = {
+        select: mock(() => ({
+          from: mock(() => ({
+            where: mock(() =>
+              makeAwaitableChain([{ id: 1 }], {
+                limit: mock(() => Promise.resolve([makeCampaignRow(campaignOverrides)])),
+                orderBy: mock(() => Promise.resolve(mockAttacks)),
+              })
+            ),
+            orderBy: mock(() => Promise.resolve(mockAttacks)),
+          })),
+        })),
+        update: mock(() => ({
+          set: mock((payload: Record<string, unknown>) => ({
+            where: mock((w: unknown) => {
+              if (payload['status'] === 'cancelled') capturedCancelWhere = w
+              return {
+                returning: mock(() => Promise.resolve([makeCampaignRow({ status: 'running' })])),
+              }
+            }),
+          })),
+        })),
+        insert: mock(() => ({
+          values: mock(() => ({
+            returning: mock(() => Promise.resolve([{}])),
+            onConflictDoNothing: mock(() => Promise.resolve()),
+          })),
+        })),
+      }
+      return fn(tx)
+    }),
   },
   client: {},
 }))
@@ -98,6 +133,12 @@ mock.module('../../src/db/index.js', () => ({
 mock.module('../../src/services/events.js', () => ({
   emitCampaignStatus: mock(() => {}),
   emitResourceUpdate: mock(() => {}),
+}))
+
+// campaigns.ts now imports audit-log.js (U3). Mock it so the transition
+// tests don't need a real db.insert for audit rows.
+mock.module('../../src/services/audit-log.js', () => ({
+  recordAuditEvent: mock(() => Promise.resolve({ id: 1 })),
 }))
 
 // Import module under test after DB/events mocks are registered

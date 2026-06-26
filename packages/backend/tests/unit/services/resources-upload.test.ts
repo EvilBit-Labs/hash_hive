@@ -37,6 +37,11 @@ if (!IS_ISOLATED) {
 }
 
 if (IS_ISOLATED) {
+  // ─── Mock audit-log recorder (resources.ts now imports it) ────────────
+  mock.module('../../../src/services/audit-log.js', () => ({
+    recordAuditEvent: mock(async () => ({ id: 1 })),
+  }))
+
   const warn = mock()
   mock.module('../../../src/config/logger.js', () => ({
     logger: { info: mock(), warn, error: mock(), debug: mock() },
@@ -93,9 +98,45 @@ if (IS_ISOLATED) {
           } else if (table === attacks && 'keyspace' in values) {
             attackKeyspaceWrites.push(values['keyspace'] as number | string | null)
           }
-          return { where: () => Promise.resolve() }
+          // Return a thenable so both `.where(...).then(...)` fan-out calls and
+          // `.where(...).returning()` (inside the audit transaction) succeed.
+          return {
+            where: () => ({
+              // oxlint-disable-next-line no-thenable -- intentional Drizzle-style thenable query-builder mock
+              then: (resolve: (v: unknown) => unknown) => resolve(undefined),
+              returning: () => Promise.resolve([resourceRow ?? {}]),
+            }),
+          }
         },
       }),
+      // uploadResourceFile wraps its DB write + recordAuditEvent in a transaction.
+      // The tx exposes the same update tracking logic plus insert for the recorder.
+      transaction: async (
+        fn: (tx: {
+          update: (table: unknown) => {
+            set: (values: Record<string, unknown>) => {
+              where: (cond: unknown) => { returning: () => Promise<unknown[]> }
+            }
+          }
+          insert: () => { values: () => { returning: () => Promise<{ id: number }[]> } }
+        }) => Promise<unknown>
+      ) =>
+        fn({
+          update: (table: unknown) => ({
+            set: (values: Record<string, unknown>) => {
+              if (table === maskLists && 'keyspace' in values) {
+                persistedMasklistKeyspace = values['keyspace'] as string | null
+                masklistKeyspaceWrites.push(values['keyspace'] as string | null)
+              } else if (table === attacks && 'keyspace' in values) {
+                attackKeyspaceWrites.push(values['keyspace'] as number | string | null)
+              }
+              return {
+                where: () => ({ returning: () => Promise.resolve([resourceRow ?? {}]) }),
+              }
+            },
+          }),
+          insert: () => ({ values: () => ({ returning: () => Promise.resolve([{ id: 1 }]) }) }),
+        }),
     },
   }))
 

@@ -23,6 +23,7 @@ import {
   parseEnrollmentToken,
   verifyEnrollmentTokenHash,
 } from '../lib/enrollment-token.js'
+import { recordAuditEvent } from './audit-log.js'
 
 // Row shape returned by selecting from enrollment_tokens (Dates, not ISO).
 type EnrollmentTokenRow = typeof enrollmentTokens.$inferSelect
@@ -113,6 +114,21 @@ export async function createEnrollmentToken(
     if (!row) {
       throw new Error('Failed to finalize enrollment token row')
     }
+
+    // Record token_issued audit event. entityType is 'agent' with entityId set
+    // to the enrollment token's own row id as a proxy — no agent exists yet at
+    // issuance time, but entity_id is NOT NULL (no FK) so we use the token id.
+    // action 'token_issued' always produces changes: null (enforced by recorder).
+    await recordAuditEvent(
+      {
+        actor: { actorType: 'user', actorId: createdByUserId },
+        projectId,
+        entityType: 'agent',
+        entityId: inserted.id,
+        action: 'token_issued',
+      },
+      tx
+    )
 
     return { token, metadata: toMetadata(row) }
   })
@@ -299,11 +315,26 @@ export async function claimEnrollmentToken(
         hardwareProfile: input.hardwareProfile ?? {},
       })
       .onConflictDoNothing({ target: [agents.projectId, agents.enrollmentClientId] })
-      .returning({ id: agents.id })
+      .returning()
 
     if (!agent) {
       throw new ConcurrentEnrollmentError()
     }
+
+    // Record the self-registration audit event. The agent is the actor — it
+    // enrolled itself using the token. Operational fields (authTokenHash,
+    // hardwareProfile, etc.) are stripped by the recorder's allowlist.
+    await recordAuditEvent(
+      {
+        actor: { actorType: 'agent', actorId: agent.id },
+        projectId: tokenRow.projectId,
+        entityType: 'agent',
+        entityId: agent.id,
+        action: 'created',
+        newRow: agent,
+      },
+      tx
+    )
 
     const token = await issueAgentBearer(tx, agent.id)
     return { ok: true, agentId: agent.id, token } as const

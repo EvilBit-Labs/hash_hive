@@ -237,7 +237,11 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
     if (!campaign || campaign.projectId !== projectId) {
       return problemResponse(c, 404, 'not_found', 'campaign not found')
     }
-    const attack = await createAttack({ ...data, projectId })
+    const user = c.get('currentUser')
+    const attack = await createAttack(
+      { ...data, projectId },
+      { actorType: 'user', actorId: user.userId }
+    )
     if (!attack) throw new Error('attack insert returned no row')
     return c.json(await withRuntime(attack), 201)
   } catch (err) {
@@ -276,7 +280,11 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
     const { id } = c.req.valid('param')
     const existing = await loadAttackInProject(id, projectId)
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
-    const updated = await updateAttack(id, c.req.valid('json'))
+    const user = c.get('currentUser')
+    const updated = await updateAttack(id, c.req.valid('json'), {
+      actorType: 'user',
+      actorId: user.userId,
+    })
     if (!updated) return problemResponse(c, 404, 'not_found', 'attack not found')
     return c.json(await withRuntime(updated), 200)
   } catch (err) {
@@ -309,7 +317,8 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
     const { id } = c.req.valid('param')
     const existing = await loadAttackInProject(id, projectId)
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
-    await deleteAttack(id)
+    const user = c.get('currentUser')
+    await deleteAttack(id, { actorType: 'user', actorId: user.userId })
     return c.body(null, 204)
   } catch (err) {
     return controlErrorResponse(c, err)

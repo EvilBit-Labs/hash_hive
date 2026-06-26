@@ -4,6 +4,7 @@ import { logger } from './config/logger.js'
 import { createRedisClient } from './config/redis.js'
 import { setQueueManager } from './queue/context.js'
 import { QueueManager } from './queue/manager.js'
+import { createAuditRetentionWorker } from './queue/workers/audit-retention.js'
 import { createHashListParserWorker } from './queue/workers/hash-list-parser.js'
 import { createHealthMonitorWorker } from './queue/workers/health-monitor.js'
 import { createHeartbeatMonitorWorker } from './queue/workers/heartbeat-monitor.js'
@@ -66,7 +67,17 @@ async function main() {
   const lineCountWorker = createLineCountWorker(connection)
   logger.info('Line count worker started')
 
-  const workers = [hashListWorker, heartbeatWorker, healthWorker, preemptionWorker, lineCountWorker]
+  const auditRetentionWorker = createAuditRetentionWorker(connection)
+  logger.info('Audit retention worker started')
+
+  const workers = [
+    hashListWorker,
+    heartbeatWorker,
+    healthWorker,
+    preemptionWorker,
+    lineCountWorker,
+    auditRetentionWorker,
+  ]
 
   async function shutdown(signal: string) {
     logger.info({ signal }, 'Shutting down job workers')

@@ -93,6 +93,8 @@ const mockCreateProject = mock(defaultCreateProjectImpl)
 mock.module('../../src/services/projects.js', () => ({
   addUserToProject: mock(async () => undefined),
   createProject: mockCreateProject,
+  findUserProjectById: mock(async () => null),
+  getUserProjectsPaginated: mock(async () => ({ items: [], total: 0 })),
   getProjectById: mock(async () => null),
   getProjectMembers: mock(async () => []),
   getUserProjects: mock(async () => []),

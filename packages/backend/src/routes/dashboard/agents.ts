@@ -194,8 +194,11 @@ const updateAgentRoute = createRoute({
 dashboardAgentRoutes.openapi(updateAgentRoute, async (c) => {
   const { id: agentId } = c.req.valid('param')
   const data = c.req.valid('json')
-  const { projectId } = c.get('scopedUser')!
-  const agent = await updateAgent(agentId, data, projectId)
+  const { projectId, userId } = c.get('scopedUser')!
+  const agent = await updateAgent(agentId, data, projectId, {
+    actorType: 'user',
+    actorId: userId,
+  })
   if (!agent) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
   }
