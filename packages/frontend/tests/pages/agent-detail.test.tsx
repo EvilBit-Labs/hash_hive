@@ -17,10 +17,17 @@ function selectProject(projectId = 1) {
   useUiStore.setState({ selectedProjectId: projectId })
 }
 
+const EMPTY_CONFIG_RESPONSE = {
+  config: { tuning: {}, hardware: {}, errorWhitelist: [] },
+  effective: { tuning: {}, hardware: {} },
+  sources: { tuning: {}, hardware: {}, errorWhitelist: 'engine' },
+}
+
 const STANDARD_DETAIL_MOCKS = (agentId = 1) => ({
   [`/dashboard/agents/${agentId}/errors`]: { status: 200, body: { errors: [] } },
   [`/dashboard/agents/${agentId}/tasks`]: { status: 200, body: { tasks: [] } },
   [`/dashboard/agents/${agentId}/benchmarks`]: { status: 200, body: { benchmarks: [] } },
+  [`/dashboard/agents/${agentId}/config`]: { status: 200, body: EMPTY_CONFIG_RESPONSE },
 })
 
 describe('AgentDetailPage', () => {
