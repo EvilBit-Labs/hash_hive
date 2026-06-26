@@ -48,6 +48,9 @@ const CrackersPage = lazy(() =>
   import('./pages/crackers').then((m) => ({ default: m.CrackersPage }))
 )
 const AccountPage = lazy(() => import('./pages/account').then((m) => ({ default: m.AccountPage })))
+const FleetConfigPage = lazy(() =>
+  import('./pages/fleet-config').then((m) => ({ default: m.FleetConfigPage }))
+)
 const NotFoundPage = lazy(() =>
   import('./pages/not-found').then((m) => ({ default: m.NotFoundPage }))
 )
@@ -99,6 +102,7 @@ function App() {
                   <Route path="/results" element={<ResultsPage />} />
                   <Route path="/audit-logs" element={<AuditLogsPage />} />
                   <Route path="/crackers" element={<CrackersPage />} />
+                  <Route path="/settings/fleet-config" element={<FleetConfigPage />} />
                   <Route path="/account" element={<AccountPage />} />
                 </Route>
               </Route>
