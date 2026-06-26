@@ -108,6 +108,12 @@ if (!IS_ISOLATED) {
     generateAgentToken: generateAgentTokenMock,
   }))
 
+  // Stub recordAuditEvent so audit inserts don't perturb the db chain mock.
+  const recordAuditEventMock = mock(async () => ({ id: 1 }))
+  mock.module('../../../src/services/audit-log.js', () => ({
+    recordAuditEvent: recordAuditEventMock,
+  }))
+
   const {
     claimEnrollmentToken,
     createEnrollmentToken,
@@ -146,6 +152,7 @@ if (!IS_ISOLATED) {
     updateMock.mockClear()
     generateAgentTokenMock.mockClear()
     generateEnrollmentTokenMock.mockClear()
+    recordAuditEventMock.mockClear()
     ;(dbMock['transaction'] as ReturnType<typeof mock>).mockClear()
   })
 
@@ -236,7 +243,30 @@ if (!IS_ISOLATED) {
         [], // no existing agent for this clientId
       ]
       updateReturningQueue = [[{ id: 1 }]] // guarded consume succeeds
-      insertReturningQueue = [[{ id: 42 }]] // agent inserted
+      // claimEnrollmentToken now does .returning() (full row) so the agent
+      // insert must return a shape with at least id for issueAgentBearer.
+      insertReturningQueue = [
+        [
+          {
+            id: 42,
+            projectId: 10,
+            name: 'rig-a',
+            status: 'offline',
+            capabilities: {},
+            hardwareProfile: {},
+            enrollmentClientId: 'rig-a',
+            enrolledByTokenId: 1,
+            operatingSystemId: null,
+            authToken: null,
+            authTokenHash: null,
+            authTokenFormat: 'plaintext',
+            crackerVersion: null,
+            lastSeenAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      ]
 
       const result = await claimEnrollmentToken({
         rawToken: 'etk_1_brave-coral-otter-47',

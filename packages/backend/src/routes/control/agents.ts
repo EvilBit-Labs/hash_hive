@@ -155,7 +155,11 @@ controlAgentRoutes.openapi(updateAgentRoute, async (c) => {
   try {
     const { projectId } = await requireProjectRole(c, 'admin')
     const { id } = c.req.valid('param')
-    const updated = await updateAgent(id, c.req.valid('json'), projectId)
+    const { userId } = c.get('currentUser')
+    const updated = await updateAgent(id, c.req.valid('json'), projectId, {
+      actorType: 'user',
+      actorId: userId,
+    })
     if (!updated) {
       return problemResponse(c, 404, 'not_found', 'agent not found')
     }

@@ -4,6 +4,7 @@ import { useLocation, useParams } from 'react-router'
 import { AgentErrorLog } from '../components/features/agent-error-log'
 import { AgentTasksSection } from '../components/features/agent-tasks-section'
 import { HardwareProfileCard } from '../components/features/hardware-profile-card'
+import { PermissionGuard } from '../components/features/permission-guard'
 import { StatusBadge } from '../components/features/status-badge'
 import { EmptyState } from '../components/ui/empty-state'
 import { PageHeader } from '../components/ui/page-header'
@@ -11,6 +12,7 @@ import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/
 import { TextLink } from '../components/ui/text-link'
 import { useAgent, useAgentBenchmarks, useAgentErrors, useAgentTasks } from '../hooks/use-dashboard'
 import { formatPrimaryEngine, getPrimaryEngine } from '../lib/agent-capabilities'
+import { Permission } from '../lib/permissions'
 
 function formatHashcatModes(capabilities: Record<string, unknown> | null | undefined): string {
   if (!capabilities) return '-'
@@ -81,9 +83,16 @@ export function AgentDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/agents" back>
-          Back to agents
-        </TextLink>
+        <div className="flex items-center gap-4">
+          <TextLink to="/agents" back>
+            Back to agents
+          </TextLink>
+          <PermissionGuard permission={Permission.AUDIT_LOG_VIEW}>
+            <TextLink to={`/audit-logs?entityType=agent&entityId=${agentId}`}>
+              Audit history
+            </TextLink>
+          </PermissionGuard>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <PageHeader>{agent.name}</PageHeader>
           <StatusBadge status={agent.status} />

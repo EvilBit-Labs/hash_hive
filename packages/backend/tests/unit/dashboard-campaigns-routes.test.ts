@@ -610,7 +610,10 @@ if (!IS_ISOLATED) {
         { id: 100, outcome: 'archived' },
         { id: 101, outcome: 'not_archivable' },
       ])
-      expect(mockArchiveCampaigns).toHaveBeenCalledWith(1, [100, 101])
+      expect(mockArchiveCampaigns).toHaveBeenCalledWith(1, [100, 101], {
+        actorType: 'user',
+        actorId: 1,
+      })
     })
 
     it('restores campaigns (admin)', async () => {
@@ -765,6 +768,27 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(400)
       const body = (await res.json()) as { error?: { code?: string } }
       expect(body.error?.code).toBe('VALIDATION_ERROR')
+    })
+
+    it('PATCH actor is sourced from the session, not injected body fields (E3)', async () => {
+      // R5: actor must come from auth context, never from the request body.
+      // Send actorType/actorId fields in the body — they must be stripped by
+      // the route schema (unknown fields are dropped by Zod strict parsing).
+      // The recorded actor must reflect session user id=1, not any body value.
+      mockUpdateCampaign.mockClear()
+      const res = await updateBody('PATCH', 100, {
+        name: 'E3 test',
+        actorType: 'system',
+        actorId: 9999,
+      })
+      expect(res.status).toBe(200)
+      expect(mockUpdateCampaign).toHaveBeenCalledTimes(1)
+      // The 4th argument to updateCampaign is the actor resolved from the session.
+      // Session user id=1 → { actorType: 'user', actorId: 1 }
+      const callArgs = mockUpdateCampaign.mock.calls[0]!
+      const actor = callArgs[3] as { actorType: string; actorId: number | null } | undefined
+      expect(actor?.actorType).toBe('user')
+      expect(actor?.actorId).toBe(1)
     })
   })
 

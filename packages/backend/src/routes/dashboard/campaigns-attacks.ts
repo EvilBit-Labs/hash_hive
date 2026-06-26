@@ -267,11 +267,15 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       }
     }
 
-    const attack = await createAttack({
-      ...data,
-      campaignId,
-      projectId: campaign.projectId,
-    })
+    const { userId } = c.get('scopedUser')!
+    const attack = await createAttack(
+      {
+        ...data,
+        campaignId,
+        projectId: campaign.projectId,
+      },
+      { actorType: 'user', actorId: userId }
+    )
 
     return c.json({ attack }, 201)
   })
@@ -354,7 +358,8 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       }
     }
 
-    const attack = await updateAttack(attackId, data)
+    const { userId } = c.get('scopedUser')!
+    const attack = await updateAttack(attackId, data, { actorType: 'user', actorId: userId })
 
     if (!attack) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
@@ -382,7 +387,8 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
     }
 
-    const attack = await deleteAttack(attackId)
+    const { userId } = c.get('scopedUser')!
+    const attack = await deleteAttack(attackId, { actorType: 'user', actorId: userId })
 
     if (!attack) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')

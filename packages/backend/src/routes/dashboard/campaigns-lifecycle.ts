@@ -49,13 +49,16 @@ const lifecycleAliasStatus = {
 type LifecycleAliasAction = keyof typeof lifecycleAliasStatus
 
 async function lifecycleAliasHandler(c: Context<AppEnv>, id: number, action: LifecycleAliasAction) {
-  const { projectId } = c.get('scopedUser')!
+  const { projectId, userId } = c.get('scopedUser')!
   const existing = await getCampaignById(id)
   if (!existing || existing.projectId !== projectId) {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  const result = await transitionCampaign(id, lifecycleAliasStatus[action])
+  const result = await transitionCampaign(id, lifecycleAliasStatus[action], {
+    actorType: 'user',
+    actorId: userId,
+  })
   return respondToTransition(c, result)
 }
 
@@ -141,7 +144,7 @@ export function registerCampaignLifecycleRoutes(router: OpenAPIHono<AppEnv>): vo
     // transitionCampaign fetches by id alone; without this guard a
     // contributor in project A could transition a campaign in project
     // B by guessing the id. Mirrors the per-alias handler check.
-    const { projectId } = c.get('scopedUser')!
+    const { projectId, userId } = c.get('scopedUser')!
     const existing = await getCampaignById(id)
     if (!existing || existing.projectId !== projectId) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
@@ -152,7 +155,10 @@ export function registerCampaignLifecycleRoutes(router: OpenAPIHono<AppEnv>): vo
     // `lifecycleAliasStatus` is the shared action→status map both this
     // action-enum route and the spec-named alias routes use, so a new
     // lifecycle action only needs to be added in one place.
-    const result = await transitionCampaign(id, lifecycleAliasStatus[action])
+    const result = await transitionCampaign(id, lifecycleAliasStatus[action], {
+      actorType: 'user',
+      actorId: userId,
+    })
     return respondToTransition(c, result)
   })
 

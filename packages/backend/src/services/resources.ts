@@ -1,4 +1,12 @@
-import { hashItems, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import {
+  type AuditEntityType,
+  hashItems,
+  hashLists,
+  hashTypes,
+  maskLists,
+  ruleLists,
+  wordLists,
+} from '@hashhive/shared'
 import { and, count, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
@@ -17,6 +25,7 @@ import {
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
@@ -26,6 +35,13 @@ import {
   countsAsWordlistLine,
   splitTextLines,
 } from './resources/line-count.js'
+
+// ─── Actor ────────────────────────────────────────────────────────────────────
+
+const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
+
+/** Actor resolved from request auth context — never from a request body (R5). */
+export type Actor = AuditActor
 
 // ─── Errors ────────────────────────────────────────────────────────────
 
@@ -193,6 +209,8 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
   projectId: number
   resourceLabel: string
   referencedBy: string
+  entityType: AuditEntityType
+  actor: Actor
   lookup: () => Promise<TRow | null>
   cascade?: (tx: DbTx) => Promise<void>
   deleteOwner: (runner: DbRunner) => Promise<void>
@@ -205,9 +223,33 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
       await db.transaction(async (tx) => {
         await args.cascade!(tx)
         await args.deleteOwner(tx)
+        await recordAuditEvent(
+          {
+            actor: args.actor,
+            projectId: args.projectId,
+            entityType: args.entityType,
+            entityId: args.id,
+            action: 'deleted',
+            oldRow: row as Record<string, unknown>,
+          },
+          tx
+        )
       })
     } else {
-      await args.deleteOwner(db)
+      await db.transaction(async (tx) => {
+        await args.deleteOwner(tx)
+        await recordAuditEvent(
+          {
+            actor: args.actor,
+            projectId: args.projectId,
+            entityType: args.entityType,
+            entityId: args.id,
+            action: 'deleted',
+            oldRow: row as Record<string, unknown>,
+          },
+          tx
+        )
+      })
     }
   } catch (err) {
     if (isForeignKeyViolation(err)) {
@@ -278,12 +320,18 @@ async function deleteHashItemsBatched(tx: DbTx, hashListId: number): Promise<voi
   )
 }
 
-export async function deleteHashList(id: number, projectId: number): Promise<boolean> {
+export async function deleteHashList(
+  id: number,
+  projectId: number,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+): Promise<boolean> {
   return cascadeDeleteResource({
     id,
     projectId,
     resourceLabel: 'hash list',
     referencedBy: 'one or more campaigns or attacks',
+    entityType: 'hash_list',
+    actor,
     lookup: () => getHashListById(id, projectId),
     // Bounded-batch cascade: large hash lists (millions of items) get
     // chunked DELETEs instead of one unbounded statement, capping the
@@ -297,17 +345,27 @@ export async function deleteHashList(id: number, projectId: number): Promise<boo
   })
 }
 
+/** Map a resource table to its audit entity type. */
+function entityTypeForTable(table: ResourceTable): AuditEntityType {
+  if (table === wordLists) return 'word_list'
+  if (table === ruleLists) return 'rule_list'
+  return 'mask_list'
+}
+
 export async function deleteResource(
   table: ResourceTable,
   id: number,
   projectId: number,
-  resourceType: string
+  resourceType: string,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ): Promise<boolean> {
   return cascadeDeleteResource({
     id,
     projectId,
     resourceLabel: resourceType,
     referencedBy: 'one or more attacks',
+    entityType: entityTypeForTable(table),
+    actor,
     lookup: () => getResourceById(table, id, projectId),
     deleteOwner: (runner) =>
       runner
@@ -326,24 +384,43 @@ export async function getHashListById(id: number, projectId: number) {
   return hl ?? null
 }
 
-export async function createHashList(data: {
-  projectId: number
-  name: string
-  hashTypeId?: number | undefined
-  source?: string | undefined
-}) {
-  const [hl] = await db
-    .insert(hashLists)
-    .values({
-      projectId: data.projectId,
-      name: data.name,
-      hashTypeId: data.hashTypeId ?? null,
-      source: data.source ?? 'upload',
-      status: 'uploading',
-    })
-    .returning()
+export async function createHashList(
+  data: {
+    projectId: number
+    name: string
+    hashTypeId?: number | undefined
+    source?: string | undefined
+  },
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
+  return db.transaction(async (tx) => {
+    const [hl] = await tx
+      .insert(hashLists)
+      .values({
+        projectId: data.projectId,
+        name: data.name,
+        hashTypeId: data.hashTypeId ?? null,
+        source: data.source ?? 'upload',
+        status: 'uploading',
+      })
+      .returning()
 
-  return hl ?? null
+    if (!hl) return null
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId: data.projectId,
+        entityType: 'hash_list',
+        entityId: hl.id,
+        action: 'created',
+        newRow: hl as Record<string, unknown>,
+      },
+      tx
+    )
+
+    return hl
+  })
 }
 
 /**
@@ -357,13 +434,44 @@ export async function createHashList(data: {
  * target type at the database layer; a stale or missing hashTypeId
  * surfaces as a Postgres FK violation and bubbles to the caller.
  */
-export async function setHashListType(id: number, projectId: number, hashTypeId: number) {
-  const [updated] = await db
-    .update(hashLists)
-    .set({ hashTypeId, updatedAt: new Date() })
-    .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
-    .returning()
-  return updated ?? null
+export async function setHashListType(
+  id: number,
+  projectId: number,
+  hashTypeId: number,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
+  return db.transaction(async (tx) => {
+    const [oldRow] = await tx
+      .select()
+      .from(hashLists)
+      .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+      .limit(1)
+
+    if (!oldRow) return null
+
+    const [updated] = await tx
+      .update(hashLists)
+      .set({ hashTypeId, updatedAt: new Date() })
+      .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
+      .returning()
+
+    if (!updated) return null
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'hash_list',
+        entityId: id,
+        action: 'updated',
+        oldRow: oldRow as Record<string, unknown>,
+        newRow: updated as Record<string, unknown>,
+      },
+      tx
+    )
+
+    return updated
+  })
 }
 
 export async function uploadHashListFile(
@@ -581,10 +689,29 @@ export async function getResourceById(table: ResourceTable, id: number, projectI
 
 export async function createResource(
   table: ResourceTable,
-  data: { projectId: number; name: string }
+  data: { projectId: number; name: string },
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ) {
-  const [row] = await db.insert(table).values(data).returning()
-  return row ?? null
+  const entityType = entityTypeForTable(table)
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(table).values(data).returning()
+
+    if (!row) return null
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId: data.projectId,
+        entityType,
+        entityId: row.id,
+        action: 'created',
+        newRow: row as Record<string, unknown>,
+      },
+      tx
+    )
+
+    return row
+  })
 }
 
 /**
@@ -625,7 +752,8 @@ export async function uploadResourceFile(
   resourceId: number,
   projectId: number,
   prefix: string,
-  file: File
+  file: File,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ) {
   const resource = await getResourceById(table, resourceId, projectId)
   if (!resource) {
@@ -662,24 +790,49 @@ export async function uploadResourceFile(
     lineCount = predicate ? countLinesInText(text, predicate) : null
   }
 
-  await db
-    .update(table)
-    .set({
-      fileRef: {
-        bucket: env.S3_BUCKET,
-        key,
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        name: file.name,
-        uploadedAt: new Date().toISOString(),
+  const entityType = entityTypeForTable(table)
+  const updateValues = {
+    fileRef: {
+      bucket: env.S3_BUCKET,
+      key,
+      contentType: file.type || 'application/octet-stream',
+      size: file.size,
+      name: file.name,
+      uploadedAt: new Date().toISOString(),
+    },
+    fileSize: file.size,
+    ...(lineCount !== null ? { lineCount } : {}),
+    ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
+    status: 'ready' as const,
+    updatedAt: new Date(),
+  }
+
+  // Wrap DB write + audit record in a transaction so a failed audit rolls
+  // back the metadata write (R4). The S3 upload above already succeeded and
+  // is not transactional (S3 is not Postgres); on rollback the uploaded
+  // object becomes an orphan. This is an acceptable trade-off — audit failure
+  // is a configuration error, not a normal code path. The non-transactional
+  // keyspace fan-out runs after commit so it is unaffected by the rollback.
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(table)
+      .set(updateValues)
+      .where(eq(table.id, resourceId))
+      .returning()
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType,
+        entityId: resourceId,
+        action: 'updated',
+        oldRow: resource as Record<string, unknown>,
+        newRow: (updated ?? { ...resource, ...updateValues }) as Record<string, unknown>,
       },
-      fileSize: file.size,
-      ...(lineCount !== null ? { lineCount } : {}),
-      ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
-      status: 'ready',
-      updatedAt: new Date(),
-    })
-    .where(eq(table.id, resourceId))
+      tx
+    )
+  })
 
   // Best-effort: refresh keyspace for any attacks already referencing this
   // resource. The usual flow uploads before attacks exist (a no-op fan-out);
@@ -772,13 +925,16 @@ const RESOURCE_TYPE_TABLE: Record<string, ResourceTable> = {
 
 const DEFAULT_PART_SIZE = 64 * 1024 * 1024 // 64 MB
 
-export async function initiateChunkedUpload(data: {
-  resourceType: string
-  name: string
-  fileSize: number
-  projectId: number
-  contentType?: string | undefined
-}): Promise<{
+export async function initiateChunkedUpload(
+  data: {
+    resourceType: string
+    name: string
+    fileSize: number
+    projectId: number
+    contentType?: string | undefined
+  },
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+): Promise<{
   uploadId: string
   resourceId: number
   partSize: number
@@ -799,11 +955,11 @@ export async function initiateChunkedUpload(data: {
   // Create DB record
   let resourceId: number
   if (isHashList) {
-    const hl = await createHashList({ projectId, name, source: 'upload' })
+    const hl = await createHashList({ projectId, name, source: 'upload' }, actor)
     if (!hl) throw new Error('Failed to create hash list')
     resourceId = hl.id
   } else {
-    const row = await createResource(table as ResourceTable, { projectId, name })
+    const row = await createResource(table as ResourceTable, { projectId, name }, actor)
     if (!row) throw new Error(`Failed to create ${resourceType}`)
     resourceId = row.id
   }

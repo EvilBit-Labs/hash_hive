@@ -2,14 +2,22 @@ import { baSessions, projects, projectUsers, users } from '@hashhive/shared'
 import { and, count, desc, eq } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 
-export async function createProject(data: {
-  name: string
-  description?: string | undefined
-  slug: string
-  settings?: Record<string, unknown> | undefined
-  createdBy: number
-}) {
+const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
+
+type Actor = AuditActor
+
+export async function createProject(
+  data: {
+    name: string
+    description?: string | undefined
+    slug: string
+    settings?: Record<string, unknown> | undefined
+    createdBy: number
+  },
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
   return db.transaction(async (tx) => {
     const [project] = await tx
       .insert(projects)
@@ -32,6 +40,18 @@ export async function createProject(data: {
       projectId: project.id,
       roles: ['admin'],
     })
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId: project.id,
+        entityType: 'project',
+        entityId: project.id,
+        action: 'created',
+        newRow: project as Record<string, unknown>,
+      },
+      tx
+    )
 
     return project
   })
@@ -115,33 +135,98 @@ export async function getUserProjectsPaginated(
   return { items, total: Number(countResult[0]?.value ?? 0) }
 }
 
+/**
+ * Wrapped in a transaction so the audit row is atomic with the UPDATE.
+ * Fetches the old row inside the tx for the diff snapshot.
+ */
 export async function updateProject(
   projectId: number,
   data: {
     name?: string | undefined
     description?: string | undefined
     settings?: Record<string, unknown> | undefined
-  }
+  },
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ) {
-  const [updated] = await db
-    .update(projects)
-    .set({ ...data, updatedAt: new Date() })
-    .where(eq(projects.id, projectId))
-    .returning()
+  return db.transaction(async (tx) => {
+    const [oldRow] = await tx.select().from(projects).where(eq(projects.id, projectId)).limit(1)
 
-  return updated ?? null
+    if (!oldRow) {
+      return null
+    }
+
+    const [updated] = await tx
+      .update(projects)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(projects.id, projectId))
+      .returning()
+
+    if (!updated) {
+      return null
+    }
+
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'project',
+        entityId: projectId,
+        action: 'updated',
+        oldRow: oldRow as Record<string, unknown>,
+        newRow: updated as Record<string, unknown>,
+      },
+      tx
+    )
+
+    return updated
+  })
 }
 
-export async function addUserToProject(projectId: number, userId: number, roles: string[]) {
-  const [membership] = await db
-    .insert(projectUsers)
-    .values({ projectId, userId, roles })
-    .returning()
+/**
+ * Wrapped in a transaction so the audit row is atomic with the INSERT.
+ * Records the new member's userId and roles (no email — R6).
+ */
+export async function addUserToProject(
+  projectId: number,
+  userId: number,
+  roles: string[],
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
+  return db.transaction(async (tx) => {
+    const [membership] = await tx
+      .insert(projectUsers)
+      .values({ projectId, userId, roles })
+      .returning()
 
-  return membership ?? null
+    if (!membership) {
+      return null
+    }
+
+    // Record membership addition as a project-level 'updated' event.
+    // Diff captures the affected member's userId and roles.
+    // userId only (not email) per R6 — no credential/PII in changes.
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'project',
+        entityId: projectId,
+        action: 'updated',
+        oldRow: { memberUserId: null, memberRoles: null },
+        newRow: { memberUserId: userId, memberRoles: roles },
+      },
+      tx
+    )
+
+    return membership
+  })
 }
 
-export async function removeUserFromProject(projectId: number, userId: number) {
+export async function removeUserFromProject(
+  projectId: number,
+  userId: number,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
   // Wrap the membership delete and session-scope cleanup in a transaction
   // so a partial failure leaves neither side stale. Without the session
   // cleanup, a user whose membership is revoked stays wedged on the
@@ -173,6 +258,22 @@ export async function removeUserFromProject(projectId: number, userId: number) {
       .update(users)
       .set({ lastProjectId: null })
       .where(and(eq(users.id, userId), eq(users.lastProjectId, projectId)))
+
+    // Record membership removal as a project-level 'updated' event.
+    // Captures the removed member's userId (not email) per R6.
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'project',
+        entityId: projectId,
+        action: 'updated',
+        oldRow: { memberUserId: userId, memberRoles: removed.roles },
+        newRow: { memberUserId: null, memberRoles: null },
+      },
+      tx
+    )
+
     return removed
   })
 }
@@ -188,12 +289,54 @@ export async function getProjectMembers(projectId: number) {
     .where(eq(projectUsers.projectId, projectId))
 }
 
-export async function updateMemberRoles(projectId: number, userId: number, roles: string[]) {
-  const [updated] = await db
-    .update(projectUsers)
-    .set({ roles })
-    .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
-    .returning()
+/**
+ * Wrapped in a transaction so the audit row is atomic with the UPDATE.
+ * Fetches the old membership row first for the old->new role diff.
+ * Captures userId only (not email) per R6.
+ */
+export async function updateMemberRoles(
+  projectId: number,
+  userId: number,
+  roles: string[],
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
+) {
+  return db.transaction(async (tx) => {
+    const [oldMembership] = await tx
+      .select()
+      .from(projectUsers)
+      .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
+      .limit(1)
 
-  return updated ?? null
+    if (!oldMembership) {
+      return null
+    }
+
+    const [updated] = await tx
+      .update(projectUsers)
+      .set({ roles })
+      .where(and(eq(projectUsers.projectId, projectId), eq(projectUsers.userId, userId)))
+      .returning()
+
+    if (!updated) {
+      return null
+    }
+
+    // Record role change as a project-level 'updated' event.
+    // Diff captures the member's userId and old->new roles.
+    // userId only — no email or credential per R6.
+    await recordAuditEvent(
+      {
+        actor,
+        projectId,
+        entityType: 'project',
+        entityId: projectId,
+        action: 'updated',
+        oldRow: { memberUserId: userId, memberRoles: oldMembership.roles },
+        newRow: { memberUserId: userId, memberRoles: roles },
+      },
+      tx
+    )
+
+    return updated
+  })
 }

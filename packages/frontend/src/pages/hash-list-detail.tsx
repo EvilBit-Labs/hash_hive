@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router'
 
+import { PermissionGuard } from '../components/features/permission-guard'
 import { CrackedStatsLine } from '../components/features/results/cracked-stats-line'
 import { ExportButton } from '../components/features/results/export-button'
 import { LiveIndicator } from '../components/features/results/live-indicator'
@@ -20,6 +21,7 @@ import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useHashListDetail, useHashListItems } from '../hooks/use-resources'
 import { useResults } from '../hooks/use-results'
 import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
+import { Permission } from '../lib/permissions'
 
 type StatusFilter = 'all' | 'cracked' | 'uncracked'
 type DetailView = 'all' | 'cracked' | 'uncracked'
@@ -150,9 +152,16 @@ export function HashListDetailPage() {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <TextLink to="/resources" back>
-          Back to resources
-        </TextLink>
+        <div className="flex items-center gap-4">
+          <TextLink to="/resources" back>
+            Back to resources
+          </TextLink>
+          <PermissionGuard permission={Permission.AUDIT_LOG_VIEW}>
+            <TextLink to={`/audit-logs?entityType=hash_list&entityId=${hashListId}`}>
+              Audit history
+            </TextLink>
+          </PermissionGuard>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <PageHeader>{hashList.name}</PageHeader>

@@ -28,6 +28,11 @@ if (!IS_ISOLATED) {
 }
 
 if (IS_ISOLATED) {
+  // ─── Mock audit-log recorder (resources.ts now imports it) ────────────
+  mock.module('../../src/services/audit-log.js', () => ({
+    recordAuditEvent: mock(async () => ({ id: 1 })),
+  }))
+
   // ─── Mock logger so the warn path doesn't pollute test output ────────
   mock.module('../../src/config/logger.js', () => ({
     logger: { info: mock(), warn: mock(), error: mock(), debug: mock() },
@@ -92,15 +97,18 @@ if (IS_ISOLATED) {
       // Production code uses tx.execute for the batched hash_items DELETE
       // (PG LIMIT-on-DELETE isn't in Drizzle's typed API). Return
       // rowCount=0 so the chunked loop terminates immediately under test.
+      // insert is required by recordAuditEvent called inside the transaction.
       transaction: async (
         fn: (tx: {
           delete: typeof mockDelete
           execute: (sql: unknown) => Promise<{ rowCount: number }>
+          insert: () => { values: () => { returning: () => Promise<{ id: number }[]> } }
         }) => Promise<unknown>
       ) =>
         fn({
           delete: mockDelete,
           execute: async () => ({ rowCount: 0 }),
+          insert: () => ({ values: () => ({ returning: () => Promise.resolve([{ id: 1 }]) }) }),
         }),
     },
   }))

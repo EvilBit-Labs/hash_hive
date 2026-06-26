@@ -827,3 +827,97 @@ export const taskTelemetry = pgTable(
     index('task_telemetry_time_idx').on(table.time.desc()),
   ]
 )
+
+// ─── Audit Logging (#105) ───────────────────────────────────────────
+// Polymorphic append-only audit table. Every state change to a resource
+// writes one row. The (entity_type, entity_id) pair is a logical FK —
+// no DB-level FK is declared because the target row may be deleted
+// (project_id is the only real FK so per-project history queries are
+// efficient even after entity deletion).
+//
+// actor_type / entity_type / action values are kept in sync with the
+// Zod enums in `../schemas/index.ts` via the check constraints below.
+// The drift-guard unit test (packages/backend/tests/unit/audit-logs-schema.test.ts)
+// asserts that every Zod enum value appears in the corresponding IN-list.
+
+/** Vocabulary constants re-used in the check constraints and Zod enums. */
+export const AUDIT_ACTOR_TYPE_VALUES = ['user', 'agent', 'system'] as const
+export const AUDIT_ENTITY_TYPE_VALUES = [
+  'project',
+  'campaign',
+  'attack',
+  'hash_list',
+  'word_list',
+  'rule_list',
+  'mask_list',
+  'agent',
+] as const
+export const AUDIT_ACTION_VALUES = [
+  'created',
+  'updated',
+  'deleted',
+  'status_changed',
+  'token_issued',
+] as const
+
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: serial('id').primaryKey(),
+    // Who triggered the event. actorId is a bare integer (no FK) because
+    // it spans both users.id and agents.id depending on actorType.
+    // .$type<> is type-only branding — no DDL change; selects infer the union.
+    actorType: varchar('actor_type', { length: 20 })
+      .notNull()
+      .$type<(typeof AUDIT_ACTOR_TYPE_VALUES)[number]>(),
+    actorId: integer('actor_id'),
+    // Scoping FK: set null when the project is deleted so per-project
+    // history queries can still be filtered while orphan rows remain.
+    projectId: integer('project_id').references(() => projects.id, { onDelete: 'set null' }),
+    // Polymorphic resource discriminator — no DB FK (entity rows can be deleted).
+    // .$type<> is type-only branding — no DDL change; selects infer the union.
+    entityType: varchar('entity_type', { length: 32 })
+      .notNull()
+      .$type<(typeof AUDIT_ENTITY_TYPE_VALUES)[number]>(),
+    entityId: integer('entity_id').notNull(),
+    // What happened.
+    // .$type<> is type-only branding — no DDL change; selects infer the union.
+    action: varchar('action', { length: 20 })
+      .notNull()
+      .$type<(typeof AUDIT_ACTION_VALUES)[number]>(),
+    // Optional transition fields; vocabularies are caller-defined (no check).
+    fromStatus: varchar('from_status', { length: 20 }),
+    toStatus: varchar('to_status', { length: 20 }),
+    // Human-readable reason annotation (wider than fromStatus to fit phrases).
+    reason: varchar('reason', { length: 40 }),
+    // Free-form before/after diff; encoding spec is owned by recordAuditEvent (U2).
+    changes: jsonb('changes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Per-entity history: primary query path for the audit trail panel.
+    index('audit_logs_entity_type_entity_id_created_at_idx').on(
+      table.entityType,
+      table.entityId,
+      table.createdAt.desc()
+    ),
+    // Project-scoped browse: powers the dashboard audit list page (U7).
+    index('audit_logs_project_id_created_at_idx').on(table.projectId, table.createdAt.desc()),
+    // Retention sweep: WHERE created_at < cutoff scans without a seq-scan.
+    index('audit_logs_created_at_idx').on(table.createdAt),
+    // Check constraints keep DB vocabulary aligned with the Zod enums in
+    // ../schemas/index.ts. The drift-guard test asserts they are identical.
+    // Sync with: AUDIT_ACTOR_TYPE_VALUES / auditActorTypeSchema in ../schemas/index.ts
+    check('audit_logs_actor_type_chk', sql`${table.actorType} IN ('user', 'agent', 'system')`),
+    // Sync with: AUDIT_ENTITY_TYPE_VALUES / auditEntityTypeSchema in ../schemas/index.ts
+    check(
+      'audit_logs_entity_type_chk',
+      sql`${table.entityType} IN ('project', 'campaign', 'attack', 'hash_list', 'word_list', 'rule_list', 'mask_list', 'agent')`
+    ),
+    // Sync with: AUDIT_ACTION_VALUES / auditActionSchema in ../schemas/index.ts
+    check(
+      'audit_logs_action_chk',
+      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued')`
+    ),
+  ]
+)

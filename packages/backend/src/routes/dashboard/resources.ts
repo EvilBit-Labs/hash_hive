@@ -176,6 +176,8 @@ const createHashListRoute = createRoute({
 
 resourceRoutes.openapi(createHashListRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
+  const { userId } = c.get('currentUser')
+  const actor = { actorType: 'user' as const, actorId: userId }
 
   const contentType = c.req.header('content-type') ?? ''
 
@@ -233,11 +235,14 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
     }
 
     // Create the DB row first so we can target the upload at a stable key.
-    const created = await createHashList({
-      projectId,
-      name: nameRaw,
-      ...(hashTypeId !== undefined ? { hashTypeId } : {}),
-    })
+    const created = await createHashList(
+      {
+        projectId,
+        name: nameRaw,
+        ...(hashTypeId !== undefined ? { hashTypeId } : {}),
+      },
+      actor
+    )
     if (!created) {
       return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to create hash list')
     }
@@ -304,7 +309,7 @@ resourceRoutes.openapi(createHashListRoute, async (c) => {
   if (!parsed.success) {
     return dashboardError(c, 400, 'VALIDATION_ERROR', 'Invalid JSON body')
   }
-  const hashList = await createHashList({ ...parsed.data, projectId })
+  const hashList = await createHashList({ ...parsed.data, projectId }, actor)
   return c.json({ hashList }, 201)
 })
 
@@ -390,6 +395,8 @@ const deleteHashListRoute = createRoute({
 
 resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
+  const { userId } = c.get('currentUser')
+  const actor = { actorType: 'user' as const, actorId: userId }
 
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
@@ -397,7 +404,7 @@ resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   }
 
   try {
-    const deleted = await deleteHashList(id, projectId)
+    const deleted = await deleteHashList(id, projectId, actor)
     if (!deleted) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
@@ -455,6 +462,8 @@ const setHashListTypeRoute = createRoute({
 
 resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
+  const { userId } = c.get('currentUser')
+  const actor = { actorType: 'user' as const, actorId: userId }
 
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
@@ -464,7 +473,7 @@ resourceRoutes.openapi(setHashListTypeRoute, async (c) => {
   const { hashTypeId } = c.req.valid('json')
 
   try {
-    const updated = await setHashListType(id, projectId, hashTypeId)
+    const updated = await setHashListType(id, projectId, hashTypeId, actor)
     if (!updated) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
     }
