@@ -91,7 +91,9 @@ describe('auditLogSchema.parse()', () => {
     expect(parsed.entityLabel).toBe('Summer Campaign')
   })
 
-  it('accepts a minimal row (nullable / optional fields absent)', () => {
+  it('accepts a minimal row (nullable fields null, required labels present)', () => {
+    // actorLabel / entityLabel are now required — the service always populates
+    // them with a fallback string ('[deleted user]', '[deleted]', 'System', …).
     const raw = {
       id: 2,
       actorType: 'system',
@@ -105,6 +107,8 @@ describe('auditLogSchema.parse()', () => {
       reason: null,
       changes: null,
       createdAt: '2026-06-24T00:00:00.000Z',
+      actorLabel: 'System',
+      entityLabel: '[deleted]',
     }
 
     const parsed = auditLogSchema.parse(raw)
@@ -112,8 +116,8 @@ describe('auditLogSchema.parse()', () => {
     expect(parsed.actorId).toBeNull()
     expect(parsed.projectId).toBeNull()
     expect(parsed.changes).toBeNull()
-    expect(parsed.actorLabel).toBeUndefined()
-    expect(parsed.entityLabel).toBeUndefined()
+    expect(parsed.actorLabel).toBe('System')
+    expect(parsed.entityLabel).toBe('[deleted]')
   })
 
   it('rejects an invalid actorType', () => {

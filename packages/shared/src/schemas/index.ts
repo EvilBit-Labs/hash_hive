@@ -1124,7 +1124,10 @@ export const auditActionSchema = z.enum(AUDIT_ACTION_VALUES).openapi('AuditActio
  * (not createSelectSchema) because:
  * 1. `createdAt` must be an ISO string on the wire (DB returns Date).
  * 2. `actorLabel` / `entityLabel` are joined display strings, not columns.
- * 3. `changes` is intentionally permissive at U1 — U2 defines the diff encoding.
+ * 3. `changes` is intentionally a loose z.record so consumers do not break as
+ *    entity types and fields evolve. The encoding is defined by `recordAuditEvent`
+ *    in services/audit-log.ts; do not tighten this schema to mirror the diff
+ *    shape — use the service return type directly for internal consumers instead.
  */
 export const auditLogSchema = z
   .object({
@@ -1137,16 +1140,17 @@ export const auditLogSchema = z
     action: auditActionSchema,
     fromStatus: z.string().nullable(),
     toStatus: z.string().nullable(),
-    reason: z.string().nullable(),
-    // Permissive until U2 pins the diff encoding. Consumers must not rely
-    // on the shape of `changes` until the schema is tightened in U2.
+    reason: z.string().max(40).nullable(),
+    // z.record stays intentionally loose so consumers do not break as entity
+    // types and fields grow. See comment 3 on this schema above.
     changes: z.record(z.string(), z.unknown()).nullable(),
     createdAt: z.iso.datetime(),
-    // Optional display-only labels joined by the service layer (U7/U8).
-    // Not stored in the DB; omitted on writes, present on reads when the
-    // service can resolve the actor/entity at query time.
-    actorLabel: z.string().optional(),
-    entityLabel: z.string().optional(),
+    // Display-only labels resolved by the service layer (U7/U8).
+    // Not stored in the DB. The service always populates them with a fallback
+    // string ('[deleted user]', '[deleted]', 'System', etc.) so these are
+    // required on reads — never absent in a well-formed API response.
+    actorLabel: z.string(),
+    entityLabel: z.string(),
   })
   .openapi('AuditLog')
 

@@ -101,7 +101,7 @@ function truncateValue(raw: unknown): { display: string; full: string; truncated
 // ─── Copy button (sub-component) ─────────────────────────────────────────────
 
 function CopyButton({ value }: { readonly value: string }) {
-  const { copied, copy } = useCopyToClipboard()
+  const { copied, copyFailed, copy } = useCopyToClipboard()
   return (
     <button
       type="button"
@@ -110,7 +110,7 @@ function CopyButton({ value }: { readonly value: string }) {
       onClick={() => copy(value)}
       className="ml-1 inline-flex items-center rounded px-1 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-surface-0/60 hover:text-foreground"
     >
-      {copied ? 'Copied' : 'Copy'}
+      {copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}
     </button>
   )
 }
@@ -263,12 +263,18 @@ function entityLink(entityType: string, entityId: number): string {
 }
 
 interface EntityCellProps {
+  readonly action: string
   readonly entityType: string
   readonly entityId: number
   readonly entityLabel: string | undefined
 }
 
-function EntityCell({ entityType, entityId, entityLabel }: EntityCellProps) {
+function EntityCell({ action, entityType, entityId, entityLabel }: EntityCellProps) {
+  // token_issued: entityId is the enrollment-token PK, not an agent row.
+  // Rendering a link to /agents/<id> would be incorrect — show a static label.
+  if (action === 'token_issued') {
+    return <span className="text-xs">Enrollment token</span>
+  }
   const display = entityLabel ?? `${entityType} #${entityId}`
   const href = entityLink(entityType, entityId)
   if (href) {
@@ -580,6 +586,7 @@ export function AuditLogsPage() {
                   </Td>
                   <Td className="text-xs">
                     <EntityCell
+                      action={log.action}
                       entityType={log.entityType}
                       entityId={log.entityId}
                       entityLabel={log.entityLabel}

@@ -57,19 +57,16 @@ if (!IS_ISOLATED) {
 
   const makeTxMock = (
     projectOverride: Record<string, unknown> = {},
-    membershipOverride: Record<string, unknown> = {}
+    membershipOverride: Record<string, unknown> = {},
+    notFound = false
   ) => ({
     select: () => ({
       from: () => ({
         where: () => ({
           limit: () =>
-            Promise.resolve([
-              // Return project row for project queries, membership row for projectUsers queries.
-              // The service calls both select().from(projects)... and select().from(projectUsers)...
-              // We use the same mock for both — it returns a project-shaped row which is fine
-              // for the project select; updateMemberRoles also needs the membership shape.
-              makeProjectRow(projectOverride),
-            ]),
+            // Return [] when notFound is true so updateProject hits the early-return
+            // guard (`if (!oldRow) return null`) before reaching recordAuditEvent.
+            Promise.resolve(notFound ? [] : [makeProjectRow(projectOverride)]),
         }),
         innerJoin: () => ({ where: () => Promise.resolve([]) }),
       }),
@@ -93,11 +90,15 @@ if (!IS_ISOLATED) {
     }),
   })
 
-  // Mutable state so individual tests can control what the tx returns
+  // Mutable state so individual tests can control what the tx returns.
+  // capturedTx is set by the transaction wrapper so E1 tests can assert identity.
+  // notFound: true makes the tx select return [] so updateProject hits the early return.
   const txState: {
     projectOverride: Record<string, unknown>
     membershipOverride: Record<string, unknown>
-  } = { projectOverride: {}, membershipOverride: {} }
+    capturedTx: ReturnType<typeof makeTxMock> | null
+    notFound: boolean
+  } = { projectOverride: {}, membershipOverride: {}, capturedTx: null, notFound: false }
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
@@ -126,8 +127,11 @@ if (!IS_ISOLATED) {
           returning: () => Promise.resolve([makeMembershipRow(txState.membershipOverride)]),
         }),
       }),
-      transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) =>
-        fn(makeTxMock(txState.projectOverride, txState.membershipOverride)),
+      transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) => {
+        const tx = makeTxMock(txState.projectOverride, txState.membershipOverride, txState.notFound)
+        txState.capturedTx = tx
+        return fn(tx)
+      },
       client: {},
     },
     client: {},
@@ -155,6 +159,8 @@ if (!IS_ISOLATED) {
       recordAuditEventSpy.mockClear()
       txState.projectOverride = {}
       txState.membershipOverride = {}
+      txState.capturedTx = null
+      txState.notFound = false
     })
 
     // ── createProject ──────────────────────────────────────────────────────
@@ -208,15 +214,21 @@ if (!IS_ISOLATED) {
         expect(input.actor).toEqual(SYSTEM_ACTOR)
       })
 
-      it('writes no audit row when project not found (returns null early)', async () => {
-        // Override tx to return empty arrays for selects (project not found)
-        txState.projectOverride = { __notFound: true }
-        // Patch the transaction mock to return empty select results
-        // Since the tx mock always returns a row, we test structural invariant:
-        // If oldRow is null, no audit call is made. Verify via code inspection.
-        // (The service returns null early before recordAuditEvent when oldRow is absent.)
-        // This is verified structurally — we test the happy path above instead.
-        expect(true).toBe(true)
+      it('forwards the transaction handle as the executor argument (E1)', async () => {
+        // updateProject wraps in db.transaction; recordAuditEvent receives tx as 2nd arg.
+        // txState.capturedTx is set by the transaction wrapper above, so we assert
+        // exact object identity — confirming the same tx handle is forwarded.
+        await updateProject(10, { name: 'Updated Name' }, USER_ACTOR)
+        expect(txState.capturedTx).not.toBeNull()
+        expect(recordAuditEventSpy.mock.calls[0]?.[1]).toBe(txState.capturedTx)
+      })
+
+      it('writes no audit row when project not found (returns null early) (E2)', async () => {
+        // Force the tx select to return [] so updateProject hits the not-found early return.
+        txState.notFound = true
+        const result = await updateProject(10, { name: 'Should Not Audit' }, USER_ACTOR)
+        expect(result).toBeNull()
+        expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })
 

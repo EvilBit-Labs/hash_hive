@@ -259,15 +259,23 @@ type Executor = Pick<typeof db, 'insert'>
 // ─── Input type ──────────────────────────────────────────────────────────────
 
 /**
+ * Discriminated union for the actor field of `RecordAuditEventInput`.
+ * Enforces that system actors always have `actorId: null` and user/agent
+ * actors always carry a numeric id. Route handlers can import this type
+ * directly to avoid re-declaring local actor shapes.
+ */
+export type AuditActor =
+  | { actorType: 'user'; actorId: number }
+  | { actorType: 'agent'; actorId: number }
+  | { actorType: 'system'; actorId: null }
+
+/**
  * Input to `recordAuditEvent`. The actor is resolved from the request's auth
  * context by the caller — NEVER from a request body (R5).
  */
 export interface RecordAuditEventInput {
   /** Who triggered the event. Resolved from auth context, not request body. */
-  actor: {
-    actorType: AuditActorType
-    actorId: number | null
-  }
+  actor: AuditActor
   /** Project the event belongs to. Used for scoped browsing. */
   projectId: number | null
   /** The kind of entity that was modified. */
@@ -444,10 +452,10 @@ export async function recordAuditEvent(input: RecordAuditEventInput, executor: E
  * omitting a field means "no filter applied" for that dimension.
  */
 export interface AuditLogFilters {
-  entityType?: string | undefined
+  entityType?: AuditEntityType | undefined
   entityId?: number | undefined
-  actorType?: string | undefined
-  action?: string | undefined
+  actorType?: AuditActorType | undefined
+  action?: AuditAction | undefined
   dateFrom?: string | undefined
   dateTo?: string | undefined
 }
@@ -466,12 +474,12 @@ export interface AuditLogPagination {
  */
 export interface AuditLogRow {
   id: number
-  actorType: string
+  actorType: AuditActorType
   actorId: number | null
   projectId: number | null
-  entityType: string
+  entityType: AuditEntityType
   entityId: number
-  action: string
+  action: AuditAction
   fromStatus: string | null
   toStatus: string | null
   reason: string | null
@@ -711,14 +719,25 @@ export async function listAuditEvents(
     }
   }
 
+  // safeLoad: wraps a batch-load so a transient DB error yields an empty Map
+  // rather than rejecting the whole Promise.all. The per-row mapper already
+  // null-coalesces missing entries to '[deleted ...]' fallbacks (R4 resilience).
+  async function safeLoad<K, V>(fn: () => Promise<Map<K, V>>): Promise<Map<K, V>> {
+    try {
+      return await fn()
+    } catch {
+      return new Map<K, V>()
+    }
+  }
+
   // Batch load all names in parallel
   const entityNamePromises = [...entityIdsByType.entries()].map(
-    async ([type, ids]) => [type, await batchLoadEntityNames(type, ids)] as const
+    async ([type, ids]) => [type, await safeLoad(() => batchLoadEntityNames(type, ids))] as const
   )
 
   const [userNames, agentNames, ...entityNameResults] = await Promise.all([
-    batchLoadUserNames(userActorIds),
-    batchLoadAgentNames(agentActorIds),
+    safeLoad(() => batchLoadUserNames(userActorIds)),
+    safeLoad(() => batchLoadAgentNames(agentActorIds)),
     ...entityNamePromises,
   ])
 
@@ -747,12 +766,12 @@ export async function listAuditEvents(
 
     return {
       id: row.id,
-      actorType: row.actorType,
+      actorType: row.actorType as AuditActorType,
       actorId: row.actorId,
       projectId: row.projectId,
-      entityType: row.entityType,
+      entityType: row.entityType as AuditEntityType,
       entityId: row.entityId,
-      action: row.action,
+      action: row.action as AuditAction,
       fromStatus: row.fromStatus,
       toStatus: row.toStatus,
       reason: row.reason,

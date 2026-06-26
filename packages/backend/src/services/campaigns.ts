@@ -11,7 +11,7 @@ import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
-import { recordAuditEvent } from './audit-log.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
@@ -262,7 +262,7 @@ export async function createCampaign(
     priority?: number | undefined
     createdBy?: number | undefined
   },
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -348,7 +348,7 @@ export async function createCampaignWithAttacks(input: {
   priority?: number | undefined
   createdBy?: number | undefined
   attacks: ReadonlyArray<InlineAttackInput>
-  actor?: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } | undefined
+  actor?: AuditActor | undefined
 }): Promise<CreateCampaignWithAttacksResult> {
   const actor = input.actor ?? { actorType: 'system' as const, actorId: null }
   // First validate the proposed DAG using index-based IDs. We use the
@@ -568,7 +568,7 @@ export async function updateCampaign(
     description?: string | null | undefined
     priority?: number | undefined
   },
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -649,7 +649,7 @@ export async function changeRunningCampaignPriority(
   id: number,
   projectId: number,
   priority: number,
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -746,7 +746,7 @@ const VALID_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
 export async function transitionCampaign(
   id: number,
   targetStatus: CampaignStatus,
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -1090,7 +1090,7 @@ export async function createAttack(
     advancedConfiguration?: Record<string, unknown> | undefined
     dependencies?: number[] | undefined
   },
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -1159,7 +1159,7 @@ export async function updateAttack(
     advancedConfiguration?: Record<string, unknown> | undefined
     dependencies?: number[] | undefined
   },
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -1225,7 +1225,7 @@ export async function updateAttack(
 
 export async function deleteAttack(
   id: number,
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }

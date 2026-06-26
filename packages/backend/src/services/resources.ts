@@ -25,7 +25,7 @@ import {
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
-import { recordAuditEvent } from './audit-log.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
@@ -38,10 +38,10 @@ import {
 
 // ─── Actor ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_SYSTEM_ACTOR = { actorType: 'system' as const, actorId: null }
+const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
 
 /** Actor resolved from request auth context — never from a request body (R5). */
-export type Actor = { actorType: 'user' | 'agent' | 'system'; actorId: number | null }
+export type Actor = AuditActor
 
 // ─── Errors ────────────────────────────────────────────────────────────
 

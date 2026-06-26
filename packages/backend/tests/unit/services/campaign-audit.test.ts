@@ -112,7 +112,12 @@ if (!IS_ISOLATED) {
 
   // campaignOverrides is mutable so individual tests can set different statuses
   // (e.g. 'running'/'paused' for changeRunningCampaignPriority).
-  const campaignState: { overrides: Record<string, unknown> } = { overrides: {} }
+  // capturedTx is set by the transaction wrapper so E1 tests can assert identity.
+  const campaignState: {
+    overrides: Record<string, unknown>
+    capturedTx: ReturnType<typeof makeTxMock> | null
+    staleState: boolean
+  } = { overrides: {}, capturedTx: null, staleState: false }
 
   mock.module('../../../src/db/index.js', () => {
     return {
@@ -129,14 +134,17 @@ if (!IS_ISOLATED) {
             orderBy: () => Promise.resolve([makeAttackRow()]),
           }),
         }),
-        // top-level update (used by transitionCampaign's status UPDATE and task cancel)
+        // top-level update (used by transitionCampaign's status UPDATE and task cancel).
+        // Returns [] when staleState is true so the service hits the STALE_STATE path.
         update: () => ({
           set: () => ({
             where: () => ({
               returning: () =>
-                Promise.resolve([
-                  makeCampaignRow({ status: 'paused', ...campaignState.overrides }),
-                ]),
+                campaignState.staleState
+                  ? Promise.resolve([])
+                  : Promise.resolve([
+                      makeCampaignRow({ status: 'paused', ...campaignState.overrides }),
+                    ]),
             }),
           }),
         }),
@@ -154,9 +162,13 @@ if (!IS_ISOLATED) {
             returning: () => Promise.resolve([makeAttackRow()]),
           }),
         }),
-        // transaction: wraps updateCampaign / changeRunningCampaignPriority
-        transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) =>
-          fn(makeTxMock({ status: 'running', ...campaignState.overrides })),
+        // transaction: wraps updateCampaign / changeRunningCampaignPriority / deleteAttack.
+        // Saves the tx handle so E1 tests can assert identity via toBe.
+        transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) => {
+          const tx = makeTxMock({ status: 'running', ...campaignState.overrides })
+          campaignState.capturedTx = tx
+          return fn(tx)
+        },
         client: {},
       },
       client: {},
@@ -255,6 +267,8 @@ if (!IS_ISOLATED) {
     afterEach(() => {
       recordAuditEventSpy.mockClear()
       campaignState.overrides = {}
+      campaignState.capturedTx = null
+      campaignState.staleState = false
     })
 
     // ── createCampaign ──────────────────────────────────────────────────────────
@@ -341,6 +355,15 @@ if (!IS_ISOLATED) {
         const [input] = recordAuditEventSpy.mock.calls[0]!
         expect(input.actor).toEqual(SYSTEM_ACTOR)
       })
+
+      it('forwards the transaction handle as the executor argument (E1)', async () => {
+        // updateCampaign wraps in db.transaction; recordAuditEvent receives tx as 2nd arg.
+        // campaignState.capturedTx is set by the transaction wrapper above, so we can
+        // assert exact object identity — confirming the same tx handle is forwarded.
+        await updateCampaign(1, 10, { name: 'New Name' }, USER_ACTOR)
+        expect(campaignState.capturedTx).not.toBeNull()
+        expect(recordAuditEventSpy.mock.calls[0]?.[1]).toBe(campaignState.capturedTx)
+      })
     })
 
     // ── changeRunningCampaignPriority ───────────────────────────────────────────
@@ -383,14 +406,12 @@ if (!IS_ISOLATED) {
         expect(input.actor).toEqual(SYSTEM_ACTOR)
       })
 
-      it('does NOT call recordAuditEvent on STALE_STATE (0 affected rows)', async () => {
-        // Simulate STALE_STATE: update returning() returns empty array
-        // We need to override the db.update mock for this test specifically.
-        // Since the mock.module is already registered, we can't change it here.
-        // This test is a best-effort check via the normal path.
-        // The STALE_STATE path returns early before the audit call.
-        // (Verified by code inspection — no audit call on early returns)
-        expect(true).toBe(true) // structural invariant verified by code review
+      it('does NOT call recordAuditEvent on STALE_STATE (0 affected rows) (E2)', async () => {
+        // Force db.update().returning() to return [] — the STALE_STATE condition.
+        campaignState.staleState = true
+        const result = await transitionCampaign(1, 'cancelled', USER_ACTOR)
+        expect((result as { code: string }).code).toBe('STALE_STATE')
+        expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })
 
@@ -423,6 +444,16 @@ if (!IS_ISOLATED) {
         expect(input.action).toBe('deleted')
         expect(input.entityType).toBe('attack')
         expect(input.actor).toEqual(USER_ACTOR)
+      })
+
+      it('deleteAttack forwards the transaction handle as the executor argument (E1)', async () => {
+        // deleteAttack wraps its mutation in db.transaction; recordAuditEvent must
+        // receive the same tx handle so the audit row is atomic with the delete.
+        // campaignState.capturedTx is set by the transaction wrapper, enabling
+        // exact object identity assertion.
+        await deleteAttack(99, USER_ACTOR)
+        expect(campaignState.capturedTx).not.toBeNull()
+        expect(recordAuditEventSpy.mock.calls[0]?.[1]).toBe(campaignState.capturedTx)
       })
 
       it('attack functions use system actor when called without actor param', async () => {

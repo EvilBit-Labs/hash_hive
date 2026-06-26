@@ -82,7 +82,11 @@ if (!IS_ISOLATED) {
     }
   }
 
-  const txState: { rowOverride: Record<string, unknown> } = { rowOverride: {} }
+  // capturedTx is set by the transaction wrapper so E1 tests can assert identity.
+  const txState: {
+    rowOverride: Record<string, unknown>
+    capturedTx: ReturnType<typeof makeTxMock> | null
+  } = { rowOverride: {}, capturedTx: null }
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
@@ -113,8 +117,11 @@ if (!IS_ISOLATED) {
       delete: () => ({
         where: () => Promise.resolve(),
       }),
-      transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) =>
-        fn(makeTxMock(txState.rowOverride)),
+      transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) => {
+        const tx = makeTxMock(txState.rowOverride)
+        txState.capturedTx = tx
+        return fn(tx)
+      },
       client: {},
     },
     client: {},
@@ -173,6 +180,7 @@ if (!IS_ISOLATED) {
     afterEach(() => {
       recordAuditEventSpy.mockClear()
       txState.rowOverride = {}
+      txState.capturedTx = null
     })
 
     // ── hash_list create ─────────────────────────────────────────────────────
@@ -255,6 +263,16 @@ if (!IS_ISOLATED) {
         expect(input.actor).toEqual(USER_ACTOR)
         expect(input.oldRow).toBeDefined()
         expect(input.newRow).toBeUndefined()
+      })
+
+      it('deleteHashList forwards the transaction handle as executor argument (E1)', async () => {
+        // deleteHashList wraps in db.transaction; recordAuditEvent must receive the
+        // same tx handle for atomicity. txState.capturedTx is set by the transaction
+        // wrapper above, enabling exact object identity assertion.
+        txState.rowOverride = { id: 10, projectId: 5, name: 'hashes.txt' }
+        await deleteHashList(10, 5, USER_ACTOR)
+        expect(txState.capturedTx).not.toBeNull()
+        expect(recordAuditEventSpy.mock.calls[0]?.[1]).toBe(txState.capturedTx)
       })
 
       it('returns false and does not audit when hash list not found', async () => {

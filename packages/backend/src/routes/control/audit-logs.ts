@@ -19,6 +19,9 @@ import {
   AUDIT_ACTION_VALUES,
   AUDIT_ACTOR_TYPE_VALUES,
   AUDIT_ENTITY_TYPE_VALUES,
+  type AuditAction,
+  type AuditActorType,
+  type AuditEntityType,
   auditLogSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
@@ -110,7 +113,14 @@ controlAuditLogRoutes.openapi(listAuditLogsRoute, async (c) => {
 
     const result = await listAuditEvents(
       projectId,
-      { entityType, entityId, actorType, action, dateFrom, dateTo },
+      {
+        entityType: entityType as AuditEntityType | undefined,
+        entityId,
+        actorType: actorType as AuditActorType | undefined,
+        action: action as AuditAction | undefined,
+        dateFrom,
+        dateTo,
+      },
       { limit, offset }
     )
 

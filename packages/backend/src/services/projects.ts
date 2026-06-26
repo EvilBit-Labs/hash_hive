@@ -2,11 +2,11 @@ import { baSessions, projects, projectUsers, users } from '@hashhive/shared'
 import { and, count, desc, eq } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
-import { recordAuditEvent } from './audit-log.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 
-const DEFAULT_SYSTEM_ACTOR = { actorType: 'system' as const, actorId: null }
+const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
 
-type Actor = { actorType: 'user' | 'agent' | 'system'; actorId: number | null }
+type Actor = AuditActor
 
 export async function createProject(
   data: {

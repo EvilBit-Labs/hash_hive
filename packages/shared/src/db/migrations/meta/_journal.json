@@ -197,6 +197,13 @@
       "when": 1782340087650,
       "tag": "0027_sticky_hammerhead",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1782435956740,
+      "tag": "0028_same_malice",
+      "breakpoints": true
     }
   ]
 }

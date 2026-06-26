@@ -137,6 +137,27 @@ if (!IS_ISOLATED) {
               },
             }
           }
+          // Admin user scoped to a different project (projectId: 999).
+          // findProjectMembership(1, 999) returns null → 403 (project-scope gate, not role gate).
+          if (cookie.includes('valid-admin-other-project')) {
+            return {
+              user: {
+                id: '1',
+                email: 'admin@test.local',
+                name: 'Admin User',
+                emailVerified: true,
+                image: null,
+                roles: ['admin'],
+              },
+              session: {
+                id: 'sess-admin-999',
+                userId: '1',
+                token: 'tok-999',
+                expiresAt: new Date(Date.now() + 3_600_000),
+                projectId: 999,
+              },
+            }
+          }
           return null
         },
       },
@@ -288,16 +309,14 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(200)
     })
 
-    it('returns 403 for a request scoped to a project the caller cannot access', async () => {
-      // Session projectId is 1; the RBAC middleware enforces it via
-      // findProjectMembership — a projectId=999 in the session produces no
-      // membership and a 403. We simulate by using a cookie whose session
-      // has projectId=999 via a different cookie value.
-      // Viewer cookie user (id=2) has no membership for projectId=999 either.
-      // The simpler path: just use the viewer cookie — it yields 403 on role.
+    it('returns 403 for a request scoped to a project the caller cannot access (E4)', async () => {
+      // Admin user with a valid session but scoped to projectId: 999.
+      // findProjectMembership(userId=1, projectId=999) returns null → 403.
+      // This isolates project-scoping from role-gating (the role is admin, so
+      // only the missing membership drives the 403, not an insufficient role).
       const res = await app.request(AUDIT_LOGS, {
         method: 'GET',
-        headers: makeHeaders(VIEWER_COOKIE),
+        headers: makeHeaders('hh.session_token=valid-admin-other-project'),
       })
       expect(res.status).toBe(403)
     })

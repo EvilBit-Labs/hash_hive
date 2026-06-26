@@ -25,7 +25,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
-import { recordAuditEvent } from './audit-log.js'
+import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { emitCampaignStatus } from './events.js'
 
 // ─── Task statistics ────────────────────────────────────────────────
@@ -157,7 +157,7 @@ export type DeleteCampaignResult =
 export async function deleteCampaign(
   id: number,
   projectId: number,
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -269,7 +269,7 @@ const ARCHIVABLE_STATUSES = ['completed', 'cancelled'] as const
 export async function archiveCampaigns(
   projectId: number,
   ids: number[],
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
@@ -353,7 +353,7 @@ export async function archiveCampaigns(
 export async function restoreCampaigns(
   projectId: number,
   ids: number[],
-  actor: { actorType: 'user' | 'agent' | 'system'; actorId: number | null } = {
+  actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
