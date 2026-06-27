@@ -214,13 +214,17 @@ const patchAgentConfigRoute = createRoute({
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
 dashboardAgentConfigRoutes.openapi(patchAgentConfigRoute, async (c) => {
   const { id: agentId } = c.req.valid('param')
   const patch = c.req.valid('json')
-  const { projectId, userId } = c.get('scopedUser')!
+  // `currentUser` (populated by requireSession) is the always-present context
+  // var and carries both projectId and userId — same source the GET handler
+  // reads. Avoids the `scopedUser!` non-null assertion.
+  const { projectId, userId } = c.get('currentUser')
 
   // Sub-resource ownership check — same pattern as agents.ts PATCH /:id.
   const agent = await getAgentById(agentId)
@@ -229,10 +233,14 @@ dashboardAgentConfigRoutes.openapi(patchAgentConfigRoute, async (c) => {
   }
 
   try {
-    const updated = await updateAgentConfig(agentId, patch, {
-      actorType: 'user',
-      actorId: userId,
-    })
+    // Pass projectId so the write is project-scoped inside the service tx,
+    // closing the TOCTOU window after the ownership check above.
+    const updated = await updateAgentConfig(
+      agentId,
+      patch,
+      { actorType: 'user', actorId: userId },
+      projectId
+    )
     const fleet = await getFleetDefault()
     const effective = mergeEffectiveConfig(updated, fleet)
     const sources = computeSourceMap(updated, fleet)
@@ -297,6 +305,7 @@ const patchFleetConfigRoute = createRoute({
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 

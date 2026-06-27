@@ -36,6 +36,9 @@ if (!IS_ISOLATED) {
 
   const ADMIN_COOKIE = 'hh.session_token=valid-admin-session'
   const CONTRIBUTOR_COOKIE = 'hh.session_token=valid-contributor-session'
+  // A project member whose membership role is below 'contributor' (viewer):
+  // used to prove the per-rig PATCH gate rejects read-only members.
+  const VIEWER_COOKIE = 'hh.session_token=valid-viewer-session'
 
   // ─── Mock BetterAuth ─────────────────────────────────────────────────
 
@@ -83,6 +86,25 @@ if (!IS_ISOLATED) {
               },
             }
           }
+          if (cookie.includes('valid-viewer-session')) {
+            return {
+              user: {
+                id: '3',
+                email: 'viewer@test.local',
+                name: 'Viewer',
+                emailVerified: true,
+                image: null,
+                roles: ['analyst'],
+              },
+              session: {
+                id: 'sess-viewer',
+                userId: '3',
+                token: 'tok-viewer',
+                expiresAt: new Date(Date.now() + 3600000),
+                projectId: 1,
+              },
+            }
+          }
           return null
         },
       },
@@ -96,12 +118,14 @@ if (!IS_ISOLATED) {
     getUserWithProjects: async (userId: number) => {
       if (userId === 1) return { id: 1, projects: [{ projectId: 1, roles: ['admin'] }] }
       if (userId === 2) return { id: 2, projects: [{ projectId: 1, roles: ['contributor'] }] }
+      if (userId === 3) return { id: 3, projects: [{ projectId: 1, roles: ['viewer'] }] }
       return null
     },
     findProjectMembership: async (userId: number, projectId: number) => {
       if (projectId !== 1) return null
       if (userId === 1) return { projectId: 1, roles: ['admin'] }
       if (userId === 2) return { projectId: 1, roles: ['contributor'] }
+      if (userId === 3) return { projectId: 1, roles: ['viewer'] }
       return null
     },
     getUserLastProjectId: async () => null,
@@ -386,6 +410,23 @@ if (!IS_ISOLATED) {
             ReturnType<AgentConfigService['updateAgentConfig']>
           >
       )
+    })
+
+    it('a viewer (below contributor) PATCH /agents/:id/config returns 403', async () => {
+      // The per-rig PATCH gate is requireMembershipRole('admin','contributor');
+      // a project member with only the 'viewer' role must be rejected. This is
+      // distinct from the fleet PATCH global-admin gate (AE5).
+      const res = await app.request(`${DASH}/agents/100/config`, {
+        method: 'PATCH',
+        headers: {
+          cookie: VIEWER_COOKIE,
+          origin: 'http://lab.local',
+          host: 'lab.local',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ tuning: { hashcat: { workloadProfile: 2 } } }),
+      })
+      expect(res.status).toBe(403)
     })
   })
 

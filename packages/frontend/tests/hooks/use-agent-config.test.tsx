@@ -1,3 +1,5 @@
+import type { AgentConfigResponse, FleetConfigResponse } from '@hashhive/shared'
+
 import { QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import { afterEach, describe, expect, it, spyOn } from 'bun:test'
@@ -20,35 +22,25 @@ afterEach(() => {
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-const AGENT_CONFIG_RESPONSE = {
+// Typed against the shared wire schemas so an invalid shape (e.g. a bogus
+// ConfigValueSource or a field the real response never carries) is a compile
+// error rather than a test that passes on a made-up payload.
+const AGENT_CONFIG_RESPONSE: AgentConfigResponse = {
   config: {
     tuning: { hashcat: { workloadProfile: 3 } },
-    hardware: null,
-    behavior: null,
-    errorHandling: null,
-    rawFlags: null,
   },
   effective: {
     tuning: { hashcat: { workloadProfile: 3 } },
     hardware: {},
-    behavior: {},
-    errorHandling: {},
   },
   sources: {
-    tuning: { hashcat: { workloadProfile: 'rig' as const } },
-    hardware: {},
-    behavior: {},
-    errorHandling: {},
+    tuning: { hashcat: { workloadProfile: 'override' } },
   },
 }
 
-const FLEET_CONFIG_RESPONSE = {
+const FLEET_CONFIG_RESPONSE: FleetConfigResponse = {
   config: {
     tuning: { hashcat: { workloadProfile: 2 } },
-    hardware: null,
-    behavior: null,
-    errorHandling: null,
-    rawFlags: null,
   },
 }
 
@@ -74,10 +66,6 @@ function UpdateAgentConfigComponent({ agentId }: { agentId: number }) {
         onClick={() =>
           mutate({
             tuning: { hashcat: { workloadProfile: 4 } },
-            hardware: null,
-            behavior: null,
-            errorHandling: null,
-            rawFlags: null,
           })
         }
       >
@@ -110,10 +98,6 @@ function UpdateFleetConfigComponent() {
         onClick={() =>
           mutate({
             tuning: { hashcat: { workloadProfile: 1 } },
-            hardware: null,
-            behavior: null,
-            errorHandling: null,
-            rawFlags: null,
           })
         }
       >
@@ -148,7 +132,7 @@ describe('useAgentConfig', () => {
 
     const data = JSON.parse(screen.getByTestId('data').textContent!)
     expect(data.config.tuning.hashcat.workloadProfile).toBe(3)
-    expect(data.sources.tuning.hashcat.workloadProfile).toBe('rig')
+    expect(data.sources.tuning.hashcat.workloadProfile).toBe('override')
   })
 
   it('does not fetch when agentId is 0', async () => {

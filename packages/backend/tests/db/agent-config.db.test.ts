@@ -420,6 +420,41 @@ describe('U4: whitelisted error downgrade (AE2)', () => {
     expect(agent!.errorCount24h).toBe(0)
   })
 
+  // ── Task-report path (3rd ingress site) ─────────────────────────────
+
+  it('task-report path: whitelisted error downgrades even though the site hardcodes severity=error', async () => {
+    await clearErrors()
+    await updateAgentConfig(agentId, { errorWhitelist: ['No hashes loaded'] })
+    await updateFleetDefault({})
+
+    // The task-report ingress assigns severity='error' to each reported item
+    // BEFORE evaluating the whitelist, then downgrades — exactly what the route
+    // loop does. This proves the hardcoded severity does not defeat the
+    // whitelist at the 3rd site.
+    const { resolveEffectiveWhitelist: resolveWL } =
+      await import('../../src/services/agent-config.js')
+    const { downgradeIfWhitelisted } = await import('../../src/services/agents/whitelist.js')
+
+    const whitelist = await resolveWL(agentId)
+    const reported = { severity: 'error', message: 'No hashes loaded' }
+    const effective = downgradeIfWhitelisted(reported, whitelist)
+    await logAgentError({ ...effective, agentId })
+
+    const [errorRow] = await db
+      .select()
+      .from(agentErrors)
+      .where(eq(agentErrors.agentId, agentId))
+      .limit(1)
+
+    expect(errorRow!.severity).toBe(WHITELISTED_SEVERITY)
+    expect((errorRow!.context as Record<string, unknown>)['whitelisted']).toBe(true)
+
+    // Badge not affected by the downgraded task-report error.
+    const result = await listAgents({ projectId })
+    const agent = result.agents.find((a) => a.id === agentId)
+    expect(agent!.errorCount24h).toBe(0)
+  })
+
   // ── Union whitelist (fleet + rig) ────────────────────────────────────
 
   it('union whitelist (fleet + rig) — patterns from both sources match and downgrade', async () => {

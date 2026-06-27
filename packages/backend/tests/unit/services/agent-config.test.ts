@@ -98,6 +98,34 @@ describe('validateRawFlags', () => {
     // case-sensitive so it must not be caught by the -o prefix rule.
     expect(validateRawFlags('-O')).toEqual({ ok: true })
   })
+
+  it('rejects hashcat brain network flags (egress / credential exfil)', () => {
+    // The "brain" feature would let a config edit turn the worker into a
+    // network client/server reaching an operator-supplied host.
+    expect(validateRawFlags('--brain-client')).toMatchObject({
+      ok: false,
+      code: 'RAW_FLAGS_DENIED',
+    })
+    expect(validateRawFlags('--brain-server')).toMatchObject({
+      ok: false,
+      code: 'RAW_FLAGS_DENIED',
+    })
+    expect(validateRawFlags('--brain-host=10.0.0.1')).toMatchObject({
+      ok: false,
+      code: 'RAW_FLAGS_DENIED',
+    })
+    expect(validateRawFlags('--brain-password=hunter2')).toMatchObject({
+      ok: false,
+      code: 'RAW_FLAGS_DENIED',
+    })
+  })
+
+  it('rejects --loopback (writes cracked plains via the session/induction dir)', () => {
+    expect(validateRawFlags('--loopback')).toMatchObject({
+      ok: false,
+      code: 'RAW_FLAGS_DENIED',
+    })
+  })
 })
 
 // ─── mergeEffectiveConfig ─────────────────────────────────────────────────────

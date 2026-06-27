@@ -25,8 +25,15 @@ export const WHITELISTED_SEVERITY = 'info' as const
  * Review-recommended threshold: an agent whose whitelisted-error count (in the
  * 24h window) meets or exceeds this constant has `reviewRecommended = true` on
  * its list/detail row, signalling that its whitelist may need tightening.
+ *
+ * Kept deliberately low (10): whitelisting downgrades a matched error to a
+ * non-counting severity, so a rig with an over-broad pattern (e.g. a short word
+ * that substring-matches most error text) stays `online` with `errorCount24h=0`
+ * and keeps receiving tasks. This signal is the safety net that surfaces such a
+ * rig for operator review, so it must fire well before a genuinely-broken rig
+ * has silently absorbed a full day of failures.
  */
-export const REVIEW_RECOMMENDED_THRESHOLD = 25
+export const REVIEW_RECOMMENDED_THRESHOLD = 10
 
 /**
  * Return `true` when `message` contains at least one pattern from `whitelist`

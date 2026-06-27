@@ -552,6 +552,22 @@ export const RAW_FLAG_DENYLIST = [
   '--induction-dir',
   '--outfile-check-dir',
   '--remove',
+  // Hashcat "brain" is a networked distributed-cracking feature. Client mode
+  // dials out to an operator-supplied host (a network-egress / candidate- and
+  // result-exfil primitive from the worker), server mode opens a listener, and
+  // the host/password are persisted plaintext in `agents.config` and the audit
+  // log. Block the whole brain surface — without client/server the rest is
+  // inert, but each is blocked individually so none can be typed in isolation.
+  '--brain-client',
+  '--brain-server',
+  '--brain-host',
+  '--brain-port',
+  '--brain-password',
+  '--brain-session',
+  // `--loopback` feeds cracked plains back through the session/induction
+  // directory — a file-write side effect even though `--induction-dir` is
+  // already blocked.
+  '--loopback',
 ] as const
 
 export const RAW_FLAGS_MAX_LEN = 512

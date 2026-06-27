@@ -22,7 +22,7 @@ import {
   fleetAgentConfig,
   fleetDefaultConfigSchema,
 } from '@hashhive/shared'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
@@ -265,16 +265,27 @@ export async function getFleetDefault(): Promise<FleetDefaultConfig> {
  * Validates raw flags before writing; records an audit event inside the tx.
  * Throws `AgentNotFoundError` when the agent does not exist.
  * Throws `RawFlagValidationError` when raw flags contain denied entries.
+ *
+ * When `projectId` is provided, the read-then-write is scoped to that project
+ * inside the transaction (same guard as `updateAgent`), closing the TOCTOU
+ * window where an agent could be reassigned between the route's ownership
+ * check and this write. Omit it for system-actor callers with no project scope.
  */
 export async function updateAgentConfig(
   agentId: number,
   patch: AgentConfig,
-  actor: AuditActor = DEFAULT_SYSTEM_ACTOR
+  actor: AuditActor = DEFAULT_SYSTEM_ACTOR,
+  projectId?: number
 ): Promise<AgentConfig> {
   assertValidRawFlags(patch.tuning?.hashcat?.rawFlags)
 
+  const scope =
+    projectId === undefined
+      ? eq(agents.id, agentId)
+      : and(eq(agents.id, agentId), eq(agents.projectId, projectId))
+
   const newConfig = await db.transaction(async (tx) => {
-    const [oldRow] = await tx.select().from(agents).where(eq(agents.id, agentId)).limit(1)
+    const [oldRow] = await tx.select().from(agents).where(scope).limit(1)
 
     if (oldRow === undefined) throw new AgentNotFoundError(agentId)
 
@@ -284,7 +295,7 @@ export async function updateAgentConfig(
     const [updatedRow] = await tx
       .update(agents)
       .set({ config: mergedConfig, updatedAt: new Date() })
-      .where(eq(agents.id, agentId))
+      .where(scope)
       .returning()
 
     if (updatedRow === undefined) throw new AgentNotFoundError(agentId)
