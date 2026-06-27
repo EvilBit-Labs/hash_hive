@@ -126,6 +126,7 @@ Copy `packages/backend/.env.example` to `packages/backend/.env`. Key variables:
 | `BETTER_AUTH_SECRET` | Session signing secret (min 32 chars) | -- |
 | `PORT` | Backend port | `4000` |
 | `NODE_ENV` | Environment | `development` |
+| `RAW_FLAG_DENYLIST` | Comma/space-separated hashcat flags the agent advanced-config raw-flags field rejects. A footgun guard (not a security control — the model trusts agents) that stops operators from overriding the flags the agent relies on (result capture, `--status-json` telemetry, session/restore). When set it **replaces** the built-in default; set it empty to disable the guard. | output / status / session flags the agent manages |
 
 Generate `BETTER_AUTH_SECRET` with: `openssl rand -base64 32`
 

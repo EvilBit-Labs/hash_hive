@@ -103,6 +103,20 @@ export const envSchema = z.object({
   // swallowed SQL error later, and the regex closes the bind-parameter
   // interpolation vector even though the source is operator-controlled env.
   AUDIT_LOG_RETENTION: z.string().regex(INTERVAL_LITERAL).default('365 days'),
+
+  // Raw-flags denylist override (#104). The agent advanced-config raw-flags
+  // escape hatch rejects any hashcat flag in this list. It is a FOOTGUN GUARD,
+  // not a security boundary (the model trusts agents): the default blocks the
+  // flags the agent relies on to drive/monitor a job — result capture,
+  // --status-json telemetry, session/restore — so an operator cannot silently
+  // break a rig. Comma- or whitespace-separated. When SET it REPLACES the
+  // built-in default (RAW_FLAG_DENYLIST in @hashhive/shared); when UNSET the
+  // default applies; set it to an empty string to disable the guard entirely
+  // (the operator then owns the risk). undefined -> use default; [] -> no guard.
+  RAW_FLAG_DENYLIST: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v.split(/[\s,]+/).filter(Boolean))),
 })
 
 export type Env = z.infer<typeof envSchema>

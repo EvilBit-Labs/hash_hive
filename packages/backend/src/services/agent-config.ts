@@ -24,6 +24,7 @@ import {
 } from '@hashhive/shared'
 import { and, eq } from 'drizzle-orm'
 
+import { env } from '../config/env.js'
 import { db } from '../db/index.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 
@@ -53,12 +54,27 @@ const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
 // ─── Raw-flag validation ─────────────────────────────────────────────────────
 
 /**
+ * Resolve the effective raw-flag denylist for this deployment. The server-level
+ * `RAW_FLAG_DENYLIST` env var (operator-owned) REPLACES the built-in default
+ * when set; when unset the `@hashhive/shared` default applies. An empty env
+ * value resolves to `[]`, disabling the guard (the operator owns that risk).
+ */
+export function resolveRawFlagDenylist(): readonly string[] {
+  return env.RAW_FLAG_DENYLIST ?? RAW_FLAG_DENYLIST
+}
+
+/**
  * Typed error outcome — never throws. Callers that need to surface the error
  * to a user should check `ok` and throw a `RawFlagValidationError` from the
  * returned `code`/`message`.
+ *
+ * `denylist` defaults to the built-in `RAW_FLAG_DENYLIST` so the function stays
+ * pure and unit-testable; the service passes the env-resolved effective list
+ * (see `resolveRawFlagDenylist`).
  */
 export function validateRawFlags(
-  raw: string | undefined
+  raw: string | undefined,
+  denylist: readonly string[] = RAW_FLAG_DENYLIST
 ): { ok: true } | { ok: false; code: string; message: string } {
   if (raw === undefined || raw.trim() === '') return { ok: true }
 
@@ -83,13 +99,13 @@ export function validateRawFlags(
   // Short denied flags (e.g. `-o`) can be written with an attached value
   // (`-o/etc/passwd`), so they are matched by prefix. Long flags (`--flag`)
   // cannot attach a value without `=`, so they are exact-matched after the
-  // `=` split. Long-flag exact match is intentional: RAW_FLAG_DENYLIST
-  // enumerates every blocked long flag individually, so `--outfile-foo` is
-  // permitted unless explicitly listed.
-  const shortDenied = RAW_FLAG_DENYLIST.filter(
+  // `=` split. Long-flag exact match is intentional: the denylist enumerates
+  // every blocked long flag individually, so `--outfile-foo` is permitted
+  // unless explicitly listed.
+  const shortDenied = denylist.filter(
     (denied) => denied.length === 2 && denied.startsWith('-') && !denied.startsWith('--')
   )
-  const longDenied = RAW_FLAG_DENYLIST.filter((denied) => denied.startsWith('--'))
+  const longDenied = denylist.filter((denied) => denied.startsWith('--'))
 
   for (const token of tokens) {
     const flagPart = token.split('=')[0] ?? token
@@ -227,7 +243,7 @@ function buildMergedFleetConfig(
 // ─── Validate-or-throw helper ─────────────────────────────────────────────────
 
 function assertValidRawFlags(rawFlags: string | undefined): void {
-  const result = validateRawFlags(rawFlags)
+  const result = validateRawFlags(rawFlags, resolveRawFlagDenylist())
   if (!result.ok) {
     throw new RawFlagValidationError(result.code, result.message)
   }

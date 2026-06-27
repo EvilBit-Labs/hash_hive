@@ -531,43 +531,46 @@ export const agentHeartbeatResponseSchema = z
 // docs/brainstorms/2026-06-26-agent-advanced-configuration-requirements.md
 
 /**
- * Hashcat flags an operator may never set through the raw-flags escape
- * hatch — they redirect output, touch the filesystem, or hijack the
- * session, turning operator-supplied config into a write/exfil primitive
- * on the worker rig. Enforced server-side at write time (R3).
+ * Default denylist for the raw-flags escape hatch — a FOOTGUN GUARD, not a
+ * security boundary. HashHive's security model trusts its agents, so the point
+ * is to stop an operator from silently breaking a rig by overriding the hashcat
+ * flags the agent itself sets to drive and monitor a job: result capture,
+ * `--status-json` telemetry, and session/restore handling. Overriding any of
+ * these desyncs the agent from the server (lost cracks, no progress, broken
+ * resume), which looks like a rig fault rather than a config mistake.
+ *
+ * Grounded in the flags CipherSwarmAgent passes to hashcat (see
+ * `../CipherSwarmAgent/lib/hashcat`). This is only the DEFAULT: it is
+ * overridable per-deployment via the `RAW_FLAG_DENYLIST` env var (server-level,
+ * operator-owned — see `packages/backend/src/config/env.ts`). `validateRawFlags`
+ * resolves the effective list at write time.
  */
 export const RAW_FLAG_DENYLIST = [
-  // `-o` is hashcat's short form of `--outfile`; block it too (matched with
-  // attached-value awareness server-side so `-o/etc/passwd` cannot slip through).
+  // Result capture — the agent writes cracked hashes to an outfile it owns and
+  // parses; redirecting, reformatting, or relocating it loses every crack.
+  // `-o` is the short form of `--outfile` (matched with attached-value
+  // awareness server-side so `-o/path` cannot slip past the `=`-split).
   '-o',
   '--outfile',
   '--outfile-format',
   '--outfile-autohex-disable',
-  '--potfile-path',
-  '--potfile-disable',
-  '--session',
-  '--restore-file-path',
-  '--logfile-disable',
-  '--debug-file',
-  '--induction-dir',
   '--outfile-check-dir',
-  '--remove',
-  // Hashcat "brain" is a networked distributed-cracking feature. Client mode
-  // dials out to an operator-supplied host (a network-egress / candidate- and
-  // result-exfil primitive from the worker), server mode opens a listener, and
-  // the host/password are persisted plaintext in `agents.config` and the audit
-  // log. Block the whole brain surface — without client/server the rest is
-  // inert, but each is blocked individually so none can be typed in isolation.
-  '--brain-client',
-  '--brain-server',
-  '--brain-host',
-  '--brain-port',
-  '--brain-password',
-  '--brain-session',
-  // `--loopback` feeds cracked plains back through the session/induction
-  // directory — a file-write side effect even though `--induction-dir` is
-  // already blocked.
-  '--loopback',
+  '--outfile-check-timer',
+  // Potfile — the agent runs with potfile handling it controls.
+  '--potfile-disable',
+  '--potfile-path',
+  // Session & restore — the agent owns the session name so a preempted task can
+  // be resumed; an override breaks lease reclaim and restore.
+  '--session',
+  '--restore',
+  '--restore-file-path',
+  // Status & telemetry — the agent parses `--status-json` on `--status-timer`
+  // to emit progress; overriding or silencing these blinds the server.
+  '--status',
+  '--status-json',
+  '--status-timer',
+  '--machine-readable',
+  '--quiet',
 ] as const
 
 export const RAW_FLAGS_MAX_LEN = 512

@@ -33,7 +33,8 @@ describe('validateRawFlags', () => {
   })
 
   it('returns ok:true for a valid flag string', () => {
-    expect(validateRawFlags('--force --status --status-timer=5')).toEqual({ ok: true })
+    // Tuning/perf flags the agent does not manage are allowed through.
+    expect(validateRawFlags('--force -O --hwmon-temp-abort=90')).toEqual({ ok: true })
   })
 
   it('returns ok:false when length exceeds RAW_FLAGS_MAX_LEN', () => {
@@ -99,32 +100,29 @@ describe('validateRawFlags', () => {
     expect(validateRawFlags('-O')).toEqual({ ok: true })
   })
 
-  it('rejects hashcat brain network flags (egress / credential exfil)', () => {
-    // The "brain" feature would let a config edit turn the worker into a
-    // network client/server reaching an operator-supplied host.
-    expect(validateRawFlags('--brain-client')).toMatchObject({
-      ok: false,
-      code: 'RAW_FLAGS_DENIED',
-    })
-    expect(validateRawFlags('--brain-server')).toMatchObject({
-      ok: false,
-      code: 'RAW_FLAGS_DENIED',
-    })
-    expect(validateRawFlags('--brain-host=10.0.0.1')).toMatchObject({
-      ok: false,
-      code: 'RAW_FLAGS_DENIED',
-    })
-    expect(validateRawFlags('--brain-password=hunter2')).toMatchObject({
-      ok: false,
-      code: 'RAW_FLAGS_DENIED',
-    })
+  it('rejects the agent-management footgun flags (telemetry / session / output)', () => {
+    // These are the flags CipherSwarmAgent sets to drive and monitor a job;
+    // overriding them desyncs the agent from the server.
+    for (const flag of ['--status-json', '--status-timer', '--session', '--restore', '--quiet']) {
+      expect(validateRawFlags(flag)).toMatchObject({ ok: false, code: 'RAW_FLAGS_DENIED' })
+    }
   })
 
-  it('rejects --loopback (writes cracked plains via the session/induction dir)', () => {
-    expect(validateRawFlags('--loopback')).toMatchObject({
+  // ── Configurable denylist (server-level override) ──────────────────────
+
+  it('uses a caller-supplied denylist instead of the built-in default', () => {
+    // A flag in the custom list is denied...
+    expect(validateRawFlags('--custom-bad-flag', ['--custom-bad-flag'])).toMatchObject({
       ok: false,
       code: 'RAW_FLAGS_DENIED',
     })
+    // ...and a flag that is in the DEFAULT but not the custom list is allowed,
+    // proving the custom list REPLACES the default rather than extending it.
+    expect(validateRawFlags('--session', ['--custom-bad-flag'])).toEqual({ ok: true })
+  })
+
+  it('an empty denylist disables the guard (operator owns the risk)', () => {
+    expect(validateRawFlags('--outfile=/tmp/x', [])).toEqual({ ok: true })
   })
 })
 
