@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+
 import { Button } from './button'
 import {
   Dialog,
@@ -39,6 +41,11 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  // The element that had focus when the dialog opened. Radix's default
+  // focus restore can land on <body> for a controlled dialog (no
+  // DialogTrigger), so we capture and restore the trigger ourselves.
+  const triggerRef = useRef<HTMLElement | null>(null)
+
   return (
     <Dialog
       open={open}
@@ -46,7 +53,22 @@ export function ConfirmDialog({
         if (!next && !busy) onCancel()
       }}
     >
-      <DialogContent showCloseButton={false} className="max-w-md">
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-md"
+        onOpenAutoFocus={() => {
+          // Fires before Radix moves focus inside, so activeElement is still
+          // the trigger that opened the dialog.
+          triggerRef.current = document.activeElement as HTMLElement | null
+        }}
+        onCloseAutoFocus={(event) => {
+          const trigger = triggerRef.current
+          if (trigger && document.contains(trigger)) {
+            event.preventDefault()
+            trigger.focus()
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{message}</DialogDescription>

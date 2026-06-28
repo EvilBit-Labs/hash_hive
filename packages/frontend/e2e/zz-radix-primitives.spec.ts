@@ -60,7 +60,9 @@ test.describe('Radix primitives (shadcn migration)', () => {
     await expect(dateRange).toContainText(/Last|All time/)
   })
 
-  test('Dialog: traps focus inside the overlay and Escape dismisses it', async ({ page }) => {
+  test('Dialog: traps focus, Escape dismisses, and focus returns to the trigger', async ({
+    page,
+  }) => {
     await login(page)
     await openSeededCampaign(page)
 
@@ -79,10 +81,12 @@ test.describe('Radix primitives (shadcn migration)', () => {
     await page.keyboard.press('Tab')
     expect(await dialog.evaluate((d) => d.contains(document.activeElement))).toBe(true)
 
-    // Escape dismisses the dialog (Radix dismissable-layer) — the hand-rolled
-    // div this replaced had no Escape handling.
+    // Escape dismisses the dialog and focus is restored to the trigger via the
+    // ConfirmDialog onCloseAutoFocus handler (Radix's default restore loses
+    // focus to <body> for this controlled, trigger-less dialog).
     await page.keyboard.press('Escape')
     await expect(dialog).toBeHidden()
+    await expect(stopTrigger).toBeFocused()
   })
 
   test('ToggleGroup: arrow keys move roving focus, selection stays mandatory', async ({ page }) => {
