@@ -1,17 +1,16 @@
-import type { HTMLAttributes } from 'react'
+import type React from 'react'
 
 import { cn } from '../../lib/utils'
 
-interface SkeletonProps extends HTMLAttributes<HTMLDivElement> {
-  readonly className?: string
-}
-
-export function Skeleton({ className, ...props }: SkeletonProps) {
+function Skeleton({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       aria-hidden="true"
+      data-slot="skeleton"
       className={cn('animate-pulse rounded-md bg-surface-0/60', className)}
       {...props}
     />
   )
 }
+
+export { Skeleton }
