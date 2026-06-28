@@ -4,8 +4,9 @@ const TEST_EMAIL = 'test@hashhive.local'
 const TEST_PASSWORD = 'TestPassword123!'
 
 // Empty-state copy emitted by ResultsTable when no cracked results are
-// returned. The dev seed (e2e/setup/seed-data.ts) provisions a user, two
-// projects, and one offline agent — no campaigns and no cracked results.
+// returned. The e2e seed (e2e/setup/seed-data.ts) provisions a user, two
+// projects, one offline agent, and one running campaign (with a hash list) —
+// but no cracked results.
 // The spec must tolerate this baseline and skip download-related assertions
 // when the table is empty.
 const RESULTS_EMPTY_COPY = 'No cracks in the current filter.'
@@ -72,6 +73,16 @@ test.describe.serial('Results flow E2E (U11)', () => {
     if (optionCount > 1) {
       await campaignOptions.nth(1).click()
       await page.waitForURL((url) => /campaignId=\d+/.test(url.search), {
+        timeout: 5_000,
+      })
+
+      // Clear back to "all campaigns" via the placeholder option — exercises the
+      // Select EMPTY_SENTINEL reverse path (onValueChange '__NONE__' -> '') so a
+      // broken sentinel round-trip would leave campaignId stuck in the URL.
+      await campaignSelect.click()
+      await expect(page.getByRole('listbox')).toBeVisible()
+      await campaignOptions.nth(0).click()
+      await page.waitForURL((url) => !url.search.includes('campaignId='), {
         timeout: 5_000,
       })
     } else {

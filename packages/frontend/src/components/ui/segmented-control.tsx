@@ -36,8 +36,13 @@ const ITEM_INACTIVE =
  * Toggle-group primitive for picking one of N short options.
  *
  * Wraps Radix ToggleGroup (`type="single"`) behind the same public API as the
- * old hand-rolled radiogroup component. Keyboard navigation (ArrowRight/Left
- * with wrap) is handled by Radix's roving-tabindex implementation.
+ * old hand-rolled radiogroup component. Keyboard contract is Radix's
+ * roving-tabindex toolbar pattern: ArrowLeft/Right move focus between segments
+ * (with wrap) and Space/Enter commits the focused segment. This differs from
+ * the old component, which committed selection on arrow alone (the WAI-ARIA
+ * radio pattern) — a deliberate trade of one keystroke for Radix's tested
+ * focus management. Neither Radix ToggleGroup nor RadioGroup replicates
+ * arrow-to-commit without a custom keydown handler.
  *
  * Mandatory-selection invariant: Radix single-select emits an empty string
  * when the user clicks the active item to deselect it. This guard drops those

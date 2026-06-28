@@ -89,7 +89,9 @@ test.describe('Radix primitives (shadcn migration)', () => {
     await expect(stopTrigger).toBeFocused()
   })
 
-  test('ToggleGroup: arrow keys move roving focus, selection stays mandatory', async ({ page }) => {
+  test('SegmentedControl: ArrowRight moves focus, Space commits the selection', async ({
+    page,
+  }) => {
     await login(page)
     await page.goto('/resources')
 
@@ -116,10 +118,16 @@ test.describe('Radix primitives (shadcn migration)', () => {
     await all.click()
     await expect(all).toBeChecked()
 
-    // Roving keyboard nav: ArrowRight moves into the next segment.
+    // Radix ToggleGroup toolbar pattern: ArrowRight moves roving focus to the
+    // next segment without committing; Space then commits the focused segment.
     await all.focus()
     await page.keyboard.press('ArrowRight')
     await expect(cracked).toBeFocused()
+    await expect(cracked).not.toBeChecked()
+
+    await page.keyboard.press('Space')
+    await expect(cracked).toBeChecked()
+    await expect(all).not.toBeChecked()
 
     // Selection stays mandatory: exactly one segment is always checked.
     await expect(group.getByRole('radio', { checked: true })).toHaveCount(1)

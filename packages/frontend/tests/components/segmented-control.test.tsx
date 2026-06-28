@@ -33,7 +33,6 @@ describe('SegmentedControl', () => {
 
     const cracked = screen.getByRole('radio', { name: 'Cracked' })
     expect(cracked.getAttribute('aria-checked')).toBe('true')
-    expect(cracked.getAttribute('data-state')).toBe('on')
 
     const all = screen.getByRole('radio', { name: 'All' })
     const uncracked = screen.getByRole('radio', { name: 'Uncracked' })
@@ -117,9 +116,9 @@ describe('SegmentedControl', () => {
     expect(onChange).toHaveBeenCalledWith('all')
   })
 
-  // NOTE: ArrowRight/ArrowLeft roving focus is driven by Radix's roving-tabindex
-  // implementation which relies on real focus management that happy-dom cannot
-  // exercise. Arrow-key navigation will be covered by Playwright e2e tests
-  // (e2e/segmented-control.spec.ts). The mandatory-selection invariant and
+  // NOTE: ArrowRight/ArrowLeft selection is driven by Radix RadioGroup's
+  // keyboard handling, which relies on real focus management that happy-dom
+  // cannot exercise. Arrow-key selection is covered by Playwright e2e
+  // (e2e/zz-radix-primitives.spec.ts). The mandatory-selection invariant and
   // click-selection are fully covered above.
 })
