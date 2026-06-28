@@ -213,8 +213,6 @@ export interface SelectProps {
    * the old native-select wrapper).
    */
   onOpenChange?: (open: boolean) => void
-  /** Portal container override – forwarded to SelectContent. */
-  container?: HTMLElement | null
 }
 
 function Select({
