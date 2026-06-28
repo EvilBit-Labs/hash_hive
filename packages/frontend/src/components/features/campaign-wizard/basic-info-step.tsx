@@ -92,9 +92,7 @@ export function BasicInfoStep({
           />
         </div>
         <div>
-          <label htmlFor="hashListId" className="text-xs font-medium text-muted-foreground">
-            Hash List
-          </label>
+          <span className="text-xs font-medium text-muted-foreground">Hash List</span>
           <div className="mt-1.5 flex gap-2">
             <Controller
               control={form.control}

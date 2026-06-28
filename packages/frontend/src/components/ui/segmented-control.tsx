@@ -69,7 +69,6 @@ export function SegmentedControl({
         <ToggleGroupItem
           key={option.value}
           value={option.value}
-          aria-label={option.label}
           className={cn(ITEM_BASE, ITEM_ACTIVE, ITEM_INACTIVE)}
         >
           {option.label}

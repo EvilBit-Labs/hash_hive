@@ -251,7 +251,7 @@ describe('HashListDetailPage', () => {
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
       const resultsCall = calls.find(([url]) => {
-        const s = String(url)
+        const s = url
         return (
           s.includes('/dashboard/results') && s.includes('hashListId=9') && s.includes('limit=100')
         )

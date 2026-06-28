@@ -53,21 +53,25 @@ test.describe.serial('Results flow E2E (U11)', () => {
     // page itself paints.
     await expect(page.getByText('Live').first()).toBeVisible({ timeout: 15_000 })
 
-    // The campaign filter is a native <select>. Read its options; only assert
-    // the URL-update behavior when there is at least one real campaign to pick.
+    // The campaign filter is a Radix Select (combobox), not a native <select>.
+    // Open it; the first listbox option is the "all campaigns" placeholder, so
+    // a real campaign exists only when there is more than one option. Pick the
+    // first real one and assert the URL gains a numeric campaignId — selecting
+    // the placeholder would not, so the assertion is self-validating.
     const campaignSelect = page.getByLabel('Filter by campaign')
     await expect(campaignSelect).toBeVisible()
+    await campaignSelect.click()
 
-    const campaignOptionValues = await campaignSelect
-      .locator('option')
-      .evaluateAll((opts) => (opts as HTMLOptionElement[]).map((o) => o.value))
-    const realCampaignValues = campaignOptionValues.filter((v) => v !== '')
-    if (realCampaignValues.length > 0) {
-      const targetId = realCampaignValues[0] as string
-      await campaignSelect.selectOption(targetId)
-      await page.waitForURL((url) => url.search.includes(`campaignId=${targetId}`), {
+    const campaignOptions = page.getByRole('option')
+    const optionCount = await campaignOptions.count()
+    if (optionCount > 1) {
+      await campaignOptions.nth(1).click()
+      await page.waitForURL((url) => /campaignId=\d+/.test(url.search), {
         timeout: 5_000,
       })
+    } else {
+      // No real campaigns to pick; close the listbox and continue.
+      await page.keyboard.press('Escape')
     }
 
     // Search input write -> debounced URL update (debounce ~300ms inside

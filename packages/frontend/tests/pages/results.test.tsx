@@ -115,14 +115,12 @@ describe('ResultsPage', () => {
 
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-      const resultsCall = calls.find(([url]) => String(url).includes('/dashboard/results'))
+      const resultsCall = calls.find(([url]) => url.includes('/dashboard/results'))
       expect(resultsCall).toBeDefined()
     })
 
     const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-    const resultsUrl = String(
-      calls.find(([url]) => String(url).includes('/dashboard/results'))?.[0]
-    )
+    const resultsUrl = String(calls.find(([url]) => url.includes('/dashboard/results'))?.[0])
 
     // 30d default resolves to a ~30-day startDate/endDate window.
     expect(resultsUrl).toContain('startDate=')
@@ -197,7 +195,7 @@ describe('ResultsPage', () => {
     await waitFor(
       () => {
         const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-        const searchCall = calls.find(([url]) => String(url).includes('q=foo'))
+        const searchCall = calls.find(([url]) => url.includes('q=foo'))
         expect(searchCall).toBeDefined()
       },
       { timeout: 1500 }
@@ -248,7 +246,7 @@ describe('ResultsPage', () => {
     })
 
     const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-    const offsetCall = calls.find(([url]) => String(url).includes('offset=100'))
+    const offsetCall = calls.find(([url]) => url.includes('offset=100'))
     expect(offsetCall).toBeDefined()
   })
 
@@ -274,7 +272,7 @@ describe('ResultsPage', () => {
 
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-      const limitCall = calls.find(([url]) => String(url).includes('limit=100'))
+      const limitCall = calls.find(([url]) => url.includes('limit=100'))
       expect(limitCall).toBeDefined()
     })
   })
@@ -287,12 +285,12 @@ describe('ResultsPage', () => {
     // Wait for the initial /dashboard/results fetch to land.
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-      const resultsCall = calls.find(([url]) => String(url).includes('/dashboard/results'))
+      const resultsCall = calls.find(([url]) => url.includes('/dashboard/results'))
       expect(resultsCall).toBeDefined()
     })
 
     const initialResultsCallCount = (fetchMock.mock.calls as Array<[string, ...unknown[]]>).filter(
-      ([url]) => String(url).includes('/dashboard/results')
+      ([url]) => url.includes('/dashboard/results')
     ).length
 
     // Press `r` to invalidate; the page should re-issue the /dashboard/results request.
@@ -300,7 +298,7 @@ describe('ResultsPage', () => {
 
     await waitFor(() => {
       const next = (fetchMock.mock.calls as Array<[string, ...unknown[]]>).filter(([url]) =>
-        String(url).includes('/dashboard/results')
+        url.includes('/dashboard/results')
       ).length
       expect(next).toBeGreaterThan(initialResultsCallCount)
     })

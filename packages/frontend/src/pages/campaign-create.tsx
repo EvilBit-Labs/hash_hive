@@ -535,7 +535,9 @@ export function CampaignCreatePage() {
                           aria-label="Attack mode"
                           className="mt-1.5"
                           value={String(field.value)}
-                          onValueChange={(v) => field.onChange(Number(v))}
+                          onValueChange={(v) => {
+                            if (v) field.onChange(Number(v))
+                          }}
                           options={ATTACK_MODES.map((mode) => ({
                             value: String(mode.value),
                             label: mode.label,
@@ -554,6 +556,10 @@ export function CampaignCreatePage() {
                           aria-label="Hash type"
                           className="mt-1.5"
                           value={
+                            // `as string | number` is load-bearing: it suppresses oxlint
+                            // no-base-to-string. The RHF field value type is wider than
+                            // string|number; the null/'' guard narrows the runtime value
+                            // but not the static type, so the cast keeps String() safe.
                             field.value != null && field.value !== ''
                               ? String(field.value as string | number)
                               : ''
@@ -589,9 +595,9 @@ export function CampaignCreatePage() {
                     },
                   ].map((field) => (
                     <div key={field.id}>
-                      <label className="text-xs font-medium text-muted-foreground">
+                      <span className="text-xs font-medium text-muted-foreground">
                         {field.label}
-                      </label>
+                      </span>
                       <div className="mt-1.5 flex gap-2">
                         <Controller
                           control={attackForm.control}
@@ -600,6 +606,7 @@ export function CampaignCreatePage() {
                             <Select
                               aria-label={field.label}
                               value={
+                                // Cast is load-bearing — see the Hash Type select above.
                                 ctrl.value != null && ctrl.value !== ''
                                   ? String(ctrl.value as string | number)
                                   : ''

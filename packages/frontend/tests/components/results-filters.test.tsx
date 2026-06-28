@@ -152,10 +152,10 @@ describe('ResultsFilters', () => {
     // Initial mount: campaigns fetched, but NOT hash-lists.
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-      expect(calls.some(([url]) => String(url).includes('/dashboard/campaigns'))).toBe(true)
+      expect(calls.some(([url]) => url.includes('/dashboard/campaigns'))).toBe(true)
     })
     const initialCalls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-    expect(initialCalls.some(([url]) => String(url).includes('/dashboard/hash-lists'))).toBe(false)
+    expect(initialCalls.some(([url]) => url.includes('/dashboard/hash-lists'))).toBe(false)
 
     // NOTE: triggering the hash-list lazy-load via Radix Select open requires
     // a real browser (portal + Radix open state). Covered by Playwright e2e.
@@ -180,7 +180,7 @@ describe('ResultsFilters', () => {
 
     await waitFor(() => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
-      expect(calls.some(([url]) => String(url).includes('/dashboard/hash-lists'))).toBe(true)
+      expect(calls.some(([url]) => url.includes('/dashboard/hash-lists'))).toBe(true)
     })
   })
 

@@ -201,7 +201,13 @@ export interface SelectProps {
   options: SelectOption[]
   /** Accessible label. Forwarded to SelectTrigger's aria-label. */
   'aria-label'?: string
-  /** Placeholder text shown when value is ''. Rendered as the first option. */
+  /**
+   * Placeholder text shown when value is ''. Rendered as a sentinel option that
+   * maps back to '' when selected. MUTUALLY EXCLUSIVE with an `options` entry
+   * whose `value` is '' — both map to the same internal empty sentinel and would
+   * collide (the second wins, the placeholder item vanishes). Use `placeholder`
+   * OR an empty-value option, never both.
+   */
   placeholder?: string
   /** Disables the trigger. */
   disabled?: boolean
