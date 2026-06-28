@@ -203,39 +203,33 @@ export function CampaignsPage() {
             aria-label="Filter by campaign status"
             className="w-auto px-3 py-1.5 text-xs"
             value={status}
-            onChange={(e) => updateParam('status', e.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="draft">Draft</option>
-            <option value="running">Running</option>
-            <option value="paused">Paused</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-          </Select>
+            onValueChange={(v) => updateParam('status', v)}
+            options={[
+              { value: '', label: 'All statuses' },
+              { value: 'draft', label: 'Draft' },
+              { value: 'running', label: 'Running' },
+              { value: 'paused', label: 'Paused' },
+              { value: 'completed', label: 'Completed' },
+              { value: 'cancelled', label: 'Cancelled' },
+            ]}
+          />
           <Select
             aria-label="Filter by campaign priority"
             className="w-auto px-3 py-1.5 text-xs"
-            value={priorityParam}
-            onChange={(e) => updateParam('priority', e.target.value)}
-          >
-            {PRIORITY_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </Select>
+            value={priorityRaw}
+            onValueChange={(v) => updateParam('priority', v)}
+            options={PRIORITY_FILTER_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+          />
           <Select
             aria-label="Sort campaigns by"
             className="w-auto px-3 py-1.5 text-xs"
             value={sortParam}
-            onChange={(e) => updateParam('sort', e.target.value)}
-          >
-            {SORT_FIELD_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                Sort: {opt.label}
-              </option>
-            ))}
-          </Select>
+            onValueChange={(v) => updateParam('sort', v)}
+            options={SORT_FIELD_OPTIONS.map((opt) => ({
+              value: opt.value,
+              label: `Sort: ${opt.label}`,
+            }))}
+          />
           <button
             type="button"
             aria-label={`Toggle sort order (currently ${orderParam})`}

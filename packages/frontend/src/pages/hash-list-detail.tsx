@@ -322,12 +322,13 @@ function AllItemsView({
         <Select
           aria-label="Filter by crack status"
           value={statusFilter}
-          onChange={(e) => onStatusChange(e.target.value as StatusFilter)}
-        >
-          <option value="all">All</option>
-          <option value="cracked">Cracked</option>
-          <option value="uncracked">Uncracked</option>
-        </Select>
+          onValueChange={(v) => onStatusChange(v as StatusFilter)}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'cracked', label: 'Cracked' },
+            { value: 'uncracked', label: 'Uncracked' },
+          ]}
+        />
         <Input
           aria-label="Search hashes"
           placeholder="Search hashes..."

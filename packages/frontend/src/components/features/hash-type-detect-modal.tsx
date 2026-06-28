@@ -268,28 +268,18 @@ export function HashTypeDetectModal({ open, onClose, onApplied }: HashTypeDetect
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <label
-              htmlFor="hash-type-target-list"
-              className="text-xs font-medium whitespace-nowrap text-muted-foreground"
-            >
+            <span className="text-xs font-medium whitespace-nowrap text-muted-foreground">
               Apply to
-            </label>
+            </span>
             <Select
-              id="hash-type-target-list"
-              value={selectedListId ?? ''}
-              onChange={(e) =>
-                setSelectedListId(e.target.value === '' ? null : Number(e.target.value))
-              }
+              aria-label="Apply to hash list"
+              value={selectedListId !== null ? String(selectedListId) : ''}
+              onValueChange={(v) => setSelectedListId(v === '' ? null : Number(v))}
               disabled={detect.isPending || setType.isPending}
               className="min-w-56"
-            >
-              <option value="">Pick a list to apply...</option>
-              {availableLists.map((hl) => (
-                <option key={hl.id} value={hl.id}>
-                  {hl.name}
-                </option>
-              ))}
-            </Select>
+              placeholder="Pick a list to apply..."
+              options={availableLists.map((hl) => ({ value: String(hl.id), label: hl.name }))}
+            />
           </div>
         </header>
 

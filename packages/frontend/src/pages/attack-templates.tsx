@@ -1,7 +1,7 @@
 import { createAttackTemplateRequestSchema } from '@hashhive/shared'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMemo, useState } from 'react'
-import { type Resolver, useForm } from 'react-hook-form'
+import { Controller, type Resolver, useForm } from 'react-hook-form'
 import { z } from 'zod'
 
 import { PermissionGuard } from '../components/features/permission-guard'
@@ -218,61 +218,55 @@ export function AttackTemplatesPage() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label htmlFor="tpl-wordlist" className="text-xs font-medium text-muted-foreground">
-                  Wordlist
-                </label>
-                <Select
-                  id="tpl-wordlist"
-                  className="mt-1.5"
-                  {...form.register('wordlistId', {
-                    setValueAs: (v: string) => (v === '' ? null : Number(v)),
-                  })}
-                >
-                  <option value="">None</option>
-                  {wordlists.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name}
-                    </option>
-                  ))}
-                </Select>
+                <span className="text-xs font-medium text-muted-foreground">Wordlist</span>
+                <Controller
+                  control={form.control}
+                  name="wordlistId"
+                  render={({ field }) => (
+                    <Select
+                      aria-label="Wordlist"
+                      className="mt-1.5"
+                      value={field.value != null ? String(field.value) : ''}
+                      onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}
+                      placeholder="None"
+                      options={wordlists.map((w) => ({ value: String(w.id), label: w.name }))}
+                    />
+                  )}
+                />
               </div>
               <div>
-                <label htmlFor="tpl-rulelist" className="text-xs font-medium text-muted-foreground">
-                  Rulelist
-                </label>
-                <Select
-                  id="tpl-rulelist"
-                  className="mt-1.5"
-                  {...form.register('rulelistId', {
-                    setValueAs: (v: string) => (v === '' ? null : Number(v)),
-                  })}
-                >
-                  <option value="">None</option>
-                  {rulelists.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </Select>
+                <span className="text-xs font-medium text-muted-foreground">Rulelist</span>
+                <Controller
+                  control={form.control}
+                  name="rulelistId"
+                  render={({ field }) => (
+                    <Select
+                      aria-label="Rulelist"
+                      className="mt-1.5"
+                      value={field.value != null ? String(field.value) : ''}
+                      onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}
+                      placeholder="None"
+                      options={rulelists.map((r) => ({ value: String(r.id), label: r.name }))}
+                    />
+                  )}
+                />
               </div>
               <div>
-                <label htmlFor="tpl-masklist" className="text-xs font-medium text-muted-foreground">
-                  Masklist
-                </label>
-                <Select
-                  id="tpl-masklist"
-                  className="mt-1.5"
-                  {...form.register('masklistId', {
-                    setValueAs: (v: string) => (v === '' ? null : Number(v)),
-                  })}
-                >
-                  <option value="">None</option>
-                  {masklists.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </Select>
+                <span className="text-xs font-medium text-muted-foreground">Masklist</span>
+                <Controller
+                  control={form.control}
+                  name="masklistId"
+                  render={({ field }) => (
+                    <Select
+                      aria-label="Masklist"
+                      className="mt-1.5"
+                      value={field.value != null ? String(field.value) : ''}
+                      onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}
+                      placeholder="None"
+                      options={masklists.map((m) => ({ value: String(m.id), label: m.name }))}
+                    />
+                  )}
+                />
               </div>
             </div>
 

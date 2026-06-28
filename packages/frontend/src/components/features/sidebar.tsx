@@ -128,17 +128,16 @@ function SidebarContent({ onNavigate }: { readonly onNavigate?: () => void }) {
           <Select
             aria-label="Select project"
             className="px-2.5 py-1.5 text-xs"
-            value={selectedProjectId ?? ''}
+            value={
+              selectedProjectId !== null && selectedProjectId !== undefined
+                ? String(selectedProjectId)
+                : ''
+            }
             disabled={selectProject.isPending}
-            onChange={(e) => handleProjectChange(e.target.value)}
-          >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p.projectId} value={p.projectId}>
-                {p.projectName}
-              </option>
-            ))}
-          </Select>
+            onValueChange={handleProjectChange}
+            options={projects.map((p) => ({ value: String(p.projectId), label: p.projectName }))}
+            placeholder="All Projects"
+          />
         </div>
       )}
 
