@@ -110,14 +110,15 @@ describe('HashListDetailPage', () => {
       expect(screen.getByText('NTLM Sample')).toBeDefined()
     })
 
-    const crackedSegment = screen.getByRole('button', { name: 'Cracked' })
-    expect(crackedSegment.getAttribute('aria-pressed')).toBe('true')
+    // Radix ToggleGroup type="single" renders items as role="radio" with aria-checked
+    const crackedSegment = screen.getByRole('radio', { name: 'Cracked' })
+    expect(crackedSegment.getAttribute('aria-checked')).toBe('true')
 
-    const allSegment = screen.getByRole('button', { name: 'All' })
-    expect(allSegment.getAttribute('aria-pressed')).toBe('false')
+    const allSegment = screen.getByRole('radio', { name: 'All' })
+    expect(allSegment.getAttribute('aria-checked')).toBe('false')
 
-    const uncrackedSegment = screen.getByRole('button', { name: 'Uncracked' })
-    expect(uncrackedSegment.getAttribute('aria-pressed')).toBe('false')
+    const uncrackedSegment = screen.getByRole('radio', { name: 'Uncracked' })
+    expect(uncrackedSegment.getAttribute('aria-checked')).toBe('false')
   })
 
   it('Cracked view renders ResultsStatsCard with cracked / total / rate', async () => {
@@ -194,7 +195,7 @@ describe('HashListDetailPage', () => {
       expect(screen.getByText('NTLM Sample')).toBeDefined()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Uncracked' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Uncracked' }))
 
     await waitFor(() => {
       expect(screen.getByText('Uncracked listing ships next release.')).toBeDefined()
@@ -231,7 +232,7 @@ describe('HashListDetailPage', () => {
       expect(screen.getByText('NTLM Sample')).toBeDefined()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'All' }))
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter by crack status')).toBeDefined()
