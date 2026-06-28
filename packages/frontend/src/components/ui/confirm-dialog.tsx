@@ -1,4 +1,12 @@
 import { Button } from './button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './dialog'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -15,8 +23,10 @@ interface ConfirmDialogProps {
 /**
  * Lightweight modal for confirming destructive or otherwise non-trivial
  * actions. Replaces `window.confirm` for surfaces that need styled,
- * focusable, screen-reader-friendly confirmation. Mirrors the visual
- * shell of `ResourceUploadModal` so the dashboard reads consistently.
+ * focusable, screen-reader-friendly confirmation. Backed by Radix Dialog
+ * (focus trap, Escape, portal, scroll lock) — the public API is unchanged
+ * so existing callsites are untouched. While `busy`, dismissal via Escape
+ * or outside-click is suppressed so an in-flight action cannot be abandoned.
  */
 export function ConfirmDialog({
   open,
@@ -29,22 +39,19 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80">
-      <div
-        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- custom modal: native <dialog> doesn't support the design system's surface tokens
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-dialog-title"
-        className="w-full max-w-md rounded-lg border border-surface-0 bg-mantle p-6 shadow-2xl"
-      >
-        <h3 id="confirm-dialog-title" className="mb-2 text-sm font-medium">
-          {title}
-        </h3>
-        <p className="text-xs text-muted-foreground">{message}</p>
-        <div className="mt-6 flex justify-end gap-2">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !busy) onCancel()
+      }}
+    >
+      <DialogContent showCloseButton={false} className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{message}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Button>
@@ -55,8 +62,8 @@ export function ConfirmDialog({
           >
             {busy ? 'Working...' : confirmLabel}
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
