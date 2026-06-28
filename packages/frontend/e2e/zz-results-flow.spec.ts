@@ -62,7 +62,12 @@ test.describe.serial('Results flow E2E (U11)', () => {
     await expect(campaignSelect).toBeVisible()
     await campaignSelect.click()
 
-    const campaignOptions = page.getByRole('option')
+    // Wait for the portaled listbox to mount before counting — count() is
+    // immediate and would otherwise read 0 mid-mount and skip the real
+    // selection assertion even when campaigns exist.
+    const listbox = page.getByRole('listbox')
+    await expect(listbox).toBeVisible()
+    const campaignOptions = listbox.getByRole('option')
     const optionCount = await campaignOptions.count()
     if (optionCount > 1) {
       await campaignOptions.nth(1).click()
