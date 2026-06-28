@@ -218,13 +218,16 @@ export function AttackTemplatesPage() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <span className="text-xs font-medium text-muted-foreground">Wordlist</span>
+                <label htmlFor="at-wordlist" className="text-xs font-medium text-muted-foreground">
+                  Wordlist
+                </label>
                 <Controller
                   control={form.control}
                   name="wordlistId"
                   render={({ field }) => (
                     <Select
                       aria-label="Wordlist"
+                      id="at-wordlist"
                       className="mt-1.5"
                       value={field.value != null ? String(field.value) : ''}
                       onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}
@@ -235,13 +238,16 @@ export function AttackTemplatesPage() {
                 />
               </div>
               <div>
-                <span className="text-xs font-medium text-muted-foreground">Rulelist</span>
+                <label htmlFor="at-rulelist" className="text-xs font-medium text-muted-foreground">
+                  Rulelist
+                </label>
                 <Controller
                   control={form.control}
                   name="rulelistId"
                   render={({ field }) => (
                     <Select
                       aria-label="Rulelist"
+                      id="at-rulelist"
                       className="mt-1.5"
                       value={field.value != null ? String(field.value) : ''}
                       onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}
@@ -252,13 +258,16 @@ export function AttackTemplatesPage() {
                 />
               </div>
               <div>
-                <span className="text-xs font-medium text-muted-foreground">Masklist</span>
+                <label htmlFor="at-masklist" className="text-xs font-medium text-muted-foreground">
+                  Masklist
+                </label>
                 <Controller
                   control={form.control}
                   name="masklistId"
                   render={({ field }) => (
                     <Select
                       aria-label="Masklist"
+                      id="at-masklist"
                       className="mt-1.5"
                       value={field.value != null ? String(field.value) : ''}
                       onValueChange={(v) => field.onChange(v === '' ? null : Number(v))}

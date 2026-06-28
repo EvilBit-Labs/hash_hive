@@ -206,13 +206,21 @@ export interface SelectProps {
    * maps back to '' when selected. MUTUALLY EXCLUSIVE with an `options` entry
    * whose `value` is '' — both map to the same internal empty sentinel and would
    * collide (the second wins, the placeholder item vanishes). Use `placeholder`
-   * OR an empty-value option, never both.
+   * OR an empty-value option, never both. When `value` may be '' and no
+   * `placeholder` is given, the trigger renders blank (the empty sentinel
+   * matches no rendered item) — always pass `placeholder` for clearable selects.
    */
   placeholder?: string
   /** Disables the trigger. */
   disabled?: boolean
   /** Additional classes forwarded to the trigger element. */
   className?: string
+  /**
+   * Optional id forwarded to the trigger so a sibling `<label htmlFor>` can
+   * associate with it for click-to-focus. The accessible name still comes from
+   * `aria-label`.
+   */
+  id?: string
   /**
    * Forwarded to SelectRoot.onOpenChange. Useful for lazy-loading option data
    * when the user first opens the dropdown (replaces onFocus/onMouseDown on
@@ -228,6 +236,7 @@ function Select({
   placeholder,
   disabled,
   className,
+  id,
   onOpenChange,
   'aria-label': ariaLabel,
 }: SelectProps) {
@@ -240,7 +249,7 @@ function Select({
       {...(disabled !== undefined ? { disabled } : {})}
       {...(onOpenChange !== undefined ? { onOpenChange } : {})}
     >
-      <SelectTrigger aria-label={ariaLabel} className={className}>
+      <SelectTrigger aria-label={ariaLabel} id={id} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent position="popper" align="start" sideOffset={4}>

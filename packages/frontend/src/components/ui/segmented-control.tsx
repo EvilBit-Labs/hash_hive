@@ -1,3 +1,5 @@
+import type { KeyboardEvent } from 'react'
+
 import { cn } from '../../lib/utils'
 import { ToggleGroup, ToggleGroupItem } from './toggle-group'
 
@@ -33,21 +35,19 @@ const ITEM_INACTIVE =
   'border border-transparent text-muted-foreground hover:bg-surface-0/60 hover:text-foreground data-[state=off]:bg-transparent'
 
 /**
- * Toggle-group primitive for picking one of N short options.
+ * Picks one of N short options, rendered as segmented buttons.
  *
- * Wraps Radix ToggleGroup (`type="single"`) behind the same public API as the
- * old hand-rolled radiogroup component. Keyboard contract is Radix's
- * roving-tabindex toolbar pattern: ArrowLeft/Right move focus between segments
- * (with wrap) and Space/Enter commits the focused segment. This differs from
- * the old component, which committed selection on arrow alone (the WAI-ARIA
- * radio pattern) — a deliberate trade of one keystroke for Radix's tested
- * focus management. Neither Radix ToggleGroup nor RadioGroup replicates
- * arrow-to-commit without a custom keydown handler.
+ * Wraps Radix ToggleGroup (`type="single"`, `loop`) behind the same public API
+ * as the old hand-rolled radiogroup. Radix's roving-tabindex moves focus on
+ * ArrowLeft/Right with wrap; a capture-phase keydown handler additionally
+ * commits the selection so arrows move BOTH focus and selection — the WAI-ARIA
+ * radio pattern the original implemented, which Radix ToggleGroup's roving does
+ * not provide on its own. Capture phase runs before Radix's item handlers, and
+ * Radix moves focus to the same item we select, so the two stay aligned.
  *
- * Mandatory-selection invariant: Radix single-select emits an empty string
- * when the user clicks the active item to deselect it. This guard drops those
- * empty values so `onChange` only fires with a real option value, preserving
- * the old radiogroup behavior where one item is always selected.
+ * Mandatory-selection invariant: Radix single-select emits an empty string when
+ * the user clicks the active item to deselect it. The `onValueChange` guard
+ * drops those empty values so one item is always selected.
  */
 export function SegmentedControl({
   value,
@@ -57,9 +57,19 @@ export function SegmentedControl({
   className,
 }: SegmentedControlProps) {
   const handleValueChange = (next: string) => {
-    // Guard: Radix emits '' when the user clicks the already-active item.
-    // Drop empty values — selection is mandatory.
+    // Radix emits '' when the active item is clicked to deselect — drop it.
     if (next) onChange(next)
+  }
+
+  const handleArrowKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const isNext = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    const isPrev = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+    if (!isNext && !isPrev) return
+    const currentIndex = options.findIndex((option) => option.value === value)
+    if (currentIndex === -1) return
+    const delta = isNext ? 1 : -1
+    const next = options[(currentIndex + delta + options.length) % options.length]
+    if (next) onChange(next.value)
   }
 
   return (
@@ -68,6 +78,8 @@ export function SegmentedControl({
       value={value}
       onValueChange={handleValueChange}
       aria-label={ariaLabel}
+      loop
+      onKeyDownCapture={handleArrowKeys}
       className={cn(GROUP_CLS, className)}
     >
       {options.map((option) => (

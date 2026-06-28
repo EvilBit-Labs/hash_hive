@@ -526,13 +526,19 @@ export function CampaignCreatePage() {
                 </div>
                 <div className="space-y-3">
                   <div>
-                    <span className="text-xs font-medium text-muted-foreground">Attack Mode</span>
+                    <label
+                      htmlFor="cc-attack-mode"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Attack Mode
+                    </label>
                     <Controller
                       control={attackForm.control}
                       name="mode"
                       render={({ field }) => (
                         <Select
                           aria-label="Attack mode"
+                          id="cc-attack-mode"
                           className="mt-1.5"
                           value={String(field.value)}
                           onValueChange={(v) => {
@@ -547,13 +553,19 @@ export function CampaignCreatePage() {
                     />
                   </div>
                   <div>
-                    <span className="text-xs font-medium text-muted-foreground">Hash Type</span>
+                    <label
+                      htmlFor="cc-hash-type"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      Hash Type
+                    </label>
                     <Controller
                       control={attackForm.control}
                       name="hashTypeId"
                       render={({ field }) => (
                         <Select
                           aria-label="Hash type"
+                          id="cc-hash-type"
                           className="mt-1.5"
                           value={
                             // `as string | number` is load-bearing: it suppresses oxlint
@@ -595,9 +607,12 @@ export function CampaignCreatePage() {
                     },
                   ].map((field) => (
                     <div key={field.id}>
-                      <span className="text-xs font-medium text-muted-foreground">
+                      <label
+                        htmlFor={field.id}
+                        className="text-xs font-medium text-muted-foreground"
+                      >
                         {field.label}
-                      </span>
+                      </label>
                       <div className="mt-1.5 flex gap-2">
                         <Controller
                           control={attackForm.control}
@@ -605,6 +620,7 @@ export function CampaignCreatePage() {
                           render={({ field: ctrl }) => (
                             <Select
                               aria-label={field.label}
+                              id={field.id}
                               value={
                                 // Cast is load-bearing — see the Hash Type select above.
                                 ctrl.value != null && ctrl.value !== ''

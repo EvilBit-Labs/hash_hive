@@ -92,7 +92,9 @@ export function BasicInfoStep({
           />
         </div>
         <div>
-          <span className="text-xs font-medium text-muted-foreground">Hash List</span>
+          <label htmlFor="bi-hash-list" className="text-xs font-medium text-muted-foreground">
+            Hash List
+          </label>
           <div className="mt-1.5 flex gap-2">
             <Controller
               control={form.control}
@@ -100,6 +102,7 @@ export function BasicInfoStep({
               render={({ field }) => (
                 <Select
                   aria-label="Hash list"
+                  id="bi-hash-list"
                   value={field.value ? String(field.value) : ''}
                   onValueChange={(v) => field.onChange(v ? Number(v) : '')}
                   placeholder="Select a hash list..."

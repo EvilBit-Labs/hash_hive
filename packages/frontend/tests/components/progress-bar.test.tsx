@@ -86,7 +86,9 @@ describe('ProgressBar', () => {
     )
     const destructiveFill = destructiveContainer.querySelector('[role="progressbar"] > div')
     const primaryFill = primaryContainer.querySelector('[role="progressbar"] > div')
-    // The indicator class names should differ between tones
+    // The indicator class names differ between tones, and the destructive tone
+    // actually carries a destructive token (not just a different class).
     expect(destructiveFill?.className).not.toBe(primaryFill?.className)
+    expect(destructiveFill?.className).toContain('destructive')
   })
 })

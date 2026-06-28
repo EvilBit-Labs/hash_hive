@@ -322,7 +322,10 @@ function AllItemsView({
         <Select
           aria-label="Filter by crack status"
           value={statusFilter}
-          onValueChange={(v) => onStatusChange(v as StatusFilter)}
+          onValueChange={(v) => {
+            // Exhaustive guard narrows v to StatusFilter without an unchecked cast.
+            if (v === 'all' || v === 'cracked' || v === 'uncracked') onStatusChange(v)
+          }}
           options={[
             { value: 'all', label: 'All' },
             { value: 'cracked', label: 'Cracked' },
