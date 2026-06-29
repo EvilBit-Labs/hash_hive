@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 
 import { ConfirmDialog } from '../../src/components/ui/confirm-dialog'
@@ -9,14 +9,16 @@ afterEach(() => {
 })
 
 describe('ConfirmDialog', () => {
-  it('renders nothing when closed', () => {
+  it('renders nothing in the accessibility tree when closed', async () => {
     render(
       <ConfirmDialog open={false} title="t" message="m" onConfirm={() => {}} onCancel={() => {}} />
     )
+    // Settle any pending Radix portal/presence work before the negative assertion.
+    await new Promise((resolve) => setTimeout(resolve, 80))
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('renders title and message when open', () => {
+  it('exposes a dialog with an accessible name from the title and the message body', () => {
     render(
       <ConfirmDialog
         open
@@ -26,8 +28,27 @@ describe('ConfirmDialog', () => {
         onCancel={() => {}}
       />
     )
-    expect(screen.getByText('Delete cracker?')).toBeDefined()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toBeDefined()
+    // Accessible name comes from the Radix DialogTitle (aria-labelledby).
+    expect(screen.getByRole('dialog', { name: 'Delete cracker?' })).toBeDefined()
     expect(screen.getByText('This removes the row and the file.')).toBeDefined()
+  })
+
+  it('renders confirm and cancel buttons by accessible name', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="t"
+        message="m"
+        confirmLabel="Delete"
+        cancelLabel="Keep"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Keep' })).toBeDefined()
   })
 
   it('fires onConfirm when the confirm button is clicked', () => {
@@ -42,7 +63,7 @@ describe('ConfirmDialog', () => {
         onCancel={() => {}}
       />
     )
-    screen.getByText('Delete').click()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 
@@ -58,15 +79,64 @@ describe('ConfirmDialog', () => {
         onCancel={onCancel}
       />
     )
-    screen.getByText('Nevermind').click()
+    fireEvent.click(screen.getByRole('button', { name: 'Nevermind' }))
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
-  it('disables both buttons while busy', () => {
+  it('fires onCancel when Escape is pressed (Radix dismiss behavior)', () => {
+    const onCancel = mock()
+    render(<ConfirmDialog open title="t" message="m" onConfirm={() => {}} onCancel={onCancel} />)
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables both action buttons while busy', () => {
     render(
       <ConfirmDialog open title="t" message="m" busy onConfirm={() => {}} onCancel={() => {}} />
     )
     const buttons = screen.getAllByRole('button')
+    expect(buttons.length).toBe(2)
     expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true)
+  })
+
+  it('does not fire onCancel on Escape while busy (in-flight action is not abandoned)', async () => {
+    const onCancel = mock()
+    render(
+      <ConfirmDialog open title="t" message="m" busy onConfirm={() => {}} onCancel={onCancel} />
+    )
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+    // Settle any late dismiss callback before asserting the negative.
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('shows the working label on the confirm button while busy', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="t"
+        message="m"
+        confirmLabel="Delete"
+        busy
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Working...' })).toBeDefined()
+  })
+
+  it('styles the confirm action as destructive when destructive', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="t"
+        message="m"
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('destructive')
   })
 })

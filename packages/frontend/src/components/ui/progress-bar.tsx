@@ -1,4 +1,5 @@
 import { cn } from '../../lib/utils'
+import { Progress } from './progress'
 
 interface BaseProgressBarProps {
   /**
@@ -30,10 +31,15 @@ type ProgressBarProps =
   | (BaseProgressBarProps & { label: string; ariaLabel?: string })
   | (BaseProgressBarProps & { label?: undefined; ariaLabel: string })
 
-const TONE_CLASSES = {
+const TONE_INDICATOR_CLASSES = {
   primary: 'bg-primary',
   success: 'bg-success',
   destructive: 'bg-destructive',
+} as const
+
+const SIZE_TRACK_CLASSES = {
+  default: 'h-2',
+  thin: 'h-1.5',
 } as const
 
 function normalize(value: number): number {
@@ -52,24 +58,15 @@ export function ProgressBar({
   className,
 }: ProgressBarProps) {
   const percentage = normalize(value)
-  const trackHeight = size === 'thin' ? 'h-1.5' : 'h-2'
 
   return (
     <div className={cn('w-full', className)}>
-      <div
-        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- native <progress> can't host the inner fill div needed for tone-colored styling
-        role="progressbar"
-        aria-valuenow={Math.round(percentage)}
-        aria-valuemin={0}
-        aria-valuemax={100}
+      <Progress
         aria-label={ariaLabel ?? label}
-        className={cn('w-full rounded-full bg-surface-1', trackHeight)}
-      >
-        <div
-          className={cn('h-full rounded-full transition-all', TONE_CLASSES[tone])}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
+        value={Math.round(percentage)}
+        className={cn('rounded-full', SIZE_TRACK_CLASSES[size])}
+        indicatorClassName={TONE_INDICATOR_CLASSES[tone]}
+      />
       {label && (
         <p className="mt-1 font-mono text-xs text-muted-foreground tabular-nums">{label}</p>
       )}

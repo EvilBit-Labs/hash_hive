@@ -135,44 +135,34 @@ export function ResultsFilters({
         aria-label="Filter by campaign"
         className="w-auto px-3 py-1.5 text-xs"
         value={filters.campaignId !== undefined ? String(filters.campaignId) : ''}
-        onChange={(e) => handleCampaignChange(e.target.value)}
-      >
-        <option value="">All campaigns</option>
-        {campaigns.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </Select>
+        onValueChange={handleCampaignChange}
+        options={[
+          { value: '', label: 'All campaigns' },
+          ...campaigns.map((c) => ({ value: String(c.id), label: c.name })),
+        ]}
+      />
 
       <Select
         aria-label="Filter by hash list"
         className="w-auto px-3 py-1.5 text-xs"
         value={filters.hashListId !== undefined ? String(filters.hashListId) : ''}
-        onFocus={() => setHashListMenuOpened(true)}
-        onMouseDown={() => setHashListMenuOpened(true)}
-        onChange={(e) => handleHashListChange(e.target.value)}
-      >
-        <option value="">All hash lists</option>
-        {hashLists.map((h) => (
-          <option key={h.id} value={h.id}>
-            {h.name}
-          </option>
-        ))}
-      </Select>
+        onValueChange={handleHashListChange}
+        onOpenChange={(open) => {
+          if (open) setHashListMenuOpened(true)
+        }}
+        options={[
+          { value: '', label: 'All hash lists' },
+          ...hashLists.map((h) => ({ value: String(h.id), label: h.name })),
+        ]}
+      />
 
       <Select
         aria-label="Filter by date range"
         className="w-auto px-3 py-1.5 text-xs"
         value={filters.dateRange}
-        onChange={(e) => handleDateRangeChange(e.target.value)}
-      >
-        {DATE_RANGE_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </Select>
+        onValueChange={handleDateRangeChange}
+        options={DATE_RANGE_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+      />
 
       <div className="relative inline-block">
         <Input

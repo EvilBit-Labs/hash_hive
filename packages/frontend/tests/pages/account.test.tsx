@@ -124,7 +124,7 @@ describe('AccountPage API key section', () => {
     await waitFor(() => {
       expect(screen.getByText(/Rotating issues a new API key/)).toBeDefined()
     })
-    fireEvent.click(screen.getAllByRole('button', { name: /^Rotate$/ })[1])
+    fireEvent.click(screen.getByRole('button', { name: /^Rotate$/ }))
     await waitFor(() => {
       expect(screen.getByText('cst_42_abc-DEF_token')).toBeDefined()
     })
@@ -135,7 +135,7 @@ describe('AccountPage API key section', () => {
     renderWithProviders(<AccountPage />)
 
     fireEvent.click(await screen.findByRole('button', { name: /Rotate/ }))
-    fireEvent.click(screen.getAllByRole('button', { name: /^Rotate$/ })[1])
+    fireEvent.click(screen.getByRole('button', { name: /^Rotate$/ }))
     await waitFor(() => expect(screen.getByText('cst_42_abc-DEF_token')).toBeDefined())
 
     fireEvent.click(screen.getByRole('button', { name: /I've saved it/ }))
@@ -154,7 +154,7 @@ describe('AccountPage API key section', () => {
     await waitFor(() => {
       expect(screen.getByText(/Revoking deletes the current API key/)).toBeDefined()
     })
-    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[1])
+    fireEvent.click(screen.getByRole('button', { name: /^Revoke$/ }))
     await waitFor(() => {
       expect(screen.getByText(/You do not have an active API key/)).toBeDefined()
     })
