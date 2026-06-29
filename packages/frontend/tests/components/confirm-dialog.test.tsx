@@ -105,4 +105,34 @@ describe('ConfirmDialog', () => {
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
     expect(onCancel).not.toHaveBeenCalled()
   })
+
+  it('shows the working label on the confirm button while busy', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="t"
+        message="m"
+        confirmLabel="Delete"
+        busy
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Working...' })).toBeDefined()
+  })
+
+  it('styles the confirm action as destructive when destructive', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="t"
+        message="m"
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('destructive')
+  })
 })

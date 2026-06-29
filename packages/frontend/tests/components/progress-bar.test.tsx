@@ -91,4 +91,12 @@ describe('ProgressBar', () => {
     expect(destructiveFill?.className).not.toBe(primaryFill?.className)
     expect(destructiveFill?.className).toContain('destructive')
   })
+
+  it('success tone carries a success token', () => {
+    const { container } = renderWithProviders(
+      <ProgressBar value={0.5} tone="success" ariaLabel="success" />
+    )
+    const fill = container.querySelector('[role="progressbar"] > div')
+    expect(fill?.className).toContain('success')
+  })
 })
