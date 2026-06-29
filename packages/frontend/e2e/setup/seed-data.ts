@@ -123,9 +123,20 @@ export async function seedTestData(databaseUrl: string): Promise<{
     if (!hashList || typeof hashList['id'] !== 'number') {
       throw new Error('Failed to insert seed hash list')
     }
-    await sql`
+    const [campaign] = await sql`
       INSERT INTO campaigns (name, project_id, hash_list_id, priority, status, is_permanent)
       VALUES (${TEST_CAMPAIGN.name}, ${projectId}, ${hashList['id']}, 5, 'running', true)
+      RETURNING id
+    `
+    if (!campaign || typeof campaign['id'] !== 'number') {
+      throw new Error('Failed to insert seed campaign')
+    }
+    // The campaign lifecycle invariant is "Start requires >=1 attack", so a
+    // running campaign must own at least one attack. Seed a minimal dictionary
+    // attack (mode 0) so the fixture matches a valid production state.
+    await sql`
+      INSERT INTO attacks (campaign_id, project_id, mode)
+      VALUES (${campaign['id']}, ${projectId}, 0)
     `
 
     return { userId, projectId }

@@ -154,6 +154,8 @@ describe('ResultsFilters', () => {
       const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
       expect(calls.some(([url]) => url.includes('/dashboard/campaigns'))).toBe(true)
     })
+    // Settle any late lazy-load fetch before asserting hash-lists was NOT fetched.
+    await new Promise((resolve) => setTimeout(resolve, 80))
     const initialCalls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
     expect(initialCalls.some(([url]) => url.includes('/dashboard/hash-lists'))).toBe(false)
 

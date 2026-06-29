@@ -66,9 +66,11 @@ export function SegmentedControl({
     const isNext = event.key === 'ArrowRight' || event.key === 'ArrowDown'
     const isPrev = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
     if (!isNext && !isPrev) return
-    // Suppress the arrow's default scroll (Up/Down scroll the page; Left/Right
-    // scroll horizontal-overflow containers) — selection nav owns these keys.
-    event.preventDefault()
+    // Do NOT preventDefault here. Radix's RovingFocusGroup moves focus and
+    // already suppresses the arrow's default scroll, but its item handler is
+    // composed with checkForDefaultPrevented — so calling preventDefault in
+    // this capture-phase handler would make Radix skip the focus move, leaving
+    // selection and focus out of sync.
     const currentIndex = options.findIndex((option) => option.value === value)
     if (currentIndex === -1) {
       if (import.meta.env.DEV) {
