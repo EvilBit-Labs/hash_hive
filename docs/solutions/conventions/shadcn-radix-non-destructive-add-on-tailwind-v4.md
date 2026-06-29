@@ -81,6 +81,9 @@ render.
   with `fireEvent.mouseDown(tab, { button: 0 })`.
 - happy-dom cannot drive roving-tabindex arrow-key nav or Radix Select/Dialog
   portal open-and-click — route those to Playwright (`e2e/`), do not fake them.
+  Roving-focus arrow nav also breaks in a real browser if a custom keyboard
+  handler calls `preventDefault` before Radix's — see
+  [`../ui-bugs/radix-roving-focus-preventdefault-breaks-keyboard-nav.md`](../ui-bugs/radix-roving-focus-preventdefault-breaks-keyboard-nav.md).
 - An open Radix Dialog sets `aria-hidden` on the background, so page controls
   leave the accessibility tree; query the dialog's own controls (they become the
   single accessible match by name).
