@@ -86,7 +86,7 @@ const handleArrowKeys = (event: KeyboardEvent<HTMLDivElement>) => {
 
 ## Why This Works
 
-Radix `RovingFocusGroup` composes each item's `onKeyDown` using `composeEventHandlers(userOnKeyDown, radixOnKeyDown)`. The second argument accepts a `checkForDefaultPrevented` option that defaults to `true`: when it is `true`, the library skips its own handler if `event.defaultPrevented` is already set.
+Radix `RovingFocusGroup` composes each item's `onKeyDown` using `composeEventHandlers(userOnKeyDown, radixOnKeyDown, { checkForDefaultPrevented })`, where `checkForDefaultPrevented` defaults to `true`: when `true`, the library skips its own handler (`radixOnKeyDown`) if `event.defaultPrevented` is already set.
 
 The capture-phase `onKeyDownCapture` handler fires before any item handler. Calling `event.preventDefault()` there sets `event.defaultPrevented = true`. By the time Radix's roving focus handler runs via `composeEventHandlers`, `checkForDefaultPrevented` causes it to be skipped entirely - so the focus move never happens. Separately, Radix's roving implementation already calls `preventDefault()` for the four arrow keys it handles (orientation is unset, so all four are active), so manual scroll suppression was redundant from the start.
 
