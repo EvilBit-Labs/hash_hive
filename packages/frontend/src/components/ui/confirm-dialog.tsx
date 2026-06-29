@@ -17,6 +17,11 @@ interface ConfirmDialogProps {
   confirmLabel?: string
   cancelLabel?: string
   destructive?: boolean
+  /**
+   * While true, disables the Cancel/Confirm buttons and suppresses Escape /
+   * outside-click dismissal — so `onCancel` does NOT fire while busy. Set this
+   * while an async confirm action is in-flight.
+   */
   busy?: boolean
   onConfirm: () => void
   onCancel: () => void
@@ -57,7 +62,8 @@ export function ConfirmDialog({
         showCloseButton={false}
         className="max-w-md"
         onOpenAutoFocus={() => {
-          // Fires before Radix moves focus inside, so activeElement is still
+          // Fires on the dialog container before Radix's FocusScope moves focus
+          // to the first tabbable element, so document.activeElement is still
           // the trigger that opened the dialog.
           triggerRef.current = document.activeElement as HTMLElement | null
         }}

@@ -38,12 +38,13 @@ const ITEM_INACTIVE =
  * Picks one of N short options, rendered as segmented buttons.
  *
  * Wraps Radix ToggleGroup (`type="single"`, `loop`) behind the same public API
- * as the old hand-rolled radiogroup. Radix's roving-tabindex moves focus on
- * ArrowLeft/Right with wrap; a capture-phase keydown handler additionally
- * commits the selection so arrows move BOTH focus and selection — the WAI-ARIA
- * radio pattern the original implemented, which Radix ToggleGroup's roving does
- * not provide on its own. Capture phase runs before Radix's item handlers, and
- * Radix moves focus to the same item we select, so the two stay aligned.
+ * as the old hand-rolled radiogroup. Orientation is left unset, so Radix's
+ * roving-tabindex moves focus on all four arrow keys (with wrap); a
+ * capture-phase keydown handler commits the selection for the same four keys,
+ * so arrows move BOTH focus and selection — the WAI-ARIA radio pattern the
+ * original implemented, which Radix ToggleGroup's roving does not provide on
+ * its own. Capture phase runs before Radix's item handlers, and Radix moves
+ * focus to the same item we select, so the two stay aligned.
  *
  * Mandatory-selection invariant: Radix single-select emits an empty string when
  * the user clicks the active item to deselect it. The `onValueChange` guard
@@ -65,8 +66,17 @@ export function SegmentedControl({
     const isNext = event.key === 'ArrowRight' || event.key === 'ArrowDown'
     const isPrev = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
     if (!isNext && !isPrev) return
+    // Suppress the arrow's default scroll (Up/Down scroll the page; Left/Right
+    // scroll horizontal-overflow containers) — selection nav owns these keys.
+    event.preventDefault()
     const currentIndex = options.findIndex((option) => option.value === value)
-    if (currentIndex === -1) return
+    if (currentIndex === -1) {
+      if (import.meta.env.DEV) {
+        // oxlint-disable-next-line no-console
+        console.warn(`SegmentedControl: value "${value}" does not match any option`)
+      }
+      return
+    }
     const delta = isNext ? 1 : -1
     const next = options[(currentIndex + delta + options.length) % options.length]
     if (next) onChange(next.value)

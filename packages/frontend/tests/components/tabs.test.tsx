@@ -138,6 +138,6 @@ describe('Tabs', () => {
 
   // Arrow-key roving-focus navigation is Radix-native. happy-dom cannot
   // reliably drive programmatic focus movement through Radix's internal
-  // roving-focus handler. These scenarios are deferred to Playwright
-  // e2e (e2e/tabs.spec.ts — deferred to orchestrator for U11).
+  // roving-focus handler. These scenarios are covered by Playwright e2e
+  // (e2e/zz-radix-primitives.spec.ts, the Tabs test).
 })

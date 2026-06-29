@@ -91,8 +91,9 @@ render.
 - shadcn's generated `progress.tsx` destructures `value` but never re-passes it
   to `ProgressPrimitive.Root` → Radix reports indeterminate, no `aria-valuenow`.
   Pass `value` through explicitly.
-- Radix Select forbids empty-string item values — round-trip `''` through an
-  internal sentinel (`'__NONE__'`).
+- Radix Select reserves `value=""` as the uncontrolled-clear signal, so a
+  `SelectItem value=""` silently clears the selection instead of setting it —
+  round-trip `''` through an internal sentinel (`'__NONE__'`).
 - react-hook-form `form.register()` is incompatible with Radix Select (no native
   ref/onChange) — wrap those callsites in `<Controller>`.
 - `buttonVariants` keeps its **positional** signature (`buttonVariants('secondary',

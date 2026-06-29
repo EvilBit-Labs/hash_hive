@@ -223,8 +223,8 @@ export interface SelectProps {
   id?: string
   /**
    * Forwarded to SelectRoot.onOpenChange. Useful for lazy-loading option data
-   * when the user first opens the dropdown (replaces onFocus/onMouseDown on
-   * the old native-select wrapper).
+   * when the user first opens the dropdown (callsites previously triggered this
+   * with native onFocus/onMouseDown on the old `<select>`).
    */
   onOpenChange?: (open: boolean) => void
 }
@@ -240,6 +240,19 @@ function Select({
   onOpenChange,
   'aria-label': ariaLabel,
 }: SelectProps) {
+  if (import.meta.env.DEV) {
+    if (placeholder !== undefined && options.some((o) => o.value === '')) {
+      // oxlint-disable-next-line no-console
+      console.error(
+        'Select: `placeholder` and an option with value="" both map to the empty sentinel and collide — use one or the other.'
+      )
+    }
+    if (options.some((o) => o.value === EMPTY_SENTINEL)) {
+      // oxlint-disable-next-line no-console
+      console.error(`Select: an option uses the reserved sentinel value "${EMPTY_SENTINEL}".`)
+    }
+  }
+
   const radixValue = toRadixValue(value)
 
   return (
