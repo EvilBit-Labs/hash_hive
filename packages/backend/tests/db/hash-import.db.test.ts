@@ -232,7 +232,10 @@ describe('processImportPairs — setWhere guard (KTD2)', () => {
         attackId: targetAttackId,
         taskId: targetTaskId,
         agentId: targetAgentId,
-        source: 'agent',
+        // Agent-cracked rows carry NULL source in production (only the parser
+        // sets 'upload' and the import worker sets 'import'); attribution FKs
+        // identify the agent crack.
+        source: null,
         username: null,
       })
       .returning({ id: hashItems.id })
@@ -267,7 +270,7 @@ describe('processImportPairs — setWhere guard (KTD2)', () => {
       // All fields must be IDENTICAL to the seeded values — setWhere blocked the update
       expect(after!.plaintext).toBe(originalPlaintext)
       expect(after!.crackedAt!.toISOString()).toBe(originalCrackedAt.toISOString())
-      expect(after!.source).toBe('agent')
+      expect(after!.source).toBeNull()
       expect(after!.username).toBeNull()
       expect(after!.campaignId).toBe(targetCampId)
       expect(after!.attackId).toBe(targetAttackId)

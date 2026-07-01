@@ -10,7 +10,7 @@
  *   - Returns compartmentalized import summary (KTD7): no cross-project field
  */
 
-import { importFormatSchema, importSummarySchema } from '@hashhive/shared'
+import { importRequestSchema, importSummarySchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { randomUUID } from 'node:crypto'
 
@@ -34,13 +34,7 @@ export const controlImportRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOpt
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() })
 
-const importBodySchema = z
-  .object({
-    content: z.string().min(1, 'content must not be empty'),
-    format: importFormatSchema,
-  })
-  .strict()
-  .openapi('ControlImportPrecrackedRequest')
+const importBodySchema = importRequestSchema.openapi('ControlImportPrecrackedRequest')
 
 const importPrecrackedRoute = createRoute({
   method: 'post',
@@ -60,6 +54,7 @@ const importPrecrackedRoute = createRoute({
       content: { 'application/json': { schema: importSummarySchema } },
     },
     400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     503: sharedControlResponse(CONTROL_RESPONSE_REFS.ServiceUnavailable),
@@ -108,6 +103,10 @@ controlImportRoutes.openapi(importPrecrackedRoute, async (c) => {
     const qm = getQueueManager()
     if (!qm) {
       logger.warn({ projectId, hashListId, stagingKey }, 'Queue manager not available')
+      // Best-effort cleanup to avoid orphaned staging objects (B2)
+      deleteFile(stagingKey).catch((cleanupErr) => {
+        logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete orphaned staging file')
+      })
       return problemResponse(c, 503, 'service_unavailable', 'Queue unavailable')
     }
 

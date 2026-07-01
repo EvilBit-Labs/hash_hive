@@ -33,14 +33,28 @@ export const importSummarySchema = z
   .openapi('ImportSummary')
 
 /**
+ * Maximum byte-length of the `content` field in a pre-cracked import
+ * request. Bounds an amplified-memory DoS from an authenticated
+ * admin/contributor while still accommodating large production imports.
+ * 32 MiB of UTF-8 characters.
+ */
+export const IMPORT_CONTENT_MAX_LENGTH = 33_554_432
+
+/**
  * Request body for the pre-cracked import endpoint.
  *
  * The hash-list id is a path parameter, not a body field.
- * Route-level validation (U7) extends this with multipart/form-data
- * file handling; the body shape here covers the parseable discriminator.
+ * Both the dashboard and control surfaces derive their per-surface
+ * OpenAPI component name via `.openapi('<Surface>ImportPrecrackedRequest')`;
+ * the shared definition is the authoritative wire schema (AGENTS.md rule:
+ * wire shapes live in `@hashhive/shared`).
  */
 export const importRequestSchema = z
   .object({
+    content: z
+      .string()
+      .min(1, 'content must not be empty')
+      .max(IMPORT_CONTENT_MAX_LENGTH, 'content is too large'),
     format: importFormatSchema,
   })
   .strict()

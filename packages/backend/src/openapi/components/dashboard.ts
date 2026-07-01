@@ -1,9 +1,9 @@
 /**
  * Dashboard surface OpenAPI plumbing.
  *
- * Five named responses (`AuthRequired`, `Forbidden`, `ValidationFailed`,
- * `ResourceNotFound`, `InternalError`) point at the dashboard's
- * `{ error: { code, message, timestamp?, requestId? } }` envelope.
+ * Six named responses (`AuthRequired`, `Forbidden`, `ValidationFailed`,
+ * `ResourceNotFound`, `InternalError`, `ServiceUnavailable`) point at the
+ * dashboard's `{ error: { code, message, timestamp?, requestId? } }` envelope.
  *
  * The `sharedDashboardResponse(ref)` wrapper is brand-typed so a
  * dashboard route cannot legally reference a control- or
@@ -51,6 +51,7 @@ const DASHBOARD_RESPONSE_NAMES = [
   'ValidationFailed',
   'ResourceNotFound',
   'InternalError',
+  'ServiceUnavailable',
 ] as const
 
 type DashboardResponseName = (typeof DASHBOARD_RESPONSE_NAMES)[number]
@@ -85,6 +86,8 @@ const DASHBOARD_RESPONSE_DESCRIPTIONS: Record<DashboardResponseName, string> = {
   ResourceNotFound: "Target resource does not exist or is outside the caller's project scope.",
   InternalError:
     'Unexpected server error - downstream dependency (database, BetterAuth, external service) failed and the request could not be completed.',
+  ServiceUnavailable:
+    'A required backing service is degraded or offline (e.g., queue or object store unavailable).',
 }
 
 /**

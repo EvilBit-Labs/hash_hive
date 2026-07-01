@@ -273,6 +273,7 @@ const exportResultsRoute = createRoute({
         'text/plain': { schema: z.string() },
       },
     },
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },

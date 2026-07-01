@@ -1,4 +1,8 @@
-import { hashSearchResponseSchema, importFormatSchema, importSummarySchema } from '@hashhive/shared'
+import {
+  hashSearchResponseSchema,
+  importRequestSchema,
+  importSummarySchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { randomUUID } from 'node:crypto'
 
@@ -85,13 +89,7 @@ hashRoutes.openapi(guessTypeRoute, async (c) => {
 
 // ─── POST /hash-lists/{id}/import-precracked — accept pre-cracked pairs ─────
 
-const importPrecrackedBodySchema = z
-  .object({
-    content: z.string().min(1, 'content must not be empty'),
-    format: importFormatSchema,
-  })
-  .strict()
-  .openapi('DashboardImportPrecrackedRequest')
+const importPrecrackedBodySchema = importRequestSchema.openapi('DashboardImportPrecrackedRequest')
 
 const importPrecrackedRoute = createRoute({
   method: 'post',
@@ -115,73 +113,85 @@ const importPrecrackedRoute = createRoute({
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
-    503: {
-      description: 'Storage or queue unavailable.',
-      content: {
-        'application/json': {
-          schema: z.object({ error: z.object({ code: z.string(), message: z.string() }) }),
-        },
-      },
-    },
+    503: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ServiceUnavailable),
   },
 })
 
 hashRoutes.openapi(importPrecrackedRoute, async (c) => {
-  const { projectId } = c.get('scopedUser')!
-  const { userId } = c.get('currentUser')
-  const actor = { actorType: 'user' as const, actorId: userId }
-  const { id: hashListId } = c.req.valid('param')
-  const { content, format } = c.req.valid('json')
-
-  // Ownership check before any parse/stage/enqueue work (KTD9)
-  const hl = await getHashListById(hashListId, projectId)
-  if (!hl) {
-    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
-  }
-
-  // Resolve hashcatMode for potfile parsing (KTD5)
-  let hashcatMode: number | null = null
-  if (hl.hashTypeId !== null) {
-    const ht = await getHashTypeById(hl.hashTypeId)
-    hashcatMode = ht?.hashcatMode ?? null
-  }
-
-  // Parse import content into normalized pairs (U6)
-  const parseResult = parseImportContent(content, format, hashcatMode)
-
-  // Stage parsed pairs to object store — keep cleartext out of Redis (KTD3)
-  const stagingKey = `${projectId}/import-staging/${randomUUID()}.json`
+  let stagingKey: string | undefined
   try {
-    await uploadFile(stagingKey, Buffer.from(JSON.stringify(parseResult.pairs)), 'application/json')
+    const { projectId } = c.get('scopedUser')!
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
+    const { id: hashListId } = c.req.valid('param')
+    const { content, format } = c.req.valid('json')
+
+    // Ownership check before any parse/stage/enqueue work (KTD9)
+    const hl = await getHashListById(hashListId, projectId)
+    if (!hl) {
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    }
+
+    // Resolve hashcatMode for potfile parsing (KTD5)
+    let hashcatMode: number | null = null
+    if (hl.hashTypeId !== null) {
+      const ht = await getHashTypeById(hl.hashTypeId)
+      hashcatMode = ht?.hashcatMode ?? null
+    }
+
+    // Parse import content into normalized pairs (U6)
+    const parseResult = parseImportContent(content, format, hashcatMode)
+
+    // Stage parsed pairs to object store — keep cleartext out of Redis (KTD3)
+    stagingKey = `${projectId}/import-staging/${randomUUID()}.json`
+    try {
+      await uploadFile(
+        stagingKey,
+        Buffer.from(JSON.stringify(parseResult.pairs)),
+        'application/json'
+      )
+    } catch (err) {
+      logger.error({ err, projectId, hashListId }, 'Failed to stage import pairs')
+      return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to stage import pairs')
+    }
+
+    // Enqueue U7 propagation job (dynamic import avoids circular dep with queue context)
+    const { getQueueManager } = await import('../../queue/context.js')
+    const qm = getQueueManager()
+    if (!qm) {
+      logger.warn({ projectId, hashListId, stagingKey }, 'Queue manager not available')
+      // Best-effort cleanup to avoid orphaned staging objects (A2)
+      deleteFile(stagingKey).catch((cleanupErr) => {
+        logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete orphaned staging file')
+      })
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', 'Queue unavailable; import not enqueued')
+    }
+
+    const enqueued = await qm.enqueue(
+      QUEUE_NAMES.HASH_IMPORT_PROPAGATION,
+      { stagingKey, hashListId, projectId, actor, skippedFromParse: parseResult.skipped },
+      { jobId: buildHashImportJobId(hashListId, stagingKey) }
+    )
+
+    if (!enqueued) {
+      // Best-effort cleanup to avoid orphaned staging objects
+      deleteFile(stagingKey).catch((cleanupErr) => {
+        logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete orphaned staging file')
+      })
+      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', 'Queue unavailable; import not enqueued')
+    }
+
+    // Return compartmentalized summary (KTD7) — matched/cracked computed async by U7 worker
+    return c.json({ matchedInList: 0, crackedInList: 0, skipped: parseResult.skipped }, 202)
   } catch (err) {
-    logger.error({ err, projectId, hashListId }, 'Failed to stage import pairs')
-    return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to stage import pairs')
+    logger.error({ err }, 'Unexpected error in import-precracked handler')
+    if (stagingKey) {
+      deleteFile(stagingKey).catch((cleanupErr) => {
+        logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete staging file after error')
+      })
+    }
+    return dashboardError(c, 500, 'INTERNAL_ERROR', 'Internal server error')
   }
-
-  // Enqueue U7 propagation job (dynamic import avoids circular dep with queue context)
-  const { getQueueManager } = await import('../../queue/context.js')
-  const qm = getQueueManager()
-  if (!qm) {
-    logger.warn({ projectId, hashListId, stagingKey }, 'Queue manager not available')
-    return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', 'Queue unavailable; import not enqueued')
-  }
-
-  const enqueued = await qm.enqueue(
-    QUEUE_NAMES.HASH_IMPORT_PROPAGATION,
-    { stagingKey, hashListId, projectId, actor, skippedFromParse: parseResult.skipped },
-    { jobId: buildHashImportJobId(hashListId, stagingKey) }
-  )
-
-  if (!enqueued) {
-    // Best-effort cleanup to avoid orphaned staging objects
-    deleteFile(stagingKey).catch((cleanupErr) => {
-      logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete orphaned staging file')
-    })
-    return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', 'Queue unavailable; import not enqueued')
-  }
-
-  // Return compartmentalized summary (KTD7) — matched/cracked computed async by U7 worker
-  return c.json({ matchedInList: 0, crackedInList: 0, skipped: parseResult.skipped }, 202)
 })
 
 // ─── GET /search — global hash search (R14–R17) ──────────────────────────────
@@ -221,6 +231,7 @@ const searchHashesRoute = createRoute({
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 
@@ -232,17 +243,22 @@ hashRoutes.openapi(searchHashesRoute, async (c) => {
   const { projectId } = scope
   const { q, limit, offset } = c.req.valid('query')
 
-  const result = await searchHashes(projectId, q, { limit, offset })
+  try {
+    const result = await searchHashes(projectId, q, { limit, offset })
 
-  // Map Date → ISO string for the wire shape (crackedAt is Date in the service,
-  // string | null in hashSearchResponseSchema). This mapping is load-bearing
-  // for round-trip .parse() validation (KTD8).
-  const results = result.results.map((r) => ({
-    ...r,
-    crackedAt: r.crackedAt !== null ? r.crackedAt.toISOString() : null,
-  }))
+    // Map Date → ISO string for the wire shape (crackedAt is Date in the service,
+    // string | null in hashSearchResponseSchema). This mapping is load-bearing
+    // for round-trip .parse() validation (KTD8).
+    const results = result.results.map((r) => ({
+      ...r,
+      crackedAt: r.crackedAt !== null ? r.crackedAt.toISOString() : null,
+    }))
 
-  return c.json({ results, total: result.total, limit: result.limit, offset: result.offset }, 200)
+    return c.json({ results, total: result.total, limit: result.limit, offset: result.offset }, 200)
+  } catch (err) {
+    logger.error({ err, projectId, q }, 'Unexpected error in search-hashes handler')
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
+  }
 })
 
 export { hashRoutes }

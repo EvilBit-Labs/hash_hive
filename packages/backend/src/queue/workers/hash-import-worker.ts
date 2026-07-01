@@ -27,7 +27,7 @@
 import type Redis from 'ioredis'
 
 import { hashItems } from '@hashhive/shared'
-import { type ConnectionOptions, Worker } from 'bullmq'
+import { type ConnectionOptions, UnrecoverableError, Worker } from 'bullmq'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import type { AuditActor } from '../../services/audit-log.js'
@@ -35,8 +35,8 @@ import type { ParsedImportPair } from '../../services/hash-items/import-parse.js
 import type { HashImportPropagationJob } from '../types.js'
 
 import { logger } from '../../config/logger.js'
-import { QUEUE_NAMES } from '../../config/queue.js'
-import { downloadFile } from '../../config/storage.js'
+import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
+import { deleteFile, downloadFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { recordAuditEvent } from '../../services/audit-log.js'
 import { propagateCrack } from '../../services/hash-items/propagation.js'
@@ -79,54 +79,31 @@ export function buildHashImportJobId(hashListId: number, stagingKey: string): st
   return `hash-import:${hashListId}:${stagingKey}`
 }
 
-// ─── Core processor ───────────────────────────────────────────────────────────
+// ─── Private helpers ──────────────────────────────────────────────────────────
 
 /**
- * Process a set of parsed import pairs against a target hash list.
+ * Phase 1: Upsert deduped pairs into the target hash list in batches.
  *
- * Exported for real-DB testing — the DB test suite calls this directly with
- * seeded pairs, bypassing Redis and S3 entirely.
+ * For each batch:
+ *   a) Pre-count how many import hashes exist in the target list and how many
+ *      are still uncracked. This gives `matchedInList` and `crackedInList`
+ *      without depending on the conditional upsert's RETURNING behaviour.
+ *   b) Upsert with `setWhere: crackedAt IS NULL` (KTD2): INSERT new rows with
+ *      provenance; on conflict update only rows that were not yet cracked so
+ *      existing attribution FKs (campaignId/taskId/agentId/attackId) and
+ *      source/username are preserved for already-cracked rows.
  *
- * @param pairs          Parsed pairs from U6 (or from a deserialized staging file).
- * @param hashListId     The target hash list to upsert into.
- * @param projectId      The project owning the hash list (for audit scope).
- * @param actor          Auth-context actor from the originating request.
- * @param skippedFromParse  Lines skipped during U6 parsing — passed through for summary.
+ * NOTE: Newly inserted rows (hashValue not already in the list) are NOT
+ * counted in matchedInList — they were not pre-existing matches. They are
+ * inserted as pre-cracked entries with source='import' and crackedAt set.
  */
-export async function processImportPairs(
-  pairs: readonly ParsedImportPair[],
+async function upsertTargetListBatches(
+  dedupedPairs: ParsedImportPair[],
   hashListId: number,
-  projectId: number,
-  actor: AuditActor,
-  skippedFromParse: number
-): Promise<HashImportResult> {
-  // Deduplicate by hashValue: last occurrence wins within a single import.
-  // Prevents "cannot affect the same row twice in a single command" errors
-  // on the ON CONFLICT upsert when the file contains duplicate hashes.
-  const pairMap = new Map<string, ParsedImportPair>()
-  for (const pair of pairs) {
-    pairMap.set(pair.hashValue, pair)
-  }
-  const dedupedPairs = [...pairMap.values()]
-
+  crackedAt: Date
+): Promise<{ totalMatched: number; totalCracked: number }> {
   let totalMatched = 0
   let totalCracked = 0
-  const crackedAt = new Date()
-
-  // ── Phase 1: upsert target-list rows ───────────────────────────────────────
-  //
-  // For each batch:
-  //   a) Pre-count how many import hashes exist in the target list and how many
-  //      are still uncracked. This gives `matchedInList` and `crackedInList`
-  //      without depending on the conditional upsert's RETURNING behaviour.
-  //   b) Upsert with `setWhere: crackedAt IS NULL` (KTD2): INSERT new rows with
-  //      provenance; on conflict update only rows that were not yet cracked so
-  //      existing attribution FKs (campaignId/taskId/agentId/attackId) and
-  //      source/username are preserved for already-cracked rows.
-  //
-  // NOTE: Newly inserted rows (hashValue not already in the list) are NOT
-  // counted in matchedInList — they were not pre-existing matches. They are
-  // inserted as pre-cracked entries with source='import' and crackedAt set.
 
   for (let i = 0; i < dedupedPairs.length; i += IMPORT_BATCH_SIZE) {
     const batch = dedupedPairs.slice(i, i + IMPORT_BATCH_SIZE)
@@ -167,12 +144,27 @@ export async function processImportPairs(
       })
   }
 
-  // ── Phase 2: audit event ────────────────────────────────────────────────────
-  //
-  // Recorded once after all upserts so the summary counts are final (KTD9).
-  // Entity scope is hash_list / 'updated' — the import is a bulk mutation
-  // of the list's hash items. The newRow carries the import summary so the
-  // audit trail documents what the operator pushed in.
+  return { totalMatched, totalCracked }
+}
+
+/**
+ * Phase 2: Record one audit event summarising the import outcome.
+ *
+ * Called after all upserts so the summary counts are final (KTD9). Entity scope
+ * is hash_list / 'updated' — the import is a bulk mutation of the list's hash
+ * items. The newRow carries the import summary so the audit trail documents
+ * what the operator pushed in.
+ *
+ * POSITION IS INTENTIONAL — must run after Phase 1 (counts are final) and
+ * before Phase 3 (audit gap if propagation fails permanently).
+ */
+async function recordImportAudit(
+  actor: AuditActor,
+  projectId: number,
+  hashListId: number,
+  counts: { totalMatched: number; totalCracked: number },
+  skippedFromParse: number
+): Promise<void> {
   await recordAuditEvent({
     actor,
     projectId,
@@ -181,25 +173,29 @@ export async function processImportPairs(
     action: 'updated',
     reason: 'import',
     newRow: {
-      matchedInList: totalMatched,
-      crackedInList: totalCracked,
+      matchedInList: counts.totalMatched,
+      crackedInList: counts.totalCracked,
       skipped: skippedFromParse,
     },
   })
+}
 
-  // ── Phase 3: system-wide propagation ───────────────────────────────────────
-  //
-  // Runs AFTER the target-list upsert. The target row's crackedAt is now set,
-  // so propagateCrack's own `crackedAt IS NULL` guard will not overwrite it —
-  // only rows in OTHER lists (and other projects) will receive the plaintext.
-  //
-  // Precheck first: after Phase 1 every imported hash's target-list row is
-  // cracked, so any hashValue that still has an uncracked row must live in
-  // another list — those are the only pairs worth propagating. Batched
-  // selectDistinct over the hash_value index turns N per-pair no-op SELECTs
-  // (the common case, where a hash exists only in the target list) into
-  // ceil(N / IMPORT_BATCH_SIZE) queries. propagateCrack's own guard still
-  // protects correctness if a concurrent crack lands between precheck and call.
+/**
+ * Phase 3: Propagate cracked plaintexts system-wide via propagateCrack.
+ *
+ * Runs AFTER the target-list upsert. The target row's crackedAt is now set,
+ * so propagateCrack's own `crackedAt IS NULL` guard will not overwrite it —
+ * only rows in OTHER lists (and other projects) will receive the plaintext.
+ *
+ * Precheck first: after Phase 1 every imported hash's target-list row is
+ * cracked, so any hashValue that still has an uncracked row must live in
+ * another list — those are the only pairs worth propagating. Batched
+ * selectDistinct over the hash_value index turns N per-pair no-op SELECTs
+ * (the common case, where a hash exists only in the target list) into
+ * ceil(N / IMPORT_BATCH_SIZE) queries. propagateCrack's own guard still
+ * protects correctness if a concurrent crack lands between precheck and call.
+ */
+async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promise<void> {
   const hashesToPropagate = new Set<string>()
   for (let i = 0; i < dedupedPairs.length; i += IMPORT_BATCH_SIZE) {
     const chunk = dedupedPairs.slice(i, i + IMPORT_BATCH_SIZE).map((p) => p.hashValue)
@@ -220,6 +216,58 @@ export async function processImportPairs(
       )
     }
   }
+}
+
+// ─── Core processor ───────────────────────────────────────────────────────────
+
+/**
+ * Process a set of parsed import pairs against a target hash list.
+ *
+ * Exported for real-DB testing — the DB test suite calls this directly with
+ * seeded pairs, bypassing Redis and S3 entirely.
+ *
+ * @param pairs          Parsed pairs from U6 (or from a deserialized staging file).
+ * @param hashListId     The target hash list to upsert into.
+ * @param projectId      The project owning the hash list (for audit scope).
+ * @param actor          Auth-context actor from the originating request.
+ * @param skippedFromParse  Lines skipped during U6 parsing — passed through for summary.
+ */
+export async function processImportPairs(
+  pairs: readonly ParsedImportPair[],
+  hashListId: number,
+  projectId: number,
+  actor: AuditActor,
+  skippedFromParse: number
+): Promise<HashImportResult> {
+  // Deduplicate by hashValue: last occurrence wins within a single import.
+  // Prevents "cannot affect the same row twice in a single command" errors
+  // on the ON CONFLICT upsert when the file contains duplicate hashes.
+  const pairMap = new Map<string, ParsedImportPair>()
+  for (const pair of pairs) {
+    pairMap.set(pair.hashValue, pair)
+  }
+  const dedupedPairs = [...pairMap.values()]
+
+  const crackedAt = new Date()
+
+  // Phase 1: upsert target-list rows
+  const { totalMatched, totalCracked } = await upsertTargetListBatches(
+    dedupedPairs,
+    hashListId,
+    crackedAt
+  )
+
+  // Phase 2: audit event (CRITICAL position — after counts are final, before propagation)
+  await recordImportAudit(
+    actor,
+    projectId,
+    hashListId,
+    { totalMatched, totalCracked },
+    skippedFromParse
+  )
+
+  // Phase 3: system-wide propagation
+  await propagateImportedCracks(dedupedPairs)
 
   return {
     matchedInList: totalMatched,
@@ -237,6 +285,14 @@ export async function processImportPairs(
  * (KTD3 — cleartext never serialised into Redis) and delegates to
  * `processImportPairs` for all database work. Metrics and failure logging
  * are wired via `attachWorkerMetrics`.
+ *
+ * Staging file lifecycle:
+ *   - Deleted on success — recovered-password files must not accumulate.
+ *   - Deleted on FINAL failure (retries exhausted) — file is unreadable or
+ *     the error is permanent; keeping it serves no purpose.
+ *   - NOT deleted on retriable failures — the retry needs to re-read the file.
+ *   - Deleted immediately before throwing UnrecoverableError (corrupt JSON) —
+ *     no retries will run, so cleanup happens at throw time.
  */
 export function createHashImportWorker(connection: Redis): Worker<HashImportPropagationJob> {
   const worker = new Worker<HashImportPropagationJob>(
@@ -253,11 +309,33 @@ export function createHashImportWorker(connection: Redis): Worker<HashImportProp
         throw new Error(`hash-import-worker: staging file empty or missing — key=${stagingKey}`)
       }
 
-      const pairs = JSON.parse(body) as ParsedImportPair[]
+      // Parse the staging file. A corrupt file is a permanent failure — burn no
+      // retry attempts on it. Clean up the staging file before throwing so it
+      // does not accumulate in the object store.
+      let pairs: ParsedImportPair[]
+      try {
+        pairs = JSON.parse(body) as ParsedImportPair[]
+      } catch {
+        await deleteFile(stagingKey).catch((cleanupErr) =>
+          logger.warn(
+            { err: cleanupErr, stagingKey },
+            'hash-import-worker: staging cleanup after parse error failed'
+          )
+        )
+        throw new UnrecoverableError(
+          `hash-import-worker: staging file is not valid JSON — key=${stagingKey}`
+        )
+      }
 
       const result = await processImportPairs(pairs, hashListId, projectId, actor, skippedFromParse)
 
       logger.info({ jobId: job.id, hashListId, ...result }, 'hash-import-worker: complete')
+
+      // Delete the staging file on success — recovered-password files must not
+      // accumulate in the object store indefinitely.
+      await deleteFile(stagingKey).catch((err) =>
+        logger.warn({ err, stagingKey }, 'hash-import-worker: staging cleanup failed')
+      )
 
       return result
     },
@@ -284,6 +362,18 @@ export function createHashImportWorker(connection: Redis): Worker<HashImportProp
       },
       'hash-import-worker: job failed'
     )
+
+    // Delete the staging file only when retries are exhausted — retriable
+    // attempts still need to re-read it. UnrecoverableError jobs are handled
+    // at throw time (file already deleted before the error is raised).
+    if (job && (job.attemptsMade ?? 0) >= (job.opts?.attempts ?? DEFAULT_JOB_ATTEMPTS)) {
+      await deleteFile(job.data.stagingKey).catch((cleanupErr) =>
+        logger.warn(
+          { err: cleanupErr, stagingKey: job.data.stagingKey },
+          'hash-import-worker: staging cleanup after failure failed'
+        )
+      )
+    }
   })
 
   return worker

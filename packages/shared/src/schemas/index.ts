@@ -1446,7 +1446,12 @@ export {
 } from './export.js'
 
 // ─── Import (#102) ──────────────────────────────────────────────────
-export { importFormatSchema, importRequestSchema, importSummarySchema } from './import.js'
+export {
+  IMPORT_CONTENT_MAX_LENGTH,
+  importFormatSchema,
+  importRequestSchema,
+  importSummarySchema,
+} from './import.js'
 
 // ─── Search (#102) ──────────────────────────────────────────────────
 export { hashSearchResponseSchema, hashSearchResultSchema } from './search.js'
