@@ -363,5 +363,60 @@ if (!IS_ISOLATED) {
       // Cleanup should be attempted for the orphaned staging file
       expect(mockDeleteFile).toHaveBeenCalledTimes(1)
     })
+
+    // ─── (new) test 11: hashcatMode threading ──────────────────────────────────
+
+    it('passes resolved hashcatMode to parseImportContent when hash list has a hashTypeId (11a)', async () => {
+      // Default state: activeHashList.hashTypeId = 1, mockGetHashTypeById returns hashcatMode = 0
+      const res = await makeRequest(42, { content: 'abc:pass', format: 'pairs' })
+      expect(res.status).toBe(202)
+
+      // getHashTypeById must have been called with the list's hashTypeId
+      expect(mockGetHashTypeById).toHaveBeenCalledWith(1)
+      // parseImportContent's third arg must be the resolved hashcatMode (0)
+      const [, , resolvedMode] = mockParseImportContent.mock.calls[0] as [
+        string,
+        string,
+        number | null,
+      ]
+      expect(resolvedMode).toBe(0)
+    })
+
+    it('passes null hashcatMode to parseImportContent when hash list has no hashTypeId (11b)', async () => {
+      activeHashList = makeHashList({ hashTypeId: null })
+
+      const res = await makeRequest(42, { content: 'abc:pass', format: 'pairs' })
+      expect(res.status).toBe(202)
+
+      // getHashTypeById must NOT be called when hashTypeId is null
+      expect(mockGetHashTypeById).not.toHaveBeenCalled()
+      // parseImportContent's third arg must be null
+      const [, , resolvedMode] = mockParseImportContent.mock.calls[0] as [
+        string,
+        string,
+        number | null,
+      ]
+      expect(resolvedMode).toBeNull()
+    })
+
+    // ─── (new) test 12: unexpected throw after staging triggers cleanup ─────────
+
+    it('500 problem+json when enqueue throws unexpectedly after staging — staging file is cleaned up (12)', async () => {
+      mockEnqueue.mockImplementation(async () => {
+        throw new Error('Unexpected queue error')
+      })
+
+      const res = await makeRequest(42, { content: 'abc:pass', format: 'pairs' })
+      expect(res.status).toBe(500)
+
+      // Staging upload ran before the throw
+      expect(mockUploadFile).toHaveBeenCalledTimes(1)
+      // Best-effort cleanup was attempted for the orphaned staging file
+      expect(mockDeleteFile).toHaveBeenCalledTimes(1)
+
+      // Control surface wraps errors in RFC 9457 problem+json
+      const body = await res.json()
+      expect(body).toMatchObject({ status: 500, type: expect.stringContaining('internal') })
+    })
   })
 }

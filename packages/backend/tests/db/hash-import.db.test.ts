@@ -463,3 +463,165 @@ describe('buildHashImportJobId — eviction contract (scenario 6)', () => {
     expect(buildHashImportJobId(99, 'imports/staging/other-uuid.json')).not.toBe(id1)
   })
 })
+
+// ─── (new) test 1: username COALESCE preservation ─────────────────────────────
+
+describe('processImportPairs — username COALESCE preservation', () => {
+  it('preserves existing username when import pair has no username (1a)', async () => {
+    // An uncracked row seeded with a username from a prior upload.
+    // An import without a username must NOT null out the existing value.
+    const hashValue = 'hash-import-coalesce-preserve-v1a'
+    const existingUsername = 'admin'
+
+    const [row] = await db
+      .insert(hashItems)
+      .values({ hashListId: targetListId, hashValue, username: existingUsername })
+      .returning({ id: hashItems.id })
+
+    try {
+      await processImportPairs(
+        [{ hashValue, plaintext: 'importedPass' }], // no username field
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0
+      )
+
+      const [after] = await db
+        .select({ username: hashItems.username })
+        .from(hashItems)
+        .where(eq(hashItems.id, row!.id))
+
+      expect(after!.username).toBe(existingUsername)
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.id, row!.id))
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+
+  it('sets username from import pair when the pair carries one (1b)', async () => {
+    // An uncracked row with no username — import provides 'root'.
+    const hashValue = 'hash-import-coalesce-set-v1b'
+    const importUsername = 'root'
+
+    const [row] = await db
+      .insert(hashItems)
+      .values({ hashListId: targetListId, hashValue })
+      .returning({ id: hashItems.id })
+
+    try {
+      await processImportPairs(
+        [{ hashValue, plaintext: 'importedPass', username: importUsername }],
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0
+      )
+
+      const [after] = await db
+        .select({ username: hashItems.username })
+        .from(hashItems)
+        .where(eq(hashItems.id, row!.id))
+
+      expect(after!.username).toBe(importUsername)
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.id, row!.id))
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+})
+
+// ─── (new) test 2: new-row insert path ────────────────────────────────────────
+
+describe('processImportPairs — new row insert', () => {
+  it('inserts a cracked row when hashValue is not pre-existing; matchedInList and crackedInList are both 0', async () => {
+    // The hash does not exist in targetListId before the import.
+    // summary counts reflect only pre-existing matches, so both are 0.
+    // The row IS inserted as a cracked entry with source='import'.
+    const hashValue = 'hash-import-new-row-v2'
+    const plaintext = 'newRowPass'
+
+    try {
+      const result = await processImportPairs(
+        [{ hashValue, plaintext }],
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0
+      )
+
+      expect(result.matchedInList).toBe(0)
+      expect(result.crackedInList).toBe(0)
+
+      const [inserted] = await db
+        .select({
+          plaintext: hashItems.plaintext,
+          crackedAt: hashItems.crackedAt,
+          source: hashItems.source,
+        })
+        .from(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, hashValue)))
+
+      expect(inserted).toBeDefined()
+      expect(inserted!.plaintext).toBe(plaintext)
+      expect(inserted!.crackedAt).toBeInstanceOf(Date)
+      expect(inserted!.source).toBe('import')
+    } finally {
+      await db
+        .delete(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, hashValue)))
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+})
+
+// ─── (new) test 3: duplicate hashValue deduplication ──────────────────────────
+
+describe('processImportPairs — duplicate hashValue deduplication', () => {
+  it('deduplicates pairs before upsert so the last occurrence plaintext wins and no DB error occurs', async () => {
+    // processImportPairs deduplicates by hashValue (last-wins Map).
+    // Without deduplication the upsert raises
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+    const hashValue = 'hash-import-dedup-v3'
+    const finalPlaintext = 'lastPass'
+
+    try {
+      // Three pairs with the same hashValue — last occurrence should win.
+      const result = await processImportPairs(
+        [
+          { hashValue, plaintext: 'firstPass' },
+          { hashValue, plaintext: 'middlePass' },
+          { hashValue, plaintext: finalPlaintext },
+        ],
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0
+      )
+
+      // New row (not pre-existing) → both summary counts are 0
+      expect(result.matchedInList).toBe(0)
+      expect(result.crackedInList).toBe(0)
+
+      const [inserted] = await db
+        .select({ plaintext: hashItems.plaintext })
+        .from(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, hashValue)))
+
+      expect(inserted!.plaintext).toBe(finalPlaintext)
+    } finally {
+      await db
+        .delete(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, hashValue)))
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+})

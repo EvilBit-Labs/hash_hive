@@ -238,3 +238,56 @@ describe('searchHashes — escapeLike: literal _ is not a wildcard (R17)', () =>
     }
   })
 })
+
+// ─── (new) test 9: escapeLike literal % is not a wildcard ────────────────────
+
+describe('searchHashes — escapeLike: literal % is not a wildcard', () => {
+  it('only matches the row whose hashValue contains the literal percent, not rows matched by % as a wildcard', async () => {
+    // If escaping were broken, querying `hash-search-pct-a%b-v9` would use %
+    // as a zero-or-more wildcard, making `hash-search-pct-aXb-v9` also match.
+    // With escapeLike the % is treated literally and only the exact row matches.
+    const literalRow = 'hash-search-pct-a%b-v9'
+    const decoyRow = 'hash-search-pct-aXb-v9'
+
+    await db.insert(hashItems).values([
+      { hashListId: listOneId, hashValue: literalRow },
+      { hashListId: listOneId, hashValue: decoyRow },
+    ])
+
+    try {
+      const result = await searchHashes(projId, literalRow, {})
+
+      const values = result.results.map((r) => r.hashValue)
+      expect(values).toContain(literalRow)
+      expect(values).not.toContain(decoyRow)
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.hashListId, listOneId))
+    }
+  })
+})
+
+// ─── (new) test 10: limit is capped to SEARCH_MAX_LIMIT ──────────────────────
+
+describe('searchHashes — limit cap at SEARCH_MAX_LIMIT (100)', () => {
+  it('caps a caller-supplied limit above 100 and still returns all matching rows', async () => {
+    const prefix = 'hash-search-lim-cap-v10'
+
+    await db.insert(hashItems).values([
+      { hashListId: listOneId, hashValue: `${prefix}-a` },
+      { hashListId: listOneId, hashValue: `${prefix}-b` },
+      { hashListId: listOneId, hashValue: `${prefix}-c` },
+    ])
+
+    try {
+      const result = await searchHashes(projId, prefix, { limit: 200 })
+
+      // Effective limit must be capped to 100
+      expect(result.limit).toBe(100)
+      // All 3 seeded rows are within the capped limit
+      expect(result.total).toBe(3)
+      expect(result.results).toHaveLength(3)
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.hashListId, listOneId))
+    }
+  })
+})

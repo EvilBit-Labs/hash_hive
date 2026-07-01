@@ -21,9 +21,9 @@
  * NOTE: Do NOT self-skip — the test-db lane always has Postgres available.
  */
 
-import { hashItems, hashLists, projects } from '@hashhive/shared'
+import { campaigns, hashItems, hashLists, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { createExport } from '../../src/services/results/export.js'
@@ -130,5 +130,65 @@ describe('createExport: skip count via default SQL counter', () => {
     }
 
     expect(skippedCount).toBe(CRACKED_ITEM_COUNT)
+  })
+})
+
+// ─── (new) test 8: campaign-scope export skips correctly ─────────────────────
+
+describe('createExport: campaign-scope skip count', () => {
+  it('skips cracked items belonging to a campaign when the list has no hash type (potfile)', async () => {
+    // Seed a campaign linked to the existing no-hash-type list
+    const [camp] = await db
+      .insert(campaigns)
+      .values({
+        name: 'export-skip-camp-v8',
+        projectId,
+        hashListId: listId,
+        priority: 1,
+        status: 'running',
+      })
+      .returning({ id: campaigns.id })
+    const campId = camp!.id
+
+    const now = new Date()
+    const CAMP_ITEM_COUNT = 2
+    await db.insert(hashItems).values([
+      {
+        hashListId: listId,
+        hashValue: 'camp-skip-hash-a-v8',
+        plaintext: 'passA',
+        crackedAt: new Date(now.getTime() + 10_000),
+        campaignId: campId,
+      },
+      {
+        hashListId: listId,
+        hashValue: 'camp-skip-hash-b-v8',
+        plaintext: 'passB',
+        crackedAt: new Date(now.getTime() + 11_000),
+        campaignId: campId,
+      },
+    ])
+
+    try {
+      const { skippedCount, rows } = await createExport(db, {
+        scope: 'campaign',
+        projectId,
+        campaignId: campId,
+        variant: 'cracked-pairs',
+        format: 'hashcat-potfile',
+      })
+
+      for await (const _line of rows) {
+        /* drain */
+      }
+
+      // All items skipped because the list has no hash type (hashcatMode null)
+      expect(skippedCount).toBe(CAMP_ITEM_COUNT)
+    } finally {
+      await db
+        .delete(hashItems)
+        .where(and(eq(hashItems.hashListId, listId), eq(hashItems.campaignId, campId)))
+      await db.delete(campaigns).where(eq(campaigns.id, campId))
+    }
   })
 })

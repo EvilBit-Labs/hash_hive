@@ -413,3 +413,70 @@ describe('EXPORT_CSV_HEADERS', () => {
     expect(EXPORT_CSV_HEADERS.uncracked).toBe('hash_value')
   })
 })
+
+// ─── (new) 5. cracked-pairs multi-batch cursor ─────────────────────────────────
+
+describe('createExport — cracked-pairs multi-batch cursor', () => {
+  it('passes {crackedAt, id} cursor from last row of each batch to the next fetch call', async () => {
+    // Arrange: two data batches then an empty sentinel
+    const dateA = new Date('2024-02-10T00:00:00Z')
+    const dateB = new Date('2024-02-09T00:00:00Z')
+    const dateC = new Date('2024-02-08T00:00:00Z')
+
+    const batches = [
+      [
+        makeCrackedRow({ id: 20, crackedAt: dateA, hashcatMode: 0 }),
+        makeCrackedRow({ id: 19, crackedAt: dateB, hashcatMode: 0 }),
+      ],
+      [makeCrackedRow({ id: 18, crackedAt: dateC, hashcatMode: 0 })],
+      [],
+    ]
+
+    let callIndex = 0
+    const cursors: Array<{ crackedAt: Date; id: number } | null> = []
+
+    // Act
+    const { rows } = await createExport(
+      NULL_DB,
+      { scope: 'project', projectId: 1, variant: 'cracked-pairs', format: 'csv' },
+      {
+        batchSize: 2,
+        fetchCrackedBatch: async (cursor) => {
+          cursors.push(cursor)
+          return batches[callIndex++] ?? []
+        },
+      }
+    )
+    await drainGenerator(rows)
+
+    // Assert cursor threading between batches
+    expect(cursors[0]).toBeNull() // first call: no cursor
+    // cursor after batch 1 = last row id=19, crackedAt=dateB
+    expect(cursors[1]).toEqual({ crackedAt: dateB, id: 19 })
+    // cursor after batch 2 = last row id=18, crackedAt=dateC
+    expect(cursors[2]).toEqual({ crackedAt: dateC, id: 18 })
+  })
+})
+
+// ─── (new) 6. null-plaintext potfile skip ──────────────────────────────────────
+
+describe('encodeCrackedRow — null plaintext potfile skip', () => {
+  it('returns null for hashcat-potfile when plaintext is null even when hashcatMode is set', () => {
+    // Arrange: mode is known (emittable) but plaintext is absent
+    const row = makeCrackedRow({ hashcatMode: 0, plaintext: null })
+
+    // Act + Assert
+    expect(encodeCrackedRow(row, 'cracked-pairs', 'hashcat-potfile')).toBeNull()
+  })
+
+  it('emits the CSV line for csv format even when plaintext is null', () => {
+    // CSV does not require a plaintext value — the cell is left empty
+    const row = makeCrackedRow({ hashcatMode: 0, plaintext: null })
+
+    const line = encodeCrackedRow(row, 'cracked-pairs', 'csv')
+
+    expect(line).not.toBeNull()
+    // The hash_value column must still be present in the output
+    expect(line).toContain(row.hashValue)
+  })
+})
