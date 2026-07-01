@@ -477,3 +477,9 @@ import type {
 export type ImportFormat = z.infer<typeof importFormatSchema>
 export type ImportRequest = z.infer<typeof importRequestSchema>
 export type ImportSummary = z.infer<typeof importSummarySchema>
+
+// ─── Search (#102) ──────────────────────────────────────────────────
+import type { hashSearchResponseSchema, hashSearchResultSchema } from '../schemas/search.js'
+
+export type HashSearchResult = z.infer<typeof hashSearchResultSchema>
+export type HashSearchResponse = z.infer<typeof hashSearchResponseSchema>
