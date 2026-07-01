@@ -1,6 +1,7 @@
-import { type KeyboardEvent, useCallback, useRef } from 'react'
+import type { KeyboardEvent } from 'react'
 
 import { cn } from '../../lib/utils'
+import { ToggleGroup, ToggleGroupItem } from './toggle-group'
 
 /** A single selectable option in the segmented control. */
 export interface SegmentedControlOption {
@@ -24,28 +25,30 @@ interface SegmentedControlProps {
 const GROUP_CLS =
   'inline-flex items-center gap-1 rounded-md border border-surface-1 bg-surface-0/40 p-1'
 
-const BUTTON_BASE =
+const ITEM_BASE =
   'inline-flex min-h-[36px] items-center justify-center rounded px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background sm:min-h-[28px]'
 
-const BUTTON_ACTIVE = 'bg-primary text-primary-foreground hover:bg-primary/90'
+const ITEM_ACTIVE =
+  'data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:hover:bg-primary/90'
 
-const BUTTON_INACTIVE =
-  'border border-transparent text-muted-foreground hover:bg-surface-0/60 hover:text-foreground'
+const ITEM_INACTIVE =
+  'border border-transparent text-muted-foreground hover:bg-surface-0/60 hover:text-foreground data-[state=off]:bg-transparent'
 
 /**
- * Toggle-group primitive for picking one of N short options.
+ * Picks one of N short options, rendered as segmented buttons.
  *
- * Visually a flat row of buttons; the active button gets a filled
- * primary treatment, the inactive buttons read as outlined. Component-local
- * state — the parent owns `value` / `onChange`.
+ * Wraps Radix ToggleGroup (`type="single"`, `loop`) behind the same public API
+ * as the old hand-rolled radiogroup. Orientation is left unset, so Radix's
+ * roving-tabindex moves focus on all four arrow keys (with wrap); a
+ * capture-phase keydown handler commits the selection for the same four keys,
+ * so arrows move BOTH focus and selection — the WAI-ARIA radio pattern the
+ * original implemented, which Radix ToggleGroup's roving does not provide on
+ * its own. Capture phase runs before Radix's item handlers, and Radix moves
+ * focus to the same item we select, so the two stay aligned.
  *
- * Keyboard: each button sits in the normal tab order; once focused, left/right
- * arrows move focus AND selection to the adjacent option, wrapping at both
- * ends. The behavior mirrors the WAI-ARIA radiogroup pattern (mutually
- * exclusive selection; arrows move both focus and selection in one step)
- * rather than the toolbar pattern (which would move focus only). The
- * surrounding markup uses `role="group"` with `aria-pressed` on each
- * button so each option is independently labeled.
+ * Mandatory-selection invariant: Radix single-select emits an empty string when
+ * the user clicks the active item to deselect it. The `onValueChange` guard
+ * drops those empty values so one item is always selected.
  */
 export function SegmentedControl({
   value,
@@ -54,57 +57,52 @@ export function SegmentedControl({
   'aria-label': ariaLabel,
   className,
 }: SegmentedControlProps) {
-  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const handleValueChange = (next: string) => {
+    // Radix emits '' when the active item is clicked to deselect — drop it.
+    if (next) onChange(next)
+  }
 
-  const moveTo = useCallback(
-    (nextIndex: number) => {
-      const next = options[nextIndex]
-      if (!next) return
-      onChange(next.value)
-      const node = buttonRefs.current[nextIndex]
-      if (node) node.focus()
-    },
-    [onChange, options]
-  )
-
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-      if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
-      event.preventDefault()
-      const total = options.length
-      if (total === 0) return
-      const delta = event.key === 'ArrowRight' ? 1 : -1
-      const nextIndex = (index + delta + total) % total
-      moveTo(nextIndex)
-    },
-    [moveTo, options.length]
-  )
+  const handleArrowKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const isNext = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    const isPrev = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+    if (!isNext && !isPrev) return
+    // Do NOT preventDefault here. Radix's RovingFocusGroup moves focus and
+    // already suppresses the arrow's default scroll, but its item handler is
+    // composed with checkForDefaultPrevented — so calling preventDefault in
+    // this capture-phase handler would make Radix skip the focus move, leaving
+    // selection and focus out of sync.
+    const currentIndex = options.findIndex((option) => option.value === value)
+    if (currentIndex === -1) {
+      if (import.meta.env.DEV) {
+        // oxlint-disable-next-line no-console
+        console.warn(`SegmentedControl: value "${value}" does not match any option`)
+      }
+      return
+    }
+    const delta = isNext ? 1 : -1
+    const next = options[(currentIndex + delta + options.length) % options.length]
+    if (next) onChange(next.value)
+  }
 
   return (
-    <div
-      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a div with role="group" preserves inline flex layout; fieldset adds default block styling that breaks the segmented control look
-      role="group"
+    <ToggleGroup
+      type="single"
+      value={value}
+      onValueChange={handleValueChange}
       aria-label={ariaLabel}
+      loop
+      onKeyDownCapture={handleArrowKeys}
       className={cn(GROUP_CLS, className)}
     >
-      {options.map((option, index) => {
-        const isActive = option.value === value
-        return (
-          <button
-            key={option.value}
-            ref={(node) => {
-              buttonRefs.current[index] = node
-            }}
-            type="button"
-            aria-pressed={isActive}
-            className={cn(BUTTON_BASE, isActive ? BUTTON_ACTIVE : BUTTON_INACTIVE)}
-            onClick={() => onChange(option.value)}
-            onKeyDown={(event) => handleKeyDown(event, index)}
-          >
-            {option.label}
-          </button>
-        )
-      })}
-    </div>
+      {options.map((option) => (
+        <ToggleGroupItem
+          key={option.value}
+          value={option.value}
+          className={cn(ITEM_BASE, ITEM_ACTIVE, ITEM_INACTIVE)}
+        >
+          {option.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
   )
 }

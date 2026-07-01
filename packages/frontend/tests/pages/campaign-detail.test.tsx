@@ -553,7 +553,9 @@ describe('CampaignDetailPage', () => {
         expect(screen.getByRole('tab', { name: 'Results' })).toBeDefined()
       })
 
-      fireEvent.click(screen.getByRole('tab', { name: 'Results' }))
+      // Radix Tabs activates a trigger on mousedown (part of a real click),
+      // so drive the switch with mouseDown rather than a synthetic click.
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Results' }), { button: 0 })
 
       await waitFor(() => {
         expect(screen.getByTestId('results-stats')).toBeDefined()

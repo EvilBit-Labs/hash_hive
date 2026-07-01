@@ -1,36 +1,48 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
-import { cn } from '../../lib/utils'
+import { cva, type VariantProps } from 'class-variance-authority'
 
-const BASE =
-  'inline-flex items-center justify-center rounded font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50'
+import { cn } from '../../lib/utils'
 
 // Variant affordance ladder. Every variant reads as a tappable control
 // at rest; hover bumps the contrast further. Ghost has no rest-state
 // background to avoid stacking against hovered table rows (the row's
 // surface-0/20 hover tint would double under the button); the border
 // alone carries its affordance.
-const VARIANTS = {
-  primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-  secondary: 'border border-surface-1 text-foreground hover:bg-surface-0/60 hover:border-surface-2',
-  destructive: 'border border-destructive/30 text-destructive hover:bg-destructive/10',
-  ghost: 'border border-surface-1/60 text-foreground hover:bg-surface-0/60 hover:border-surface-1',
-} as const
+const buttonStyles = cva(
+  'inline-flex items-center justify-center rounded font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50',
+  {
+    variants: {
+      variant: {
+        primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        secondary:
+          'border border-surface-1 text-foreground hover:bg-surface-0/60 hover:border-surface-2',
+        destructive: 'border border-destructive/30 text-destructive hover:bg-destructive/10',
+        ghost:
+          'border border-surface-1/60 text-foreground hover:bg-surface-0/60 hover:border-surface-1',
+      },
+      size: {
+        sm: 'min-h-[36px] px-3 py-1.5 text-xs sm:min-h-[28px]',
+        default: 'min-h-[44px] px-4 py-2 text-xs sm:min-h-[36px]',
+      },
+    },
+    defaultVariants: { variant: 'primary', size: 'default' },
+  }
+)
 
-const SIZES = {
-  sm: 'min-h-[36px] px-3 py-1.5 text-xs sm:min-h-[28px]',
-  default: 'min-h-[44px] px-4 py-2 text-xs sm:min-h-[36px]',
-} as const
+export type ButtonVariant = NonNullable<VariantProps<typeof buttonStyles>['variant']>
+export type ButtonSize = NonNullable<VariantProps<typeof buttonStyles>['size']>
 
-export type ButtonVariant = keyof typeof VARIANTS
-export type ButtonSize = keyof typeof SIZES
-
-/** Returns class names for button styling - use on `<a>`, `<Link>`, or other non-button elements. */
+/**
+ * Returns class names for button styling - use on `<a>`, `<Link>`, or other
+ * non-button elements. The positional signature is preserved so existing
+ * callsites (`buttonVariants('secondary', 'sm')`) keep working.
+ */
 export function buttonVariants(
   variant: ButtonVariant = 'primary',
   size: ButtonSize = 'default'
 ): string {
-  return cn(BASE, VARIANTS[variant], SIZES[size])
+  return buttonStyles({ variant, size })
 }
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -48,7 +60,7 @@ export function Button({
   ...props
 }: ButtonProps) {
   return (
-    <button type={type} className={cn(buttonVariants(variant, size), className)} {...props}>
+    <button type={type} className={cn(buttonStyles({ variant, size }), className)} {...props}>
       {children}
     </button>
   )

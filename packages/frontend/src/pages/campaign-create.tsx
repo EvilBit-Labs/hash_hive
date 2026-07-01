@@ -2,7 +2,7 @@ import type { Edge, Node as FlowNode, OnConnect } from 'reactflow'
 
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type Resolver, useForm } from 'react-hook-form'
+import { Controller, type Resolver, useForm } from 'react-hook-form'
 import { Navigate, useNavigate } from 'react-router'
 import ReactFlow, { Background, useEdgesState, useNodesState } from 'reactflow'
 
@@ -178,6 +178,7 @@ export function CampaignCreatePage() {
       unknown,
       AttackFormOutput
     >,
+    defaultValues: { mode: 0 },
   })
 
   // Prefill hash type from the selected hash list when starting a fresh attack.
@@ -525,36 +526,65 @@ export function CampaignCreatePage() {
                 </div>
                 <div className="space-y-3">
                   <div>
-                    <label htmlFor="mode" className="text-xs font-medium text-muted-foreground">
+                    <label
+                      htmlFor="cc-attack-mode"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
                       Attack Mode
                     </label>
-                    <Select id="mode" className="mt-1.5" {...attackForm.register('mode')}>
-                      {ATTACK_MODES.map((mode) => (
-                        <option key={mode.value} value={mode.value}>
-                          {mode.label}
-                        </option>
-                      ))}
-                    </Select>
+                    <Controller
+                      control={attackForm.control}
+                      name="mode"
+                      render={({ field }) => (
+                        <Select
+                          aria-label="Attack mode"
+                          id="cc-attack-mode"
+                          className="mt-1.5"
+                          value={String(field.value)}
+                          onValueChange={(v) => {
+                            if (v) field.onChange(Number(v))
+                          }}
+                          options={ATTACK_MODES.map((mode) => ({
+                            value: String(mode.value),
+                            label: mode.label,
+                          }))}
+                        />
+                      )}
+                    />
                   </div>
                   <div>
                     <label
-                      htmlFor="hashTypeId"
+                      htmlFor="cc-hash-type"
                       className="text-xs font-medium text-muted-foreground"
                     >
                       Hash Type
                     </label>
-                    <Select
-                      id="hashTypeId"
-                      className="mt-1.5"
-                      {...attackForm.register('hashTypeId')}
-                    >
-                      <option value="">Auto (from hash list)</option>
-                      {hashTypes.map((ht) => (
-                        <option key={ht.id} value={ht.id}>
-                          {ht.name} (mode {ht.hashcatMode})
-                        </option>
-                      ))}
-                    </Select>
+                    <Controller
+                      control={attackForm.control}
+                      name="hashTypeId"
+                      render={({ field }) => (
+                        <Select
+                          aria-label="Hash type"
+                          id="cc-hash-type"
+                          className="mt-1.5"
+                          value={
+                            // `as string | number` is load-bearing: it suppresses oxlint
+                            // no-base-to-string. The RHF field value type is wider than
+                            // string|number; the null/'' guard narrows the runtime value
+                            // but not the static type, so the cast keeps String() safe.
+                            field.value != null && field.value !== ''
+                              ? String(field.value as string | number)
+                              : ''
+                          }
+                          onValueChange={(v) => field.onChange(v === '' ? '' : Number(v))}
+                          placeholder="Auto (from hash list)"
+                          options={hashTypes.map((ht) => ({
+                            value: String(ht.id),
+                            label: `${ht.name} (mode ${ht.hashcatMode})`,
+                          }))}
+                        />
+                      )}
+                    />
                   </div>
                   {[
                     {
@@ -584,14 +614,28 @@ export function CampaignCreatePage() {
                         {field.label}
                       </label>
                       <div className="mt-1.5 flex gap-2">
-                        <Select id={field.id} {...attackForm.register(field.id)}>
-                          <option value="">None</option>
-                          {field.items.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <Controller
+                          control={attackForm.control}
+                          name={field.id}
+                          render={({ field: ctrl }) => (
+                            <Select
+                              aria-label={field.label}
+                              id={field.id}
+                              value={
+                                // Cast is load-bearing — see the Hash Type select above.
+                                ctrl.value != null && ctrl.value !== ''
+                                  ? String(ctrl.value as string | number)
+                                  : ''
+                              }
+                              onValueChange={(v) => ctrl.onChange(v === '' ? '' : Number(v))}
+                              placeholder="None"
+                              options={field.items.map((item) => ({
+                                value: String(item.id),
+                                label: item.name,
+                              }))}
+                            />
+                          )}
+                        />
                         <Button
                           type="button"
                           variant="secondary"

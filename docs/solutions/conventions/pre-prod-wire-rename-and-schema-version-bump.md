@@ -1,5 +1,5 @@
 ---
-module: packages/backend, packages/shared, packages/openapi, packages/frontend
+module: packages/backend, packages/shared, packages/frontend
 date: 2026-05-25
 problem_type: convention
 component: api-contract
@@ -44,12 +44,12 @@ Anything outside the repo is harder to audit. Pre-prod posture means "no product
 
 ### 2. Rename across the wire-shape mirror in one PR
 
-Per the [Zod ↔ OpenAPI ↔ route triple-sync convention](shared-zod-openapi-wire-contract-mirror-2026-05-25.md), the rename touches every corner of the contract atomically:
+The rename touches every corner of the contract atomically. (As of 2026-06-01 the OpenAPI surface is **route-as-spec** — the shared Zod schema bound into `createRoute(...)` IS the spec, generated at `GET /api/v1/{agent,dashboard,control}/openapi.json`; there is no `packages/openapi/*.yaml` to edit. The `*.yaml` references in this doc reflect PR #171's state, which predated that migration — see the now-superseded [wire-contract-mirror convention](shared-zod-openapi-wire-contract-mirror-2026-05-25.md).)
 
 - Backend service code (enum types, probe wiring, log fields, comments describing current behavior).
 - Backend tests (mocks, assertions, regression-guards).
 - Shared schemas (`packages/shared/src/schemas/`) — if the type didn't live there already, move it now per AGENTS.md "wire shapes live in shared."
-- OpenAPI spec (`packages/openapi/*.yaml`) — both `required` array and `properties` map.
+- The OpenAPI binding — the shared Zod schema referenced from the route's `createRoute(...)` definition (formerly a hand-maintained `packages/openapi/*.yaml` entry: the `required` array and `properties` map).
 - Frontend hooks + components that consume the field.
 - Frontend tests with fixtures (the most common miss; the type-check covers backend but a `tsconfig.json` that only `includes` `src/**/*` won't catch frontend test fixtures).
 

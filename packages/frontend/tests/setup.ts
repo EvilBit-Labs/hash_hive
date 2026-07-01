@@ -47,6 +47,12 @@ Object.assign(globalThis, {
   Text: window.Text,
   DocumentFragment: window.DocumentFragment,
   Element: window.Element,
+  // Radix UI primitives (Dialog/Select/Tabs focus-scope + aria-hidden sibling
+  // hiding) walk the DOM via document.createTreeWalker, which reads the
+  // NodeFilter.* constants from global scope. happy-dom v20 ships these on
+  // window but not globalThis, mirroring the ResizeObserver gap above.
+  NodeFilter: window.NodeFilter,
+  TreeWalker: window.TreeWalker,
   Event: window.Event,
   CustomEvent: window.CustomEvent,
   MouseEvent: window.MouseEvent,
