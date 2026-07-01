@@ -1,3 +1,5 @@
+import type { HashSearchResult } from '@hashhive/shared'
+
 import {
   hashSearchResponseSchema,
   importRequestSchema,
@@ -123,14 +125,25 @@ hashRoutes.openapi(importPrecrackedRoute, async (c) => {
     const result = await stageAndEnqueueImport({ hashListId, projectId, actor, content, format })
 
     if (!result.ok) {
-      if (result.reason === 'not_found') {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+      switch (result.reason) {
+        case 'not_found':
+          return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+        case 'staging_failed':
+          return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to stage import pairs')
+        case 'queue_unavailable':
+          return dashboardError(
+            c,
+            503,
+            'SERVICE_UNAVAILABLE',
+            'Queue unavailable; import not enqueued'
+          )
+        default: {
+          // Compile-time exhaustiveness guard — this branch is never reached at runtime.
+          const exhaustiveCheck: never = result.reason
+          void exhaustiveCheck
+          return dashboardError(c, 500, 'INTERNAL_ERROR', 'Unhandled import failure reason')
+        }
       }
-      if (result.reason === 'staging_failed') {
-        return dashboardError(c, 503, 'STORAGE_UNAVAILABLE', 'Failed to stage import pairs')
-      }
-      // queue_unavailable
-      return dashboardError(c, 503, 'SERVICE_UNAVAILABLE', 'Queue unavailable; import not enqueued')
     }
 
     // Return compartmentalized summary (KTD7) — matched/cracked computed async by U7 worker
@@ -199,7 +212,7 @@ hashRoutes.openapi(searchHashesRoute, async (c) => {
     const results = result.results.map((r) => ({
       ...r,
       crackedAt: r.crackedAt !== null ? r.crackedAt.toISOString() : null,
-    }))
+    })) satisfies HashSearchResult[]
 
     return c.json({ results, total: result.total, limit: result.limit, offset: result.offset }, 200)
   } catch (err) {

@@ -151,14 +151,18 @@ export function encodeCrackedRow(
 ): string | null {
   if (!isEmittable(row.hashcatMode, format)) return null
   if (format === 'csv') return encodeAsCsvLine(row, variant)
+  // Potfile formats require a plaintext value; a null plaintext produces a
+  // malformed `hash:` line. Skip these rows — the pre-counted skippedCount
+  // header accounts for them (see createDefaultSkippedCounter).
+  if (row.plaintext == null) return null
   if (format === 'hashcat-potfile') {
     // KTD5: hashValue already contains `hash:salt` for salted modes;
     // export is always `hashValue:plaintext` — no reconstruction needed.
-    return `${row.hashValue}:${row.plaintext ?? ''}`
+    return `${row.hashValue}:${row.plaintext}`
   }
   // john-potfile — tag is guaranteed non-null because isEmittable passed
   const tag = JOHN_FORMAT_TAGS[row.hashcatMode!]!
-  return `${tag}${row.hashValue}:${row.plaintext ?? ''}`
+  return `${tag}${row.hashValue}:${row.plaintext}`
 }
 
 /**
@@ -324,12 +328,19 @@ function createDefaultSkippedCounter(
   return async () => {
     if (format === 'csv') return 0
 
-    // Rows are skipped when the list has no hash type (hashcatMode is null)
-    // or, for john-potfile, when the mode is not in the supported tag map.
+    // Rows are skipped when the list has no hash type (hashcatMode is null),
+    // for john-potfile when the mode is not in the supported tag map, or
+    // for either potfile format when plaintext is null (would produce `hash:` with
+    // no plaintext — malformed). The null-plaintext term must appear here too
+    // so skippedCount matches what encodeCrackedRow returns null for.
     const modeFilter =
       format === 'hashcat-potfile'
-        ? isNull(hashTypes.id)
-        : or(isNull(hashTypes.id), not(inArray(hashTypes.hashcatMode, [...JOHN_MAPPED_MODES])))
+        ? or(isNull(hashTypes.id), isNull(hashItems.plaintext))
+        : or(
+            isNull(hashTypes.id),
+            not(inArray(hashTypes.hashcatMode, [...JOHN_MAPPED_MODES])),
+            isNull(hashItems.plaintext)
+          )
 
     const conditions = [...buildCrackedBaseConditions(params), modeFilter]
 

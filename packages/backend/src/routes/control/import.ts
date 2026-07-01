@@ -66,14 +66,20 @@ controlImportRoutes.openapi(importPrecrackedRoute, async (c) => {
     const result = await stageAndEnqueueImport({ hashListId, projectId, actor, content, format })
 
     if (!result.ok) {
-      if (result.reason === 'not_found') {
-        return problemResponse(c, 404, 'not_found', 'Hash list not found')
+      switch (result.reason) {
+        case 'not_found':
+          return problemResponse(c, 404, 'not_found', 'Hash list not found')
+        case 'staging_failed':
+          return problemResponse(c, 503, 'service_unavailable', 'Failed to stage import pairs')
+        case 'queue_unavailable':
+          return problemResponse(c, 503, 'service_unavailable', 'Queue unavailable')
+        default: {
+          // Compile-time exhaustiveness guard — this branch is never reached at runtime.
+          const exhaustiveCheck: never = result.reason
+          void exhaustiveCheck
+          return problemResponse(c, 500, 'internal', 'Unhandled import failure reason')
+        }
       }
-      if (result.reason === 'staging_failed') {
-        return problemResponse(c, 503, 'service_unavailable', 'Failed to stage import pairs')
-      }
-      // queue_unavailable
-      return problemResponse(c, 503, 'service_unavailable', 'Queue unavailable')
     }
 
     // Return compartmentalized summary (KTD7) — matched/cracked computed async by U7 worker

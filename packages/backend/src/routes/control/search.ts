@@ -11,6 +11,8 @@
  * Requirements: R14, R15, R16, R17
  */
 
+import type { HashSearchResult } from '@hashhive/shared'
+
 import { hashSearchResponseSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -90,7 +92,7 @@ controlSearchRoutes.openapi(searchRoute, async (c) => {
     const results = result.results.map((r) => ({
       ...r,
       crackedAt: r.crackedAt !== null ? r.crackedAt.toISOString() : null,
-    }))
+    })) satisfies HashSearchResult[]
 
     return c.json({ results, total: result.total, limit: result.limit, offset: result.offset }, 200)
   } catch (err) {

@@ -55,7 +55,7 @@ export interface AuditRetentionJob {
  *
  * CRITICAL (KTD3): recovered plaintexts must NEVER appear in this payload.
  * The `stagingKey` is the S3/object-store key of the staged JSON file
- * (array of ParsedImportPair) uploaded by the route handler (U8) before
+ * (array of ParsedImportPair) uploaded by the import-intake service before
  * enqueuing. The worker downloads and processes the pairs from the object
  * store, keeping cleartext out of Redis at all times.
  */

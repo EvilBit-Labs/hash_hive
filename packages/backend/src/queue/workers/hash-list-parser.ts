@@ -59,9 +59,9 @@ function sanitizeParseError(err: unknown): string {
  * `hash:plaintext` — to submit a username-tagged hash without a plaintext, send
  * `username:hash:` (3 tokens, empty plaintext) or `username:hash:<plaintext>`.
  *
- * `source` is always `'upload'` for parser-originated rows. Propagated rows
- * (U2/U7) carry a NULL source — they are written by the import/propagation
- * service, not this parser.
+ * `source` is always `'upload'` for parser-originated rows. Rows written by
+ * propagateCrack (U2) carry a NULL source; the import worker (U7) upserts
+ * target-list rows with source='import'. Neither is written by this parser.
  *
  * Exported for testing.
  */

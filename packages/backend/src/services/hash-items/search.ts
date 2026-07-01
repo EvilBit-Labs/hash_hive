@@ -18,9 +18,9 @@
  * The caller (route layer, U11) is responsible for presenting this correctly.
  *
  * Pagination defaults: limit 50, max 100, offset 0.
- * These constants mirror RESULTS_LIST_DEFAULT_LIMIT / RESULTS_LIST_MAX_LIMIT
- * from packages/backend/src/routes/dashboard/results.ts so callers can apply
- * consistent caps without importing private route constants.
+ * These constants are defined in @hashhive/shared as the canonical pagination
+ * caps for hash searches; this module re-exports them so route files import
+ * from one service entry point.
  */
 import {
   hashItems,

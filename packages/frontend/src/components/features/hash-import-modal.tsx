@@ -1,6 +1,7 @@
 import type { ImportFormat, ImportSummary } from '@hashhive/shared'
 import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 
+import { IMPORT_CONTENT_MAX_LENGTH } from '@hashhive/shared'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -73,6 +74,11 @@ export function HashImportModal({ open, onClose, preselectedHashListId }: HashIm
   // ─── File selection ───────────────────────────────────────────────
 
   const adoptFile = useCallback((selected: File | null) => {
+    if (selected !== null && selected.size > IMPORT_CONTENT_MAX_LENGTH) {
+      setError('File too large (max 32 MB)')
+      setFile(null)
+      return
+    }
     setFile(selected)
     setError(null)
   }, [])

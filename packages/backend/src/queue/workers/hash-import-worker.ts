@@ -18,12 +18,16 @@
  * Exported surface:
  *   - `processImportPairs` — the testable DB core; real-DB tests call it directly
  *     without needing Redis or a live S3 connection.
- *   - `buildHashImportJobId` — deterministic jobId helper used by U8 at enqueue
- *     time; QueueManager auto-pairs a non-empty jobId with removeOnComplete +
- *     removeOnFail eviction (repo memory: BullMQ dedup requires eviction).
+ *   - `runHashImportJob` — extracted worker body (download → parse → process →
+ *     success-delete); unit-testable with mocked storage.
+ *   - `buildHashImportJobId` — deterministic jobId helper called by
+ *     `stageAndEnqueueImport` (import-intake.ts) at enqueue time; QueueManager
+ *     auto-pairs a non-empty jobId with removeOnComplete + removeOnFail eviction
+ *     (repo memory: BullMQ dedup requires eviction).
  *   - `createHashImportWorker` — thin BullMQ factory that wraps the core.
  */
 
+import type { ImportSummary } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
 import { hashItems } from '@hashhive/shared'
@@ -50,18 +54,6 @@ import { attachWorkerMetrics } from './metrics.js'
  * long-running row-level locks on large imports.
  */
 const IMPORT_BATCH_SIZE = 500
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-/** Result returned by processImportPairs and surfaced as the BullMQ job result. */
-export interface HashImportResult {
-  /** Rows in the target list whose hashValue appeared in the import (pre-existing matches). */
-  matchedInList: number
-  /** Subset of matchedInList that were uncracked and newly cracked by this import. */
-  crackedInList: number
-  /** Parse-time skip count passed through from U6 for the complete response summary. */
-  skipped: number
-}
 
 // ─── JobId helper ─────────────────────────────────────────────────────────────
 
@@ -138,7 +130,11 @@ async function upsertTargetListBatches(
           plaintext: sql`EXCLUDED.plaintext`,
           crackedAt: sql`EXCLUDED.cracked_at`,
           source: sql`EXCLUDED.source`,
-          username: sql`EXCLUDED.username`,
+          // COALESCE so an import pair without a username (e.g. a plain
+          // hash:plaintext potfile line) does NOT null out an existing username
+          // on an uncracked row (a `user:hash:` upload leaves username set but
+          // crackedAt NULL, so the setWhere guard would otherwise overwrite it).
+          username: sql`COALESCE(EXCLUDED.username, ${hashItems.username})`,
         },
         setWhere: isNull(hashItems.crackedAt),
       })
@@ -238,7 +234,7 @@ export async function processImportPairs(
   projectId: number,
   actor: AuditActor,
   skippedFromParse: number
-): Promise<HashImportResult> {
+): Promise<ImportSummary> {
   // Deduplicate by hashValue: last occurrence wins within a single import.
   // Prevents "cannot affect the same row twice in a single command" errors
   // on the ON CONFLICT upsert when the file contains duplicate hashes.
@@ -276,15 +272,78 @@ export async function processImportPairs(
   }
 }
 
+// ─── Worker job body ─────────────────────────────────────────────────────────
+
+/**
+ * Execute a single hash import propagation job.
+ *
+ * Extracted from the BullMQ worker closure so the download → parse → process →
+ * success-delete path is unit-testable with mocked storage (inject a spy over
+ * `downloadFile` / `deleteFile`). The `failed` event handler cleanup (final
+ * retry exhausted) stays in the worker shell.
+ *
+ * Staging file lifecycle within this function:
+ *   - Deleted on success.
+ *   - Deleted immediately before throwing `UnrecoverableError` (corrupt JSON) —
+ *     no retries will run so cleanup happens at throw time.
+ *   - NOT deleted on retriable failures — the worker shell's `failed` handler
+ *     cleans up only when `attemptsMade >= attempts`.
+ */
+export async function runHashImportJob(
+  data: HashImportPropagationJob,
+  jobId: string | undefined
+): Promise<ImportSummary> {
+  const { stagingKey, hashListId, projectId, actor, skippedFromParse } = data
+
+  logger.info({ jobId, hashListId, stagingKey }, 'hash-import-worker: starting')
+
+  // Download staged pairs — cleartext lives only in the object store (KTD3).
+  const download = await downloadFile(stagingKey)
+  const body = await download.Body?.transformToString('utf-8')
+  if (!body) {
+    throw new Error(`hash-import-worker: staging file empty or missing — key=${stagingKey}`)
+  }
+
+  // Parse the staging file. A corrupt file is a permanent failure — burn no
+  // retry attempts on it. Clean up the staging file before throwing so it
+  // does not accumulate in the object store.
+  let pairs: ParsedImportPair[]
+  try {
+    pairs = JSON.parse(body) as ParsedImportPair[]
+  } catch (parseErr) {
+    await deleteFile(stagingKey).catch((cleanupErr) =>
+      logger.warn(
+        { err: cleanupErr, stagingKey },
+        'hash-import-worker: staging cleanup after parse error failed'
+      )
+    )
+    const parseMessage = parseErr instanceof Error ? parseErr.message : String(parseErr)
+    throw new UnrecoverableError(
+      `hash-import-worker: staging file is not valid JSON — key=${stagingKey}, parseError=${parseMessage}`
+    )
+  }
+
+  const result = await processImportPairs(pairs, hashListId, projectId, actor, skippedFromParse)
+
+  logger.info({ jobId, hashListId, ...result }, 'hash-import-worker: complete')
+
+  // Delete the staging file on success — recovered-password files must not
+  // accumulate in the object store indefinitely.
+  await deleteFile(stagingKey).catch((err) =>
+    logger.warn({ err, stagingKey }, 'hash-import-worker: staging cleanup failed')
+  )
+
+  return result
+}
+
 // ─── Worker factory ───────────────────────────────────────────────────────────
 
 /**
  * Creates the BullMQ worker for the HASH_IMPORT_PROPAGATION queue.
  *
- * The worker is a thin shell: it downloads the staged pairs JSON from S3
- * (KTD3 — cleartext never serialised into Redis) and delegates to
- * `processImportPairs` for all database work. Metrics and failure logging
- * are wired via `attachWorkerMetrics`.
+ * The worker is a thin shell: it delegates to `runHashImportJob` for all
+ * download/parse/DB work. Metrics and failure logging are wired via
+ * `attachWorkerMetrics`.
  *
  * Staging file lifecycle:
  *   - Deleted on success — recovered-password files must not accumulate.
@@ -297,48 +356,7 @@ export async function processImportPairs(
 export function createHashImportWorker(connection: Redis): Worker<HashImportPropagationJob> {
   const worker = new Worker<HashImportPropagationJob>(
     QUEUE_NAMES.HASH_IMPORT_PROPAGATION,
-    async (job) => {
-      const { stagingKey, hashListId, projectId, actor, skippedFromParse } = job.data
-
-      logger.info({ jobId: job.id, hashListId, stagingKey }, 'hash-import-worker: starting')
-
-      // Download staged pairs — cleartext lives only in the object store (KTD3).
-      const download = await downloadFile(stagingKey)
-      const body = await download.Body?.transformToString('utf-8')
-      if (!body) {
-        throw new Error(`hash-import-worker: staging file empty or missing — key=${stagingKey}`)
-      }
-
-      // Parse the staging file. A corrupt file is a permanent failure — burn no
-      // retry attempts on it. Clean up the staging file before throwing so it
-      // does not accumulate in the object store.
-      let pairs: ParsedImportPair[]
-      try {
-        pairs = JSON.parse(body) as ParsedImportPair[]
-      } catch {
-        await deleteFile(stagingKey).catch((cleanupErr) =>
-          logger.warn(
-            { err: cleanupErr, stagingKey },
-            'hash-import-worker: staging cleanup after parse error failed'
-          )
-        )
-        throw new UnrecoverableError(
-          `hash-import-worker: staging file is not valid JSON — key=${stagingKey}`
-        )
-      }
-
-      const result = await processImportPairs(pairs, hashListId, projectId, actor, skippedFromParse)
-
-      logger.info({ jobId: job.id, hashListId, ...result }, 'hash-import-worker: complete')
-
-      // Delete the staging file on success — recovered-password files must not
-      // accumulate in the object store indefinitely.
-      await deleteFile(stagingKey).catch((err) =>
-        logger.warn({ err, stagingKey }, 'hash-import-worker: staging cleanup failed')
-      )
-
-      return result
-    },
+    async (job) => runHashImportJob(job.data, job.id),
     { connection: connection as unknown as ConnectionOptions }
   )
 

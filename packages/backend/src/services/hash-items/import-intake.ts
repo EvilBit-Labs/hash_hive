@@ -18,6 +18,8 @@ import type { ImportFormat } from '@hashhive/shared'
 
 import { randomUUID } from 'node:crypto'
 
+import type { AuditActor } from '../audit-log.js'
+
 import { logger } from '../../config/logger.js'
 import { QUEUE_NAMES } from '../../config/queue.js'
 import { deleteFile, uploadFile } from '../../config/storage.js'
@@ -27,10 +29,7 @@ import { parseImportContent } from './import-parse.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ImportActor = {
-  actorType: 'user'
-  actorId: number
-}
+export type ImportActor = Extract<AuditActor, { actorType: 'user' }>
 
 export type ImportIntakeParams = {
   hashListId: number
@@ -113,6 +112,10 @@ export async function stageAndEnqueueImport(
     )
 
     if (!enqueued) {
+      logger.warn(
+        { projectId, hashListId, stagingKey },
+        'import-intake: enqueue returned falsy — deleting orphaned staging file'
+      )
       deleteFile(stagingKey).catch((cleanupErr) => {
         logger.warn({ err: cleanupErr, stagingKey }, 'Failed to delete orphaned staging file')
       })

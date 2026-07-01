@@ -9,6 +9,8 @@ import type { ExportFormat, ExportScope } from '@hashhive/shared'
 
 import type { ExportScopeParams } from './export.js'
 
+import { logger } from '../../config/logger.js'
+
 /**
  * Convert an AsyncGenerator<string> from the export service into a
  * ReadableStream<Uint8Array>. Uses the `pull` pattern so bytes flow lazily and
@@ -20,12 +22,20 @@ export function generatorToReadableStream(
   const encoder = new TextEncoder()
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { value, done } = await rows.next()
-      if (done) {
-        controller.close()
-        return
+      try {
+        const { value, done } = await rows.next()
+        if (done) {
+          controller.close()
+          return
+        }
+        controller.enqueue(encoder.encode(`${value}\n`))
+      } catch (err) {
+        // Headers + 200 are already sent by the time the stream pulls, so a
+        // mid-stream DB cursor error truncates the client's download. Log it
+        // (ops has no other signal) and error the stream rather than hang.
+        logger.error({ err }, 'export stream: cursor error mid-stream — client download truncated')
+        controller.error(err)
       }
-      controller.enqueue(encoder.encode(`${value}\n`))
     },
   })
 }
