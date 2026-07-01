@@ -439,6 +439,8 @@ export const hashItems = pgTable(
     taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     metadata: jsonb('metadata').default({}),
+    username: varchar('username', { length: 255 }),
+    source: varchar('source', { length: 32 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -447,6 +449,7 @@ export const hashItems = pgTable(
     index('hash_items_cracked_at_idx').on(table.crackedAt),
     index('hash_items_campaign_id_idx').on(table.campaignId),
     index('hash_items_hash_list_cracked_idx').on(table.hashListId, table.crackedAt),
+    index('hash_items_hash_value_idx').on(table.hashValue),
   ]
 )
 
