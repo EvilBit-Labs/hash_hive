@@ -466,3 +466,14 @@ export type ExportVariant = z.infer<typeof exportVariantSchema>
 export type ExportFormat = z.infer<typeof exportFormatSchema>
 export type ExportScope = z.infer<typeof exportScopeSchema>
 export type ExportQuery = z.infer<typeof exportQuerySchema>
+
+// ─── Import (#102) ──────────────────────────────────────────────────
+import type {
+  importFormatSchema,
+  importRequestSchema,
+  importSummarySchema,
+} from '../schemas/import.js'
+
+export type ImportFormat = z.infer<typeof importFormatSchema>
+export type ImportRequest = z.infer<typeof importRequestSchema>
+export type ImportSummary = z.infer<typeof importSummarySchema>

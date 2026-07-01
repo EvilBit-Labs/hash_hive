@@ -1444,3 +1444,6 @@ export {
   exportScopeSchema,
   exportVariantSchema,
 } from './export.js'
+
+// ─── Import (#102) ──────────────────────────────────────────────────
+export { importFormatSchema, importRequestSchema, importSummarySchema } from './import.js'
