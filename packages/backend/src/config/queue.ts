@@ -23,6 +23,14 @@ export const QUEUE_NAMES = {
   // older than AUDIT_LOG_RETENTION in bounded batches to avoid table-lock
   // contention on large purges. Covers orphaned rows (project_id IS NULL).
   AUDIT_RETENTION: 'jobs-audit-retention',
+  // Pre-cracked import propagation (issue #102, U7). Event-driven: enqueued
+  // when a user submits a pre-cracked import file via the dashboard (U8).
+  // Reads staged pairs from the object store (KTD3), upserts the target
+  // hash list with provenance (KTD2), audits the write (KTD9), then
+  // propagates each plaintext system-wide via propagateCrack (U2/KTD4).
+  // Deduped per import via a deterministic jobId built from hashListId +
+  // staging key; QueueManager auto-pairs with removeOnComplete/removeOnFail.
+  HASH_IMPORT_PROPAGATION: 'jobs-hash-import-propagation',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

@@ -1,4 +1,5 @@
 import type { QUEUE_NAMES } from '../config/queue.js'
+import type { AuditActor } from '../services/audit-log.js'
 
 // ─── Job Priority ────────────────────────────────────────────────────
 
@@ -49,6 +50,28 @@ export interface AuditRetentionJob {
   triggeredAt: string
 }
 
+/**
+ * Payload for the hash import propagation job (U7).
+ *
+ * CRITICAL (KTD3): recovered plaintexts must NEVER appear in this payload.
+ * The `stagingKey` is the S3/object-store key of the staged JSON file
+ * (array of ParsedImportPair) uploaded by the route handler (U8) before
+ * enqueuing. The worker downloads and processes the pairs from the object
+ * store, keeping cleartext out of Redis at all times.
+ */
+export interface HashImportPropagationJob {
+  /** S3 key of the staged ParsedImportPair[] JSON — no cleartext in payload (KTD3). */
+  stagingKey: string
+  /** Target hash list to upsert. */
+  hashListId: number
+  /** Project the hash list belongs to — used for audit scope. */
+  projectId: number
+  /** Actor resolved from auth context at route time, serialized for the worker. */
+  actor: AuditActor
+  /** Parse-time skip count from U6 — passed through for the final summary. */
+  skippedFromParse: number
+}
+
 // ─── Job Data Discriminated Union ────────────────────────────────────
 
 export type QueueJobMap = {
@@ -65,4 +88,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.PREEMPTION]: PreemptionJob
   [QUEUE_NAMES.LINE_COUNT]: LineCountJob
   [QUEUE_NAMES.AUDIT_RETENTION]: AuditRetentionJob
+  [QUEUE_NAMES.HASH_IMPORT_PROPAGATION]: HashImportPropagationJob
 }

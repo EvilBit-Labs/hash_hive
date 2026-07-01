@@ -5,6 +5,7 @@ import { createRedisClient } from './config/redis.js'
 import { setQueueManager } from './queue/context.js'
 import { QueueManager } from './queue/manager.js'
 import { createAuditRetentionWorker } from './queue/workers/audit-retention.js'
+import { createHashImportWorker } from './queue/workers/hash-import-worker.js'
 import { createHashListParserWorker } from './queue/workers/hash-list-parser.js'
 import { createHealthMonitorWorker } from './queue/workers/health-monitor.js'
 import { createHeartbeatMonitorWorker } from './queue/workers/heartbeat-monitor.js'
@@ -70,6 +71,9 @@ async function main() {
   const auditRetentionWorker = createAuditRetentionWorker(connection)
   logger.info('Audit retention worker started')
 
+  const hashImportWorker = createHashImportWorker(connection)
+  logger.info('Hash import propagation worker started')
+
   const workers = [
     hashListWorker,
     heartbeatWorker,
@@ -77,6 +81,7 @@ async function main() {
     preemptionWorker,
     lineCountWorker,
     auditRetentionWorker,
+    hashImportWorker,
   ]
 
   async function shutdown(signal: string) {
