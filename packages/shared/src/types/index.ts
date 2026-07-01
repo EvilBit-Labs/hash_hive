@@ -453,3 +453,16 @@ export type AuditLog = z.infer<typeof auditLogSchema>
 export type AuditLogListResponse = z.infer<typeof auditLogListResponseSchema>
 export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>
 export type InsertTaskTelemetry = typeof taskTelemetry.$inferInsert
+
+// ─── Export (#102) ──────────────────────────────────────────────────
+import type {
+  exportFormatSchema,
+  exportQuerySchema,
+  exportScopeSchema,
+  exportVariantSchema,
+} from '../schemas/export.js'
+
+export type ExportVariant = z.infer<typeof exportVariantSchema>
+export type ExportFormat = z.infer<typeof exportFormatSchema>
+export type ExportScope = z.infer<typeof exportScopeSchema>
+export type ExportQuery = z.infer<typeof exportQuerySchema>

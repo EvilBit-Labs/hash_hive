@@ -1436,3 +1436,11 @@ export const fleetConfigResponseSchema = z
     config: fleetDefaultConfigSchema,
   })
   .openapi('FleetConfigResponse')
+
+// ─── Export (#102) ──────────────────────────────────────────────────
+export {
+  exportFormatSchema,
+  exportQuerySchema,
+  exportScopeSchema,
+  exportVariantSchema,
+} from './export.js'

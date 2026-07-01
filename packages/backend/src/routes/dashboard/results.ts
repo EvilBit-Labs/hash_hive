@@ -25,6 +25,7 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
+import { escapeCsv } from '../../services/results/export.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -37,31 +38,6 @@ const RESULTS_LIST_MAX_LIMIT = 100
 const RESULTS_LIST_DEFAULT_LIMIT = 50
 
 const CSV_STREAM_BATCH_SIZE = 1000
-
-// Characters that trigger spreadsheet formula evaluation in Excel, Google
-// Sheets, and LibreOffice Calc when they appear at the start of a cell.
-// `plaintext` and `hashValue` are attacker-influenced data — a recovered
-// password of `=cmd|...` would otherwise execute as a formula when the
-// exported CSV is opened. Quote-wrapping does not neutralize this; the
-// canonical mitigation is to prefix the cell with a leading apostrophe so
-// spreadsheet apps treat it as literal text. `\n` and `\r` are included
-// because Excel/Sheets strip leading whitespace (including newlines that
-// the CSV reader preserved inside a quoted cell) before evaluating
-// formula triggers. See OWASP "CSV Injection".
-const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r\n]/
-
-function escapeCsv(val: string | null | undefined): string {
-  if (val == null) return ''
-  let str = val
-  if (CSV_FORMULA_TRIGGER_REGEX.test(str)) {
-    str = `'${str}`
-  }
-  // Bare CR splits the row in spreadsheet parsers; double inner quotes per RFC 4180.
-  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-    return `"${str.replace(/"/g, '""')}"`
-  }
-  return str
-}
 
 // Permissive filter inputs across the dashboard surface: invalid values
 // fall back to "no filter" rather than 400, and `coerce` keeps
