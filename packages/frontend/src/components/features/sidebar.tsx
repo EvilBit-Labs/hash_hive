@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Monitor,
   Package,
+  Search,
   Sliders,
   Trophy,
   X,
@@ -63,6 +64,11 @@ const navItems: readonly NavItem[] = [
     label: 'Results',
     href: '/results',
     icon: <Trophy className={ICON_CLASS} aria-hidden="true" />,
+  },
+  {
+    label: 'Hash Search',
+    href: '/hash-search',
+    icon: <Search className={ICON_CLASS} aria-hidden="true" />,
   },
   {
     label: 'Audit Logs',

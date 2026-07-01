@@ -41,6 +41,9 @@ const HashListDetailPage = lazy(() =>
   import('./pages/hash-list-detail').then((m) => ({ default: m.HashListDetailPage }))
 )
 const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default: m.ResultsPage })))
+const HashSearchPage = lazy(() =>
+  import('./pages/hash-search').then((m) => ({ default: m.HashSearchPage }))
+)
 const AuditLogsPage = lazy(() =>
   import('./pages/audit-logs').then((m) => ({ default: m.AuditLogsPage }))
 )
@@ -100,6 +103,7 @@ function App() {
                   <Route path="/resources" element={<ResourcesPage />} />
                   <Route path="/resources/hash-lists/:id" element={<HashListDetailPage />} />
                   <Route path="/results" element={<ResultsPage />} />
+                  <Route path="/hash-search" element={<HashSearchPage />} />
                   <Route path="/audit-logs" element={<AuditLogsPage />} />
                   <Route path="/crackers" element={<CrackersPage />} />
                   <Route path="/settings/fleet-config" element={<FleetConfigPage />} />
