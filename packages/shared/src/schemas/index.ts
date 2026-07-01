@@ -521,6 +521,148 @@ export const agentHeartbeatResponseSchema = z
   })
   .strict()
 
+// ─── Agent Advanced Configuration (#104) ────────────────────────────
+//
+// Per-rig hashcat configuration: tuning knobs that inherit from a single
+// fleet-wide default, hardware-bound knobs that are always per-rig, a
+// bounded raw-flags escape hatch, and a server-side error whitelist.
+// Engine-keyed (`tuning.hashcat`) so a future engine (John the Ripper)
+// adds a key rather than reshaping the surface. See origin requirements:
+// docs/brainstorms/2026-06-26-agent-advanced-configuration-requirements.md
+
+/**
+ * Default denylist for the raw-flags escape hatch — a FOOTGUN GUARD, not a
+ * security boundary. HashHive's security model trusts its agents, so the point
+ * is to stop an operator from silently breaking a rig by overriding the hashcat
+ * flags the agent itself sets to drive and monitor a job: result capture,
+ * `--status-json` telemetry, and session/restore handling. Overriding any of
+ * these desyncs the agent from the server (lost cracks, no progress, broken
+ * resume), which looks like a rig fault rather than a config mistake.
+ *
+ * Grounded in the flags CipherSwarmAgent passes to hashcat (see
+ * `../CipherSwarmAgent/lib/hashcat`). This is only the DEFAULT: it is
+ * overridable per-deployment via the `RAW_FLAG_DENYLIST` env var (server-level,
+ * operator-owned — see `packages/backend/src/config/env.ts`). `validateRawFlags`
+ * resolves the effective list at write time.
+ */
+export const RAW_FLAG_DENYLIST = [
+  // Result capture — the agent writes cracked hashes to an outfile it owns and
+  // parses; redirecting, reformatting, or relocating it loses every crack.
+  // `-o` is the short form of `--outfile` (matched with attached-value
+  // awareness server-side so `-o/path` cannot slip past the `=`-split).
+  '-o',
+  '--outfile',
+  '--outfile-format',
+  '--outfile-autohex-disable',
+  '--outfile-check-dir',
+  '--outfile-check-timer',
+  // Potfile — the agent runs with potfile handling it controls.
+  '--potfile-disable',
+  '--potfile-path',
+  // Session & restore — the agent owns the session name so a preempted task can
+  // be resumed; an override breaks lease reclaim and restore.
+  '--session',
+  '--restore',
+  '--restore-file-path',
+  // Status & telemetry — the agent parses `--status-json` on `--status-timer`
+  // to emit progress; overriding or silencing these blinds the server.
+  '--status',
+  '--status-json',
+  '--status-timer',
+  '--machine-readable',
+  '--quiet',
+] as const
+
+export const RAW_FLAGS_MAX_LEN = 512
+export const RAW_FLAGS_MAX_TOKENS = 16
+export const WORKLOAD_PROFILE_MIN = 1
+export const WORKLOAD_PROFILE_MAX = 4
+export const TEMP_ABORT_MIN = 0
+export const TEMP_ABORT_MAX = 150
+export const WHITELIST_PATTERN_MAX = 256
+export const WHITELIST_MAX_ENTRIES = 64
+
+/** Engine-specific hashcat tuning knobs. Inherit fleet default → per-rig. */
+export const agentHashcatTuningSchema = z
+  .object({
+    workloadProfile: z
+      .number()
+      .int()
+      .min(WORKLOAD_PROFILE_MIN)
+      .max(WORKLOAD_PROFILE_MAX)
+      .optional(),
+    kernelAccel: z.number().int().positive().optional(),
+    kernelLoops: z.number().int().positive().optional(),
+    rawFlags: z.string().max(RAW_FLAGS_MAX_LEN).optional(),
+  })
+  .strict()
+  .openapi('AgentHashcatTuning')
+
+/** Tuning keyed by engine so a second engine is an additive key (R4). */
+export const agentTuningSchema = z
+  .object({
+    hashcat: agentHashcatTuningSchema.optional(),
+  })
+  .strict()
+  .openapi('AgentTuning')
+
+/**
+ * Hardware-bound knobs — always per-rig, never inherited from the fleet
+ * default (R5). `deviceIds` index into the rig's detected hardware.
+ */
+export const agentHardwareKnobsSchema = z
+  .object({
+    deviceIds: z.array(z.number().int().positive()).optional(),
+    tempAbort: z.number().int().min(TEMP_ABORT_MIN).max(TEMP_ABORT_MAX).optional(),
+  })
+  .strict()
+  .openapi('AgentHardwareKnobs')
+
+/** Error patterns treated as non-critical; matched case-insensitively (R12). */
+export const agentErrorWhitelistSchema = z
+  .array(z.string().min(1).max(WHITELIST_PATTERN_MAX))
+  .max(WHITELIST_MAX_ENTRIES)
+  .openapi('AgentErrorWhitelist')
+
+/** Full per-rig configuration as stored on `agents.config`. */
+export const agentConfigSchema = z
+  .object({
+    tuning: agentTuningSchema.optional(),
+    hardware: agentHardwareKnobsSchema.optional(),
+    errorWhitelist: agentErrorWhitelistSchema.optional(),
+  })
+  .strict()
+  .openapi('AgentConfig')
+
+/**
+ * Fleet-wide default — tuning + whitelist only. Hardware-bound knobs are
+ * always per-rig (R5), so they are absent from the fleet default.
+ */
+export const fleetDefaultConfigSchema = z
+  .object({
+    tuning: agentTuningSchema.optional(),
+    errorWhitelist: agentErrorWhitelistSchema.optional(),
+  })
+  .strict()
+  .openapi('FleetDefaultConfig')
+
+/** Source of a resolved knob for the inherited-vs-overridden display (R11). */
+export const configValueSourceSchema = z
+  .enum(['override', 'fleet', 'engine'])
+  .openapi('ConfigValueSource')
+
+/**
+ * What the agent receives at `GET /api/v1/agent/config` — resolved tuning
+ * and hardware knobs only. The whitelist is evaluated server-side and is
+ * never delivered to the rig (R13).
+ */
+export const effectiveAgentConfigSchema = z
+  .object({
+    tuning: agentTuningSchema,
+    hardware: agentHardwareKnobsSchema,
+  })
+  .openapi('EffectiveAgentConfig')
+
 // ─── System Health API ─────────────────────────────────────────────
 
 /**
@@ -1195,3 +1337,102 @@ export const auditLogQuerySchema = z
     offset: z.number().int().min(0).optional(),
   })
   .openapi('AuditLogQuery')
+
+// ─── Agent List Row wire shape (#104 U5) ────────────────────────────
+//
+// Extends the DB-derived agent row with the computed enrichment fields
+// that `listAgents` adds: 24h error aggregates, the currently-running
+// task summary, and the `reviewRecommended` signal (R18). Defined here
+// (not as a local interface in the route file) so the frontend hook
+// can import the inferred type from @hashhive/shared.
+
+/**
+ * Wire shape for a single agent row returned by
+ * `GET /dashboard/agents`. Extends the select schema with computed
+ * enrichment fields added by `listAgents` in `services/agents.ts`.
+ * `reviewRecommended` is true when whitelisted-error absorptions in the
+ * 24h window meet or exceed REVIEW_RECOMMENDED_THRESHOLD (R18).
+ */
+export const agentListRowWireSchema = z
+  .object({
+    id: z.number().int().positive(),
+    projectId: z.number().int().positive().nullable(),
+    name: z.string(),
+    status: agentStatusSchema,
+    errorCount24h: z.number().int().nonnegative(),
+    worstSeverity24h: agentWorstSeveritySchema,
+    currentTask: agentCurrentTaskSchema.nullable(),
+    reviewRecommended: z.boolean(),
+    lastSeenAt: z.coerce.date().nullable(),
+    createdAt: z.coerce.date(),
+    updatedAt: z.coerce.date(),
+  })
+  .passthrough()
+  .openapi('AgentListRowWire')
+
+// ─── Agent Config Dashboard API (#104 U5) ────────────────────────────
+//
+// Wire shapes for the dashboard per-rig and fleet-wide config endpoints.
+// `AgentConfigSourceMap` carries the per-knob source so the UI can
+// render an "inherited" vs "overridden" badge for each tuning knob
+// (requirement R11). Knob names mirror `agentHashcatTuningSchema` so
+// a schema drift surfaces as a type error here.
+
+/**
+ * Per-knob source map returned by `GET /dashboard/agents/:id/config`.
+ * Each key in `tuning.hashcat` maps to the resolution source:
+ *   - `'override'` = rig has an explicit per-rig value
+ *   - `'fleet'`    = rig inherits from the fleet default
+ *   - `'engine'`   = neither rig nor fleet set this knob (engine default)
+ *
+ * Hardware knobs are always per-rig (R5); they always show `'override'`
+ * when present, `'engine'` when absent.
+ */
+export const agentConfigSourceMapSchema = z
+  .object({
+    tuning: z
+      .object({
+        hashcat: z
+          .object({
+            workloadProfile: configValueSourceSchema.optional(),
+            kernelAccel: configValueSourceSchema.optional(),
+            kernelLoops: configValueSourceSchema.optional(),
+            rawFlags: configValueSourceSchema.optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+    hardware: z
+      .object({
+        deviceIds: configValueSourceSchema.optional(),
+        tempAbort: configValueSourceSchema.optional(),
+      })
+      .optional(),
+    errorWhitelist: configValueSourceSchema.optional(),
+  })
+  .openapi('AgentConfigSourceMap')
+
+/**
+ * Response body for `GET /dashboard/agents/:id/config`.
+ * Returns the per-rig config, the resolved effective config, and a
+ * per-knob source map so the UI can display inherited-vs-overridden
+ * badges (R11).
+ */
+export const agentConfigResponseSchema = z
+  .object({
+    config: agentConfigSchema,
+    effective: effectiveAgentConfigSchema,
+    sources: agentConfigSourceMapSchema,
+  })
+  .openapi('AgentConfigResponse')
+
+/**
+ * Response body for `GET /dashboard/fleet-agent-config`.
+ * Wraps the fleet default config so the response shape is consistent
+ * with the agent-level endpoint.
+ */
+export const fleetConfigResponseSchema = z
+  .object({
+    config: fleetDefaultConfigSchema,
+  })
+  .openapi('FleetConfigResponse')

@@ -67,6 +67,10 @@ export const DASHBOARD_ERROR_CODES = [
   'ENROLLMENT_TOKEN_REVOKE_FAILED',
   // ─── Audit logs ───────────────────────────────────────────────────
   'AUDIT_LOG_LIST_FAILED',
+  // ─── Agent configuration (#104) ───────────────────────────────────
+  'AGENT_CONFIG_UPDATE_FAILED',
+  'FLEET_CONFIG_UPDATE_FAILED',
+  'RAW_FLAG_INVALID',
   // ─── Generic ──────────────────────────────────────────────────────
   'INTERNAL_ERROR',
 ] as const

@@ -16,6 +16,9 @@ export const Permission = {
   // Browse project audit history. Admin and contributor only (R11) — mirrors
   // the backend's requireMembershipRole('admin', 'contributor') gate.
   AUDIT_LOG_VIEW: 'audit_log:view',
+  // Edit fleet-wide default agent configuration. Admin-only — mirrors the
+  // backend's requireMembershipRole('admin') gate on fleet-agent-config routes.
+  FLEET_CONFIG_MANAGE: 'fleet_config:manage',
 } as const
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission]

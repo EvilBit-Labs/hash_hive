@@ -36,6 +36,7 @@ import {
   benchmarkSubmissionSchema,
   crackerCheckUpdateRequestSchema,
   crackerCheckUpdateResponseSchema,
+  effectiveAgentConfigSchema,
   HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
   HEARTBEAT_ERROR_MESSAGE_MAX,
 } from '@hashhive/shared'
@@ -53,7 +54,9 @@ import {
 } from '../../openapi/components.js'
 import { registerAgentSecurity } from '../../openapi/security.js'
 import { mountCachedSpec } from '../../openapi/spec-cache.js'
+import { resolveEffectiveConfig, resolveEffectiveWhitelist } from '../../services/agent-config.js'
 import { logAgentError, processHeartbeat, submitBenchmarks } from '../../services/agents.js'
+import { downgradeIfWhitelisted } from '../../services/agents/whitelist.js'
 import {
   compareCrackerVersions,
   getCrackerDownloadUrl,
@@ -133,6 +136,7 @@ agentRoutes.use('/errors', requireAgentToken)
 agentRoutes.use('/benchmark', requireAgentToken)
 agentRoutes.use('/resources/*', requireAgentToken)
 agentRoutes.use('/cracker/*', requireAgentToken)
+agentRoutes.use('/config', requireAgentToken)
 
 // ─── POST /enroll — anonymous agent enrollment (#233 / #114) ─────────
 // Route definition, handler, and local schemas live in ./enroll.ts (I5).
@@ -438,13 +442,17 @@ agentRoutes.openapi(taskReportRoute, async (c) => {
   const data = c.req.valid('json')
 
   try {
-    // Log any errors reported by the agent
+    // Log any errors reported by the agent, downgrading whitelisted ones.
     if (data.errors && data.errors.length > 0) {
+      const whitelist = await resolveEffectiveWhitelist(agentId)
       for (const errorMessage of data.errors) {
+        const raw = { severity: 'error', message: errorMessage }
+        const effective = downgradeIfWhitelisted(raw, whitelist)
         await logAgentError({
           agentId,
-          severity: 'error',
-          message: errorMessage,
+          severity: effective.severity,
+          message: effective.message,
+          context: effective.context,
           taskId,
         })
       }
@@ -572,7 +580,9 @@ agentRoutes.openapi(reportErrorRoute, async (c) => {
   const { agentId } = c.get('agent')
   const data = c.req.valid('json')
   try {
-    await logAgentError({ ...data, agentId })
+    const whitelist = await resolveEffectiveWhitelist(agentId)
+    const effective = downgradeIfWhitelisted(data, whitelist)
+    await logAgentError({ ...effective, agentId })
     return c.json({ acknowledged: true }, 200)
   } catch (err: unknown) {
     return agentInternalError(
@@ -769,6 +779,50 @@ agentRoutes.openapi(crackerCheckUpdateRoute, async (c) => {
       'Failed to check for cracker update',
       { agentId, engine, platform },
       'Cracker update check failed'
+    )
+  }
+})
+
+// ─── GET /config — effective tuning + hardware config ───────────────
+//
+// Returns the authenticated agent's resolved tuning and hardware knobs
+// (per-rig override → fleet default → engine default). The error
+// whitelist is evaluated server-side and is intentionally excluded (R13).
+// Scope is pinned to the token's own agentId — the handler never reads
+// another agent's config.
+
+const effectiveAgentConfigSchemaOA = effectiveAgentConfigSchema.openapi('EffectiveAgentConfig')
+
+const agentConfigRoute = createRoute({
+  method: 'get',
+  path: '/config',
+  tags: ['Configuration'],
+  summary: "Retrieve the authenticated agent's effective tuning and hardware config",
+  security: [{ AgentBearer: [] }],
+  responses: {
+    200: {
+      description:
+        'Effective tuning and hardware configuration for the agent. Resolved as: per-rig override → fleet default → engine default (omitted).',
+      content: { 'application/json': { schema: effectiveAgentConfigSchemaOA } },
+    },
+    401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
+    500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
+  },
+})
+
+agentRoutes.openapi(agentConfigRoute, async (c) => {
+  const { agentId } = c.get('agent')
+  try {
+    const config = await resolveEffectiveConfig(agentId)
+    return c.json(effectiveAgentConfigSchema.parse(config), 200)
+  } catch (err: unknown) {
+    return agentInternalError(
+      c,
+      err,
+      'CONFIG_FETCH_ERROR',
+      'Failed to retrieve agent configuration',
+      { agentId },
+      'Agent config fetch failed'
     )
   }
 })

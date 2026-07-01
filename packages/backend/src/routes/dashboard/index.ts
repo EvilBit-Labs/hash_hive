@@ -39,6 +39,7 @@ import type { AppEnv } from '../../types.js'
 import { registerDashboardResponseComponents } from '../../openapi/components.js'
 import { registerDashboardSecurity } from '../../openapi/security.js'
 import { mountCachedSpec } from '../../openapi/spec-cache.js'
+import { dashboardAgentConfigRoutes } from './agent-config.js'
 import { dashboardAgentRoutes } from './agents.js'
 import { attackTemplateRoutes } from './attack-templates.js'
 import { auditLogRoutes } from './audit-logs.js'
@@ -90,6 +91,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/auth', authRoutes)
   surface.route('/projects', projectRoutes)
   surface.route('/agents', dashboardAgentRoutes)
+  surface.route('/', dashboardAgentConfigRoutes)
   surface.route('/enrollment-tokens', enrollmentTokenRoutes)
   surface.route('/resources', resourceRoutes)
   surface.route('/hashes', hashRoutes)

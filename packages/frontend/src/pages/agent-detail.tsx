@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useLocation, useParams } from 'react-router'
 
+import { AgentConfigSection } from '../components/features/agent-config-section'
 import { AgentErrorLog } from '../components/features/agent-error-log'
 import { AgentTasksSection } from '../components/features/agent-tasks-section'
 import { HardwareProfileCard } from '../components/features/hardware-profile-card'
@@ -143,6 +144,12 @@ export function AgentDetailPage() {
       />
 
       <AgentErrorLog errors={errorsData?.errors} isError={isErrorsError} />
+
+      <AgentConfigSection
+        agentId={agentId}
+        hardwareProfile={agent.hardwareProfile}
+        lastSeenAt={agent.lastSeenAt}
+      />
 
       <section className="space-y-3">
         <h3 className="text-sm font-medium">Benchmarks</h3>

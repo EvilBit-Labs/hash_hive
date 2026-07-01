@@ -48,6 +48,7 @@ import {
   attacks,
   auditLogs,
   campaigns,
+  fleetAgentConfig,
   hashLists,
   maskLists,
   projects,
@@ -233,6 +234,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'status',
     'crackerVersion',
     'enrollmentClientId',
+    // Per-rig advanced config (#104) — operator-meaningful, audited on edit.
+    'config',
     // EXCLUDED (security / operational):
     //   capabilities — agent-controlled free-form jsonb (set by the agent at
     //     enrollment via the anonymous enrollment path); storing it verbatim
@@ -245,6 +248,10 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     //   enrolledByTokenId — token issuance is audited separately via token_issued
     //   createdAt / updatedAt — system-managed
   ]),
+  // Fleet-wide default agent config (#104). Singleton row; `config` is the
+  // only operator-meaningful column. `updatedAt` is system-managed (excluded
+  // globally) and "who" is captured by the audit event's actor.
+  fleet_config: new Set(['id', 'config']),
 }
 
 // ─── Executor type ───────────────────────────────────────────────────────────
@@ -801,6 +808,7 @@ export const AUDITED_TABLE_COLUMNS: Record<AuditEntityType, ReadonlySet<string>>
   rule_list: new Set(Object.keys(ruleLists)),
   mask_list: new Set(Object.keys(maskLists)),
   agent: new Set(Object.keys(agents)),
+  fleet_config: new Set(Object.keys(fleetAgentConfig)),
 }
 
 /**

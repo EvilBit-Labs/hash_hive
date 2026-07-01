@@ -107,7 +107,10 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
  * stream doesn't fan out into every detail tab.
  */
 const agentScopedKeysByEvent: Readonly<Record<string, readonly string[]>> = {
-  agent_status: ['agent', 'agent-errors', 'agent-tasks'],
+  // 'agent-config' is included so a future backend agent_status emit on
+  // config PATCH triggers a cache refresh. The config route does not yet
+  // publish agent_status; this is inert until it does (see U5 agent-config.ts).
+  agent_status: ['agent', 'agent-errors', 'agent-tasks', 'agent-config'],
   agent_error: ['agent-errors', 'agent'],
   task_update: ['agent-tasks', 'agent'],
 }

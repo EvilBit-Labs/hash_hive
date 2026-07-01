@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Monitor,
   Package,
+  Sliders,
   Trophy,
   X,
 } from 'lucide-react'
@@ -74,6 +75,12 @@ const navItems: readonly NavItem[] = [
     href: '/crackers',
     icon: <Cpu className={ICON_CLASS} aria-hidden="true" />,
     permission: Permission.CRACKER_MANAGE,
+  },
+  {
+    label: 'Fleet Config',
+    href: '/settings/fleet-config',
+    icon: <Sliders className={ICON_CLASS} aria-hidden="true" />,
+    permission: Permission.FLEET_CONFIG_MANAGE,
   },
   {
     label: 'Account',

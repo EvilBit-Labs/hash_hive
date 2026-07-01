@@ -12,6 +12,18 @@ import type {
   agentStatusSchema,
   agentTaskSummarySchema,
   agentWorstSeveritySchema,
+  agentHashcatTuningSchema,
+  agentTuningSchema,
+  agentHardwareKnobsSchema,
+  agentErrorWhitelistSchema,
+  agentConfigSchema,
+  fleetDefaultConfigSchema,
+  configValueSourceSchema,
+  effectiveAgentConfigSchema,
+  agentConfigSourceMapSchema,
+  agentConfigResponseSchema,
+  fleetConfigResponseSchema,
+  agentListRowWireSchema,
   assignedTaskSchema,
   pausedReasonSchema,
   taskEventSchema,
@@ -152,6 +164,21 @@ export type SelectAgentError = z.infer<typeof selectAgentErrorSchema>
 
 export type InsertAgentBenchmark = z.infer<typeof insertAgentBenchmarkSchema>
 export type SelectAgentBenchmark = z.infer<typeof selectAgentBenchmarkSchema>
+
+// Agent advanced configuration (#104)
+export type AgentHashcatTuning = z.infer<typeof agentHashcatTuningSchema>
+export type AgentTuning = z.infer<typeof agentTuningSchema>
+export type AgentHardwareKnobs = z.infer<typeof agentHardwareKnobsSchema>
+export type AgentErrorWhitelist = z.infer<typeof agentErrorWhitelistSchema>
+export type AgentConfig = z.infer<typeof agentConfigSchema>
+export type FleetDefaultConfig = z.infer<typeof fleetDefaultConfigSchema>
+export type ConfigValueSource = z.infer<typeof configValueSourceSchema>
+export type EffectiveAgentConfig = z.infer<typeof effectiveAgentConfigSchema>
+// Agent config dashboard API response shapes (#104 U5)
+export type AgentConfigSourceMap = z.infer<typeof agentConfigSourceMapSchema>
+export type AgentConfigResponse = z.infer<typeof agentConfigResponseSchema>
+export type FleetConfigResponse = z.infer<typeof fleetConfigResponseSchema>
+export type AgentListRowWire = z.infer<typeof agentListRowWireSchema>
 
 // ─── Resources ──────────────────────────────────────────────────────
 
