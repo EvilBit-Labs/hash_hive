@@ -35,6 +35,7 @@ import { z } from 'zod'
 
 import type { AppEnv } from '../../types.js'
 
+import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
 import { requireMembershipRole, requireProjectAccess, requireRole } from '../../middleware/rbac.js'
@@ -252,6 +253,10 @@ dashboardAgentConfigRoutes.openapi(patchAgentConfigRoute, async (c) => {
     if (err instanceof AgentNotFoundError) {
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
     }
+    logger.error(
+      { err, agentId, projectId, userId, op: 'updateAgentConfig' },
+      'agent-config: update failed'
+    )
     return dashboardError(c, 500, 'AGENT_CONFIG_UPDATE_FAILED', 'Failed to update agent config')
   }
 })
@@ -323,6 +328,7 @@ dashboardAgentConfigRoutes.openapi(patchFleetConfigRoute, async (c) => {
     if (err instanceof RawFlagValidationError) {
       return dashboardError(c, 400, 'RAW_FLAG_INVALID', err.message)
     }
+    logger.error({ err, userId, op: 'updateFleetDefault' }, 'agent-config: fleet update failed')
     return dashboardError(c, 500, 'FLEET_CONFIG_UPDATE_FAILED', 'Failed to update fleet config')
   }
 })

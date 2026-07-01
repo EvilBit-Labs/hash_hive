@@ -15,7 +15,7 @@ import {
   mergeEffectiveConfig,
   mergeWhitelist,
   validateRawFlags,
-} from '../../../src/services/agent-config.js'
+} from '../../../src/services/agent-config-helpers.js'
 
 // ─── validateRawFlags ─────────────────────────────────────────────────────────
 
