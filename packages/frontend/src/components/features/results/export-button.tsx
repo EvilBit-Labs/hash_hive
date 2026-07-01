@@ -45,14 +45,12 @@ export function deriveDefaultScope(filters: ExportResultsFilters): ExportScope {
  *   - 'project'    disabled when hashListId is present (per spec)
  */
 export function isScopeOptionDisabled(option: ExportScope, filters: ExportResultsFilters): boolean {
-  switch (option) {
-    case 'hash-list':
-      return filters.hashListId === undefined
-    case 'campaign':
-      return filters.campaignId === undefined || filters.hashListId !== undefined
-    case 'project':
-      return filters.hashListId !== undefined
+  if (option === 'hash-list') return filters.hashListId === undefined
+  if (option === 'campaign') {
+    return filters.campaignId === undefined || filters.hashListId !== undefined
   }
+  // 'project'
+  return filters.hashListId !== undefined
 }
 
 /**
@@ -117,11 +115,6 @@ export function ExportButton({ filters, label = 'Export CSV', shortcutKey }: Exp
   const effectiveScope: ExportScope = isScopeOptionDisabled(userScope, filters)
     ? deriveDefaultScope(filters)
     : userScope
-
-  // Auto-reset format to CSV whenever variant changes to an incompatible value.
-  useEffect(() => {
-    setFormat((f) => reconcileFormat(variant, f))
-  }, [variant])
 
   // Success-ack timer.
   useEffect(() => {
@@ -188,7 +181,13 @@ export function ExportButton({ filters, label = 'Export CSV', shortcutKey }: Exp
           aria-label="Export variant"
           className="h-7 px-2 text-xs"
           value={variant}
-          onValueChange={(v) => setVariant(v as ExportVariant)}
+          onValueChange={(v) => {
+            const nextVariant = v as ExportVariant
+            setVariant(nextVariant)
+            // Reset format to a compatible one in the same event (potfile is
+            // invalid for the csv-only variants) — no extra render cycle.
+            setFormat((f) => reconcileFormat(nextVariant, f))
+          }}
           options={[
             { value: 'cracked-pairs', label: 'Cracked pairs' },
             { value: 'plaintext-only', label: 'Plaintext only' },

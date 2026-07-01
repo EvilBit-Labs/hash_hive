@@ -8,8 +8,6 @@ import {
   hashLists,
   listResultsResponseSchema,
   resolveAttackModeName,
-  type ExportFormat,
-  type ExportScope,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { and, desc, eq, gte, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
@@ -30,7 +28,14 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
-import { createExport, escapeCsv, type ExportScopeParams } from '../../services/results/export.js'
+import {
+  buildExportScopeParams,
+  buildExportTimestamp,
+  generatorToReadableStream,
+  getExportFileExtension,
+  getExportMimeType,
+} from '../../services/results/export-format.js'
+import { createExport, escapeCsv } from '../../services/results/export.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -340,59 +345,6 @@ function encodeBatchAsCsv(batch: readonly CsvBatchRow[]): string {
   return batch.map((r) => CSV_COLUMNS.map((c) => c.project(r)).join(',')).join('\n')
 }
 
-// ─── Export helpers ────────────────────────────────────────────────────────────
-
-/**
- * Convert an AsyncGenerator<string> from the export service into a
- * ReadableStream<Uint8Array>. Uses the `pull` pattern so bytes flow
- * lazily and backpressure propagates to the DB cursor.
- * Each line is encoded with a trailing newline.
- */
-function generatorToReadableStream(rows: AsyncGenerator<string>): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { value, done } = await rows.next()
-      if (done) {
-        controller.close()
-        return
-      }
-      controller.enqueue(encoder.encode(`${value}\n`))
-    },
-  })
-}
-
-function getExportMimeType(format: ExportFormat): string {
-  return format === 'csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8'
-}
-
-function getExportFileExtension(format: ExportFormat): string {
-  return format === 'csv' ? 'csv' : 'potfile'
-}
-
-/**
- * Build the ExportScopeParams for the U3 service from the resolved scope,
- * session projectId, and optional scope IDs from the query.
- *
- * Returns null when a required scope ID is missing; callers emit a 400.
- */
-function buildExportScopeParams(
-  scope: ExportScope,
-  projectId: number,
-  hashListId: number | undefined,
-  campaignId: number | undefined
-): ExportScopeParams | null {
-  if (scope === 'hash-list') {
-    if (hashListId == null) return null
-    return { scope: 'hash-list', projectId, hashListId }
-  }
-  if (scope === 'campaign') {
-    if (campaignId == null) return null
-    return { scope: 'campaign', projectId, campaignId }
-  }
-  return { scope: 'project', projectId }
-}
-
 resultsRoutes.openapi(exportResultsRoute, async (c) => {
   const scopeResult = getScopedProjectId(c)
   if (!scopeResult.ok) {
@@ -446,7 +398,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
       format: resolvedFormat,
     })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const timestamp = buildExportTimestamp()
     const ext = getExportFileExtension(resolvedFormat)
     const mime = getExportMimeType(resolvedFormat)
     const stream = generatorToReadableStream(rows)
@@ -548,7 +500,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   })
 
   // Strip `:` for Windows-safe filenames; slice to seconds (drop millis).
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const timestamp = buildExportTimestamp()
 
   return new Response(stream, {
     status: 200,

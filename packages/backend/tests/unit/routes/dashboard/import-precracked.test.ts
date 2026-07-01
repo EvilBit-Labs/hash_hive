@@ -141,6 +141,10 @@ if (!IS_ISOLATED) {
   mock.module('../../../../src/services/resources.js', () => ({
     getHashListById: mockGetHashListById,
     getHashTypeById: mockGetHashTypeById,
+    // hashes.ts also mounts the search route, which transitively pulls
+    // escapeLike from resources.ts; the mock must re-export it or the module
+    // fails to link. The search route is not exercised by these import tests.
+    escapeLike: (value: string) => value,
   }))
 
   mock.module('../../../../src/services/hash-items/import-parse.js', () => ({

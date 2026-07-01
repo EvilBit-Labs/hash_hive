@@ -15,13 +15,7 @@
  *                         or the potfile mode is unsupported. Always "0" for CSV.
  */
 
-import {
-  exportFormatSchema,
-  exportScopeSchema,
-  exportVariantSchema,
-  type ExportFormat,
-  type ExportScope,
-} from '@hashhive/shared'
+import { exportFormatSchema, exportScopeSchema, exportVariantSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -32,7 +26,14 @@ import {
   controlOpenApiHonoOptions,
   sharedControlResponse,
 } from '../../openapi/components.js'
-import { createExport, type ExportScopeParams } from '../../services/results/export.js'
+import {
+  buildExportScopeParams,
+  buildExportTimestamp,
+  generatorToReadableStream,
+  getExportFileExtension,
+  getExportMimeType,
+} from '../../services/results/export-format.js'
+import { createExport } from '../../services/results/export.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
 export const controlExportRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
@@ -112,52 +113,6 @@ const controlExportRoute = createRoute({
   },
 })
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildScopeParams(
-  scope: ExportScope,
-  projectId: number,
-  hashListId: number | undefined,
-  campaignId: number | undefined
-): ExportScopeParams {
-  if (scope === 'hash-list') {
-    // superRefine guarantees hashListId is present; the cast is safe.
-    return { scope: 'hash-list', projectId, hashListId: hashListId! }
-  }
-  if (scope === 'campaign') {
-    // superRefine guarantees campaignId is present; the cast is safe.
-    return { scope: 'campaign', projectId, campaignId: campaignId! }
-  }
-  return { scope: 'project', projectId }
-}
-
-function getMimeType(format: ExportFormat): string {
-  return format === 'csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8'
-}
-
-function getFileExtension(format: ExportFormat): string {
-  return format === 'csv' ? 'csv' : 'potfile'
-}
-
-/**
- * Convert the export service's AsyncGenerator<string> into a ReadableStream<Uint8Array>.
- * Uses the `pull` pattern so bytes flow lazily and backpressure propagates.
- * Each line from the generator is encoded with a trailing newline.
- */
-function generatorToStream(rows: AsyncGenerator<string>): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { value, done } = await rows.next()
-      if (done) {
-        controller.close()
-        return
-      }
-      controller.enqueue(encoder.encode(`${value}\n`))
-    },
-  })
-}
-
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 controlExportRoutes.openapi(controlExportRoute, async (c) => {
@@ -165,13 +120,15 @@ controlExportRoutes.openapi(controlExportRoute, async (c) => {
     const { projectId } = await requireProjectMembership(c)
     const { scope, variant, format, hashListId, campaignId } = c.req.valid('query')
 
-    const scopeParams = buildScopeParams(scope, projectId, hashListId, campaignId)
+    // superRefine on the query schema guarantees the required scope ID is
+    // present, so buildExportScopeParams never returns null here.
+    const scopeParams = buildExportScopeParams(scope, projectId, hashListId, campaignId)!
     const { skippedCount, rows } = await createExport(db, { ...scopeParams, variant, format })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const ext = getFileExtension(format)
-    const mime = getMimeType(format)
-    const stream = generatorToStream(rows)
+    const timestamp = buildExportTimestamp()
+    const ext = getExportFileExtension(format)
+    const mime = getExportMimeType(format)
+    const stream = generatorToReadableStream(rows)
 
     return new Response(stream, {
       status: 200,

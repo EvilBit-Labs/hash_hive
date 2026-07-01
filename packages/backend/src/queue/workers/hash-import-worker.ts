@@ -192,7 +192,26 @@ export async function processImportPairs(
   // Runs AFTER the target-list upsert. The target row's crackedAt is now set,
   // so propagateCrack's own `crackedAt IS NULL` guard will not overwrite it —
   // only rows in OTHER lists (and other projects) will receive the plaintext.
+  //
+  // Precheck first: after Phase 1 every imported hash's target-list row is
+  // cracked, so any hashValue that still has an uncracked row must live in
+  // another list — those are the only pairs worth propagating. Batched
+  // selectDistinct over the hash_value index turns N per-pair no-op SELECTs
+  // (the common case, where a hash exists only in the target list) into
+  // ceil(N / IMPORT_BATCH_SIZE) queries. propagateCrack's own guard still
+  // protects correctness if a concurrent crack lands between precheck and call.
+  const hashesToPropagate = new Set<string>()
+  for (let i = 0; i < dedupedPairs.length; i += IMPORT_BATCH_SIZE) {
+    const chunk = dedupedPairs.slice(i, i + IMPORT_BATCH_SIZE).map((p) => p.hashValue)
+    const uncrackedElsewhere = await db
+      .selectDistinct({ hashValue: hashItems.hashValue })
+      .from(hashItems)
+      .where(and(inArray(hashItems.hashValue, chunk), isNull(hashItems.crackedAt)))
+    for (const row of uncrackedElsewhere) hashesToPropagate.add(row.hashValue)
+  }
+
   for (const pair of dedupedPairs) {
+    if (!hashesToPropagate.has(pair.hashValue)) continue
     const { updated } = await propagateCrack(pair.hashValue, pair.plaintext)
     if (updated > 0) {
       logger.debug(

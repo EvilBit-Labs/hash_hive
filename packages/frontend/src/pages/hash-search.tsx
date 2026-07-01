@@ -66,6 +66,7 @@ export function HashSearchPage() {
           <ErrorBanner
             message={error instanceof Error ? error.message : 'Search failed. Please try again.'}
           />
+          {/* div keeps the button at content width; as a direct flex child it would stretch full-width */}
           <div>
             <Button variant="secondary" size="sm" onClick={() => void refetch()}>
               Retry
