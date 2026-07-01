@@ -1,4 +1,4 @@
-import { importFormatSchema, importSummarySchema } from '@hashhive/shared'
+import { hashSearchResponseSchema, importFormatSchema, importSummarySchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { randomUUID } from 'node:crypto'
 
@@ -9,7 +9,8 @@ import { QUEUE_NAMES } from '../../config/queue.js'
 import { deleteFile, uploadFile } from '../../config/storage.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
-import { requireMembershipRole } from '../../middleware/rbac.js'
+import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
+import { coercedIntegerQuery } from '../../openapi/coerced-query.js'
 import {
   DASHBOARD_RESPONSE_REFS,
   dashboardOpenApiHonoOptions,
@@ -18,7 +19,14 @@ import {
 import { buildHashImportJobId } from '../../queue/workers/hash-import-worker.js'
 import { guessHashType } from '../../services/hash-analysis.js'
 import { parseImportContent } from '../../services/hash-items/import-parse.js'
+import {
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_LIMIT,
+  SEARCH_MAX_Q_LENGTH,
+  searchHashes,
+} from '../../services/hash-items/search.js'
 import { getHashListById, getHashTypeById } from '../../services/resources.js'
+import { getScopedProjectId } from './scoped-user.js'
 
 const hashRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
@@ -174,6 +182,67 @@ hashRoutes.openapi(importPrecrackedRoute, async (c) => {
 
   // Return compartmentalized summary (KTD7) — matched/cracked computed async by U7 worker
   return c.json({ matchedInList: 0, crackedInList: 0, skipped: parseResult.skipped }, 202)
+})
+
+// ─── GET /search — global hash search (R14–R17) ──────────────────────────────
+//
+// Fetch-on-demand: returns matching hash rows (cracked + uncracked) across
+// all hash lists in the active project. No realtime invalidation wired here
+// (KTD8: search is user-triggered fetch-on-demand, not a server-pushed surface).
+
+const searchHashesQuerySchema = z.object({
+  q: z.string().min(1, 'q must not be empty').max(SEARCH_MAX_Q_LENGTH, 'q is too long'),
+  limit: coercedIntegerQuery({
+    min: 1,
+    max: SEARCH_MAX_LIMIT,
+    default: SEARCH_DEFAULT_LIMIT,
+  }),
+  offset: coercedIntegerQuery({ min: 0, default: 0 }),
+})
+
+const dashboardHashSearchResponseSchema = hashSearchResponseSchema.openapi(
+  'DashboardHashSearchResponse'
+)
+
+const searchHashesRoute = createRoute({
+  method: 'get',
+  path: '/search',
+  tags: ['Hashes'],
+  summary: 'Search for hashes across all hash lists in the active project',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: { query: searchHashesQuerySchema },
+  responses: {
+    200: {
+      description:
+        'Project-scoped hash search results. Both cracked (crackedAt is an ISO string) and uncracked (crackedAt is null) rows are returned. A single hash value may appear multiple times if it belongs to multiple hash lists.',
+      content: { 'application/json': { schema: dashboardHashSearchResponseSchema } },
+    },
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+  },
+})
+
+hashRoutes.openapi(searchHashesRoute, async (c) => {
+  const scope = getScopedProjectId(c, 'hashes/search')
+  if (!scope.ok) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
+  }
+  const { projectId } = scope
+  const { q, limit, offset } = c.req.valid('query')
+
+  const result = await searchHashes(projectId, q, { limit, offset })
+
+  // Map Date → ISO string for the wire shape (crackedAt is Date in the service,
+  // string | null in hashSearchResponseSchema). This mapping is load-bearing
+  // for round-trip .parse() validation (KTD8).
+  const results = result.results.map((r) => ({
+    ...r,
+    crackedAt: r.crackedAt !== null ? r.crackedAt.toISOString() : null,
+  }))
+
+  return c.json({ results, total: result.total, limit: result.limit, offset: result.offset }, 200)
 })
 
 export { hashRoutes }

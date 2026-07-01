@@ -32,6 +32,9 @@ import { escapeLike } from '../resources.js'
 export const SEARCH_DEFAULT_LIMIT = 50
 export const SEARCH_MAX_LIMIT = 100
 export const SEARCH_DEFAULT_OFFSET = 0
+// Mirrors the hash_items.hash_value varchar(1024) column and the sibling
+// guess-type endpoint's max length so full hashes always survive q validation.
+export const SEARCH_MAX_Q_LENGTH = 1024
 
 export interface SearchHashesResult {
   results: {

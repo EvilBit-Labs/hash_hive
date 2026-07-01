@@ -39,6 +39,7 @@ import { controlHealthRoutes } from './health.js'
 import { controlImportRoutes } from './import.js'
 import { controlProjectRoutes } from './projects.js'
 import { controlResourceRoutes } from './resources.js'
+import { controlSearchRoutes } from './search.js'
 import { controlStatsRoutes } from './stats.js'
 import { controlTaskRoutes } from './tasks.js'
 import { controlUserRoutes } from './users.js'
@@ -96,6 +97,7 @@ controlRoutes.use('*', requireApiKey)
 
 controlRoutes.route('/export', controlExportRoutes)
 controlRoutes.route('/import', controlImportRoutes)
+controlRoutes.route('/search', controlSearchRoutes)
 controlRoutes.route('/health', controlHealthRoutes)
 controlRoutes.route('/projects', controlProjectRoutes)
 controlRoutes.route('/users', controlUserRoutes)
