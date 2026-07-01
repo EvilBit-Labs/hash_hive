@@ -238,7 +238,7 @@ function createDefaultCrackedFetcher(
             or(
               lt(hashItems.crackedAt, cursor.crackedAt),
               and(eq(hashItems.crackedAt, cursor.crackedAt), lt(hashItems.id, cursor.id))
-            )!,
+            ),
           ]
         : []),
     ]
@@ -298,7 +298,7 @@ function createDefaultUncrackedFetcher(
         .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
         .innerJoin(
           campaigns,
-          and(eq(campaigns.id, params.campaignId), eq(campaigns.hashListId, hashItems.hashListId))!
+          and(eq(campaigns.id, params.campaignId), eq(campaigns.hashListId, hashItems.hashListId))
         )
         .where(and(...baseConds))
         .orderBy(desc(hashItems.id))
@@ -329,7 +329,7 @@ function createDefaultSkippedCounter(
     const modeFilter =
       format === 'hashcat-potfile'
         ? isNull(hashTypes.id)
-        : or(isNull(hashTypes.id), not(inArray(hashTypes.hashcatMode, [...JOHN_MAPPED_MODES])))!
+        : or(isNull(hashTypes.id), not(inArray(hashTypes.hashcatMode, [...JOHN_MAPPED_MODES])))
 
     const conditions = [...buildCrackedBaseConditions(params), modeFilter]
 

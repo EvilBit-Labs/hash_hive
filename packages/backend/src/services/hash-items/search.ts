@@ -22,19 +22,23 @@
  * from packages/backend/src/routes/dashboard/results.ts so callers can apply
  * consistent caps without importing private route constants.
  */
-import { hashItems, hashLists } from '@hashhive/shared'
+import {
+  hashItems,
+  hashLists,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_LIMIT,
+  SEARCH_MAX_Q_LENGTH,
+} from '@hashhive/shared'
 import { and, count, eq, or, sql } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { escapeLike } from '../resources.js'
 
-export const SEARCH_DEFAULT_LIMIT = 50
-export const SEARCH_MAX_LIMIT = 100
+// Re-export shared constants so route files keep importing from this service module.
+export { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, SEARCH_MAX_Q_LENGTH }
+
 export const SEARCH_DEFAULT_OFFSET = 0
-// Mirrors the hash_items.hash_value varchar(1024) column and the sibling
-// guess-type endpoint's max length so full hashes always survive q validation.
-export const SEARCH_MAX_Q_LENGTH = 1024
 
 export interface SearchHashesResult {
   results: {

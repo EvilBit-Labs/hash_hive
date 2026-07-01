@@ -1443,6 +1443,7 @@ export {
   exportQuerySchema,
   exportScopeSchema,
   exportVariantSchema,
+  isPotfileVariantConflict,
 } from './export.js'
 
 // ─── Import (#102) ──────────────────────────────────────────────────
@@ -1454,4 +1455,10 @@ export {
 } from './import.js'
 
 // ─── Search (#102) ──────────────────────────────────────────────────
-export { hashSearchResponseSchema, hashSearchResultSchema } from './search.js'
+export {
+  hashSearchResponseSchema,
+  hashSearchResultSchema,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_LIMIT,
+  SEARCH_MAX_Q_LENGTH,
+} from './search.js'

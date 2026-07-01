@@ -1,11 +1,10 @@
 import type { HashSearchResponse } from '@hashhive/shared'
 
+import { SEARCH_DEFAULT_LIMIT } from '@hashhive/shared'
 import { useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
-
-const SEARCH_DEFAULT_LIMIT = 50
 
 /**
  * Fetches hash search results from the dashboard search endpoint.

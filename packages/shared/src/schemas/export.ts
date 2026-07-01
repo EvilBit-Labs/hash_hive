@@ -26,6 +26,26 @@ export const exportFormatSchema = z
 
 export const exportScopeSchema = z.enum(['hash-list', 'campaign', 'project']).openapi('ExportScope')
 
+/**
+ * Returns true when the combination of format and variant is invalid for
+ * potfile output. Potfile formats require the hash value in every output line,
+ * so variants that omit it ('plaintext-only') or omit the plaintext
+ * ('uncracked') cannot produce a valid potfile.
+ *
+ * Used in:
+ *   - the shared `exportQuerySchema.superRefine` below
+ *   - the dashboard results route (after resolving optional defaults)
+ *   - the control export route's `superRefine` (separately imported)
+ */
+export function isPotfileVariantConflict(
+  format: z.infer<typeof exportFormatSchema>,
+  variant: z.infer<typeof exportVariantSchema>
+): boolean {
+  const isPotfile = format === 'hashcat-potfile' || format === 'john-potfile'
+  const isCsvOnly = variant === 'plaintext-only' || variant === 'uncracked'
+  return isPotfile && isCsvOnly
+}
+
 export const exportQuerySchema = z
   .object({
     scope: exportScopeSchema,
@@ -34,9 +54,7 @@ export const exportQuerySchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
-    const isPotfile = data.format === 'hashcat-potfile' || data.format === 'john-potfile'
-    const isCsvOnly = data.variant === 'plaintext-only' || data.variant === 'uncracked'
-    if (isPotfile && isCsvOnly) {
+    if (isPotfileVariantConflict(data.format, data.variant)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `format '${data.format}' requires variant 'cracked-pairs'; '${data.variant}' does not include hash values`,

@@ -483,3 +483,5 @@ import type { hashSearchResponseSchema, hashSearchResultSchema } from '../schema
 
 export type HashSearchResult = z.infer<typeof hashSearchResultSchema>
 export type HashSearchResponse = z.infer<typeof hashSearchResponseSchema>
+/** Re-exports of the search pagination constants for callers. */
+export { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, SEARCH_MAX_Q_LENGTH } from '../schemas/index.js'

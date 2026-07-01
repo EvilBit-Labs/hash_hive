@@ -1,6 +1,21 @@
 import '../openapi-extension.js'
 import { z } from 'zod'
 
+// ─── Search constants ─────────────────────────────────────────────────────────
+
+/** Default page size for hash search results (mirrors RESULTS_LIST_DEFAULT_LIMIT). */
+export const SEARCH_DEFAULT_LIMIT = 50
+
+/** Maximum page size accepted for hash search results. */
+export const SEARCH_MAX_LIMIT = 100
+
+/**
+ * Maximum length of the `q` query parameter. Matches hash_items.hash_value
+ * varchar(1024) and the guess-type endpoint's max length so full hashes always
+ * survive `q` validation.
+ */
+export const SEARCH_MAX_Q_LENGTH = 1024
+
 /**
  * Shared Zod schemas for the global hash-search feature (issue #102).
  *

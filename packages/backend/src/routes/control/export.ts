@@ -15,7 +15,12 @@
  *                         or the potfile mode is unsupported. Always "0" for CSV.
  */
 
-import { exportFormatSchema, exportScopeSchema, exportVariantSchema } from '@hashhive/shared'
+import {
+  exportFormatSchema,
+  exportScopeSchema,
+  exportVariantSchema,
+  isPotfileVariantConflict,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -61,9 +66,7 @@ const controlExportQuerySchema = z
     }),
   })
   .superRefine((data, ctx) => {
-    const isPotfile = data.format === 'hashcat-potfile' || data.format === 'john-potfile'
-    const isCsvOnly = data.variant === 'plaintext-only' || data.variant === 'uncracked'
-    if (isPotfile && isCsvOnly) {
+    if (isPotfileVariantConflict(data.format, data.variant)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `format '${data.format}' requires variant 'cracked-pairs'; '${data.variant}' does not include hash values`,

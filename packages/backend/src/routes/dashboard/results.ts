@@ -6,6 +6,7 @@ import {
   exportVariantSchema,
   hashItems,
   hashLists,
+  isPotfileVariantConflict,
   listResultsResponseSchema,
   resolveAttackModeName,
 } from '@hashhive/shared'
@@ -365,9 +366,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
     const resolvedVariant = variant ?? 'cracked-pairs'
     const resolvedFormat = format ?? 'csv'
 
-    const isPotfile = resolvedFormat === 'hashcat-potfile' || resolvedFormat === 'john-potfile'
-    const isCsvOnly = resolvedVariant === 'plaintext-only' || resolvedVariant === 'uncracked'
-    if (isPotfile && isCsvOnly) {
+    if (isPotfileVariantConflict(resolvedFormat, resolvedVariant)) {
       return c.json(
         {
           error: {
