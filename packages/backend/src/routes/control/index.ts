@@ -33,6 +33,7 @@ import { controlAgentRoutes } from './agents.js'
 import { controlAttackRoutes } from './attacks.js'
 import { controlAuditLogRoutes } from './audit-logs.js'
 import { controlCampaignRoutes } from './campaigns.js'
+import { controlExportRoutes } from './export.js'
 import { controlHashListRoutes } from './hashlists.js'
 import { controlHealthRoutes } from './health.js'
 import { controlProjectRoutes } from './projects.js'
@@ -92,6 +93,7 @@ mountCachedSpec(
 
 controlRoutes.use('*', requireApiKey)
 
+controlRoutes.route('/export', controlExportRoutes)
 controlRoutes.route('/health', controlHealthRoutes)
 controlRoutes.route('/projects', controlProjectRoutes)
 controlRoutes.route('/users', controlUserRoutes)

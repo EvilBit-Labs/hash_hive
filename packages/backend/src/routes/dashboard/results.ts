@@ -1,10 +1,15 @@
 import {
   attacks,
   campaigns,
+  exportFormatSchema,
+  exportScopeSchema,
+  exportVariantSchema,
   hashItems,
   hashLists,
   listResultsResponseSchema,
   resolveAttackModeName,
+  type ExportFormat,
+  type ExportScope,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { and, desc, eq, gte, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
@@ -25,7 +30,7 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { escapeLike } from '../../services/resources.js'
-import { escapeCsv } from '../../services/results/export.js'
+import { createExport, escapeCsv, type ExportScopeParams } from '../../services/results/export.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -70,9 +75,29 @@ const listResultsQuerySchema = z.object({
   offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
-const exportResultsQuerySchema = z.object(resultsFilterShape)
+// Export scope/variant/format are optional for backward compatibility. When all
+// three are absent the handler follows the legacy CSV path so that existing
+// clients continue to receive the same output. When any one is present the
+// handler uses the U3 export service with defaults (project/cracked-pairs/csv)
+// for whichever axes are missing.
+const exportResultsQuerySchema = z.object({
+  ...resultsFilterShape,
+  scope: exportScopeSchema.optional(),
+  variant: exportVariantSchema.optional(),
+  format: exportFormatSchema.optional(),
+})
 
-type ResultsFilterInput = z.infer<typeof exportResultsQuerySchema>
+// Filter-only subset used by buildResultFilters and the legacy export path.
+// Uses `T | undefined` (not `?: T`) to satisfy exactOptionalPropertyTypes —
+// query destructuring always produces properties that are present but possibly
+// undefined, which is distinct from an absent property under strict TS config.
+type ResultsFilterInput = {
+  campaignId: number | undefined
+  hashListId: number | undefined
+  q: string | undefined
+  startDate: string | undefined
+  endDate: string | undefined
+}
 
 function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
@@ -231,13 +256,17 @@ const exportResultsRoute = createRoute({
   path: '/export',
   tags: ['Results'],
   summary:
-    'Stream a CSV export of cracked results. Streams all matching rows with no row cap; backpressure is handled via ReadableStream.',
+    'Stream an export of cracked results. Accepts scope, variant, and format to control output. Streams all matching rows with no row cap; backpressure is handled via ReadableStream.',
   security: [{ SessionCookie: [] }],
   request: { query: exportResultsQuerySchema },
   responses: {
     200: {
-      description: 'CSV file with one row per cracked hash; streamed via ReadableStream.',
-      content: { 'text/csv': { schema: z.string() } },
+      description:
+        'Export file streamed via ReadableStream. Content-Type is text/csv for CSV exports or text/plain for potfile exports. The x-export-skipped header carries the count of rows omitted because the hash type is missing or the potfile mode is unsupported.',
+      content: {
+        'text/csv': { schema: z.string() },
+        'text/plain': { schema: z.string() },
+      },
     },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
@@ -311,14 +340,134 @@ function encodeBatchAsCsv(batch: readonly CsvBatchRow[]): string {
   return batch.map((r) => CSV_COLUMNS.map((c) => c.project(r)).join(',')).join('\n')
 }
 
+// ─── Export helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Convert an AsyncGenerator<string> from the export service into a
+ * ReadableStream<Uint8Array>. Uses the `pull` pattern so bytes flow
+ * lazily and backpressure propagates to the DB cursor.
+ * Each line is encoded with a trailing newline.
+ */
+function generatorToReadableStream(rows: AsyncGenerator<string>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { value, done } = await rows.next()
+      if (done) {
+        controller.close()
+        return
+      }
+      controller.enqueue(encoder.encode(`${value}\n`))
+    },
+  })
+}
+
+function getExportMimeType(format: ExportFormat): string {
+  return format === 'csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8'
+}
+
+function getExportFileExtension(format: ExportFormat): string {
+  return format === 'csv' ? 'csv' : 'potfile'
+}
+
+/**
+ * Build the ExportScopeParams for the U3 service from the resolved scope,
+ * session projectId, and optional scope IDs from the query.
+ *
+ * Returns null when a required scope ID is missing; callers emit a 400.
+ */
+function buildExportScopeParams(
+  scope: ExportScope,
+  projectId: number,
+  hashListId: number | undefined,
+  campaignId: number | undefined
+): ExportScopeParams | null {
+  if (scope === 'hash-list') {
+    if (hashListId == null) return null
+    return { scope: 'hash-list', projectId, hashListId }
+  }
+  if (scope === 'campaign') {
+    if (campaignId == null) return null
+    return { scope: 'campaign', projectId, campaignId }
+  }
+  return { scope: 'project', projectId }
+}
+
 resultsRoutes.openapi(exportResultsRoute, async (c) => {
-  const scope = getScopedProjectId(c)
-  if (!scope.ok) {
+  const scopeResult = getScopedProjectId(c)
+  if (!scopeResult.ok) {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
   }
-  const { projectId } = scope
+  const { projectId } = scopeResult
 
-  const { campaignId, hashListId, q, startDate, endDate } = c.req.valid('query')
+  const { campaignId, hashListId, q, startDate, endDate, scope, variant, format } =
+    c.req.valid('query')
+
+  // When any of the new axes are provided, delegate to the U3 export service.
+  // Absent axes default to project/cracked-pairs/csv so partial callers get a
+  // sensible result. When all three are absent the legacy handler runs instead —
+  // this keeps old-format CSV output (6 columns) unchanged for existing clients.
+  if (scope !== undefined || variant !== undefined || format !== undefined) {
+    const resolvedScope = scope ?? 'project'
+    const resolvedVariant = variant ?? 'cracked-pairs'
+    const resolvedFormat = format ?? 'csv'
+
+    const isPotfile = resolvedFormat === 'hashcat-potfile' || resolvedFormat === 'john-potfile'
+    const isCsvOnly = resolvedVariant === 'plaintext-only' || resolvedVariant === 'uncracked'
+    if (isPotfile && isCsvOnly) {
+      return c.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: `format '${resolvedFormat}' requires variant 'cracked-pairs'; '${resolvedVariant}' does not include hash values`,
+          },
+        },
+        400
+      )
+    }
+
+    const scopeParams = buildExportScopeParams(resolvedScope, projectId, hashListId, campaignId)
+    if (scopeParams === null) {
+      const missing = resolvedScope === 'hash-list' ? 'hashListId' : 'campaignId'
+      return c.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: `'${missing}' is required when scope is '${resolvedScope}'`,
+          },
+        },
+        400
+      )
+    }
+
+    const { skippedCount, rows } = await createExport(db, {
+      ...scopeParams,
+      variant: resolvedVariant,
+      format: resolvedFormat,
+    })
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const ext = getExportFileExtension(resolvedFormat)
+    const mime = getExportMimeType(resolvedFormat)
+    const stream = generatorToReadableStream(rows)
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': mime,
+        'Content-Disposition': `attachment; filename="results-${timestamp}.${ext}"`,
+        'x-export-skipped': String(skippedCount),
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
+
+  // ─── Legacy path: original 6-column CSV export ──────────────────────────────
+  // Runs when scope/variant/format are all absent. Preserves the pre-U3 output
+  // format (6 columns: hash_value, plaintext, campaign, attack, hash_list,
+  // cracked_at) so that existing dashboard clients receive the same file shape.
+
   const filters: ResultsFilterInput = { campaignId, hashListId, q, startDate, endDate }
   // Build conditions once at handler entry — each pull only composes the
   // cursor predicate on top.
