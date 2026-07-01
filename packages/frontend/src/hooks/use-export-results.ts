@@ -1,7 +1,11 @@
+import type { ExportFormat, ExportScope, ExportVariant } from '@hashhive/shared'
+
 import { useMutation } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
+
+export type { ExportFormat, ExportScope, ExportVariant }
 
 export interface ExportResultsFilters {
   campaignId?: number
@@ -12,6 +16,12 @@ export interface ExportResultsFilters {
   startDate?: string
   /** ISO 8601 timestamp (e.g. `2026-06-08T23:59:59.000Z`). */
   endDate?: string
+  /** Scope of the export — which entity to draw rows from. */
+  scope?: ExportScope
+  /** Which rows to include: cracked pairs, plaintext only, or uncracked. */
+  variant?: ExportVariant
+  /** Output format: CSV, hashcat potfile, or John the Ripper potfile. */
+  format?: ExportFormat
 }
 
 /**
@@ -53,6 +63,17 @@ function buildFallbackFilename(projectId: number | null): string {
   return `results-${slug}-${iso}.csv`
 }
 
+/**
+ * Parse the `x-export-skipped` response header into a non-negative integer.
+ * Guards against null, empty, non-numeric, and negative values — a malformed
+ * header must never render "NaN rows skipped" in the UI.
+ */
+function parseSkippedCount(headerValue: string | null): number {
+  if (!headerValue) return 0
+  const n = Number(headerValue)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
+}
+
 function serializeFilters(filters: ExportResultsFilters): string {
   const params = new URLSearchParams()
   if (filters.campaignId !== undefined) params.set('campaignId', String(filters.campaignId))
@@ -60,6 +81,9 @@ function serializeFilters(filters: ExportResultsFilters): string {
   if (filters.search) params.set('q', filters.search)
   if (filters.startDate) params.set('startDate', filters.startDate)
   if (filters.endDate) params.set('endDate', filters.endDate)
+  if (filters.scope !== undefined) params.set('scope', filters.scope)
+  if (filters.variant !== undefined) params.set('variant', filters.variant)
+  if (filters.format !== undefined) params.set('format', filters.format)
   return params.toString()
 }
 
@@ -98,6 +122,8 @@ export function useExportResults() {
         parseFilename(response.headers.get('Content-Disposition')) ??
         buildFallbackFilename(selectedProjectId)
 
+      const skippedCount = parseSkippedCount(response.headers.get('x-export-skipped'))
+
       // `response.blob()` may reject (network drop mid-stream). Let it
       // propagate before we allocate a blob URL — keeps the cleanup
       // contract tight.
@@ -123,7 +149,7 @@ export function useExportResults() {
         if (objectUrl) URL.revokeObjectURL(objectUrl)
       }
 
-      return { filename }
+      return { filename, skippedCount }
     },
   })
 }

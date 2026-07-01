@@ -235,6 +235,137 @@ describe('useExportResults', () => {
     expect(revokeObjectUrl).not.toHaveBeenCalled()
   })
 
+  it('serializes scope, variant, and format into the export request URL', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/dashboard/results/export': {
+        status: 200,
+        body: 'hash,plaintext\n',
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': 'attachment; filename="results-x.csv"',
+        },
+      },
+    })
+
+    const { result } = renderHook(() => useExportResults(), wrapper())
+
+    result.current.mutate({
+      scope: 'campaign',
+      variant: 'plaintext-only',
+      format: 'hashcat-potfile',
+    })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    const url = String(fetchMock.mock.calls[0]?.[0])
+    expect(url).toContain('scope=campaign')
+    expect(url).toContain('variant=plaintext-only')
+    expect(url).toContain('format=hashcat-potfile')
+  })
+
+  it('returns skippedCount from the x-export-skipped response header', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/dashboard/results/export': {
+        status: 200,
+        body: 'hash,plaintext\n',
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': 'attachment; filename="results-x.csv"',
+          'x-export-skipped': '7',
+        },
+      },
+    })
+
+    const originalCreateElement = document.createElement.bind(document)
+    document.createElement = mock((tag: string) => {
+      const el = originalCreateElement(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = mock(() => {})
+      return el
+    }) as unknown as typeof document.createElement
+
+    try {
+      const { result } = renderHook(() => useExportResults(), wrapper())
+      result.current.mutate({})
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true)
+      })
+
+      expect(result.current.data?.skippedCount).toBe(7)
+    } finally {
+      document.createElement = originalCreateElement
+    }
+  })
+
+  it('returns skippedCount of 0 when x-export-skipped header is absent', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/dashboard/results/export': {
+        status: 200,
+        body: 'hash,plaintext\n',
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': 'attachment; filename="results-x.csv"',
+        },
+      },
+    })
+
+    const originalCreateElement = document.createElement.bind(document)
+    document.createElement = mock((tag: string) => {
+      const el = originalCreateElement(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = mock(() => {})
+      return el
+    }) as unknown as typeof document.createElement
+
+    try {
+      const { result } = renderHook(() => useExportResults(), wrapper())
+      result.current.mutate({})
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true)
+      })
+
+      expect(result.current.data?.skippedCount).toBe(0)
+    } finally {
+      document.createElement = originalCreateElement
+    }
+  })
+
+  it('returns skippedCount of 0 when x-export-skipped header is non-numeric', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/dashboard/results/export': {
+        status: 200,
+        body: 'hash,plaintext\n',
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': 'attachment; filename="results-x.csv"',
+          'x-export-skipped': 'not-a-number',
+        },
+      },
+    })
+
+    const originalCreateElement = document.createElement.bind(document)
+    document.createElement = mock((tag: string) => {
+      const el = originalCreateElement(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = mock(() => {})
+      return el
+    }) as unknown as typeof document.createElement
+
+    try {
+      const { result } = renderHook(() => useExportResults(), wrapper())
+      result.current.mutate({})
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true)
+      })
+
+      expect(result.current.data?.skippedCount).toBe(0)
+    } finally {
+      document.createElement = originalCreateElement
+    }
+  })
+
   it('marks the mutation as error when response.blob() rejects, without leaking an object URL', async () => {
     // Hand-craft a Response whose `.blob()` rejects to simulate a
     // network drop mid-stream. We can't express this with mockFetch's
