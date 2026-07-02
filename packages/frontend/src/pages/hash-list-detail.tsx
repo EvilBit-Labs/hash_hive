@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router'
 
+import { HashImportModal } from '../components/features/hash-import-modal'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { CrackedStatsLine } from '../components/features/results/cracked-stats-line'
 import { ExportButton } from '../components/features/results/export-button'
@@ -49,6 +50,7 @@ export function HashListDetailPage() {
   const isValidId = Number.isInteger(parsedId) && parsedId > 0
   const hashListId = isValidId ? parsedId : 0
 
+  const [importModalOpen, setImportModalOpen] = useState(false)
   const [view, setView] = useState<DetailView>('cracked')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [search, setSearch] = useState('')
@@ -167,8 +169,20 @@ export function HashListDetailPage() {
             <PageHeader>{hashList.name}</PageHeader>
             <StatusBadge status={hashList.status} />
           </div>
-          <ExportButton filters={{ hashListId }} />
+          <div className="flex items-center gap-2">
+            <PermissionGuard permission={Permission.RESOURCE_UPLOAD}>
+              <Button variant="secondary" onClick={() => setImportModalOpen(true)}>
+                Import Pre-cracked
+              </Button>
+            </PermissionGuard>
+            <ExportButton filters={{ hashListId }} />
+          </div>
         </div>
+        <HashImportModal
+          open={importModalOpen}
+          onClose={() => setImportModalOpen(false)}
+          preselectedHashListId={hashListId}
+        />
         <SegmentedControl
           aria-label="Hash list view"
           value={view}

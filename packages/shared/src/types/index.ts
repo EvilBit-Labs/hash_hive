@@ -453,3 +453,35 @@ export type AuditLog = z.infer<typeof auditLogSchema>
 export type AuditLogListResponse = z.infer<typeof auditLogListResponseSchema>
 export type AuditLogQuery = z.infer<typeof auditLogQuerySchema>
 export type InsertTaskTelemetry = typeof taskTelemetry.$inferInsert
+
+// ─── Export (#102) ──────────────────────────────────────────────────
+import type {
+  exportFormatSchema,
+  exportQuerySchema,
+  exportScopeSchema,
+  exportVariantSchema,
+} from '../schemas/export.js'
+
+export type ExportVariant = z.infer<typeof exportVariantSchema>
+export type ExportFormat = z.infer<typeof exportFormatSchema>
+export type ExportScope = z.infer<typeof exportScopeSchema>
+export type ExportQuery = z.infer<typeof exportQuerySchema>
+
+// ─── Import (#102) ──────────────────────────────────────────────────
+import type {
+  importFormatSchema,
+  importRequestSchema,
+  importSummarySchema,
+} from '../schemas/import.js'
+
+export type ImportFormat = z.infer<typeof importFormatSchema>
+export type ImportRequest = z.infer<typeof importRequestSchema>
+export type ImportSummary = z.infer<typeof importSummarySchema>
+
+// ─── Search (#102) ──────────────────────────────────────────────────
+import type { hashSearchResponseSchema, hashSearchResultSchema } from '../schemas/search.js'
+
+export type HashSearchResult = z.infer<typeof hashSearchResultSchema>
+export type HashSearchResponse = z.infer<typeof hashSearchResponseSchema>
+/** Re-exports of the search pagination constants for callers. */
+export { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, SEARCH_MAX_Q_LENGTH } from '../schemas/index.js'

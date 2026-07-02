@@ -10,6 +10,7 @@ import type {
   CampaignTaskStats,
   CrackedResultRow,
   FileRef,
+  HashSearchResult,
   ResourceStatus,
 } from '@hashhive/shared'
 
@@ -489,6 +490,36 @@ export function mockResultsResponse(options: MockResultsResponseOptions = {}) {
     attackMode: 0,
     attackModeName: 'Dictionary' as const,
     agentId: 1,
+    ...options.results?.[i],
+  }))
+  return {
+    results,
+    total: options.total ?? results.length,
+    limit: options.limit ?? 50,
+    offset: options.offset ?? 0,
+  }
+}
+
+// --- Hash search fixtures ---
+
+// Wire shape derived from the canonical shared schema per AGENTS.md.
+type MockHashSearchResult = HashSearchResult
+
+interface MockHashSearchResponseOptions {
+  count?: number
+  results?: Array<Partial<MockHashSearchResult>>
+  total?: number
+  limit?: number
+  offset?: number
+}
+
+export function mockHashSearchResponse(options: MockHashSearchResponseOptions = {}) {
+  const count = options.count ?? 2
+  const results: MockHashSearchResult[] = Array.from({ length: count }, (_, i) => ({
+    hashValue: `5f4dcc3b5aa765d61d8327deb882cf${String(i + 1).padStart(2, '0')}`,
+    hashListId: i + 1,
+    hashListName: `Hash List ${i + 1}`,
+    crackedAt: i === 0 ? new Date().toISOString() : null,
     ...options.results?.[i],
   }))
   return {

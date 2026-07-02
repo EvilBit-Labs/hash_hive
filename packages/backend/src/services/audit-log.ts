@@ -191,6 +191,10 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'status',
     // fileRef excluded: contains storage path/URL which is operational detail
     // createdAt / updatedAt excluded
+    // Synthetic key used only by import audit rows — never present on real
+    // hash_list rows. Lets recordImportAudit embed a stagingKey dedup token
+    // in changes so retry runs can detect a previously-written audit row.
+    'importKey',
   ]),
 
   word_list: new Set([

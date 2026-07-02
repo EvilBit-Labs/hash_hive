@@ -46,9 +46,9 @@ function sanitizeParseError(err: unknown): string {
 /**
  * Parse a single hash line into an insert value. Supports:
  *
- *   - `hash`                          1 token  -> { hashValue }
- *   - `hash:plaintext`                2 tokens -> { hashValue, plaintext, crackedAt }
- *   - `username:hash:plaintext`       3 tokens -> { ..., metadata: { username } }
+ *   - `hash`                          1 token  -> { hashValue, source }
+ *   - `hash:plaintext`                2 tokens -> { hashValue, plaintext, crackedAt, source }
+ *   - `username:hash:plaintext`       3 tokens -> { ..., username, source }
  *   - 4+ tokens (plaintext with `:`)  fallback -> first-colon-as-separator, same as
  *                                                 2-token semantics, preserves prior
  *                                                 behavior for plaintexts containing
@@ -58,11 +58,17 @@ function sanitizeParseError(err: unknown): string {
  * An ambiguous 2-token line (e.g. `admin:hash`) is always treated as
  * `hash:plaintext` — to submit a username-tagged hash without a plaintext, send
  * `username:hash:` (3 tokens, empty plaintext) or `username:hash:<plaintext>`.
+ *
+ * `source` is always `'upload'` for parser-originated rows. Rows written by
+ * propagateCrack (U2) carry a NULL source; the import worker (U7) upserts
+ * target-list rows with source='import'. Neither is written by this parser.
+ *
+ * Exported for testing.
  */
-function parseHashLine(line: string, hashListId: number) {
+export function parseHashLine(line: string, hashListId: number) {
   const tokens = line.split(':')
   if (tokens.length === 1) {
-    return { hashListId, hashValue: line }
+    return { hashListId, hashValue: line, source: 'upload' as const }
   }
   if (tokens.length === 2) {
     const [hashValue, plaintext] = tokens
@@ -72,6 +78,7 @@ function parseHashLine(line: string, hashListId: number) {
       hashValue,
       plaintext: plaintext ?? '',
       crackedAt: new Date(),
+      source: 'upload' as const,
     }
   }
   if (tokens.length === 3) {
@@ -82,19 +89,21 @@ function parseHashLine(line: string, hashListId: number) {
     // the cracked count and progress %.
     const hasPlaintext = !!plaintext && plaintext.length > 0
     // Empty username (`:hash:plain`) falls back to 2-token semantics so
-    // the JSONB isn't polluted with empty-string usernames.
+    // the username column isn't polluted with empty-string usernames.
     if (!username) {
       return {
         hashListId,
         hashValue,
         ...(hasPlaintext ? { plaintext: plaintext as string, crackedAt: new Date() } : {}),
+        source: 'upload' as const,
       }
     }
     return {
       hashListId,
       hashValue,
       ...(hasPlaintext ? { plaintext: plaintext as string, crackedAt: new Date() } : {}),
-      metadata: { username },
+      username,
+      source: 'upload' as const,
     }
   }
   // 4+ tokens: legacy first-colon-as-separator. Preserves prior behavior for
@@ -107,6 +116,7 @@ function parseHashLine(line: string, hashListId: number) {
     hashValue,
     plaintext: line.substring(firstColon + 1),
     crackedAt: new Date(),
+    source: 'upload' as const,
   }
 }
 

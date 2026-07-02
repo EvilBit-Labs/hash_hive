@@ -190,6 +190,8 @@ function SelectScrollDownButton({
 export interface SelectOption {
   value: string
   label: string
+  /** When true, renders the option as non-interactive (greyed out). */
+  disabled?: boolean
 }
 
 export interface SelectProps {
@@ -268,7 +270,11 @@ function Select({
       <SelectContent position="popper" align="start" sideOffset={4}>
         {placeholder !== undefined && <SelectItem value={EMPTY_SENTINEL}>{placeholder}</SelectItem>}
         {options.map((opt) => (
-          <SelectItem key={opt.value} value={toRadixValue(opt.value)}>
+          <SelectItem
+            key={opt.value}
+            value={toRadixValue(opt.value)}
+            {...(opt.disabled === true ? { disabled: true } : {})}
+          >
             {opt.label}
           </SelectItem>
         ))}

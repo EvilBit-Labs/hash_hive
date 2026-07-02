@@ -211,6 +211,20 @@
       "when": 1782507350192,
       "tag": "0029_spicy_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1782878657938,
+      "tag": "0030_eager_microbe",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1782901408087,
+      "tag": "0031_slippery_mandroid",
+      "breakpoints": true
     }
   ]
 }

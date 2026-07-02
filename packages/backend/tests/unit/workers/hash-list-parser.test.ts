@@ -320,8 +320,10 @@ describe('Hash list parser worker', () => {
     expect(inserted[0]).toMatchObject({
       hashValue: 'e99a18c428cb38d5f260853678922e03',
       plaintext: 'secret',
+      source: 'upload',
     })
     expect(inserted[0]?.['metadata']).toBeUndefined()
+    expect(inserted[0]?.['username']).toBeUndefined()
   })
 
   test('atomic flip: skips emit when UPDATE returns zero rows (concurrent processor)', async () => {
@@ -388,34 +390,40 @@ describe('Hash list parser worker', () => {
     )
     expect(inserted.length).toBe(4)
 
-    // 1 token: only hashValue
+    // 1 token: only hashValue — username null, source='upload', no crackedAt
     expect(inserted[0]).toMatchObject({
       hashListId: 1,
       hashValue: '5f4dcc3b5aa765d61d8327deb882cf99',
+      source: 'upload',
     })
     expect(inserted[0]?.['plaintext']).toBeUndefined()
     expect(inserted[0]?.['metadata']).toBeUndefined()
+    expect(inserted[0]?.['username']).toBeUndefined()
 
-    // 2 token: hash:plaintext
+    // 2 token: hash:plaintext — no username, source='upload'
     expect(inserted[1]).toMatchObject({
       hashListId: 1,
       hashValue: '098f6bcd4621d373cade4e832627b4f6',
       plaintext: 'test',
+      source: 'upload',
     })
 
-    // 3 token: username:hash:plaintext
+    // 3 token: username:hash:plaintext — username column, no metadata, source='upload'
     expect(inserted[2]).toMatchObject({
       hashListId: 1,
       hashValue: 'e99a18c428cb38d5f260853678922e03',
       plaintext: 'secret',
-      metadata: { username: 'admin' },
+      username: 'admin',
+      source: 'upload',
     })
+    expect(inserted[2]?.['metadata']).toBeUndefined()
 
     // 4+ tokens: legacy first-colon-as-separator (plaintext keeps internal colons)
     expect(inserted[3]).toMatchObject({
       hashListId: 1,
       hashValue: 'abc123',
       plaintext: 'pass:with:colons',
+      source: 'upload',
     })
   })
 

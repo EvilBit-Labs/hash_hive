@@ -408,12 +408,13 @@ if (IS_ISOLATED) {
         hashValue: '098f6bcd4621d373cade4e832627b4f6',
         plaintext: 'test',
       })
-      // 3-token row carries username in metadata
+      // 3-token row carries username column (not metadata) and source='upload'
       expect(items[2]).toMatchObject({
         hashListId: id,
         hashValue: 'e99a18c428cb38d5f260853678922e03',
         plaintext: 'secret',
-        metadata: { username: 'admin' },
+        username: 'admin',
+        source: 'upload',
       })
 
       // Status flipped to ready with U1 statistics shape

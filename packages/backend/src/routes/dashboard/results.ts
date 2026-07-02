@@ -1,8 +1,12 @@
 import {
   attacks,
   campaigns,
+  exportFormatSchema,
+  exportScopeSchema,
+  exportVariantSchema,
   hashItems,
   hashLists,
+  isPotfileVariantConflict,
   listResultsResponseSchema,
   resolveAttackModeName,
 } from '@hashhive/shared'
@@ -24,7 +28,16 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
-import { escapeLike } from '../../services/resources.js'
+import { getCampaignById } from '../../services/campaigns.js'
+import { escapeLike, getHashListById } from '../../services/resources.js'
+import {
+  buildExportScopeParams,
+  buildExportTimestamp,
+  generatorToReadableStream,
+  getExportFileExtension,
+  getExportMimeType,
+} from '../../services/results/export-format.js'
+import { createExport, escapeCsv } from '../../services/results/export.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -37,31 +50,6 @@ const RESULTS_LIST_MAX_LIMIT = 100
 const RESULTS_LIST_DEFAULT_LIMIT = 50
 
 const CSV_STREAM_BATCH_SIZE = 1000
-
-// Characters that trigger spreadsheet formula evaluation in Excel, Google
-// Sheets, and LibreOffice Calc when they appear at the start of a cell.
-// `plaintext` and `hashValue` are attacker-influenced data — a recovered
-// password of `=cmd|...` would otherwise execute as a formula when the
-// exported CSV is opened. Quote-wrapping does not neutralize this; the
-// canonical mitigation is to prefix the cell with a leading apostrophe so
-// spreadsheet apps treat it as literal text. `\n` and `\r` are included
-// because Excel/Sheets strip leading whitespace (including newlines that
-// the CSV reader preserved inside a quoted cell) before evaluating
-// formula triggers. See OWASP "CSV Injection".
-const CSV_FORMULA_TRIGGER_REGEX = /^[=+\-@\t\r\n]/
-
-function escapeCsv(val: string | null | undefined): string {
-  if (val == null) return ''
-  let str = val
-  if (CSV_FORMULA_TRIGGER_REGEX.test(str)) {
-    str = `'${str}`
-  }
-  // Bare CR splits the row in spreadsheet parsers; double inner quotes per RFC 4180.
-  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-    return `"${str.replace(/"/g, '""')}"`
-  }
-  return str
-}
 
 // Permissive filter inputs across the dashboard surface: invalid values
 // fall back to "no filter" rather than 400, and `coerce` keeps
@@ -94,9 +82,29 @@ const listResultsQuerySchema = z.object({
   offset: coercedIntegerQuery({ min: 0, default: 0 }),
 })
 
-const exportResultsQuerySchema = z.object(resultsFilterShape)
+// Export scope/variant/format are optional for backward compatibility. When all
+// three are absent the handler follows the legacy CSV path so that existing
+// clients continue to receive the same output. When any one is present the
+// handler uses the U3 export service with defaults (project/cracked-pairs/csv)
+// for whichever axes are missing.
+const exportResultsQuerySchema = z.object({
+  ...resultsFilterShape,
+  scope: exportScopeSchema.optional(),
+  variant: exportVariantSchema.optional(),
+  format: exportFormatSchema.optional(),
+})
 
-type ResultsFilterInput = z.infer<typeof exportResultsQuerySchema>
+// Filter-only subset used by buildResultFilters and the legacy export path.
+// Uses `T | undefined` (not `?: T`) to satisfy exactOptionalPropertyTypes —
+// query destructuring always produces properties that are present but possibly
+// undefined, which is distinct from an absent property under strict TS config.
+type ResultsFilterInput = {
+  campaignId: number | undefined
+  hashListId: number | undefined
+  q: string | undefined
+  startDate: string | undefined
+  endDate: string | undefined
+}
 
 function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
@@ -255,14 +263,19 @@ const exportResultsRoute = createRoute({
   path: '/export',
   tags: ['Results'],
   summary:
-    'Stream a CSV export of cracked results. Streams all matching rows with no row cap; backpressure is handled via ReadableStream.',
+    'Stream an export of cracked results. Accepts scope, variant, and format to control output. Streams all matching rows with no row cap; backpressure is handled via ReadableStream.',
   security: [{ SessionCookie: [] }],
   request: { query: exportResultsQuerySchema },
   responses: {
     200: {
-      description: 'CSV file with one row per cracked hash; streamed via ReadableStream.',
-      content: { 'text/csv': { schema: z.string() } },
+      description:
+        'Export file streamed via ReadableStream. Content-Type is text/csv for CSV exports or text/plain for potfile exports. The x-export-skipped header carries the count of rows omitted because the hash type is missing or the potfile mode is unsupported.',
+      content: {
+        'text/csv': { schema: z.string() },
+        'text/plain': { schema: z.string() },
+      },
     },
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
   },
@@ -336,13 +349,98 @@ function encodeBatchAsCsv(batch: readonly CsvBatchRow[]): string {
 }
 
 resultsRoutes.openapi(exportResultsRoute, async (c) => {
-  const scope = getScopedProjectId(c)
-  if (!scope.ok) {
+  const scopeResult = getScopedProjectId(c)
+  if (!scopeResult.ok) {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500)
   }
-  const { projectId } = scope
+  const { projectId } = scopeResult
 
-  const { campaignId, hashListId, q, startDate, endDate } = c.req.valid('query')
+  const { campaignId, hashListId, q, startDate, endDate, scope, variant, format } =
+    c.req.valid('query')
+
+  // When any of the new axes are provided, delegate to the U3 export service.
+  // Absent axes default to project/cracked-pairs/csv so partial callers get a
+  // sensible result. When all three are absent the legacy handler runs instead —
+  // this keeps old-format CSV output (6 columns) unchanged for existing clients.
+  if (scope !== undefined || variant !== undefined || format !== undefined) {
+    const resolvedScope = scope ?? 'project'
+    const resolvedVariant = variant ?? 'cracked-pairs'
+    const resolvedFormat = format ?? 'csv'
+
+    if (isPotfileVariantConflict(resolvedFormat, resolvedVariant)) {
+      return c.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: `format '${resolvedFormat}' requires the cracked-pairs variant — potfiles need both the hash and its plaintext, which '${resolvedVariant}' does not provide.`,
+          },
+        },
+        400
+      )
+    }
+
+    // Ownership check (item D): verify the scoped resource belongs to the project
+    // before building scopeParams. Without this, any valid hashListId or
+    // campaignId — even from a different project — could be passed to createExport.
+    if (resolvedScope === 'hash-list' && hashListId != null) {
+      const hl = await getHashListById(hashListId, projectId)
+      if (!hl) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } },
+          404
+        )
+      }
+    }
+    if (resolvedScope === 'campaign' && campaignId != null) {
+      const camp = await getCampaignById(campaignId)
+      if (!camp || camp.projectId !== projectId) {
+        return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      }
+    }
+
+    const scopeParams = buildExportScopeParams(resolvedScope, projectId, hashListId, campaignId)
+    if (scopeParams === null) {
+      const missing = resolvedScope === 'hash-list' ? 'hashListId' : 'campaignId'
+      return c.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: `'${missing}' is required when scope is '${resolvedScope}'`,
+          },
+        },
+        400
+      )
+    }
+
+    const { skippedCount, rows } = await createExport(db, {
+      ...scopeParams,
+      variant: resolvedVariant,
+      format: resolvedFormat,
+      filters: { q, startDate, endDate },
+    })
+
+    const timestamp = buildExportTimestamp()
+    const ext = getExportFileExtension(resolvedFormat)
+    const mime = getExportMimeType(resolvedFormat)
+    const stream = generatorToReadableStream(rows)
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': mime,
+        'Content-Disposition': `attachment; filename="results-${timestamp}.${ext}"`,
+        'x-export-skipped': String(skippedCount),
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
+
+  // ─── Legacy path: original 6-column CSV export ──────────────────────────────
+  // Runs when scope/variant/format are all absent. Preserves the pre-U3 output
+  // format (6 columns: hash_value, plaintext, campaign, attack, hash_list,
+  // cracked_at) so that existing dashboard clients receive the same file shape.
+
   const filters: ResultsFilterInput = { campaignId, hashListId, q, startDate, endDate }
   // Build conditions once at handler entry — each pull only composes the
   // cursor predicate on top.
@@ -423,7 +521,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   })
 
   // Strip `:` for Windows-safe filenames; slice to seconds (drop millis).
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const timestamp = buildExportTimestamp()
 
   return new Response(stream, {
     status: 200,

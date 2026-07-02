@@ -1436,3 +1436,29 @@ export const fleetConfigResponseSchema = z
     config: fleetDefaultConfigSchema,
   })
   .openapi('FleetConfigResponse')
+
+// ─── Export (#102) ──────────────────────────────────────────────────
+export {
+  exportFormatSchema,
+  exportQuerySchema,
+  exportScopeSchema,
+  exportVariantSchema,
+  isPotfileVariantConflict,
+} from './export.js'
+
+// ─── Import (#102) ──────────────────────────────────────────────────
+export {
+  IMPORT_CONTENT_MAX_LENGTH,
+  importFormatSchema,
+  importRequestSchema,
+  importSummarySchema,
+} from './import.js'
+
+// ─── Search (#102) ──────────────────────────────────────────────────
+export {
+  hashSearchResponseSchema,
+  hashSearchResultSchema,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_LIMIT,
+  SEARCH_MAX_Q_LENGTH,
+} from './search.js'
