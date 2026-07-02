@@ -210,6 +210,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'status',
     'isPermanent',
     'archivedAt',
+    'blobReclaimedAt',
+    'fileChecksum',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -223,6 +225,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'status',
     'isPermanent',
     'archivedAt',
+    'blobReclaimedAt',
+    'fileChecksum',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -237,6 +241,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'status',
     'isPermanent',
     'archivedAt',
+    'blobReclaimedAt',
+    'fileChecksum',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
