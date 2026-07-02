@@ -1149,12 +1149,19 @@ export async function listAttacks(
  * Paginated variant of `listAttacks` for the Control API. Same shape
  * as the other paginated services (`{ items, total }` via `LIMIT/
  * OFFSET` + `count(*)`). Deterministic order by `attacks.id` ascending.
+ * Archived attacks are excluded by default (ADR-0019 / issue #106 U6,
+ * R10) — pass `showArchived: true` to include them, matching
+ * `listAttacks`'s non-paginated sibling.
  */
 export async function listAttacksPaginated(
   campaignId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(attacks.campaignId, campaignId)
+  const conditions = [eq(attacks.campaignId, campaignId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(attacks.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()

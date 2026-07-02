@@ -1113,6 +1113,36 @@ export const attackRestoreResponseSchema = z.object({
   ),
 })
 
+// ─── Archive / restore (Control API) ────────────────────────────────
+//
+// The Control API's archive/restore endpoints operate on a single
+// resource per call (`POST /{id}/archive`) rather than the dashboard's
+// bulk `{ ids }` shape — automation clients act on one id at a time, and
+// a single-resource outcome maps cleanly onto an HTTP status per call
+// instead of a per-id array inside a 200. Reuses the same outcome enums
+// as the dashboard schemas above (`resourceArchiveOutcomeSchema`,
+// `attackArchiveOutcomeSchema`, etc.) so the two surfaces can never
+// drift on what "archived" vs "not_archivable" means; only the envelope
+// shape differs. One pair of resource schemas covers hash lists AND
+// word/rule/mask lists, mirroring the dashboard's reuse of
+// `resourceArchiveResponseSchema` across both (issue #106 U10).
+
+export const controlResourceArchiveResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: resourceArchiveOutcomeSchema })
+  .openapi('ControlResourceArchiveResponse')
+
+export const controlResourceRestoreResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: resourceRestoreOutcomeSchema })
+  .openapi('ControlResourceRestoreResponse')
+
+export const controlAttackArchiveResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: attackArchiveOutcomeSchema })
+  .openapi('ControlAttackArchiveResponse')
+
+export const controlAttackRestoreResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: attackRestoreOutcomeSchema })
+  .openapi('ControlAttackRestoreResponse')
+
 // ─── Agent retire (dashboard) ────────────────────────────────────────
 //
 // Retirement is terminal — there is no agent restore path (ADR-0019's

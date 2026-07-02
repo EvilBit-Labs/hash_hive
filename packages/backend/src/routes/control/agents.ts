@@ -4,7 +4,7 @@
  * agent API and is not duplicated here.
  */
 
-import { selectAgentSchema } from '@hashhive/shared'
+import { agentRetireResponseSchema, selectAgentSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -16,7 +16,7 @@ import {
   controlOpenApiHonoOptions,
   sharedControlResponse,
 } from '../../openapi/components.js'
-import { getAgentById, listAgents, updateAgent } from '../../services/agents.js'
+import { getAgentById, listAgents, retireAgent, updateAgent } from '../../services/agents.js'
 import { controlErrorResponse, requireProjectMembership, requireProjectRole } from './helpers.js'
 
 export const controlAgentRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
@@ -164,6 +164,69 @@ controlAgentRoutes.openapi(updateAgentRoute, async (c) => {
       return problemResponse(c, 404, 'not_found', 'agent not found')
     }
     return c.json(updated, 200)
+  } catch (err) {
+    return controlErrorResponse(c, err)
+  }
+})
+
+// ─── POST /:id/retire — retire an agent (admin only) ────────────────
+//
+// Control API parity for the dashboard's `POST /:id/retire` (issue
+// #106 U9), backed by the same `retireAgent` service (U8). Admin-only —
+// retirement is terminal (no restore path), matching the dashboard's
+// precedent (stricter than the `contributor`-or-`admin` archive/restore
+// endpoints above for hash lists, resources, and attacks).
+//
+// Outcome → HTTP status: `retired` → 200 with `{ outcome,
+// releasedTaskIds }`; `not_found` → 404 `not_found`. `already_retired`
+// is mapped to 409 `conflict` here rather than the dashboard's 200
+// idempotent response — the Control surface treats "the requested
+// state transition did not happen because the record is already in a
+// terminal state" the same way archive/restore's `already_archived`
+// does, so a machine client gets a consistent conflict signal across
+// every lifecycle endpoint on this surface instead of having to special-
+// case retire's idempotency.
+
+const retireAgentRoute = createRoute({
+  method: 'post',
+  path: '/{id}/retire',
+  tags: ['Agents'],
+  summary: 'Retire an agent (admin only); terminal, no restore path',
+  description:
+    'Flips the agent to the terminal `retired` status and releases any task it currently holds (assigned/running) back to `pending` with `agent_id` cleared so the scheduler can reassign it. The agent row and all of its history (tasks, benchmarks, errors) are retained — this is a status change, not a delete.',
+  security: [{ ControlApiKey: [] }],
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Retire outcome and the ids of any tasks released back to pending.',
+      content: { 'application/json': { schema: agentRetireResponseSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlAgentRoutes.openapi(retireAgentRoute, async (c) => {
+  try {
+    const { projectId } = await requireProjectRole(c, 'admin')
+    const { id } = c.req.valid('param')
+    const user = c.get('currentUser')
+    const result = await retireAgent(id, projectId, {
+      actorType: 'user',
+      actorId: user.userId,
+    })
+    switch (result.kind) {
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'agent not found')
+      case 'already_retired':
+        return problemResponse(c, 409, 'conflict', 'agent is already retired')
+      case 'retired':
+        return c.json({ outcome: 'retired' as const, releasedTaskIds: result.releasedTaskIds }, 200)
+    }
   } catch (err) {
     return controlErrorResponse(c, err)
   }

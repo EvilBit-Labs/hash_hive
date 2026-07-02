@@ -213,6 +213,14 @@ if (!IS_ISOLATED) {
   const deleteAttackMock: CampaignsService['deleteAttack'] = async () => ({
     kind: 'not_found' as const,
   })
+  // `archiveAttacks`/`restoreAttacks` are exercised in
+  // `control-lifecycle-routes.test.ts`; these stubs are for the
+  // transitive static-import binding only (issue #106 U10 added
+  // archive/restore imports to `control/attacks.ts`).
+  const archiveAttacksMock: CampaignsService['archiveAttacks'] = async (_projectId, ids) =>
+    ids.map((id) => ({ id, outcome: 'not_found' as const }))
+  const restoreAttacksMock: CampaignsService['restoreAttacks'] = async (_projectId, ids) =>
+    ids.map((id) => ({ id, outcome: 'not_found' as const }))
 
   mock.module('../../src/services/campaigns.js', () => ({
     getCampaignById: getCampaignByIdMock,
@@ -227,6 +235,8 @@ if (!IS_ISOLATED) {
     createAttack: createAttackMock,
     updateAttack: updateAttackMock,
     deleteAttack: deleteAttackMock,
+    archiveAttacks: archiveAttacksMock,
+    restoreAttacks: restoreAttacksMock,
     // tasks.ts/retry.ts statically import this (#97 U6); the named import
     // fails to link if the campaigns.js mock omits it.
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
@@ -248,10 +258,16 @@ if (!IS_ISOLATED) {
   const updateAgentMock: AgentsService['updateAgent'] = async (id) =>
     makeAgent({ id, projectId: 1, status: 'offline', name: 'Updated' })
 
+  // `retireAgent` is exercised in `control-lifecycle-routes.test.ts`; this
+  // stub is for the transitive static-import binding only (issue #106
+  // U10 added a `retireAgent` import to `control/agents.ts`).
+  const retireAgentMock: AgentsService['retireAgent'] = async () => ({ kind: 'not_found' as const })
+
   mock.module('../../src/services/agents.js', () => ({
     listAgents: listAgentsMock,
     getAgentById: getAgentByIdMock,
     updateAgent: updateAgentMock,
+    retireAgent: retireAgentMock,
   }))
 
   mock.module('../../src/db/index.js', () => ({

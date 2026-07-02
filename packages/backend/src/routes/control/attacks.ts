@@ -3,7 +3,13 @@
  * routes are scoped via the parent campaign's project.
  */
 
-import { attackStatusSchema, keyspaceCoordSchema, selectAttackSchema } from '@hashhive/shared'
+import {
+  attackStatusSchema,
+  controlAttackArchiveResponseSchema,
+  controlAttackRestoreResponseSchema,
+  keyspaceCoordSchema,
+  selectAttackSchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -17,11 +23,13 @@ import {
 } from '../../openapi/components.js'
 import { deriveAttackRuntimes } from '../../services/attacks/runtime.js'
 import {
+  archiveAttacks,
   createAttack,
   deleteAttack,
   getAttackById,
   getCampaignById,
   listAttacksPaginated,
+  restoreAttacks,
   updateAttack,
 } from '../../services/campaigns.js'
 import { controlErrorResponse, requireProjectMembership, requireProjectRole } from './helpers.js'
@@ -100,8 +108,18 @@ const updateAttackSchema = z
 // `controlOpenApiHonoOptions.defaultHook` (openapi/components.ts) emit
 // the uniform RFC 9457 problem-details envelope on absence — handlers
 // don't need a manual presence check.
+// `showArchived` mirrors the dashboard's `?showArchived=true` query param
+// naming and permissive coercion (ADR-0019 / issue #106 R10) — only the
+// literal "true" enables it, anything else (or absent) is false and
+// archived attacks stay excluded from the default listing.
 const attackListQuerySchema = paginationQuerySchema.merge(
-  z.object({ campaignId: z.coerce.number().int().positive() })
+  z.object({
+    campaignId: z.coerce.number().int().positive(),
+    showArchived: z
+      .string()
+      .optional()
+      .transform((v) => v === 'true'),
+  })
 )
 
 // `selectAttackSchema` no longer carries `status` (the dead column was dropped
@@ -164,6 +182,7 @@ controlAttackRoutes.openapi(listAttacksRoute, async (c) => {
     const { items, total } = await listAttacksPaginated(query.campaignId, {
       limit: query.limit,
       offset: query.offset,
+      showArchived: query.showArchived,
     })
     return c.json(paginate(await withRuntimeMany(items), total, query), 200)
   } catch (err) {
@@ -320,9 +339,8 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
     const user = c.get('currentUser')
     // deleteAttack returns a typed result (issue #106 U6) — a permanent
-    // (run) attack is archive-only. Minimal handling here so this DELETE
-    // stops returning a false 204 / uncaught 500 on a permanent attack;
-    // a fuller Control API archive/restore pass is U10.
+    // (run) attack is archive-only. See the archive/restore routes below
+    // (issue #106 U10) for the actual archive-only path.
     const result = await deleteAttack(id, { actorType: 'user', actorId: user.userId })
     switch (result.kind) {
       case 'not_found':
@@ -336,6 +354,133 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
         )
       case 'deleted':
         return c.body(null, 204)
+    }
+  } catch (err) {
+    return controlErrorResponse(c, err)
+  }
+})
+
+// ─── POST /:id/archive, /:id/restore — attack lifecycle (issue #106 U10) ─
+//
+// Control API parity for the dashboard's bulk `POST /attacks/archive`
+// and `/restore` (issue #106 U7). Single-resource per the Control
+// surface's existing per-resource style — the underlying service
+// (`archiveAttacks`/`restoreAttacks`, U6) is bulk-`ids`-shaped, so these
+// handlers call it with a one-element array and unwrap the sole result.
+//
+// Outcome → HTTP status (documented here once; hash-list/resource and
+// agent-retire routes follow the same convention):
+//   - archived / restored       → 200, body carries `{ id, outcome }`.
+//   - not_found                 → 404 `not_found`.
+//   - already_archived,
+//     not_archivable,
+//     in_use, not_archived      → 409 `conflict` — the record's CURRENT
+//                                  state blocks the action but the
+//                                  state can change (e.g. a task-less
+//                                  attack becomes archivable once it
+//                                  latches permanent). This is
+//                                  deliberately distinct from the 422
+//                                  `not_deletable` the DELETE route
+//                                  above uses: 422 means the action can
+//                                  NEVER succeed for this record (it's
+//                                  permanent), 409 means it can't
+//                                  succeed RIGHT NOW.
+//   - error                     → 500 `internal` (a per-id service
+//                                  failure, e.g. a DB error).
+
+const archiveAttackRoute = createRoute({
+  method: 'post',
+  path: '/{id}/archive',
+  tags: ['Attacks'],
+  summary: 'Archive a permanent attack (contributor or admin only)',
+  security: [{ ControlApiKey: [] }],
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Archive outcome.',
+      content: { 'application/json': { schema: controlAttackArchiveResponseSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlAttackRoutes.openapi(archiveAttackRoute, async (c) => {
+  try {
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
+    const { id } = c.req.valid('param')
+    const user = c.get('currentUser')
+    const [result] = await archiveAttacks(projectId, [id], {
+      actorType: 'user',
+      actorId: user.userId,
+    })
+    if (!result) throw new Error('archiveAttacks returned no result for a single id')
+    switch (result.outcome) {
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'attack not found')
+      case 'already_archived':
+        return problemResponse(c, 409, 'conflict', 'attack is already archived')
+      case 'not_archivable':
+        return problemResponse(
+          c,
+          409,
+          'conflict',
+          'attack has never generated a task and is not yet permanent; delete it instead'
+        )
+      case 'error':
+        return problemResponse(c, 500, 'internal', 'archive failed')
+      case 'archived':
+        return c.json({ id: result.id, outcome: result.outcome }, 200)
+    }
+  } catch (err) {
+    return controlErrorResponse(c, err)
+  }
+})
+
+const restoreAttackRoute = createRoute({
+  method: 'post',
+  path: '/{id}/restore',
+  tags: ['Attacks'],
+  summary: 'Restore an archived attack (contributor or admin only)',
+  security: [{ ControlApiKey: [] }],
+  request: { params: idParamSchema },
+  responses: {
+    200: {
+      description: 'Restore outcome.',
+      content: { 'application/json': { schema: controlAttackRestoreResponseSchema } },
+    },
+    400: sharedControlResponse(CONTROL_RESPONSE_REFS.ValidationError),
+    401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
+    403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
+    404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
+  },
+})
+
+controlAttackRoutes.openapi(restoreAttackRoute, async (c) => {
+  try {
+    const { projectId } = await requireProjectRole(c, 'contributor', 'admin')
+    const { id } = c.req.valid('param')
+    const user = c.get('currentUser')
+    const [result] = await restoreAttacks(projectId, [id], {
+      actorType: 'user',
+      actorId: user.userId,
+    })
+    if (!result) throw new Error('restoreAttacks returned no result for a single id')
+    switch (result.outcome) {
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'attack not found')
+      case 'not_archived':
+        return problemResponse(c, 409, 'conflict', 'attack is not archived')
+      case 'error':
+        return problemResponse(c, 500, 'internal', 'restore failed')
+      case 'restored':
+        return c.json({ id: result.id, outcome: result.outcome }, 200)
     }
   } catch (err) {
     return controlErrorResponse(c, err)
