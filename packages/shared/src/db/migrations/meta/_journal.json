@@ -232,6 +232,13 @@
       "when": 1782959245606,
       "tag": "0032_oval_justin_hammer",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1782961157717,
+      "tag": "0033_pale_junta",
+      "breakpoints": true
     }
   ]
 }
