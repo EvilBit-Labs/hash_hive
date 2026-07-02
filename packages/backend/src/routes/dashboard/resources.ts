@@ -404,11 +404,22 @@ resourceRoutes.openapi(deleteHashListRoute, async (c) => {
   }
 
   try {
-    const deleted = await deleteHashList(id, projectId, actor)
-    if (!deleted) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    const result = await deleteHashList(id, projectId, actor)
+    switch (result.kind) {
+      case 'not_found':
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+      case 'not_deletable':
+        // ADR-0019 / issue #106 U3: a hash list that has ever been
+        // referenced by a campaign is permanent — archive-only.
+        return dashboardError(
+          c,
+          409,
+          'NOT_DELETABLE',
+          'Hash list has been used by a campaign and is now permanent; it cannot be deleted, only archived.'
+        )
+      case 'deleted':
+        return c.body(null, 204)
     }
-    return c.body(null, 204)
   } catch (err) {
     if (err instanceof ResourceInUseError) {
       return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)

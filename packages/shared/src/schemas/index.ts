@@ -1001,6 +1001,55 @@ export const campaignRestoreResponseSchema = z.object({
   ),
 })
 
+// ─── Resource archive / restore (dashboard) ─────────────────────────
+//
+// Shared by hash lists, word lists, rule lists, and mask lists — all four
+// mirror the same permanence-latch + reversible-archive state machine
+// (ADR-0019, issue #106 U3). One outcome vocabulary suffices because the
+// eligibility rules are identical across the four tables (permanent +
+// status='ready', not already archived, not referenced by a non-archived
+// dependent); only the dependent kind differs (campaigns for hash lists,
+// attacks for word/rule/mask lists) and that lives in the service layer,
+// not the wire shape. Bulk-capable, same `.min(1).max(200)` cap as
+// campaign archive/restore.
+
+export const resourceArchiveRequestSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200),
+})
+
+export const resourceArchiveOutcomeSchema = z.enum([
+  'archived',
+  'not_found',
+  'not_archivable',
+  'already_archived',
+  // Refused because a non-archived dependent (campaign or attack) still
+  // references the resource (R3).
+  'in_use',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
+])
+
+export const resourceArchiveResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: resourceArchiveOutcomeSchema })
+  ),
+})
+
+export const resourceRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Per-id failure (see resourceArchiveOutcomeSchema).
+  'error',
+])
+
+export const resourceRestoreResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: resourceRestoreOutcomeSchema })
+  ),
+})
+
 /**
  * The attack lifecycle vocabulary. Unlike `campaignStatusSchema`, this
  * governs a *wire-only* field: attack status is derived at read time from

@@ -7,7 +7,7 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -129,11 +129,20 @@ export async function getHashTypeById(id: number) {
 
 // ─── Hash Lists ─────────────────────────────────────────────────────
 
-export async function listHashLists(projectId: number) {
+export async function listHashLists(
+  projectId: number,
+  opts: { showArchived?: boolean | undefined } = {}
+) {
+  // Archived hash lists are excluded from active list views by default
+  // (ADR-0019 / R10); pass showArchived to include them.
+  const conditions = [eq(hashLists.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(hashLists.archivedAt))
+  }
   return db
     .select()
     .from(hashLists)
-    .where(eq(hashLists.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(desc(hashLists.createdAt))
 }
 
@@ -146,9 +155,13 @@ export async function listHashLists(projectId: number) {
  */
 export async function listHashListsPaginated(
   projectId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(hashLists.projectId, projectId)
+  const conditions = [eq(hashLists.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(hashLists.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -190,21 +203,77 @@ export function isForeignKeyViolation(err: unknown, expectedConstraint?: string)
   return constraint === expectedConstraint
 }
 
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+type DbRunner = DbTx | typeof db
+
+// ─── Permanence latch (ADR-0019 / issue #106 U3) ────────────────────
+//
+// Any table this latch can target — hash lists plus the three generic
+// resource tables. All four share the same `id` / `isPermanent` /
+// `updatedAt` column shapes, so one function covers every reference-write
+// site instead of four near-duplicates.
+type LatchableTable = typeof hashLists | ResourceTable
+
+/**
+ * Latch `is_permanent = true` the first time a hash list or word/rule/mask
+ * list becomes referenced by a campaign or attack — the resource analog of
+ * a campaign leaving `draft` (see `transitionCampaign`'s latch). One-way:
+ * the guarded `WHERE isPermanent = false` makes a repeat call on an
+ * already-permanent row a no-op, so callers can invoke this unconditionally
+ * on every reference-creating write without checking current state first.
+ *
+ * Must run inside the same transaction as the reference-creating write
+ * (campaign/attack insert or update) so a crash between the two can never
+ * leave a referenced resource un-latched.
+ */
+export async function latchResourcePermanent(
+  tx: DbTx,
+  table: LatchableTable,
+  id: number
+): Promise<void> {
+  await tx
+    .update(table)
+    .set({ isPermanent: true, updatedAt: new Date() })
+    .where(and(eq(table.id, id), eq(table.isPermanent, false)))
+}
+
+// ─── Delete guard ─────────────────────────────────────────────────────
+
+/**
+ * Outcome of a hash-list / resource delete attempt. Mirrors
+ * `DeleteCampaignResult` (`campaign-dashboard.ts`): a purely backend-internal
+ * discriminated union — routes translate `kind` into the HTTP envelope, it is
+ * never serialized verbatim, so it does not need a shared Zod schema.
+ */
+export type DeleteResourceResult =
+  | { kind: 'not_found' }
+  // Latched permanent (referenced at least once, ever) — archive-only,
+  // never hard-deletable again even if every reference is later removed.
+  | { kind: 'not_deletable' }
+  | { kind: 'deleted' }
+
 /**
  * Shared cascade-delete flow for resource tables. Steps:
  *   1. Ownership check (404 if not in project) - handled by the caller via
  *      `lookup`.
- *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
- *      FK violation rolls back the children).
- *   3. Best-effort S3 object delete on the row's fileRef.
+ *   2. Permanence pre-check (409-equivalent `not_deletable`) - skips the
+ *      cascade entirely for an already-latched row so a hash list with
+ *      millions of `hash_items` is never scanned for a delete that the
+ *      guard will refuse anyway.
+ *   3. DB delete FIRST (inside a tx when `cascade` is supplied so a late
+ *      FK violation rolls back the children). The owner delete folds
+ *      `is_permanent = false` into its own WHERE so a concurrent latch
+ *      (a reference created between step 2 and here) is caught atomically
+ *      instead of racing past the pre-check.
+ *   4. Best-effort S3 object delete on the row's fileRef.
  *
  * Throws `ResourceInUseError` if a FK from another table still references
- * the row. Idempotent: returns `false` when the row was already gone.
+ * the row (the pristine-but-referenced case: never latched, still blocked
+ * by RESTRICT/child rows).
  */
-type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
-type DbRunner = DbTx | typeof db
-
-async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
+async function cascadeDeleteResource<
+  TRow extends { fileRef?: unknown; isPermanent: boolean },
+>(args: {
   id: number
   projectId: number
   resourceLabel: string
@@ -213,45 +282,46 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
   actor: Actor
   lookup: () => Promise<TRow | null>
   cascade?: (tx: DbTx) => Promise<void>
-  deleteOwner: (runner: DbRunner) => Promise<void>
-}): Promise<boolean> {
+  // Performs the guarded DELETE (folding `isPermanent = false` into its
+  // WHERE) and returns the number of rows actually removed, so the caller
+  // can detect a race where permanence latched between the pre-check and
+  // this statement.
+  deleteOwner: (runner: DbRunner) => Promise<number>
+}): Promise<DeleteResourceResult> {
   const row = await args.lookup()
-  if (!row) return false
+  if (!row) return { kind: 'not_found' }
+  if (row.isPermanent) return { kind: 'not_deletable' }
+
+  class LatchedDuringDelete extends Error {}
 
   try {
-    if (args.cascade) {
-      await db.transaction(async (tx) => {
-        await args.cascade!(tx)
-        await args.deleteOwner(tx)
-        await recordAuditEvent(
-          {
-            actor: args.actor,
-            projectId: args.projectId,
-            entityType: args.entityType,
-            entityId: args.id,
-            action: 'deleted',
-            oldRow: row as Record<string, unknown>,
-          },
-          tx
-        )
-      })
-    } else {
-      await db.transaction(async (tx) => {
-        await args.deleteOwner(tx)
-        await recordAuditEvent(
-          {
-            actor: args.actor,
-            projectId: args.projectId,
-            entityType: args.entityType,
-            entityId: args.id,
-            action: 'deleted',
-            oldRow: row as Record<string, unknown>,
-          },
-          tx
-        )
-      })
-    }
+    await db.transaction(async (tx) => {
+      if (args.cascade) {
+        await args.cascade(tx)
+      }
+      const deletedCount = await args.deleteOwner(tx)
+      if (deletedCount === 0) {
+        // Race: a reference-creating write latched is_permanent=true between
+        // the pre-check above and this guarded DELETE. Throw to roll back
+        // any cascade deletes already applied in this transaction.
+        throw new LatchedDuringDelete()
+      }
+      await recordAuditEvent(
+        {
+          actor: args.actor,
+          projectId: args.projectId,
+          entityType: args.entityType,
+          entityId: args.id,
+          action: 'deleted',
+          oldRow: row as Record<string, unknown>,
+        },
+        tx
+      )
+    })
   } catch (err) {
+    if (err instanceof LatchedDuringDelete) {
+      return { kind: 'not_deletable' }
+    }
     if (isForeignKeyViolation(err)) {
       throw new ResourceInUseError(args.resourceLabel, args.id, args.referencedBy)
     }
@@ -272,7 +342,7 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
       )
     }
   }
-  return true
+  return { kind: 'deleted' }
 }
 
 // Maximum hash_items rows to remove per DELETE chunk during cascade. Bounds
@@ -324,7 +394,7 @@ export async function deleteHashList(
   id: number,
   projectId: number,
   actor: Actor = DEFAULT_SYSTEM_ACTOR
-): Promise<boolean> {
+): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
     projectId,
@@ -340,13 +410,27 @@ export async function deleteHashList(
     deleteOwner: (runner) =>
       runner
         .delete(hashLists)
-        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
-        .then(() => undefined),
+        .where(
+          and(
+            eq(hashLists.id, id),
+            eq(hashLists.projectId, projectId),
+            // Draft-only hard-delete guard (ADR-0019 / R2): a hash list that
+            // has ever been referenced is permanent and archive-only. Folded
+            // into the WHERE so a concurrent latch loses the race atomically
+            // rather than deleting a now-permanent row.
+            eq(hashLists.isPermanent, false)
+          )
+        )
+        .returning({ id: hashLists.id })
+        .then((rows) => rows.length),
   })
 }
 
-/** Map a resource table to its audit entity type. */
-function entityTypeForTable(table: ResourceTable): AuditEntityType {
+/**
+ * Map a resource table to its audit entity type. Exported for reuse by
+ * `resources-archive.ts` (ADR-0019 / issue #106 U3 archive/restore).
+ */
+export function entityTypeForTable(table: ResourceTable): AuditEntityType {
   if (table === wordLists) return 'word_list'
   if (table === ruleLists) return 'rule_list'
   return 'mask_list'
@@ -358,7 +442,7 @@ export async function deleteResource(
   projectId: number,
   resourceType: string,
   actor: Actor = DEFAULT_SYSTEM_ACTOR
-): Promise<boolean> {
+): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
     projectId,
@@ -370,8 +454,16 @@ export async function deleteResource(
     deleteOwner: (runner) =>
       runner
         .delete(table)
-        .where(and(eq(table.id, id), eq(table.projectId, projectId)))
-        .then(() => undefined),
+        .where(
+          and(
+            eq(table.id, id),
+            eq(table.projectId, projectId),
+            // Draft-only hard-delete guard (ADR-0019 / R2): see deleteHashList.
+            eq(table.isPermanent, false)
+          )
+        )
+        .returning({ id: table.id })
+        .then((rows) => rows.length),
   })
 }
 
@@ -645,11 +737,21 @@ export async function getHashListStats(hashListId: number): Promise<{
 
 export type ResourceTable = typeof wordLists | typeof ruleLists | typeof maskLists
 
-export async function listResources(table: ResourceTable, projectId: number) {
+export async function listResources(
+  table: ResourceTable,
+  projectId: number,
+  opts: { showArchived?: boolean | undefined } = {}
+) {
+  // Archived resources are excluded from active list views by default
+  // (ADR-0019 / R10); pass showArchived to include them.
+  const conditions = [eq(table.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(table.archivedAt))
+  }
   return db
     .select()
     .from(table)
-    .where(eq(table.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(desc(table.createdAt))
 }
 
@@ -662,9 +764,13 @@ export async function listResources(table: ResourceTable, projectId: number) {
 export async function listResourcesPaginated(
   table: ResourceTable,
   projectId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(table.projectId, projectId)
+  const conditions = [eq(table.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(table.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()

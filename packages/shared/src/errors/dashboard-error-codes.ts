@@ -30,6 +30,10 @@ export const DASHBOARD_ERROR_CODES = [
   'RESOURCE_VALIDATION_FAILED',
   'DUPLICATE_NAME',
   'NOT_DRAFT',
+  // Permanent (latched by ADR-0019 / issue #106) — archive-only, refuses
+  // hard delete. Used by campaigns (existing, raw c.json) and hash
+  // lists/resources (issue #106 U3).
+  'NOT_DELETABLE',
   'INVALID_TRANSITION',
   'STALE_STATE',
   'DELETE_FAILED',

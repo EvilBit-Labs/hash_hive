@@ -4,7 +4,11 @@ import {
   type CampaignSortOrder,
   type CampaignStatus,
   campaigns,
+  hashLists,
+  maskLists,
+  ruleLists,
   tasks,
+  wordLists,
 } from '@hashhive/shared'
 import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
@@ -16,7 +20,38 @@ import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
 import { emitCampaignStatus } from './events.js'
+import { latchResourcePermanent } from './resources.js'
 import { enqueueLineCountForUncountedResources } from './resources/line-count-trigger.js'
+
+// ─── Permanence latch (ADR-0019 / issue #106 U3) ─────────────────────
+//
+// Every write site that sets attacks.wordlistId/rulelistId/masklistId
+// (createAttack, updateAttack, and the per-attack insert loop in
+// createCampaignWithAttacks) funnels through this helper so a word/rule/mask
+// list becomes permanent the moment it is first referenced. Called with the
+// attack row's CURRENT (post-write) values — not the caller's raw input —
+// so it latches whichever resource is actually in effect after the write,
+// covering both "new reference on create" and "swapped to a new resource on
+// update" uniformly. Must run inside the same transaction as the attack
+// write (see latchResourcePermanent).
+async function latchAttackResources(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  attack: {
+    wordlistId: number | null
+    rulelistId: number | null
+    masklistId: number | null
+  }
+): Promise<void> {
+  if (attack.wordlistId != null) {
+    await latchResourcePermanent(tx, wordLists, attack.wordlistId)
+  }
+  if (attack.rulelistId != null) {
+    await latchResourcePermanent(tx, ruleLists, attack.rulelistId)
+  }
+  if (attack.masklistId != null) {
+    await latchResourcePermanent(tx, maskLists, attack.masklistId)
+  }
+}
 
 export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js'
 // Re-export from sibling modules so existing callers (route handlers,
@@ -283,6 +318,12 @@ export async function createCampaign(
 
     if (!campaign) return null
 
+    // Permanence latch (ADR-0019 / issue #106 U3): a hash list becomes
+    // referenced the moment a campaign is created against it, regardless of
+    // the campaign's own draft/permanent state. One-way and idempotent — see
+    // latchResourcePermanent.
+    await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+
     await recordAuditEvent(
       {
         actor,
@@ -415,6 +456,9 @@ export async function createCampaignWithAttacks(input: {
         throw new Error('Campaign insert returned no row')
       }
 
+      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign.
+      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+
       await recordAuditEvent(
         {
           actor,
@@ -463,6 +507,9 @@ export async function createCampaignWithAttacks(input: {
           throw new Error('Attack insert returned no row — txn invariant violated')
         }
         realIdByIndex.push(row.id)
+
+        // Permanence latch (ADR-0019 / issue #106 U3): see latchAttackResources.
+        await latchAttackResources(tx, row)
 
         await recordAuditEvent(
           {
@@ -1117,6 +1164,9 @@ export async function createAttack(
       .returning()
 
     if (inserted) {
+      // Permanence latch (ADR-0019 / issue #106 U3): see latchAttackResources.
+      await latchAttackResources(tx, inserted)
+
       await recordAuditEvent(
         {
           actor,
@@ -1191,6 +1241,11 @@ export async function updateAttack(
       .returning()
 
     if (row) {
+      // Permanence latch (ADR-0019 / issue #106 U3): latch whichever
+      // resource is in effect AFTER the update (see latchAttackResources) —
+      // covers both a fresh reference and a swap to a new resource.
+      await latchAttackResources(tx, row)
+
       await recordAuditEvent(
         {
           actor,

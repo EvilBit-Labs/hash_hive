@@ -48,6 +48,11 @@ import type {
   campaignArchiveResponseSchema,
   campaignRestoreOutcomeSchema,
   campaignRestoreResponseSchema,
+  resourceArchiveOutcomeSchema,
+  resourceArchiveRequestSchema,
+  resourceArchiveResponseSchema,
+  resourceRestoreOutcomeSchema,
+  resourceRestoreResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
@@ -232,6 +237,11 @@ export type CampaignArchiveOutcome = z.infer<typeof campaignArchiveOutcomeSchema
 export type CampaignArchiveResponse = z.infer<typeof campaignArchiveResponseSchema>
 export type CampaignRestoreOutcome = z.infer<typeof campaignRestoreOutcomeSchema>
 export type CampaignRestoreResponse = z.infer<typeof campaignRestoreResponseSchema>
+export type ResourceArchiveRequest = z.infer<typeof resourceArchiveRequestSchema>
+export type ResourceArchiveOutcome = z.infer<typeof resourceArchiveOutcomeSchema>
+export type ResourceArchiveResponse = z.infer<typeof resourceArchiveResponseSchema>
+export type ResourceRestoreOutcome = z.infer<typeof resourceRestoreOutcomeSchema>
+export type ResourceRestoreResponse = z.infer<typeof resourceRestoreResponseSchema>
 export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>

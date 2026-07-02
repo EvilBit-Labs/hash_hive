@@ -150,6 +150,12 @@ if (!IS_ISOLATED) {
   }
   mock.module('../../src/services/resources.js', () => ({
     getHashListStats: mock(async () => hashListStatsQueue.shift() ?? defaultHashListStats),
+    // `services/campaigns.js` (loaded for real by this file — see header)
+    // imports `latchResourcePermanent` at module scope (ADR-0019 / issue
+    // #106 U3). GOTCHAS.md "mock.module merges exports" — every consumer's
+    // top-level import must be present on the mock factory or the import
+    // fails at load time for every test file in this run.
+    latchResourcePermanent: mock(async () => undefined),
   }))
 
   // Import service AFTER mocks are in place.

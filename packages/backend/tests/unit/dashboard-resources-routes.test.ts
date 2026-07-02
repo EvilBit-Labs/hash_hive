@@ -117,7 +117,7 @@ if (!IS_ISOLATED) {
   )
   const mockUploadHashListFile = mock(async () => ({ key: 'some/key', size: 123 }))
   const mockImportHashList = mock(async () => ({ status: 'processing' as const, queued: true }))
-  const mockDeleteHashList = mock(async () => true)
+  const mockDeleteHashList = mock(async () => ({ kind: 'deleted' as const }))
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
   // PATCH /hash-lists/{id} set-hash-type mock. Default: row not in
   // project (null) → route maps to 404. Tests override per-case via
@@ -235,8 +235,15 @@ if (!IS_ISOLATED) {
     createResource: mock(async () => ({ id: 1 })),
     getResourceById: mock(async () => null),
     uploadResourceFile: mock(async () => ({ key: 'k', size: 0 })),
-    deleteResource: mock(async () => true),
+    deleteResource: mock(async () => ({ kind: 'deleted' as const })),
     getResourcePresignedUrl: mock(async () => 'https://example/test'),
+    // `services/campaigns.js` (loaded for real by this app's route
+    // registration) imports `latchResourcePermanent` at module scope
+    // (ADR-0019 / issue #106 U3). GOTCHAS.md "mock.module merges exports" —
+    // every consumer's top-level import must be present on the mock
+    // factory or the import fails at load time for every test file in
+    // this run.
+    latchResourcePermanent: mock(async () => undefined),
     // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
     // dashboard route consumes this service from this test file's
     // surface, but `routes/agent/index.ts` imports the function at
@@ -470,7 +477,7 @@ if (!IS_ISOLATED) {
         queued: true,
       }))
       mockDeleteHashList.mockReset()
-      mockDeleteHashList.mockImplementation(async () => true)
+      mockDeleteHashList.mockImplementation(async () => ({ kind: 'deleted' as const }))
 
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'too-big' },
@@ -594,7 +601,7 @@ if (!IS_ISOLATED) {
         throw new Error('S3 down')
       })
       mockDeleteHashList.mockReset()
-      mockDeleteHashList.mockImplementation(async () => true)
+      mockDeleteHashList.mockImplementation(async () => ({ kind: 'deleted' as const }))
       mockImportHashList.mockReset()
       mockImportHashList.mockImplementation(async () => ({
         status: 'processing' as const,
