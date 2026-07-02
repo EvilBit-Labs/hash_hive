@@ -258,18 +258,28 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
     if (!campaign || campaign.projectId !== projectId) {
       return problemResponse(c, 404, 'not_found', 'campaign not found')
     }
-    // Reclaimed-shell guard (issue #106 U12 / R12): the Control surface has
-    // no existing pre-check chokepoint (unlike the dashboard's
-    // checkResourcesOrErrorResponse), so this is checked directly. A
-    // word/rule/mask list swept by the blob-reclamation worker is present
-    // but unusable until re-uploaded and checksum-verified.
-    const reclaimed = await findReclaimedResourceRefs(projectId, data)
+    // Reclaimed-shell / archived guard (issue #106 U12 / R12, F5 code
+    // review): the Control surface has no existing pre-check chokepoint
+    // (unlike the dashboard's checkResourcesOrErrorResponse), so this is
+    // checked directly. A word/rule/mask list swept by the
+    // blob-reclamation worker is present but unusable until re-uploaded
+    // and checksum-verified; an archived one is hidden from listings and
+    // must not silently power new work.
+    const { reclaimed, archived } = await findReclaimedResourceRefs(projectId, data)
     if (reclaimed.length > 0) {
       return problemResponse(
         c,
         409,
         'conflict',
         `Referenced resources are reclaimed shells (re-upload required): ${reclaimed.join(', ')}`
+      )
+    }
+    if (archived.length > 0) {
+      return problemResponse(
+        c,
+        409,
+        'conflict',
+        `Referenced resources are archived: ${archived.join(', ')}`
       )
     }
     const user = c.get('currentUser')
@@ -325,13 +335,21 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
       body.rulelistId !== undefined ||
       body.masklistId !== undefined
     if (hasResourceRefChange) {
-      const reclaimed = await findReclaimedResourceRefs(projectId, body)
+      const { reclaimed, archived } = await findReclaimedResourceRefs(projectId, body)
       if (reclaimed.length > 0) {
         return problemResponse(
           c,
           409,
           'conflict',
           `Referenced resources are reclaimed shells (re-upload required): ${reclaimed.join(', ')}`
+        )
+      }
+      if (archived.length > 0) {
+        return problemResponse(
+          c,
+          409,
+          'conflict',
+          `Referenced resources are archived: ${archived.join(', ')}`
         )
       }
     }
@@ -410,7 +428,8 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
 //   - not_found                 → 404 `not_found`.
 //   - already_archived,
 //     not_archivable,
-//     in_use, not_archived      → 409 `conflict` — the record's CURRENT
+//     in_use, not_archived,
+//     resource_reclaimed        → 409 `conflict` — the record's CURRENT
 //                                  state blocks the action but the
 //                                  state can change (e.g. a task-less
 //                                  attack becomes archivable once it
@@ -513,6 +532,13 @@ controlAttackRoutes.openapi(restoreAttackRoute, async (c) => {
         return problemResponse(c, 404, 'not_found', 'attack not found')
       case 'not_archived':
         return problemResponse(c, 409, 'conflict', 'attack is not archived')
+      case 'resource_reclaimed':
+        return problemResponse(
+          c,
+          409,
+          'conflict',
+          'attack references a reclaimed-shell resource; re-upload the resource before restoring'
+        )
       case 'error':
         return problemResponse(c, 500, 'internal', 'restore failed')
       case 'restored':

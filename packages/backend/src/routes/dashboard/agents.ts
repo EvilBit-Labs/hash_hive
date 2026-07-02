@@ -190,6 +190,10 @@ const updateAgentRoute = createRoute({
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Agent is retired; retirement is terminal and immutable via this path.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
   },
 })
 
@@ -197,14 +201,18 @@ dashboardAgentRoutes.openapi(updateAgentRoute, async (c) => {
   const { id: agentId } = c.req.valid('param')
   const data = c.req.valid('json')
   const { projectId, userId } = c.get('scopedUser')!
-  const agent = await updateAgent(agentId, data, projectId, {
+  const result = await updateAgent(agentId, data, projectId, {
     actorType: 'user',
     actorId: userId,
   })
-  if (!agent) {
-    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
+  switch (result.kind) {
+    case 'not_found':
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
+    case 'retired':
+      return dashboardError(c, 409, 'AGENT_RETIRED', 'Agent is retired and cannot be updated')
+    case 'updated':
+      return c.json({ agent: result.agent }, 200)
   }
-  return c.json({ agent }, 200)
 })
 
 // ─── GET /:id/errors ────────────────────────────────────────────────

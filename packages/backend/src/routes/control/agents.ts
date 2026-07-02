@@ -132,7 +132,7 @@ const updateAgentRoute = createRoute({
   tags: ['Agents'],
   summary: 'Update agent name or status (admin only)',
   description:
-    'Atomic UPDATE ... WHERE projectId closes the read-then-write TOCTOU window. A null return collapses "wrong project" and "no such row" into the same 404.',
+    'Atomic UPDATE ... WHERE projectId AND status <> retired closes the read-then-write TOCTOU window and makes a retired agent immutable via this path. A not-found result collapses "wrong project" and "no such row" into the same 404; a retired agent reports 409 conflict.',
   security: [{ ControlApiKey: [] }],
   request: {
     params: idParamSchema,
@@ -147,6 +147,7 @@ const updateAgentRoute = createRoute({
     401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -156,14 +157,18 @@ controlAgentRoutes.openapi(updateAgentRoute, async (c) => {
     const { projectId } = await requireProjectRole(c, 'admin')
     const { id } = c.req.valid('param')
     const { userId } = c.get('currentUser')
-    const updated = await updateAgent(id, c.req.valid('json'), projectId, {
+    const result = await updateAgent(id, c.req.valid('json'), projectId, {
       actorType: 'user',
       actorId: userId,
     })
-    if (!updated) {
-      return problemResponse(c, 404, 'not_found', 'agent not found')
+    switch (result.kind) {
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'agent not found')
+      case 'retired':
+        return problemResponse(c, 409, 'conflict', 'agent is retired and cannot be updated')
+      case 'updated':
+        return c.json(result.agent, 200)
     }
-    return c.json(updated, 200)
   } catch (err) {
     return controlErrorResponse(c, err)
   }

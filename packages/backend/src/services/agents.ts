@@ -515,13 +515,42 @@ export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
 }
 
 /**
- * Update an agent, enforcing project scope inside the UPDATE WHERE
- * predicate. The atomic form closes the TOCTOU window the previous
- * "read with getAgentById then write with updateAgent" pattern left
- * open: ownership could change between the read and the write, and
- * the write would still land. Returns null when the row does not
- * exist OR when it belongs to a different project -- both cases
- * collapse to "not found" at the caller.
+ * Typed outcome of `updateAgent` (issue #106 F4 code review), mirroring the
+ * `retireAgent` / campaign-archive-service convention (`{ kind }`
+ * discriminant, no thrown exceptions for expected outcomes). Backend-
+ * internal only — routes translate `kind` into the HTTP envelope, never
+ * serialized verbatim, so it does not need a shared Zod schema (see
+ * `DeleteResourceResult` in `services/resources.ts` for the same pattern).
+ */
+export type UpdateAgentResult =
+  | { kind: 'updated'; agent: typeof agents.$inferSelect }
+  // Row missing OR belongs to a different project -- both collapse to
+  // "not found" at the caller (unchanged from the prior `null` contract).
+  | { kind: 'not_found' }
+  // The agent exists and is in this project, but is retired. Retirement is
+  // terminal (ADR-0019 / issue #106 R9, no restore path) and the generic
+  // PATCH path must not be able to reverse it -- see the guarded UPDATE
+  // WHERE below.
+  | { kind: 'retired' }
+
+/**
+ * Update an agent, enforcing project scope AND the retired-is-immutable
+ * invariant inside the UPDATE WHERE predicate. The atomic form closes two
+ * TOCTOU windows the previous "read with getAgentById then write with
+ * updateAgent" pattern left open:
+ *   1. Ownership could change between the read and the write.
+ *   2. (F4) A contributor could PATCH `status: 'online'` on a
+ *      just-retired agent, reversing admin-only terminal retirement --
+ *      `retireAgent` folds `ne(status, 'retired')` into ITS guarded
+ *      UPDATE for the same reason; this generic PATCH path needs the
+ *      identical guard so retirement can't be undone through it.
+ *
+ * `oldRow` is read inside the same transaction as the guarded UPDATE, so a
+ * zero-row UPDATE after `oldRow` was found unambiguously means the
+ * retired-guard fired (existence + project match were already proven by
+ * the `oldRow` read in this same transaction) -- there is no separate
+ * race-loss case to re-classify here, unlike the archive/restore services'
+ * pre-check-outside-the-transaction pattern.
  */
 export async function updateAgent(
   agentId: number,
@@ -531,26 +560,28 @@ export async function updateAgent(
   },
   projectId: number,
   actor?: Actor
-) {
+): Promise<UpdateAgentResult> {
   const DEFAULT_SYSTEM_ACTOR: Actor = { actorType: 'system', actorId: null }
   const resolvedActor = actor ?? DEFAULT_SYSTEM_ACTOR
 
-  const updated = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx): Promise<UpdateAgentResult> => {
     const [oldRow] = await tx
       .select()
       .from(agents)
       .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
       .limit(1)
 
-    if (!oldRow) return null
+    if (!oldRow) return { kind: 'not_found' }
 
     const [updatedRow] = await tx
       .update(agents)
       .set({ ...data, updatedAt: new Date() })
-      .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+      .where(
+        and(eq(agents.id, agentId), eq(agents.projectId, projectId), ne(agents.status, 'retired'))
+      )
       .returning()
 
-    if (!updatedRow) return null
+    if (!updatedRow) return { kind: 'retired' }
 
     await recordAuditEvent(
       {
@@ -565,14 +596,14 @@ export async function updateAgent(
       tx
     )
 
-    return updatedRow
+    return { kind: 'updated', agent: updatedRow }
   })
 
-  if (updated && data.status) {
-    emitAgentStatus(updated.projectId, updated.id, data.status)
+  if (result.kind === 'updated' && data.status) {
+    emitAgentStatus(result.agent.projectId, result.agent.id, data.status)
   }
 
-  return updated ?? null
+  return result
 }
 
 /**

@@ -1103,6 +1103,12 @@ export const attackRestoreOutcomeSchema = z.enum([
   'restored',
   'not_found',
   'not_archived',
+  // Refused because the attack references a word/rule/mask list that is a
+  // reclaimed shell (blob_reclaimed_at IS NOT NULL) — restoring would make
+  // the attack live again while referencing a resource whose underlying
+  // file was already deleted by the blob-reclamation sweep (issue #106 F2
+  // code review / R12).
+  'resource_reclaimed',
   // Per-id failure (see attackArchiveOutcomeSchema).
   'error',
 ])

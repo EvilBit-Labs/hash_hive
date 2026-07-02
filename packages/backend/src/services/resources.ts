@@ -138,6 +138,26 @@ export class UploadResourceNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown by `initiateChunkedUpload` when a caller supplies `restoreResourceId`
+ * (issue #106 F3 code review — chunked-upload restore-after-reclaim) that
+ * points at a resource which exists and is in project scope, but is NOT a
+ * reclaimed shell (`blob_reclaimed_at IS NULL`). Restore-via-chunked-upload
+ * is only for resurrecting a reclaimed shell; hijacking an active resource's
+ * upload session through this path is refused. Routes catch this and
+ * surface a 409.
+ */
+export class ResourceNotReclaimedShellError extends Error {
+  readonly resourceId: number
+  readonly resourceType: string
+  constructor(resourceId: number, resourceType: string) {
+    super(`${resourceType} ${resourceId} is not a reclaimed shell; nothing to restore`)
+    this.name = 'ResourceNotReclaimedShellError'
+    this.resourceId = resourceId
+    this.resourceType = resourceType
+  }
+}
+
 // ─── Hash Types ──────────────────────────────────────────────────────
 
 export async function listHashTypes() {
@@ -1079,6 +1099,20 @@ export async function initiateChunkedUpload(
     fileSize: number
     projectId: number
     contentType?: string | undefined
+    /**
+     * Restore-after-reclaim over chunked upload (issue #106 F3 code
+     * review / R12). When supplied, this session targets an EXISTING
+     * resource row that is a reclaimed shell (`blob_reclaimed_at IS NOT
+     * NULL`) instead of creating a new row — the counterpart to
+     * `uploadResourceFile`'s direct-upload restore guard, but for large
+     * word/rule/mask lists, which always go through chunked upload.
+     * Ownership + shell-state are verified up front here;
+     * `completeChunkedUpload` does the checksum verification once the
+     * upload actually lands. Hash lists have no blob-reclamation
+     * lifecycle (`isHashList`), so this is rejected for that resource
+     * type.
+     */
+    restoreResourceId?: number | undefined
   },
   actor: Actor = DEFAULT_SYSTEM_ACTOR
 ): Promise<{
@@ -1087,7 +1121,7 @@ export async function initiateChunkedUpload(
   partSize: number
   key: string
 }> {
-  const { resourceType, name, fileSize, projectId, contentType } = data
+  const { resourceType, name, fileSize, projectId, contentType, restoreResourceId } = data
 
   // Hash lists use the hashLists table with different create logic
   const isHashList = resourceType === 'hash-lists'
@@ -1098,10 +1132,30 @@ export async function initiateChunkedUpload(
   if (!table) {
     throw new Error(`Unknown resource type: ${resourceType}`)
   }
+  if (isHashList && restoreResourceId != null) {
+    throw new Error(
+      'restoreResourceId is not supported for hash lists (no blob-reclamation lifecycle)'
+    )
+  }
 
-  // Create DB record
+  // Create DB record — OR, for a restore session, reuse an existing
+  // reclaimed-shell row instead of creating a new one.
   let resourceId: number
-  if (isHashList) {
+  const isRestore = restoreResourceId != null
+  if (isRestore) {
+    const [existing] = await db
+      .select()
+      .from(table as ResourceTable)
+      .where(
+        and(eq((table as ResourceTable).id, restoreResourceId), eq(table.projectId, projectId))
+      )
+      .limit(1)
+    if (!existing) throw new UploadResourceNotFoundError(restoreResourceId, resourceType)
+    if (existing.blobReclaimedAt === null) {
+      throw new ResourceNotReclaimedShellError(restoreResourceId, resourceType)
+    }
+    resourceId = existing.id
+  } else if (isHashList) {
     const hl = await createHashList({ projectId, name, source: 'upload' }, actor)
     if (!hl) throw new Error('Failed to create hash list')
     resourceId = hl.id
@@ -1111,21 +1165,33 @@ export async function initiateChunkedUpload(
     resourceId = row.id
   }
 
-  // Generate S3 key
+  // Generate S3 key. A restore session always mints a fresh key: the
+  // ORIGINAL blob (whatever key the shell's fileRef used to point at) was
+  // already deleted by the blob-reclamation sweep, so there's nothing to
+  // reuse — the re-upload lands at a new location and fileRef is
+  // overwritten to point at it on completion.
   const prefix = isHashList ? 'hash-lists' : resourceType
   const key = `${projectId}/${prefix}/${randomUUID()}`
   const ct = contentType ?? 'application/octet-stream'
 
-  // Initiate S3 multipart upload - clean up orphan DB record on failure
+  // Initiate S3 multipart upload - clean up orphan DB record on failure.
+  // A restore session's resource row is NOT an orphan (it pre-existed as
+  // a reclaimed shell) — never delete it here, only the fileRef/status
+  // update below is skipped by simply not touching it further, so the row
+  // is left exactly as it was (still a shell, uninitiated retry-safe).
   let s3UploadId: string
   try {
     s3UploadId = await createMultipartUpload(key, ct)
   } catch (err) {
     logger.error(
-      { err, resourceId, resourceType },
-      'S3 multipart initiation failed, removing orphan DB record'
+      { err, resourceId, resourceType, isRestore },
+      isRestore
+        ? 'S3 multipart initiation failed for a restore session; leaving the reclaimed-shell row untouched'
+        : 'S3 multipart initiation failed, removing orphan DB record'
     )
-    await db.delete(table).where(eq(table.id, resourceId))
+    if (!isRestore) {
+      await db.delete(table).where(eq(table.id, resourceId))
+    }
     throw err
   }
 
@@ -1186,7 +1252,8 @@ export async function completeChunkedUpload(
   parts: ReadonlyArray<{ partNumber: number; etag: string }>,
   resourceId: number,
   resourceType: string,
-  projectId: number
+  projectId: number,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ): Promise<{ resourceId: number }> {
   const isHashList = resourceType === 'hash-lists'
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType]
@@ -1208,23 +1275,79 @@ export async function completeChunkedUpload(
   } | null
   if (!fileRef?.key) throw new Error('Resource has no file reference')
 
+  // F3 (issue #106 code review): a chunked-upload session started by
+  // `initiateChunkedUpload`'s restore path (`restoreResourceId`) targets
+  // an EXISTING reclaimed-shell row, so — unlike the historical
+  // "always-fresh-row" assumption — completion here CAN be a restore.
+  // `row.blobReclaimedAt` is the ground truth (set independently of which
+  // init path was used), so this is derived directly rather than threaded
+  // through as a separate flag, mirroring `uploadResourceFile`'s
+  // `isReclaimedShell` check on the direct-upload path.
+  //
+  // `table` (and therefore `row`) is typed as a union that includes
+  // `hashLists`, which carries neither column — cast defensively; the
+  // `!isHashList` guard is what actually makes this safe at runtime.
+  const reclaimableRow = row as unknown as {
+    blobReclaimedAt: Date | null
+    fileChecksum: string | null
+  }
+  const isReclaimedShell = !isHashList && reclaimableRow.blobReclaimedAt !== null
+
   // Complete S3 multipart upload
   await completeMultipartUpload(fileRef.key, s3UploadId, parts)
 
-  // Checksum capture (issue #106 U12): `initiateChunkedUpload` always
-  // creates a fresh resource row, so `completeChunkedUpload` never targets
-  // an existing reclaimed shell — there is no re-upload comparison to make
-  // here, only capture. Word/rule/mask lists only (hash lists carry no
-  // `file_checksum` column; reclamation is word/rule/mask only). Computed
-  // by streaming the just-completed object rather than buffering it —
-  // chunked upload's entire purpose is avoiding a server-side buffer for
-  // files too large for the direct-upload path. Best-effort: a failure
-  // here must not fail an otherwise-successful upload — the resource is
-  // already durably `ready`. A resource with no captured checksum simply
-  // never becomes a blob-reclamation candidate (U11's candidate predicate
-  // requires `file_checksum IS NOT NULL`), which is a safe degrade.
+  // Checksum capture / verification (issue #106 U12, F3). Word/rule/mask
+  // lists only (hash lists carry no `file_checksum` column; reclamation is
+  // word/rule/mask only). Computed by streaming the just-completed object
+  // rather than buffering it — chunked upload's entire purpose is avoiding
+  // a server-side buffer for files too large for the direct-upload path.
+  //
+  // Two distinct policies depending on whether this is a restore:
+  //   - NOT a reclaimed shell (the common case): best-effort capture only.
+  //     A failure here must not fail an otherwise-successful upload — the
+  //     resource is already durably `ready`. A resource with no captured
+  //     checksum simply never becomes a blob-reclamation candidate (U11's
+  //     candidate predicate requires `file_checksum IS NOT NULL`), which
+  //     is a safe degrade.
+  //   - A reclaimed shell (restore-after-reclaim, R12): verification is
+  //     load-bearing, not best-effort. Unlike the direct-upload path
+  //     (`uploadResourceFile`), the checksum can only be computed AFTER
+  //     the bytes already landed in S3 — chunked upload streams parts
+  //     straight through, there is no in-memory buffer to hash first. A
+  //     mismatch (including a checksum-computation failure, which can't
+  //     be distinguished from "unverifiable" here) throws
+  //     `ChecksumMismatchError` and the mismatched object is best-effort
+  //     deleted so it doesn't linger as an orphan; the row is left
+  //     exactly as it was (still a shell) and no DB write happens below.
   let checksum: string | null = null
-  if (!isHashList) {
+  if (isReclaimedShell) {
+    let computedChecksum: string
+    try {
+      computedChecksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
+    } catch (err) {
+      logger.error(
+        { err, resourceId, resourceType },
+        'checksum verification failed for a reclaimed-shell restore; rejecting the re-upload'
+      )
+      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
+        logger.warn(
+          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
+          'failed to clean up unverifiable chunked-upload object; continuing'
+        )
+      })
+      throw new ChecksumMismatchError(resourceId, resourceType)
+    }
+    if (reclaimableRow.fileChecksum && reclaimableRow.fileChecksum !== computedChecksum) {
+      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
+        logger.warn(
+          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
+          'failed to clean up mismatched chunked-upload object; continuing'
+        )
+      })
+      throw new ChecksumMismatchError(resourceId, resourceType)
+    }
+    checksum = computedChecksum
+  } else if (!isHashList) {
     try {
       checksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
     } catch (err) {
@@ -1244,19 +1367,48 @@ export async function completeChunkedUpload(
     name: fileRef.name,
     uploadedAt: new Date().toISOString(),
   }
+  const updateValues = {
+    status: isHashList ? ('uploaded' as const) : ('ready' as const),
+    fileRef: updatedFileRef,
+    ...(isHashList ? {} : { fileSize: fileRef.fileSize }),
+    ...(checksum !== null ? { fileChecksum: checksum } : {}),
+    // A checksum-verified match clears the shell (R12) — the resource is
+    // usable again. Only reachable when isReclaimedShell is true AND the
+    // checksum comparison above didn't throw.
+    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
+    updatedAt: new Date(),
+  }
 
-  await db
-    .update(table)
-    .set({
-      status: isHashList ? 'uploaded' : 'ready',
-      fileRef: updatedFileRef,
-      ...(isHashList ? {} : { fileSize: fileRef.fileSize }),
-      ...(checksum !== null ? { fileChecksum: checksum } : {}),
-      updatedAt: new Date(),
+  if (isReclaimedShell) {
+    // Restore path: wrap the write in a transaction with an audit event
+    // (mirroring `uploadResourceFile`'s reclaimed-shell restore) so the
+    // shell-clearing is captured in the audit trail the same way whether
+    // the re-upload came through the direct or chunked path.
+    await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(table)
+        .set(updateValues)
+        .where(eq(table.id, resourceId))
+        .returning()
+
+      await recordAuditEvent(
+        {
+          actor,
+          projectId,
+          entityType: entityTypeForTable(table as ResourceTable),
+          entityId: resourceId,
+          action: 'updated',
+          oldRow: row as Record<string, unknown>,
+          newRow: (updated ?? { ...row, ...updateValues }) as Record<string, unknown>,
+        },
+        tx
+      )
     })
-    .where(eq(table.id, resourceId))
+  } else {
+    await db.update(table).set(updateValues).where(eq(table.id, resourceId))
+  }
 
-  logger.info({ resourceId, resourceType }, 'Chunked upload completed')
+  logger.info({ resourceId, resourceType, isReclaimedShell }, 'Chunked upload completed')
 
   // A chunked upload streams parts straight to S3 and never buffers the file
   // to count lines, so a wordlist/rulelist arrives ready with a null line

@@ -241,10 +241,10 @@ if (!IS_ISOLATED) {
     // fails to link if the campaigns.js mock omits it.
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
     // `control/attacks.ts` statically imports this (issue #106 U12) to
-    // reject a reclaimed-shell resource ref on create/update; the named
-    // import fails to link if the campaigns.js mock omits it. No refs are
-    // ever reclaimed in this RBAC-focused suite.
-    findReclaimedResourceRefs: mock(() => Promise.resolve([])),
+    // reject a reclaimed-shell or archived resource ref on create/update;
+    // the named import fails to link if the campaigns.js mock omits it.
+    // No refs are ever reclaimed or archived in this RBAC-focused suite.
+    findReclaimedResourceRefs: mock(() => Promise.resolve({ reclaimed: [], archived: [] })),
   }))
 
   const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {
@@ -260,8 +260,10 @@ if (!IS_ISOLATED) {
     const partial = mockAgents.find((a) => a.id === id)
     return partial ? makeAgent(partial) : null
   }
-  const updateAgentMock: AgentsService['updateAgent'] = async (id) =>
-    makeAgent({ id, projectId: 1, status: 'offline', name: 'Updated' })
+  const updateAgentMock: AgentsService['updateAgent'] = async (id) => ({
+    kind: 'updated' as const,
+    agent: makeAgent({ id, projectId: 1, status: 'offline', name: 'Updated' }),
+  })
 
   // `retireAgent` is exercised in `control-lifecycle-routes.test.ts`; this
   // stub is for the transitive static-import binding only (issue #106

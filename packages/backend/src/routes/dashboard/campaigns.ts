@@ -291,6 +291,18 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'resource_archived') {
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_ARCHIVED',
+          message: `Referenced resources are archived: ${result.archived.join(', ')}`,
+        },
+      },
+      409
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
 })
 

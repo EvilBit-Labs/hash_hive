@@ -126,8 +126,8 @@ if (!IS_ISOLATED) {
     updateAttack: mock(async () => null),
     // control/attacks.ts statically imports this (issue #106 U12); the named
     // import fails to link if the campaigns.js mock omits it. No refs are
-    // ever reclaimed in this lifecycle-focused suite.
-    findReclaimedResourceRefs: mock(async () => []),
+    // ever reclaimed or archived in this lifecycle-focused suite.
+    findReclaimedResourceRefs: mock(async () => ({ reclaimed: [], archived: [] })),
   }))
 
   // ─── services/agents.js — controllable retireAgent, inert stubs for
@@ -149,7 +149,7 @@ if (!IS_ISOLATED) {
   mock.module('../../src/services/agents.js', () => ({
     listAgents: mock(async () => ({ agents: [], total: 0, limit: 50, offset: 0 })),
     getAgentById: mock(async () => null),
-    updateAgent: mock(async () => null),
+    updateAgent: mock(async () => ({ kind: 'not_found' as const })),
     retireAgent: mockRetireAgent,
   }))
 
@@ -426,6 +426,17 @@ if (!IS_ISOLATED) {
       const app = makeApp(controlAttackRoutes)
       const res = await app.request('/50/archive', { method: 'POST', headers: authHeaders() })
       expect(res.status).toBe(403)
+    })
+
+    it('returns 409 conflict problem+json when restoring an attack that references a reclaimed-shell resource (F2, issue #106 code review)', async () => {
+      mockRestoreAttacks.mockImplementationOnce(async (_p, ids) =>
+        ids.map((id): Outcome => ({ id, outcome: 'resource_reclaimed' }))
+      )
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/50/restore', { method: 'POST', headers: authHeaders() })
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/conflict')
     })
   })
 

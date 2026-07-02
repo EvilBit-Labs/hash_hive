@@ -396,6 +396,10 @@ export type CreateCampaignWithAttacksResult =
   // A referenced word/rule/mask list is a reclaimed shell (issue #106 U12 /
   // R12) — present, but unusable until re-uploaded and checksum-verified.
   | { kind: 'resource_reclaimed'; reclaimed: string[] }
+  // A referenced hash list / word/rule/mask list is archived (issue #106
+  // F5 code review) — present, but hidden from listings and refused as a
+  // reference for new work.
+  | { kind: 'resource_archived'; archived: string[] }
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -451,6 +455,9 @@ export async function createCampaignWithAttacks(input: {
   if (!resourceCheck.valid) {
     if (resourceCheck.reclaimed.length > 0) {
       return { kind: 'resource_reclaimed', reclaimed: resourceCheck.reclaimed }
+    }
+    if (resourceCheck.archived.length > 0) {
+      return { kind: 'resource_archived', archived: resourceCheck.archived }
     }
     return { kind: 'resource_missing', missing: resourceCheck.missing }
   }
@@ -889,6 +896,12 @@ export async function transitionCampaign(
         return {
           error: `Referenced resources are reclaimed shells (re-upload required): ${resourceCheck.reclaimed.join(', ')}`,
           code: 'RESOURCE_RECLAIMED' as const,
+        }
+      }
+      if (resourceCheck.archived.length > 0) {
+        return {
+          error: `Referenced resources are archived: ${resourceCheck.archived.join(', ')}`,
+          code: 'RESOURCE_ARCHIVED' as const,
         }
       }
       return {

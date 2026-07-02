@@ -267,4 +267,47 @@ describe('reclaimExpiredResourceBlobs (U11, R11)', () => {
       expect(row?.blobReclaimedAt).toBeNull()
     })
   })
+
+  describe('F6 (issue #106 code review): resilient sweep — one row failure does not abort the batch', () => {
+    it('a thrown error reclaiming one candidate is logged and does not stop the other candidates in the same batch', async () => {
+      const failingId = await insertWordList({ archivedAt: OLD_ARCHIVED_AT })
+      const okId = await insertWordList({ archivedAt: OLD_ARCHIVED_AT })
+      const deleteBlob = mock(() => Promise.resolve())
+
+      const result = await reclaimExpiredResourceBlobs({
+        retention: '90 days',
+        deleteBlob,
+        // Simulates an unexpected failure reclaiming one specific candidate
+        // (e.g. a transient DB error inside the stamp+audit transaction).
+        // The per-row try/catch in reclaimTableBlobs must catch this,
+        // count it as an error, and continue on to the next candidate
+        // rather than letting it abort the whole sweep.
+        onBeforeStamp: async (row) => {
+          if (row.id === failingId) {
+            throw new Error('simulated transient failure')
+          }
+        },
+      })
+
+      expect(result.errors).toBeGreaterThanOrEqual(1)
+      // The other candidate in the same batch still got reclaimed.
+      expect(result.reclaimed).toBeGreaterThanOrEqual(1)
+
+      const failingRow = await readWordList(failingId)
+      expect(failingRow?.blobReclaimedAt).toBeNull()
+      const [failingAudit] = await db
+        .select({ action: auditLogs.action })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'word_list'), eq(auditLogs.entityId, failingId)))
+      expect(failingAudit).toBeUndefined()
+
+      const okRow = await readWordList(okId)
+      expect(okRow?.blobReclaimedAt).not.toBeNull()
+      const [okAudit] = await db
+        .select({ action: auditLogs.action })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'word_list'), eq(auditLogs.entityId, okId)))
+      expect(okAudit?.action).toBe('reclaimed')
+    })
+  })
 })

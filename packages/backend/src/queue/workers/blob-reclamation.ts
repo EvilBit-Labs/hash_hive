@@ -87,6 +87,13 @@ export interface ReclaimResult {
   scanned: number
   /** Number of SELECT passes executed, summed across all three tables. */
   passes: number
+  /**
+   * Row- or table-level failures that were logged and swallowed rather than
+   * aborting the sweep (issue #106 F6 code review). Non-zero means an
+   * operator should check logs — the sweep still made forward progress on
+   * everything else, but something needs a manual look.
+   */
+  errors: number
 }
 
 type DeleteBlobFn = (key: string, bucket?: string) => Promise<unknown>
@@ -124,23 +131,37 @@ export async function reclaimExpiredResourceBlobs({
   let reclaimed = 0
   let scanned = 0
   let passes = 0
+  let errors = 0
 
   for (const table of tables) {
-    // oxlint-disable-next-line no-await-in-loop -- tables are swept sequentially, one at a time
-    const tableResult = await reclaimTableBlobs(table, {
-      batchSize,
-      retention,
-      deleteBlob,
-      ...(onBeforeStamp ? { onBeforeStamp } : {}),
-    })
-    reclaimed += tableResult.reclaimed
-    scanned += tableResult.scanned
-    passes += tableResult.passes
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- tables are swept sequentially, one at a time
+      const tableResult = await reclaimTableBlobs(table, {
+        batchSize,
+        retention,
+        deleteBlob,
+        ...(onBeforeStamp ? { onBeforeStamp } : {}),
+      })
+      reclaimed += tableResult.reclaimed
+      scanned += tableResult.scanned
+      passes += tableResult.passes
+      errors += tableResult.errors
+    } catch (err) {
+      // F6 (issue #106 code review): a table-level failure (e.g. the
+      // candidate SELECT itself throwing on a transient DB error) must not
+      // abort the remaining tables' sweeps — log and continue to the next
+      // table rather than letting one bad table take down the whole run.
+      errors++
+      logger.error(
+        { err, entityType: entityTypeForTable(table) },
+        'blob-reclamation: table sweep failed; continuing with remaining tables'
+      )
+    }
   }
 
-  logger.info({ reclaimed, scanned, passes, retention }, 'blob-reclamation: sweep complete')
+  logger.info({ reclaimed, scanned, passes, errors, retention }, 'blob-reclamation: sweep complete')
 
-  return { reclaimed, scanned, passes }
+  return { reclaimed, scanned, passes, errors }
 }
 
 async function reclaimTableBlobs(
@@ -159,6 +180,7 @@ async function reclaimTableBlobs(
   let reclaimed = 0
   let scanned = 0
   let passes = 0
+  let errors = 0
 
   for (;;) {
     // Candidate predicate (issue #106 U11 plan Approach):
@@ -194,22 +216,33 @@ async function reclaimTableBlobs(
     if (candidates.length === 0) break
 
     for (const row of candidates) {
-      // oxlint-disable-next-line no-await-in-loop -- per-row stamp+delete is sequential (network I/O to the object store)
-      const didReclaim = await reclaimOne({
-        table,
-        row,
-        attackFk,
-        deleteBlob,
-        entityType,
-        ...(onBeforeStamp ? { onBeforeStamp } : {}),
-      })
-      if (didReclaim) reclaimed++
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- per-row stamp+delete is sequential (network I/O to the object store)
+        const didReclaim = await reclaimOne({
+          table,
+          row,
+          attackFk,
+          deleteBlob,
+          entityType,
+          ...(onBeforeStamp ? { onBeforeStamp } : {}),
+        })
+        if (didReclaim) reclaimed++
+      } catch (err) {
+        // F6 (issue #106 code review): one row's reclaim failing (e.g. the
+        // stamp+audit transaction erroring) must not abort the rest of this
+        // batch or table — log and move on to the next candidate.
+        errors++
+        logger.error(
+          { err, entityType, id: row.id },
+          'blob-reclamation: row reclaim failed; continuing sweep'
+        )
+      }
     }
 
     if (candidates.length < batchSize) break
   }
 
-  return { reclaimed, scanned, passes }
+  return { reclaimed, scanned, passes, errors }
 }
 
 /**
@@ -217,6 +250,23 @@ async function reclaimTableBlobs(
  * intent-stamp UPDATE actually affected a row (i.e., the race was won and
  * `deleteBlob` was attempted) — a race loss (concurrent restore or new
  * attack reference) returns `false` and leaves the row/blob untouched.
+ *
+ * F6 (issue #106 code review): the intent-stamp UPDATE and its `reclaimed`
+ * audit event now commit atomically in ONE `db.transaction()` — mirroring
+ * every other lifecycle mutation in this codebase (archive/restore/retire).
+ * Previously the stamp ran directly against `db` and the audit event was a
+ * separate statement afterward; a crash or throw between the two could
+ * leave a resource permanently marked reclaimed with no `reclaimed` audit
+ * row, and an unguarded `recordAuditEvent` throw would propagate straight
+ * out of this function (see the per-row/per-table `try`/`catch` in
+ * `reclaimTableBlobs`/`reclaimExpiredResourceBlobs` for the outer
+ * resilience half of this fix).
+ *
+ * `deleteBlob` runs AFTER the transaction commits (same ordering as
+ * `cascadeDeleteResource`'s S3 delete in `services/resources.ts`): the DB
+ * state (stamp + audit) is durable first, and the object-store delete is
+ * still best-effort — a failure there is logged and swallowed rather than
+ * un-stamping the row or aborting the sweep.
  */
 async function reclaimOne(args: {
   table: ResourceTable
@@ -237,26 +287,50 @@ async function reclaimOne(args: {
   // analysis. All three guards (id, archived_at IS NOT NULL, blob_reclaimed_at
   // IS NULL) plus the NOT EXISTS reference check are folded into ONE guarded
   // UPDATE's WHERE so the whole check-and-set is a single atomic statement.
-  const [stamped] = await db
-    .update(table)
-    .set({ blobReclaimedAt: stampedAt })
-    .where(
-      and(
-        eq(table.id, row.id),
-        isNotNull(table.archivedAt),
-        isNull(table.blobReclaimedAt),
-        sql`NOT EXISTS (SELECT 1 FROM ${attacks} WHERE ${and(
-          eq(attackFk, table.id),
-          isNull(attacks.archivedAt)
-        )})`
+  // The audit event now shares this same transaction (F6) so the stamp and
+  // its audit trail commit or roll back together.
+  const stamped = await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(table)
+      .set({ blobReclaimedAt: stampedAt })
+      .where(
+        and(
+          eq(table.id, row.id),
+          isNotNull(table.archivedAt),
+          isNull(table.blobReclaimedAt),
+          sql`NOT EXISTS (SELECT 1 FROM ${attacks} WHERE ${and(
+            eq(attackFk, table.id),
+            isNull(attacks.archivedAt)
+          )})`
+        )
       )
+      .returning({ id: table.id })
+
+    if (!updated) {
+      // Race lost between the batch SELECT and this UPDATE (restore, or a
+      // new attack reference). Zero rows affected — commit the (no-op)
+      // transaction and report no stamp; deleteBlob is never called and
+      // the blob is preserved. This is the intended, non-error outcome.
+      return false
+    }
+
+    await recordAuditEvent(
+      {
+        actor: DEFAULT_SYSTEM_ACTOR,
+        projectId: row.projectId,
+        entityType,
+        entityId: row.id,
+        action: 'reclaimed',
+        oldRow: row as unknown as Record<string, unknown>,
+        newRow: { ...row, blobReclaimedAt: stampedAt } as unknown as Record<string, unknown>,
+      },
+      tx
     )
-    .returning({ id: table.id })
+
+    return true
+  })
 
   if (!stamped) {
-    // Race lost between the batch SELECT and this UPDATE (restore, or a new
-    // attack reference). Zero rows affected — deleteBlob is never called and
-    // the blob is preserved. This is the intended, non-error outcome.
     return false
   }
 
@@ -265,26 +339,17 @@ async function reclaimOne(args: {
     try {
       await deleteBlob(fileRef.key, fileRef.bucket)
     } catch (err) {
-      // Best-effort (issue #106 U11 plan Approach): the DB stamp already
-      // committed above. Log and continue — do not abort the batch and do
-      // not attempt to un-stamp the row. The row stays marked reclaimed
-      // even if the underlying object-store delete needs a manual follow-up.
+      // Best-effort (issue #106 U11 plan Approach): the DB stamp + audit
+      // row already committed above. Log and continue — do not abort the
+      // batch and do not attempt to un-stamp the row. The row stays marked
+      // reclaimed even if the underlying object-store delete needs a
+      // manual follow-up.
       logger.warn(
         { err, entityType, id: row.id, key: fileRef.key },
         'blob-reclamation: deleteFile failed after intent-stamp; continuing sweep'
       )
     }
   }
-
-  await recordAuditEvent({
-    actor: DEFAULT_SYSTEM_ACTOR,
-    projectId: row.projectId,
-    entityType,
-    entityId: row.id,
-    action: 'reclaimed',
-    oldRow: row as unknown as Record<string, unknown>,
-    newRow: { ...row, blobReclaimedAt: stampedAt } as unknown as Record<string, unknown>,
-  })
 
   return true
 }

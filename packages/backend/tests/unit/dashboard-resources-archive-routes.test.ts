@@ -163,6 +163,10 @@ if (!IS_ISOLATED) {
     // archive/restore-focused file exercises it, but the named export must
     // be present or the import fails to link.
     ChecksumMismatchError: class ChecksumMismatchErrorMock extends Error {},
+    // Chunked-upload restore-after-reclaim target that isn't actually a
+    // reclaimed shell (issue #106 F3 code review) — same link-only
+    // requirement as ChecksumMismatchError above.
+    ResourceNotReclaimedShellError: class ResourceNotReclaimedShellErrorMock extends Error {},
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 

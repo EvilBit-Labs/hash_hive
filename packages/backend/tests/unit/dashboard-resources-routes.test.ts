@@ -132,6 +132,12 @@ if (!IS_ISOLATED) {
   // signatures (`uploadChunkPart → { etag }`, `completeChunkedUpload →
   // { resourceId }`) so mock drift doesn't silently mask a real wire
   // contract change.
+  const mockInitiateChunkedUpload = mock(async () => ({
+    uploadId: 'u',
+    resourceId: 1,
+    partSize: 64 * 1024 * 1024,
+    key: 'k',
+  }))
   const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
   const mockCompleteChunkedUpload = mock(async () => ({ resourceId: 1 }))
 
@@ -190,6 +196,19 @@ if (!IS_ISOLATED) {
         `${resourceType} ${resourceId} is a reclaimed shell; the re-uploaded file does not match the original checksum`
       )
       this.name = 'ChecksumMismatchError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
+    }
+  }
+
+  // Chunked-upload restore session target that isn't actually a reclaimed
+  // shell (issue #106 F3 code review).
+  class ResourceNotReclaimedShellErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(`${resourceType} ${resourceId} is not a reclaimed shell; nothing to restore`)
+      this.name = 'ResourceNotReclaimedShellError'
       this.resourceId = resourceId
       this.resourceType = resourceType
     }
@@ -287,7 +306,7 @@ if (!IS_ISOLATED) {
     // String helper used by results routes.
     escapeLike: (s: string) => s,
     // Chunked upload
-    initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),
+    initiateChunkedUpload: mockInitiateChunkedUpload,
     uploadChunkPart: mockUploadChunkPart,
     completeChunkedUpload: mockCompleteChunkedUpload,
     abortChunkedUpload: noop,
@@ -299,6 +318,7 @@ if (!IS_ISOLATED) {
     ResourceInUseError: ResourceInUseErrorMock,
     UploadResourceNotFoundError: UploadResourceNotFoundErrorMock,
     ChecksumMismatchError: ChecksumMismatchErrorMock,
+    ResourceNotReclaimedShellError: ResourceNotReclaimedShellErrorMock,
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 
@@ -815,6 +835,135 @@ if (!IS_ISOLATED) {
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
       // Same generic-message pin as the upload-part case above.
       expect(json.error?.message).toBe('Upload not found')
+    })
+  })
+
+  describe('chunked-upload restore-after-reclaim (F3, issue #106 code review)', () => {
+    const UPLOAD_INITIATE_URL = '/api/v1/dashboard/resources/upload/initiate'
+    const UPLOAD_COMPLETE_URL = '/api/v1/dashboard/resources/upload/u-1/complete'
+
+    it('POST /upload/initiate forwards restoreResourceId to the service', async () => {
+      mockInitiateChunkedUpload.mockClear()
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(201)
+      expect(mockInitiateChunkedUpload).toHaveBeenCalledTimes(1)
+      const [data] = mockInitiateChunkedUpload.mock.calls[0]!
+      expect(data).toMatchObject({ restoreResourceId: 42, resourceType: 'wordlists' })
+    })
+
+    it('POST /upload/initiate rejects restoreResourceId with resourceType hash-lists at the schema layer (400)', async () => {
+      mockInitiateChunkedUpload.mockClear()
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'hash-lists',
+          name: 'restored-hashlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(mockInitiateChunkedUpload).not.toHaveBeenCalled()
+    })
+
+    it('POST /upload/initiate maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => ({
+        uploadId: 'u',
+        resourceId: 1,
+        partSize: 64 * 1024 * 1024,
+        key: 'k',
+      }))
+    })
+
+    it('POST /upload/initiate maps ResourceNotReclaimedShellError to 409 RESOURCE_NOT_RECLAIMED', async () => {
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => {
+        throw new ResourceNotReclaimedShellErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(409)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_RECLAIMED')
+
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => ({
+        uploadId: 'u',
+        resourceId: 1,
+        partSize: 64 * 1024 * 1024,
+        key: 'k',
+      }))
+    })
+
+    it('POST /upload/{id}/complete maps ChecksumMismatchError to 409 CHECKSUM_MISMATCH', async () => {
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => {
+        throw new ChecksumMismatchErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_COMPLETE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: 'e' }],
+          resourceId: 42,
+          resourceType: 'wordlists',
+        }),
+      })
+
+      expect(res.status).toBe(409)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('CHECKSUM_MISMATCH')
+
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => ({ resourceId: 1 }))
     })
   })
 

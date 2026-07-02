@@ -2,8 +2,7 @@
  * Cross-project resource validator for campaigns and attacks.
  *
  * Extracted from `services/campaigns.ts` to keep that module under the
- * project's 800-line file-size guideline. The function is unchanged in
- * behavior — only relocated. Callers (transitionCampaign,
+ * project's 800-line file-size guideline. Callers (transitionCampaign,
  * createCampaignWithAttacks, the standalone attack-write routes) keep
  * importing through the `services/campaigns.ts` facade.
  */
@@ -12,117 +11,70 @@ import { and, eq, inArray } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 
-type ResourceLookupKey = 'hashListId' | 'hashTypeId' | 'wordlistId' | 'rulelistId' | 'masklistId'
+// ─── Global (non-archivable) lookups ─────────────────────────────────
+//
+// `hashTypes` is the only referenced resource with neither `archivedAt`
+// nor `blobReclaimedAt` — it's a global, seed-managed catalogue, never
+// archived or reclaimed. Existence-only.
 
-// Each of the 5 resource tables is a Drizzle pgTable carrying an
-// integer `id` column and (for everything except hashTypes) a
-// `projectId` column. Modeling the union explicitly drops the `any`
-// holes the prior version carried; the helper only needs `.id` and
-// optionally `.projectId`, both of which are present on every member
-// of the union.
-type ResourceTable =
-  | typeof hashLists
-  | typeof hashTypes
-  | typeof wordLists
-  | typeof ruleLists
-  | typeof maskLists
-
-interface ResourceLookupSpec {
-  table: ResourceTable
-  idColumn:
-    | typeof hashLists.id
-    | typeof hashTypes.id
-    | typeof wordLists.id
-    | typeof ruleLists.id
-    | typeof maskLists.id
-  // hashTypes is global (no `projectId` column), so this is nullable
-  // and the helper switches off it.
-  projectIdColumn:
-    | typeof hashLists.projectId
-    | typeof wordLists.projectId
-    | typeof ruleLists.projectId
-    | typeof maskLists.projectId
-    | null
-  label: string
-}
-
-const RESOURCE_LOOKUPS: Record<ResourceLookupKey, ResourceLookupSpec> = {
-  hashListId: {
-    table: hashLists,
-    idColumn: hashLists.id,
-    projectIdColumn: hashLists.projectId,
-    label: 'hashList',
-  },
-  hashTypeId: {
-    table: hashTypes,
-    idColumn: hashTypes.id,
-    projectIdColumn: null, // global, no project scope
-    label: 'hashType',
-  },
-  wordlistId: {
-    table: wordLists,
-    idColumn: wordLists.id,
-    projectIdColumn: wordLists.projectId,
-    label: 'wordlist',
-  },
-  rulelistId: {
-    table: ruleLists,
-    idColumn: ruleLists.id,
-    projectIdColumn: ruleLists.projectId,
-    label: 'rulelist',
-  },
-  masklistId: {
-    table: maskLists,
-    idColumn: maskLists.id,
-    projectIdColumn: maskLists.projectId,
-    label: 'masklist',
-  },
-}
-
-async function lookupExistingIds(
-  spec: ResourceLookupSpec,
-  wanted: readonly number[],
-  projectId: number
-): Promise<Set<number>> {
+async function lookupExistingHashTypeIds(wanted: readonly number[]): Promise<Set<number>> {
   if (wanted.length === 0) return new Set()
-  const whereClause = spec.projectIdColumn
-    ? and(inArray(spec.idColumn, [...wanted]), eq(spec.projectIdColumn, projectId))
-    : inArray(spec.idColumn, [...wanted])
-  const rows = await db.select({ id: spec.idColumn }).from(spec.table).where(whereClause)
+  const rows = await db
+    .select({ id: hashTypes.id })
+    .from(hashTypes)
+    .where(inArray(hashTypes.id, [...wanted]))
   return new Set(rows.map((r) => r.id))
 }
 
-// ─── Reclaimed-shell lookups (issue #106 U11/U12) ────────────────────
+// ─── Archivable / reclaimable lookups (ADR-0019, issue #106 U11/U12, F5) ──
 //
-// Only word/rule/mask lists carry `blob_reclaimed_at` (hash lists are
-// excluded from blob reclamation — their forensic value is the in-DB
-// `hash_items`, not a retained source file). A dedicated, concretely-typed
-// map (rather than reusing `RESOURCE_LOOKUPS`, whose `table` field is a
-// 5-member union that doesn't statically carry `blobReclaimedAt`) avoids an
-// unsafe cast.
+// Every project-scoped resource a campaign or attack can reference —
+// hash lists plus word/rule/mask lists — carries `archived_at`; only
+// word/rule/mask lists additionally carry `blob_reclaimed_at` (hash
+// lists are excluded from blob reclamation — their forensic value is
+// the in-DB `hash_items`, not a retained source file). A dedicated,
+// concretely-typed map (rather than a wider table union that doesn't
+// statically carry these columns) avoids an unsafe cast.
 
-type ReclaimableKey = 'wordlistId' | 'rulelistId' | 'masklistId'
+type ArchivableKey = 'hashListId' | 'wordlistId' | 'rulelistId' | 'masklistId'
 
-const RECLAIMABLE_LOOKUPS: Record<
-  ReclaimableKey,
+const ARCHIVABLE_LOOKUPS: Record<
+  ArchivableKey,
   {
-    table: typeof wordLists | typeof ruleLists | typeof maskLists
-    idColumn: typeof wordLists.id | typeof ruleLists.id | typeof maskLists.id
+    table: typeof hashLists | typeof wordLists | typeof ruleLists | typeof maskLists
+    idColumn: typeof hashLists.id | typeof wordLists.id | typeof ruleLists.id | typeof maskLists.id
     projectIdColumn:
+      | typeof hashLists.projectId
       | typeof wordLists.projectId
       | typeof ruleLists.projectId
       | typeof maskLists.projectId
+    archivedAtColumn:
+      | typeof hashLists.archivedAt
+      | typeof wordLists.archivedAt
+      | typeof ruleLists.archivedAt
+      | typeof maskLists.archivedAt
+    // null for hashLists — hash lists have no blob-reclamation lifecycle.
     blobReclaimedAtColumn:
       | typeof wordLists.blobReclaimedAt
       | typeof ruleLists.blobReclaimedAt
       | typeof maskLists.blobReclaimedAt
+      | null
     label: string
   }
 > = {
+  hashListId: {
+    table: hashLists,
+    idColumn: hashLists.id,
+    projectIdColumn: hashLists.projectId,
+    archivedAtColumn: hashLists.archivedAt,
+    blobReclaimedAtColumn: null,
+    label: 'hashList',
+  },
   wordlistId: {
     table: wordLists,
     idColumn: wordLists.id,
     projectIdColumn: wordLists.projectId,
+    archivedAtColumn: wordLists.archivedAt,
     blobReclaimedAtColumn: wordLists.blobReclaimedAt,
     label: 'wordlist',
   },
@@ -130,6 +82,7 @@ const RECLAIMABLE_LOOKUPS: Record<
     table: ruleLists,
     idColumn: ruleLists.id,
     projectIdColumn: ruleLists.projectId,
+    archivedAtColumn: ruleLists.archivedAt,
     blobReclaimedAtColumn: ruleLists.blobReclaimedAt,
     label: 'rulelist',
   },
@@ -137,53 +90,87 @@ const RECLAIMABLE_LOOKUPS: Record<
     table: maskLists,
     idColumn: maskLists.id,
     projectIdColumn: maskLists.projectId,
+    archivedAtColumn: maskLists.archivedAt,
     blobReclaimedAtColumn: maskLists.blobReclaimedAt,
     label: 'masklist',
   },
 }
 
 /**
- * Existence + reclaimed-shell status in ONE query (issue #106 U12): selects
- * `{id, blobReclaimedAt}` instead of firing a second SELECT per table.
- * Folding both checks into a single read is both cheaper and more correct
- * than two separate reads (one snapshot, no window for the two checks to
- * observe different states of the same row).
+ * Existence + archived + reclaimed-shell status in ONE query per table
+ * (issue #106 U12, F5): selects `{id, archivedAt, blobReclaimedAt?}`
+ * instead of firing a separate SELECT per check. Folding every check into
+ * a single read is both cheaper and more correct than multiple reads (one
+ * snapshot, no window for the checks to observe different states of the
+ * same row).
+ *
+ * F5 (issue #106 code review): archived-but-not-reclaimed resources were
+ * previously invisible to this validator — only `blob_reclaimed_at` was
+ * checked, so a newly created/updated attack or campaign could silently
+ * reference an archived (hidden-from-listing) hash list / word/rule/mask
+ * list, making a hidden resource power live work and permanently blocking
+ * its eventual blob reclamation (an active, non-archived attack reference
+ * is exactly what the reclamation sweep's NOT EXISTS guard checks for).
  */
-async function lookupExistingAndReclaimed(
-  key: ReclaimableKey,
+async function lookupExistingArchivedReclaimed(
+  key: ArchivableKey,
   wanted: readonly number[],
   projectId: number
-): Promise<{ foundIds: Set<number>; reclaimedIds: number[] }> {
-  if (wanted.length === 0) return { foundIds: new Set(), reclaimedIds: [] }
-  const spec = RECLAIMABLE_LOOKUPS[key]
+): Promise<{ foundIds: Set<number>; archivedIds: number[]; reclaimedIds: number[] }> {
+  if (wanted.length === 0) return { foundIds: new Set(), archivedIds: [], reclaimedIds: [] }
+  const spec = ARCHIVABLE_LOOKUPS[key]
+  const whereClause = and(inArray(spec.idColumn, [...wanted]), eq(spec.projectIdColumn, projectId))
+
+  if (spec.blobReclaimedAtColumn) {
+    const rows = await db
+      .select({
+        id: spec.idColumn,
+        archivedAt: spec.archivedAtColumn,
+        blobReclaimedAt: spec.blobReclaimedAtColumn,
+      })
+      .from(spec.table)
+      .where(whereClause)
+    return {
+      foundIds: new Set(rows.map((r) => r.id)),
+      archivedIds: rows.filter((r) => r.archivedAt != null).map((r) => r.id),
+      reclaimedIds: rows.filter((r) => r.blobReclaimedAt != null).map((r) => r.id),
+    }
+  }
+
+  // hashLists: no blobReclaimedAt column to select.
   const rows = await db
-    .select({ id: spec.idColumn, blobReclaimedAt: spec.blobReclaimedAtColumn })
+    .select({ id: spec.idColumn, archivedAt: spec.archivedAtColumn })
     .from(spec.table)
-    .where(and(inArray(spec.idColumn, [...wanted]), eq(spec.projectIdColumn, projectId)))
+    .where(whereClause)
   return {
     foundIds: new Set(rows.map((r) => r.id)),
-    reclaimedIds: rows.filter((r) => r.blobReclaimedAt != null).map((r) => r.id),
+    archivedIds: rows.filter((r) => r.archivedAt != null).map((r) => r.id),
+    reclaimedIds: [],
   }
 }
 
 /**
  * Verify every resource referenced by the campaign and its attacks
  * actually exists, and (for project-scoped resources) belongs to the
- * campaign's project. Also flags any word/rule/mask list reference that is
- * a reclaimed shell (issue #106 U12 / R12) — present, but unusable until
- * re-uploaded and checksum-verified. Returns the missing/reclaimed resource
- * identifiers grouped by table so the route layer can surface a single
- * combined error.
+ * campaign's project. Also flags:
+ *   - any word/rule/mask list reference that is a reclaimed shell (issue
+ *     #106 U12 / R12) — present, but unusable until re-uploaded and
+ *     checksum-verified.
+ *   - any hash list / word/rule/mask list reference that is archived
+ *     (issue #106 F5 code review) — present, but hidden from listings and
+ *     must not be allowed to silently power new/updated live work.
  *
- * Runs one SELECT per referenced table (word/rule/mask lists fold the
- * reclaimed-shell check into their existence SELECT rather than firing a
- * second query — see `lookupExistingAndReclaimed`); all resource id lookups
- * are indexed by primary key.
+ * Returns the missing/reclaimed/archived resource identifiers grouped by
+ * table so the route layer can surface a single combined error.
  *
- * Project scoping (driven by per-resource `projectScoped` flag):
+ * Runs one SELECT per referenced table; all resource id lookups are
+ * indexed by primary key.
+ *
+ * Project scoping:
  *   - `hashLists`, `wordLists`, `ruleLists`, `maskLists` have
  *     `project_id` and are scoped to the campaign's project.
- *   - `hashTypes` is global (no project_id) so it's looked up by id only.
+ *   - `hashTypes` is global (no project_id) so it's looked up by id only,
+ *     and has no archived/reclaimed lifecycle to check.
  *
  * Null `campaign.hashListId` is a legitimate caller signal: standalone
  * attack-write callers (POST /:id/attacks, PATCH /:id/attacks/:attackId)
@@ -201,77 +188,78 @@ export async function validateCampaignResources(
     rulelistId?: number | null | undefined
     masklistId?: number | null | undefined
   }>
-): Promise<{ valid: true } | { valid: false; missing: string[]; reclaimed: string[] }> {
+): Promise<
+  { valid: true } | { valid: false; missing: string[]; reclaimed: string[]; archived: string[] }
+> {
   // Collect dedup'd id lists per resource type. Null campaign.hashListId
   // is the documented "skip" signal — keep the wanted list empty so the
   // helper produces no lookup for that dimension.
-  const wanted: Record<ResourceLookupKey, number[]> = {
+  const wantedHashType = dedupIds(campaignAttacks, 'hashTypeId')
+  const wantedArchivable: Record<ArchivableKey, number[]> = {
     hashListId: campaign.hashListId != null ? [campaign.hashListId] : [],
-    hashTypeId: dedupIds(campaignAttacks, 'hashTypeId'),
     wordlistId: dedupIds(campaignAttacks, 'wordlistId'),
     rulelistId: dedupIds(campaignAttacks, 'rulelistId'),
     masklistId: dedupIds(campaignAttacks, 'masklistId'),
   }
-
-  const reclaimableKeySet = new Set<ResourceLookupKey>(['wordlistId', 'rulelistId', 'masklistId'])
-  const lookupKeys = (Object.keys(RESOURCE_LOOKUPS) as ResourceLookupKey[]).filter(
-    (k) => wanted[k].length > 0
+  const archivableKeys = (Object.keys(wantedArchivable) as ArchivableKey[]).filter(
+    (k) => wantedArchivable[k].length > 0
   )
 
-  if (lookupKeys.length === 0) {
+  if (wantedHashType.length === 0 && archivableKeys.length === 0) {
     return { valid: true }
   }
 
-  // Run in parallel — every lookup is a single indexed SELECT (one per
-  // referenced table, not per key). hashListId/hashTypeId use the plain
-  // existence-only lookup; wordlistId/rulelistId/masklistId use the
-  // combined existence + reclaimed-shell lookup (issue #106 U12).
-  const results = await Promise.all(
-    lookupKeys.map(async (key) => {
-      if (reclaimableKeySet.has(key)) {
-        const { foundIds, reclaimedIds } = await lookupExistingAndReclaimed(
-          key as ReclaimableKey,
-          wanted[key],
-          campaign.projectId
-        )
-        return { key, foundIds, reclaimedIds }
-      }
-      const foundIds = await lookupExistingIds(
-        RESOURCE_LOOKUPS[key],
-        wanted[key],
-        campaign.projectId
-      )
-      return { key, foundIds, reclaimedIds: [] as number[] }
-    })
-  )
+  // Run every table's lookup in parallel — one indexed SELECT per
+  // referenced table.
+  const [hashTypeFoundIds, archivableResults] = await Promise.all([
+    lookupExistingHashTypeIds(wantedHashType),
+    Promise.all(
+      archivableKeys.map(async (key) => ({
+        key,
+        ...(await lookupExistingArchivedReclaimed(key, wantedArchivable[key], campaign.projectId)),
+      }))
+    ),
+  ])
 
   const missing: string[] = []
   const reclaimed: string[] = []
-  for (const { key, foundIds, reclaimedIds } of results) {
-    const label = RESOURCE_LOOKUPS[key].label
-    for (const id of wanted[key]) {
+  const archived: string[] = []
+
+  for (const id of wantedHashType) {
+    if (!hashTypeFoundIds.has(id)) missing.push(`hashType(${id})`)
+  }
+
+  for (const { key, foundIds, archivedIds, reclaimedIds } of archivableResults) {
+    const label = ARCHIVABLE_LOOKUPS[key].label
+    for (const id of wantedArchivable[key]) {
       if (!foundIds.has(id)) {
         missing.push(`${label}(${id})`)
       }
+    }
+    for (const id of archivedIds) {
+      archived.push(`${label}(${id})`)
     }
     for (const id of reclaimedIds) {
       reclaimed.push(`${label}(${id})`)
     }
   }
 
-  return missing.length === 0 && reclaimed.length === 0
+  return missing.length === 0 && reclaimed.length === 0 && archived.length === 0
     ? { valid: true }
-    : { valid: false, missing, reclaimed }
+    : { valid: false, missing, reclaimed, archived }
 }
 
 /**
- * Standalone reclaimed-shell check for callers that don't go through
- * `validateCampaignResources` (issue #106 U12 / R12) — currently the
- * Control API's attack create/update routes, which validate resource refs
- * via FK constraints alone and have no existing pre-check chokepoint to
- * extend. Returns human-readable `label(id)` refs for any wordlist/
- * rulelist/masklist reference that is a reclaimed shell (present, but
- * `blob_reclaimed_at IS NOT NULL`).
+ * Standalone reclaimed-shell / archived check for callers that don't go
+ * through `validateCampaignResources` (issue #106 U12 / R12, F5) —
+ * currently the Control API's attack create/update routes, which validate
+ * resource refs via FK constraints alone and have no existing pre-check
+ * chokepoint to extend. Returns human-readable `label(id)` refs, split by
+ * reason, for any wordlist/rulelist/masklist reference that is a
+ * reclaimed shell (`blob_reclaimed_at IS NOT NULL`) or archived
+ * (`archived_at IS NOT NULL`) — attacks never reference a hash list
+ * directly (that's a campaign-level field), so hashLists is intentionally
+ * not part of this check.
  */
 export async function findReclaimedResourceRefs(
   projectId: number,
@@ -280,19 +268,34 @@ export async function findReclaimedResourceRefs(
     rulelistId?: number | null | undefined
     masklistId?: number | null | undefined
   }
-): Promise<string[]> {
-  const reclaimableKeys: ReadonlyArray<ReclaimableKey> = ['wordlistId', 'rulelistId', 'masklistId']
+): Promise<{ reclaimed: string[]; archived: string[] }> {
+  const archivableKeys: ReadonlyArray<Exclude<ArchivableKey, 'hashListId'>> = [
+    'wordlistId',
+    'rulelistId',
+    'masklistId',
+  ]
   const results = await Promise.all(
-    reclaimableKeys
+    archivableKeys
       .filter((key) => refs[key] != null)
       .map(async (key) => {
         const id = refs[key]
-        if (id == null) return []
-        const { reclaimedIds } = await lookupExistingAndReclaimed(key, [id], projectId)
-        return reclaimedIds.map((rid) => `${RECLAIMABLE_LOOKUPS[key].label}(${rid})`)
+        if (id == null) return { reclaimed: [] as string[], archived: [] as string[] }
+        const { archivedIds, reclaimedIds } = await lookupExistingArchivedReclaimed(
+          key,
+          [id],
+          projectId
+        )
+        const label = ARCHIVABLE_LOOKUPS[key].label
+        return {
+          reclaimed: reclaimedIds.map((rid) => `${label}(${rid})`),
+          archived: archivedIds.map((aid) => `${label}(${aid})`),
+        }
       })
   )
-  return results.flat()
+  return {
+    reclaimed: results.flatMap((r) => r.reclaimed),
+    archived: results.flatMap((r) => r.archived),
+  }
 }
 
 function dedupIds<T extends Record<string, unknown>>(

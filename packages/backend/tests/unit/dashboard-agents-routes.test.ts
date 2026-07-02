@@ -141,17 +141,21 @@ const mockGetAgentById: AgentsService['getAgentById'] = mock(async (id: number) 
 const mockUpdateAgent: AgentsService['updateAgent'] = mock(async (id, patch, projectId) => {
   // Honors the atomic UPDATE WHERE projectId contract: id=100 lives
   // in project 1, id=200 lives in project 999 (foreign). A mismatch
-  // collapses to null exactly the way the real query would after the
-  // 0 rows-affected.
+  // collapses to not_found exactly the way the real query would after
+  // the 0 rows-affected. Mirrors the real service's typed-outcome
+  // contract (issue #106 F4).
   if (id === 100 && projectId === 1) {
-    return makeAgent({
-      id: 100,
-      projectId: 1,
-      name: patch.name ?? 'Rig Alpha',
-      status: patch.status ?? 'online',
-    })
+    return {
+      kind: 'updated' as const,
+      agent: makeAgent({
+        id: 100,
+        projectId: 1,
+        name: patch.name ?? 'Rig Alpha',
+        status: patch.status ?? 'online',
+      }),
+    }
   }
-  return null
+  return { kind: 'not_found' as const }
 })
 
 const mockRotateAgentToken: AgentsService['rotateAgentToken'] = mock(async (agentId, projectId) => {

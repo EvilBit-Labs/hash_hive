@@ -22,6 +22,7 @@ import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
+import { findReclaimedResourceRefs } from './campaign-resources.js'
 
 /**
  * Archive is refused for a task-less (never-latched) attack — see
@@ -123,6 +124,29 @@ export async function restoreAttacks(
 
         if (!oldRow) return { id, outcome: 'not_found' }
         if (!oldRow.archivedAt) return { id, outcome: 'not_archived' }
+
+        // F2 (issue #106 code review): re-validate the attack's resource
+        // refs before clearing archived_at. Without this, a
+        // create-attack -> archive-attack -> [blob-reclamation sweep
+        // reclaims the referenced wordlist/rulelist/masklist] ->
+        // restore-attack sequence would silently resurrect an attack that
+        // references a blobless shell — the scheduler would then generate
+        // tasks against a missing file (violates R12). Scoped to the
+        // reclaimed-shell check only (not the F5 archived-ref check):
+        // this mirrors the create/update attack paths' existing
+        // pre-check, which is a plain read before the write rather than a
+        // guard folded into the UPDATE's WHERE — the same narrow,
+        // accepted race window (a reclaim landing between this check and
+        // the UPDATE below) already exists on those paths, since blob
+        // reclamation only sweeps once daily.
+        const { reclaimed } = await findReclaimedResourceRefs(projectId, {
+          wordlistId: oldRow.wordlistId,
+          rulelistId: oldRow.rulelistId,
+          masklistId: oldRow.masklistId,
+        })
+        if (reclaimed.length > 0) {
+          return { id, outcome: 'resource_reclaimed' }
+        }
 
         const result = await db.transaction(async (tx) => {
           const updated = await tx

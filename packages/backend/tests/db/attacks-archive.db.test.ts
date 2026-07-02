@@ -15,7 +15,15 @@
  * drizzle client lifecycle. All db-lane files share the same client.
  */
 
-import { attacks, campaigns, hashLists, hashTypes, projects, tasks } from '@hashhive/shared'
+import {
+  attacks,
+  campaigns,
+  hashLists,
+  hashTypes,
+  projects,
+  tasks,
+  wordLists,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
@@ -276,5 +284,82 @@ describe('archived attack excluded from listAttacks (U6, R6, R10)', () => {
 
     await restoreAttacks(ctx.projectId, [id])
     expect((await listAttacks(ctx.campaignId)).map((a) => a.id)).toContain(id)
+  })
+})
+
+// ─── Reclaimed-shell restore guard (F2, issue #106 code review) ─────
+
+async function insertReclaimedWordList(): Promise<number> {
+  const [row] = await db
+    .insert(wordLists)
+    .values({
+      projectId: ctx.projectId,
+      name: 'attack-restore-reclaimed-wordlist',
+      status: 'ready',
+      isPermanent: true,
+      archivedAt: new Date('2025-01-01T00:00:00Z'),
+      blobReclaimedAt: new Date('2025-06-01T00:00:00Z'),
+      fileChecksum: 'deadbeefcafef00d',
+      fileRef: {},
+    })
+    .returning({ id: wordLists.id })
+  return row!.id
+}
+
+async function insertArchivedAttackReferencing(wordlistId: number): Promise<number> {
+  const [row] = await db
+    .insert(attacks)
+    .values({
+      campaignId: ctx.campaignId,
+      projectId: ctx.projectId,
+      mode: 0,
+      wordlistId,
+      isPermanent: true,
+      archivedAt: new Date(),
+    })
+    .returning({ id: attacks.id })
+  return row!.id
+}
+
+describe('restoreAttacks: reclaimed-shell guard (F2, issue #106 code review)', () => {
+  it('refuses to restore an attack referencing a reclaimed-shell wordlist, and leaves it archived', async () => {
+    const wordlistId = await insertReclaimedWordList()
+    const id = await insertArchivedAttackReferencing(wordlistId)
+
+    const [res] = await restoreAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('resource_reclaimed')
+
+    const after = await readAttack(id)
+    expect(after?.archivedAt).not.toBeNull()
+  })
+
+  it('restores normally once the referenced resource is no longer a reclaimed shell (re-uploaded)', async () => {
+    const wordlistId = await insertReclaimedWordList()
+    const id = await insertArchivedAttackReferencing(wordlistId)
+
+    // Simulate a successful checksum-verified re-upload (proven elsewhere):
+    // blob_reclaimed_at clears, the resource is usable again.
+    await db.update(wordLists).set({ blobReclaimedAt: null }).where(eq(wordLists.id, wordlistId))
+
+    const [res] = await restoreAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('restored')
+    expect((await readAttack(id))?.archivedAt).toBeNull()
+  })
+
+  it('does not block restoring an attack referencing an unrelated, usable wordlist', async () => {
+    const [usable] = await db
+      .insert(wordLists)
+      .values({
+        projectId: ctx.projectId,
+        name: 'attack-restore-usable-wordlist',
+        status: 'ready',
+        isPermanent: true,
+        fileRef: {},
+      })
+      .returning({ id: wordLists.id })
+    const id = await insertArchivedAttackReferencing(usable!.id)
+
+    const [res] = await restoreAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('restored')
   })
 })

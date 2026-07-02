@@ -226,7 +226,7 @@ if (!IS_ISOLATED) {
 
   type ResourceCheckResult =
     | { valid: true }
-    | { valid: false; missing: string[]; reclaimed: string[] }
+    | { valid: false; missing: string[]; reclaimed: string[]; archived: string[] }
   const mockValidateCampaignResources = mock(
     async (
       _campaign: { projectId: number; hashListId: number | null },
@@ -1030,6 +1030,7 @@ if (!IS_ISOLATED) {
         valid: false,
         missing: ['wordlist(99)'],
         reclaimed: [],
+        archived: [],
       })
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
         method: 'POST',
@@ -1059,6 +1060,7 @@ if (!IS_ISOLATED) {
         valid: false,
         missing: ['rulelist(13)'],
         reclaimed: [],
+        archived: [],
       })
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
         method: 'PATCH',

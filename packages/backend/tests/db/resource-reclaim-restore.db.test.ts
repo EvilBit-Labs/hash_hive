@@ -121,7 +121,8 @@ describe('restore-after-reclaim (U12, R12)', () => {
     await restoreResources(wordLists, ctx.projectId, [id])
 
     const refs = await findReclaimedResourceRefs(ctx.projectId, { wordlistId: id })
-    expect(refs).toEqual([`wordlist(${id})`])
+    // Restored: archived_at cleared, blob_reclaimed_at still set (shell).
+    expect(refs).toEqual({ reclaimed: [`wordlist(${id})`], archived: [] })
   })
 
   it('findReclaimedResourceRefs returns empty for a usable (non-shell) wordlist', async () => {
@@ -138,7 +139,7 @@ describe('restore-after-reclaim (U12, R12)', () => {
     const id = row!.id
 
     const refs = await findReclaimedResourceRefs(ctx.projectId, { wordlistId: id })
-    expect(refs).toEqual([])
+    expect(refs).toEqual({ reclaimed: [], archived: [] })
   })
 
   it('validateCampaignResources rejects an attack referencing a reclaimed-shell wordlist', async () => {
@@ -153,6 +154,7 @@ describe('restore-after-reclaim (U12, R12)', () => {
     if (!result.valid) {
       expect(result.reclaimed).toEqual([`wordlist(${id})`])
       expect(result.missing).toEqual([])
+      expect(result.archived).toEqual([])
     }
   })
 
@@ -186,7 +188,70 @@ describe('restore-after-reclaim (U12, R12)', () => {
     await db.update(wordLists).set({ blobReclaimedAt: null }).where(eq(wordLists.id, id))
 
     const refs = await findReclaimedResourceRefs(ctx.projectId, { wordlistId: id })
-    expect(refs).toEqual([])
+    expect(refs).toEqual({ reclaimed: [], archived: [] })
+  })
+})
+
+// ─── F5 (issue #106 code review): archived (not reclaimed) resource refs ──
+
+describe('archived resource refs are rejected distinct from reclaimed refs (F5)', () => {
+  async function insertArchivedWordList(): Promise<number> {
+    const [row] = await db
+      .insert(wordLists)
+      .values({
+        projectId: ctx.projectId,
+        name: 'archived-not-reclaimed-wordlist',
+        status: 'ready',
+        isPermanent: true,
+        archivedAt: new Date('2025-01-01T00:00:00Z'),
+        blobReclaimedAt: null,
+        fileRef: {},
+      })
+      .returning({ id: wordLists.id })
+    return row!.id
+  }
+
+  it('findReclaimedResourceRefs flags an archived (not reclaimed) wordlist reference', async () => {
+    const id = await insertArchivedWordList()
+
+    const refs = await findReclaimedResourceRefs(ctx.projectId, { wordlistId: id })
+    expect(refs).toEqual({ reclaimed: [], archived: [`wordlist(${id})`] })
+  })
+
+  it('validateCampaignResources rejects an attack referencing an archived (not reclaimed) wordlist', async () => {
+    const id = await insertArchivedWordList()
+
+    const result = await validateCampaignResources({ projectId: ctx.projectId, hashListId: null }, [
+      { wordlistId: id },
+    ])
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.archived).toEqual([`wordlist(${id})`])
+      expect(result.reclaimed).toEqual([])
+      expect(result.missing).toEqual([])
+    }
+  })
+
+  it('validateCampaignResources rejects a campaign referencing an archived hash list', async () => {
+    const [row] = await db
+      .insert(hashLists)
+      .values({
+        projectId: ctx.projectId,
+        name: 'archived-hashlist',
+        status: 'ready',
+        isPermanent: true,
+        archivedAt: new Date('2025-01-01T00:00:00Z'),
+      })
+      .returning({ id: hashLists.id })
+    const id = row!.id
+
+    const result = await validateCampaignResources({ projectId: ctx.projectId, hashListId: id }, [])
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.archived).toEqual([`hashList(${id})`])
+    }
   })
 })
 

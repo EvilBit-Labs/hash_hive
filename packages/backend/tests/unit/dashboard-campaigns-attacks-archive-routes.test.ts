@@ -224,8 +224,8 @@ if (!IS_ISOLATED) {
     // `control/attacks.ts` statically imports this (issue #106 U12); since
     // this file loads the full app (`src/index.ts`), the named import fails
     // to link if the campaigns.js mock omits it. No refs are ever reclaimed
-    // in this archive/restore-focused suite.
-    findReclaimedResourceRefs: mock(async () => []),
+    // or archived in this archive/restore-focused suite.
+    findReclaimedResourceRefs: mock(async () => ({ reclaimed: [], archived: [] })),
   }))
 
   const { app } = await import('../../src/index.js')

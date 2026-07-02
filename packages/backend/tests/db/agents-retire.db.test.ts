@@ -30,7 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { listAgents, retireAgent } from '../../src/services/agents.js'
+import { listAgents, retireAgent, updateAgent } from '../../src/services/agents.js'
 import { processHeartbeat } from '../../src/services/agents/heartbeat.js'
 import { assignNextTask } from '../../src/services/tasks.js'
 
@@ -301,5 +301,64 @@ describe('retireAgent: records a retired audit event (U8)', () => {
     expect(rows.length).toBe(1)
     expect(rows[0]?.action).toBe('retired')
     expect(rows[0]?.projectId).toBe(ctx.projectId)
+  })
+})
+
+// ─── F4 (issue #106 code review) — retired agents are immutable via PATCH ──
+
+describe('updateAgent: a retired agent is immutable via the generic PATCH path (F4)', () => {
+  it('reports retired and leaves the row untouched when un-retiring via status', async () => {
+    const agentId = await insertAgent('update-retired-agent')
+    const retireResult = await retireAgent(agentId, ctx.projectId, SYSTEM_ACTOR)
+    expect(retireResult.kind).toBe('retired')
+
+    // A contributor/admin attempting to PATCH status back to 'online'
+    // through the generic update path must be refused -- retirement has
+    // no restore path (ADR-0019 / R9).
+    const result = await updateAgent(agentId, { status: 'online' }, ctx.projectId, SYSTEM_ACTOR)
+    expect(result.kind).toBe('retired')
+
+    const row = await readAgent(agentId)
+    expect(row?.status).toBe('retired')
+  })
+
+  it('also refuses a name-only edit on a retired agent', async () => {
+    const agentId = await insertAgent('update-retired-agent-name')
+    await retireAgent(agentId, ctx.projectId, SYSTEM_ACTOR)
+
+    const result = await updateAgent(agentId, { name: 'renamed' }, ctx.projectId, SYSTEM_ACTOR)
+    expect(result.kind).toBe('retired')
+
+    const row = await readAgent(agentId)
+    expect(row?.name).toBe('update-retired-agent-name')
+  })
+
+  it('still updates a non-retired agent normally', async () => {
+    const agentId = await insertAgent('update-online-agent')
+
+    const result = await updateAgent(
+      agentId,
+      { name: 'renamed-online' },
+      ctx.projectId,
+      SYSTEM_ACTOR
+    )
+    expect(result.kind).toBe('updated')
+
+    const row = await readAgent(agentId)
+    expect(row?.name).toBe('renamed-online')
+  })
+
+  it('reports not_found for a missing or cross-project agent id', async () => {
+    const missing = await updateAgent(999_999_999, { name: 'x' }, ctx.projectId, SYSTEM_ACTOR)
+    expect(missing.kind).toBe('not_found')
+
+    const agentId = await insertAgent('update-cross-project-agent')
+    const crossProject = await updateAgent(
+      agentId,
+      { name: 'x' },
+      ctx.projectId + 100_000,
+      SYSTEM_ACTOR
+    )
+    expect(crossProject.kind).toBe('not_found')
   })
 })
