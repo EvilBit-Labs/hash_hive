@@ -11,7 +11,7 @@ import {
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, ne, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -110,7 +110,10 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
         count: sql<number>`count(*)`,
       })
       .from(agents)
-      .where(eq(agents.projectId, projectId))
+      // Retired agents are decommissioned and excluded from active-fleet views
+      // (ADR-0019 / #106), so they contribute to neither `total` nor any bucket
+      // here — matching listAgents' default exclusion.
+      .where(and(eq(agents.projectId, projectId), ne(agents.status, 'retired')))
       .groupBy(agents.status),
 
     db
