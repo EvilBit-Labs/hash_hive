@@ -310,7 +310,7 @@ if (!IS_ISOLATED) {
     createAttack: mockCreateAttack,
     getAttackById: mockGetAttackByIdImpl,
     updateAttack: mockUpdateAttackImpl,
-    deleteAttack: mock(async () => null),
+    deleteAttack: mock(async () => ({ kind: 'not_found' as const })),
     transitionCampaign: mockTransitionCampaign,
     validateCampaignDAG: mock(async () => ({ valid: true })),
     // Cross-project resource pre-check on draft writes. Default to
@@ -325,6 +325,10 @@ if (!IS_ISOLATED) {
     updateCampaignProgress: mock(async () => undefined),
     // Likewise required by tasks.ts/retry.ts (#97 U6 completion trigger).
     enqueuePreemptionEvaluation: mock(async () => undefined),
+    // Likewise required by tasks.ts's generateTasksForAttack (issue #106
+    // U6 permanence latch) — no-op stub, no test in this file exercises
+    // real task generation against a real transaction.
+    latchAttackPermanent: mock(async () => undefined),
     resolveGenerationStrategy: () => 'inline' as const,
     INLINE_GENERATION_THRESHOLD: 100,
     _deps: {},

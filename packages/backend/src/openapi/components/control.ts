@@ -59,6 +59,9 @@ const CONTROL_RESPONSE_NAMES = [
   'Conflict',
   'InternalError',
   'ServiceUnavailable',
+  // A record is permanent and archive-only (ADR-0019, issue #106 U6/U10) —
+  // e.g. DELETE on a run attack.
+  'UnprocessableEntity',
 ] as const
 
 type ControlResponseName = (typeof CONTROL_RESPONSE_NAMES)[number]
@@ -86,6 +89,8 @@ const CONTROL_RESPONSE_DESCRIPTIONS: Record<ControlResponseName, string> = {
     'Unexpected server error - downstream dependency (database, queue, storage) failed and the request could not be completed.',
   ServiceUnavailable:
     'A required backing service is degraded or offline (e.g., Redis queue unavailable).',
+  UnprocessableEntity:
+    'Request is well-formed but cannot be processed because the target record is permanent and archive-only.',
 }
 
 /**

@@ -1,0 +1,280 @@
+/**
+ * Real-DB tests for attack archiving (ADR-0019, issue #106 U6): the
+ * permanence latch (fires on first task generation, not on create like
+ * campaigns/resources), the hardened draft/task-less-only delete guard,
+ * archive/restore behavior (no `in_use` guard — nothing references an
+ * attack the way campaigns reference hash lists), and the scheduler /
+ * campaign-editor exclusion of archived attacks. These prove SQL-level
+ * behavior the mocked default lane cannot — guarded UPDATEs, the latch
+ * firing inside the task-insert transaction, and isNull filtering.
+ *
+ * Runs under `just test-db` (preload: tests/preload-db.ts). cleanupSeed()
+ * in afterAll keeps runs idempotent and order-independent.
+ *
+ * NOTE: do NOT call client.end() here — harness.test.ts owns the shared
+ * drizzle client lifecycle. All db-lane files share the same client.
+ */
+
+import { attacks, campaigns, hashLists, hashTypes, projects, tasks } from '@hashhive/shared'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { eq } from 'drizzle-orm'
+
+import { db } from '../../src/db/index.js'
+import { archiveAttacks, restoreAttacks } from '../../src/services/campaigns-attacks-archive.js'
+import { deleteAttack, latchAttackPermanent, listAttacks } from '../../src/services/campaigns.js'
+import { generateTasksForAttack } from '../../src/services/tasks.js'
+
+const TEST_SLUG = 'attacks-archive-test-proj'
+const HASHCAT_MODE = 9_999_844 // unique to this test file
+
+interface SeedCtx {
+  projectId: number
+  campaignId: number
+}
+
+let ctx: SeedCtx
+
+async function insertAttack(overrides: { campaignId?: number; projectId?: number } = {}) {
+  const [row] = await db
+    .insert(attacks)
+    .values({
+      campaignId: overrides.campaignId ?? ctx.campaignId,
+      projectId: overrides.projectId ?? ctx.projectId,
+      // Mode 3 (mask) with an inline mask computes its keyspace synchronously
+      // (no wordlist/rulelist DB rows needed) — a small, deterministic,
+      // single-chunk keyspace so generateTasksForAttack always emits at
+      // least one task.
+      mode: 3,
+      advancedConfiguration: { mask: '?d?d' },
+    })
+    .returning({ id: attacks.id })
+  return row!.id
+}
+
+async function readAttack(id: number) {
+  const [row] = await db
+    .select({ isPermanent: attacks.isPermanent, archivedAt: attacks.archivedAt })
+    .from(attacks)
+    .where(eq(attacks.id, id))
+  return row
+}
+
+async function taskCountForAttack(id: number): Promise<number> {
+  const rows = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.attackId, id))
+  return rows.length
+}
+
+async function cleanupSeed(): Promise<void> {
+  // Project cascade removes hashLists/campaigns/attacks/tasks in one delete.
+  await db.delete(projects).where(eq(projects.slug, TEST_SLUG))
+  await db.delete(hashTypes).where(eq(hashTypes.hashcatMode, HASHCAT_MODE))
+}
+
+beforeAll(async () => {
+  await cleanupSeed()
+  const [project] = await db
+    .insert(projects)
+    .values({ name: TEST_SLUG, slug: TEST_SLUG })
+    .returning({ id: projects.id })
+  const projectId = project!.id
+  const [hashType] = await db
+    .insert(hashTypes)
+    .values({ name: 'attacks-archive-test', hashcatMode: HASHCAT_MODE })
+    .returning({ id: hashTypes.id })
+  const [hashList] = await db
+    .insert(hashLists)
+    .values({
+      projectId,
+      name: 'attacks-archive-test-list',
+      hashTypeId: hashType!.id,
+      status: 'ready',
+    })
+    .returning({ id: hashLists.id })
+  const [campaign] = await db
+    .insert(campaigns)
+    .values({
+      projectId,
+      name: 'attacks-archive-test-campaign',
+      hashListId: hashList!.id,
+      priority: 5,
+      status: 'draft',
+    })
+    .returning({ id: campaigns.id })
+  ctx = { projectId, campaignId: campaign!.id }
+})
+
+afterAll(cleanupSeed)
+
+// ─── Permanence latch on first task generation ───────────────────────
+
+describe('attack permanence latch (U6, assumption: fires on first task generation)', () => {
+  it('leaves is_permanent=false for an attack with no tasks generated', async () => {
+    const id = await insertAttack()
+    expect((await readAttack(id))?.isPermanent).toBe(false)
+    expect(await taskCountForAttack(id)).toBe(0)
+  })
+
+  it('latches is_permanent=true when the first task is generated', async () => {
+    const id = await insertAttack()
+    expect((await readAttack(id))?.isPermanent).toBe(false)
+
+    const result = await generateTasksForAttack(id)
+    expect(result.count).toBeGreaterThan(0)
+
+    expect((await readAttack(id))?.isPermanent).toBe(true)
+  })
+
+  it('is idempotent: generating tasks a second time does not error and stays latched', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    expect((await readAttack(id))?.isPermanent).toBe(true)
+
+    // Re-generation (e.g. a retry) must not throw and must leave the latch set.
+    await generateTasksForAttack(id)
+    expect((await readAttack(id))?.isPermanent).toBe(true)
+  })
+
+  it('directly exercises latchAttackPermanent as a no-op on an already-permanent attack', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    expect((await readAttack(id))?.isPermanent).toBe(true)
+
+    await db.transaction(async (tx) => {
+      await latchAttackPermanent(tx, id)
+    })
+    expect((await readAttack(id))?.isPermanent).toBe(true)
+  })
+})
+
+// ─── Draft/task-less-only hard-delete guard ──────────────────────────
+
+describe('attack delete guard (U6, R2)', () => {
+  it('hard-deletes a task-less (never-run) attack', async () => {
+    const id = await insertAttack()
+    const res = await deleteAttack(id)
+    expect(res.kind).toBe('deleted')
+    expect(await readAttack(id)).toBeUndefined()
+  })
+
+  it('rejects deleting a permanent (has-run) attack', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    const res = await deleteAttack(id)
+    expect(res.kind).toBe('not_deletable')
+    expect(await readAttack(id)).toBeDefined()
+  })
+
+  it('reports not_found for a missing attack', async () => {
+    const res = await deleteAttack(999_999_999)
+    expect(res.kind).toBe('not_found')
+  })
+})
+
+// ─── Archive / restore ────────────────────────────────────────────────
+
+describe('attack archive / restore (U6, R5, R6, R10)', () => {
+  it('archives a permanent (has-run) attack', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    const [res] = await archiveAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('archived')
+    expect((await readAttack(id))?.archivedAt).not.toBeNull()
+  })
+
+  it('rejects archiving a task-less attack (not_archivable)', async () => {
+    const id = await insertAttack()
+    const [res] = await archiveAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('not_archivable')
+    expect((await readAttack(id))?.archivedAt).toBeNull()
+  })
+
+  it('reports already_archived when archiving an already-archived attack', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    await archiveAttacks(ctx.projectId, [id])
+    const [res] = await archiveAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('already_archived')
+  })
+
+  it('reports not_found for a cross-project id', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    const [res] = await archiveAttacks(ctx.projectId + 100_000, [id])
+    expect(res?.outcome).toBe('not_found')
+    expect((await readAttack(id))?.archivedAt).toBeNull()
+  })
+
+  it('restores an archived attack and clears archived_at', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    await archiveAttacks(ctx.projectId, [id])
+    const [res] = await restoreAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('restored')
+    expect((await readAttack(id))?.archivedAt).toBeNull()
+  })
+
+  it('reports not_archived when restoring a non-archived attack', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    const [res] = await restoreAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('not_archived')
+  })
+
+  it('handles a bulk mixed batch with per-id outcomes', async () => {
+    const archivable = await insertAttack()
+    await generateTasksForAttack(archivable)
+    const notArchivable = await insertAttack()
+    const missing = ctx.projectId + 200_000
+    const results = await archiveAttacks(ctx.projectId, [archivable, notArchivable, missing])
+    const byId = new Map(results.map((r) => [r.id, r.outcome]))
+    expect(byId.get(archivable)).toBe('archived')
+    expect(byId.get(notArchivable)).toBe('not_archivable')
+    expect(byId.get(missing)).toBe('not_found')
+  })
+
+  it('retains task rows attributed to the attack after archiving', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    const before = await taskCountForAttack(id)
+    expect(before).toBeGreaterThan(0)
+
+    const [res] = await archiveAttacks(ctx.projectId, [id])
+    expect(res?.outcome).toBe('archived')
+
+    const after = await taskCountForAttack(id)
+    expect(after).toBe(before)
+  })
+})
+
+// ─── Scheduler / campaign-editor exclusion ───────────────────────────
+
+describe('archived attack excluded from listAttacks (U6, R6, R10)', () => {
+  it('excludes an archived attack by default and includes it with showArchived', async () => {
+    const active = await insertAttack()
+    await generateTasksForAttack(active)
+
+    const archived = await insertAttack()
+    await generateTasksForAttack(archived)
+    await archiveAttacks(ctx.projectId, [archived])
+
+    const defaultList = await listAttacks(ctx.campaignId)
+    const defaultIds = defaultList.map((a) => a.id)
+    expect(defaultIds).toContain(active)
+    expect(defaultIds).not.toContain(archived)
+
+    const fullList = await listAttacks(ctx.campaignId, { showArchived: true })
+    const fullIds = fullList.map((a) => a.id)
+    expect(fullIds).toContain(active)
+    expect(fullIds).toContain(archived)
+  })
+
+  it('re-includes a restored attack in the default listing', async () => {
+    const id = await insertAttack()
+    await generateTasksForAttack(id)
+    await archiveAttacks(ctx.projectId, [id])
+    expect((await listAttacks(ctx.campaignId)).map((a) => a.id)).not.toContain(id)
+
+    await restoreAttacks(ctx.projectId, [id])
+    expect((await listAttacks(ctx.campaignId)).map((a) => a.id)).toContain(id)
+  })
+})

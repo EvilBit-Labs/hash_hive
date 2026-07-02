@@ -1050,6 +1050,53 @@ export const resourceRestoreResponseSchema = z.object({
   ),
 })
 
+// ─── Attack archive / restore (dashboard & control) ─────────────────
+//
+// Attacks carry no `status` column (issue #99) and nothing references an
+// attack the way campaigns reference hash lists, so the outcome
+// vocabulary has neither a status-based archivable-set nor an `in_use`
+// guard — eligibility is just `is_permanent = true` (ADR-0019, issue
+// #106 U6). The shape happens to match campaign archive/restore exactly
+// since both share the same "permanent + not already archived"
+// eligibility rule; kept as separate named schemas (rather than reused)
+// so each surface's OpenAPI document names the type after its own entity.
+
+export const attackArchiveRequestSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200),
+})
+
+export const attackArchiveOutcomeSchema = z.enum([
+  'archived',
+  'not_found',
+  // Refused because the attack has never generated a task (never latched
+  // permanent) — draft/task-less attacks stay hard-deletable instead.
+  'not_archivable',
+  'already_archived',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
+])
+
+export const attackArchiveResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: attackArchiveOutcomeSchema })
+  ),
+})
+
+export const attackRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Per-id failure (see attackArchiveOutcomeSchema).
+  'error',
+])
+
+export const attackRestoreResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: attackRestoreOutcomeSchema })
+  ),
+})
+
 /**
  * The attack lifecycle vocabulary. Unlike `campaignStatusSchema`, this
  * governs a *wire-only* field: attack status is derived at read time from

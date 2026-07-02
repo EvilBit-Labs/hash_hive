@@ -210,7 +210,9 @@ if (!IS_ISOLATED) {
     makeAttack({ id: 888, campaignId: data.campaignId, projectId: data.projectId })
   const updateAttackMock: CampaignsService['updateAttack'] = async (id) =>
     makeAttack({ id, campaignId: 1, projectId: 1 })
-  const deleteAttackMock: CampaignsService['deleteAttack'] = async () => null
+  const deleteAttackMock: CampaignsService['deleteAttack'] = async () => ({
+    kind: 'not_found' as const,
+  })
 
   mock.module('../../src/services/campaigns.js', () => ({
     getCampaignById: getCampaignByIdMock,

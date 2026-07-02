@@ -307,6 +307,7 @@ const deleteAttackRoute = createRoute({
     401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -318,8 +319,24 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
     const existing = await loadAttackInProject(id, projectId)
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
     const user = c.get('currentUser')
-    await deleteAttack(id, { actorType: 'user', actorId: user.userId })
-    return c.body(null, 204)
+    // deleteAttack returns a typed result (issue #106 U6) — a permanent
+    // (run) attack is archive-only. Minimal handling here so this DELETE
+    // stops returning a false 204 / uncaught 500 on a permanent attack;
+    // a fuller Control API archive/restore pass is U10.
+    const result = await deleteAttack(id, { actorType: 'user', actorId: user.userId })
+    switch (result.kind) {
+      case 'not_found':
+        return problemResponse(c, 404, 'not_found', 'attack not found')
+      case 'not_deletable':
+        return problemResponse(
+          c,
+          422,
+          'not_deletable',
+          'attack has run and is now permanent; it cannot be deleted, only archived'
+        )
+      case 'deleted':
+        return c.body(null, 204)
+    }
   } catch (err) {
     return controlErrorResponse(c, err)
   }

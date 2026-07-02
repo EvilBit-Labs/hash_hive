@@ -21,6 +21,9 @@ export type ProblemCode =
   | 'internal'
   | 'project_not_selected'
   | 'service_unavailable'
+  // A record is permanent (has run / been referenced) and is archive-only —
+  // used by the attack DELETE guard (ADR-0019, issue #106 U6/U10).
+  | 'not_deletable'
 
 interface ProblemMeta {
   type: string
@@ -59,6 +62,10 @@ const PROBLEM_REGISTRY: Record<ProblemCode, ProblemMeta> = {
   service_unavailable: {
     type: 'https://hashhive.dev/errors/service-unavailable',
     title: 'Service unavailable',
+  },
+  not_deletable: {
+    type: 'https://hashhive.dev/errors/not-deletable',
+    title: 'Not deletable',
   },
 }
 

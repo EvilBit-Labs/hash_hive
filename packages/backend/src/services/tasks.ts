@@ -9,7 +9,11 @@ import { db } from '../db/index.js'
 import { updateAgentObservedRate } from './agent-rate.js'
 import { getAgentBenchmarkForMode } from './agents.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
-import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
+import {
+  enqueuePreemptionEvaluation,
+  latchAttackPermanent,
+  updateCampaignProgress,
+} from './campaigns.js'
 import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
@@ -122,16 +126,23 @@ export async function generateTasksForAttack(
   if (totalKeyspace <= 0n) {
     // No keyspace available - emit a single placeholder task so downstream
     // assignment / progress / failure paths still have a row to operate on.
-    const [task] = await db
-      .insert(tasks)
-      .values({
-        attackId: attack.id,
-        campaignId: attack.campaignId,
-        status: 'pending',
-        workRange: { start: 0, end: 0, total: 0 },
-        requiredCapabilities,
-      })
-      .returning()
+    // Insert + permanence latch (ADR-0019 / issue #106 U6) run in one
+    // transaction: this is the attack's first task row, so a crash between
+    // the two could otherwise leave a run attack un-latched (deletable).
+    const [task] = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(tasks)
+        .values({
+          attackId: attack.id,
+          campaignId: attack.campaignId,
+          status: 'pending',
+          workRange: { start: 0, end: 0, total: 0 },
+          requiredCapabilities,
+        })
+        .returning()
+      await latchAttackPermanent(tx, attack.id)
+      return inserted
+    })
 
     return { tasks: [task], count: 1 }
   }
@@ -178,18 +189,26 @@ export async function generateTasksForAttack(
     })
   }
 
-  const createdTasks = await db
-    .insert(tasks)
-    .values(
-      chunks.map((range) => ({
-        attackId: attack.id,
-        campaignId: attack.campaignId,
-        status: 'pending' as const,
-        workRange: range,
-        requiredCapabilities,
-      }))
-    )
-    .returning()
+  // Insert + permanence latch (ADR-0019 / issue #106 U6) run in one
+  // transaction — see the placeholder-task branch above for why. The
+  // guarded `WHERE isPermanent = false` inside the latch makes a
+  // re-generation run (attack already permanent) a no-op.
+  const createdTasks = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(tasks)
+      .values(
+        chunks.map((range) => ({
+          attackId: attack.id,
+          campaignId: attack.campaignId,
+          status: 'pending' as const,
+          workRange: range,
+          requiredCapabilities,
+        }))
+      )
+      .returning()
+    await latchAttackPermanent(tx, attack.id)
+    return inserted
+  })
 
   return { tasks: createdTasks, count: createdTasks.length }
 }

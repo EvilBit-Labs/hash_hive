@@ -255,11 +255,12 @@ export async function archiveResources(
                 eq(table.isPermanent, true),
                 isNull(table.archivedAt),
                 // R3: refuse while a non-archived attack still references this
-                // resource. TODO(U5): filter to attacks.archivedAt IS NULL once
-                // the attacks column lands — until then every referencing
-                // attack counts as non-archived, which is the conservative
-                // (and currently only possible) reading of "non-archived".
-                sql`NOT EXISTS (SELECT 1 FROM ${attacks} WHERE ${eq(attackFk, table.id)})`
+                // resource — an archived attack no longer counts as "in use"
+                // (issue #106 U6 added attacks.archived_at).
+                sql`NOT EXISTS (SELECT 1 FROM ${attacks} WHERE ${and(
+                  eq(attackFk, table.id),
+                  isNull(attacks.archivedAt)
+                )})`
               )
             )
             .returning({ id: table.id })
