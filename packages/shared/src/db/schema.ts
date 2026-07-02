@@ -890,6 +890,10 @@ export const AUDIT_ACTION_VALUES = [
   'deleted',
   'status_changed',
   'token_issued',
+  'archived',
+  'restored',
+  'retired',
+  'reclaimed',
 ] as const
 
 export const auditLogs = pgTable(
@@ -949,7 +953,7 @@ export const auditLogs = pgTable(
     // Sync with: AUDIT_ACTION_VALUES / auditActionSchema in ../schemas/index.ts
     check(
       'audit_logs_action_chk',
-      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued')`
+      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued', 'archived', 'restored', 'retired', 'reclaimed')`
     ),
   ]
 )

@@ -225,6 +225,13 @@
       "when": 1782901408087,
       "tag": "0031_slippery_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1782959245606,
+      "tag": "0032_oval_justin_hammer",
+      "breakpoints": true
     }
   ]
 }

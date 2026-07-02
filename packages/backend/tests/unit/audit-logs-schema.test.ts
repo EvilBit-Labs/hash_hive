@@ -49,6 +49,25 @@ describe('audit_logs vocab drift guard', () => {
 
     expect([...zodValues].toSorted()).toEqual([...dbValues].toSorted())
   })
+
+  it('AUDIT_ACTION_VALUES includes the lifecycle verbs added in U1', () => {
+    const lifecycleVerbs = ['archived', 'restored', 'retired', 'reclaimed'] as const
+    for (const verb of lifecycleVerbs) {
+      expect(AUDIT_ACTION_VALUES).toContain(verb)
+    }
+  })
+
+  it('auditActionSchema accepts each new lifecycle verb', () => {
+    const lifecycleVerbs = ['archived', 'restored', 'retired', 'reclaimed'] as const
+    for (const verb of lifecycleVerbs) {
+      expect(() => auditActionSchema.parse(verb)).not.toThrow()
+      expect(auditActionSchema.parse(verb)).toBe(verb)
+    }
+  })
+
+  it('auditActionSchema still rejects an unknown verb', () => {
+    expect(() => auditActionSchema.parse('purged')).toThrow()
+  })
 })
 
 // ─── auditLogSchema round-trip ───────────────────────────────────────────────

@@ -174,6 +174,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'masklistId',
     'keyspace',
     'dependencies',
+    'isPermanent',
+    'archivedAt',
     // EXCLUDED:
     //   advancedConfiguration — user-controlled passthrough hashcat blob
     //     (z.record(z.string(), z.unknown())); storing it verbatim in audit
@@ -189,6 +191,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'source',
     'statistics',
     'status',
+    'isPermanent',
+    'archivedAt',
     // fileRef excluded: contains storage path/URL which is operational detail
     // createdAt / updatedAt excluded
     // Synthetic key used only by import audit rows — never present on real
@@ -204,6 +208,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'lineCount',
     'fileSize',
     'status',
+    'isPermanent',
+    'archivedAt',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -215,6 +221,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'lineCount',
     'fileSize',
     'status',
+    'isPermanent',
+    'archivedAt',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -227,6 +235,8 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'fileSize',
     'keyspace',
     'status',
+    'isPermanent',
+    'archivedAt',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
