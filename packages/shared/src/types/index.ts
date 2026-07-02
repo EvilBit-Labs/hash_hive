@@ -58,6 +58,8 @@ import type {
   attackArchiveResponseSchema,
   attackRestoreOutcomeSchema,
   attackRestoreResponseSchema,
+  agentRetireOutcomeSchema,
+  agentRetireResponseSchema,
   createAttackRequestSchema,
   createAttackTemplateRequestSchema,
   createCampaignRequestSchema,
@@ -252,6 +254,8 @@ export type AttackArchiveOutcome = z.infer<typeof attackArchiveOutcomeSchema>
 export type AttackArchiveResponse = z.infer<typeof attackArchiveResponseSchema>
 export type AttackRestoreOutcome = z.infer<typeof attackRestoreOutcomeSchema>
 export type AttackRestoreResponse = z.infer<typeof attackRestoreResponseSchema>
+export type AgentRetireOutcome = z.infer<typeof agentRetireOutcomeSchema>
+export type AgentRetireResponse = z.infer<typeof agentRetireResponseSchema>
 export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>

@@ -1,3 +1,4 @@
+import { agentRetireResponseSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -16,6 +17,7 @@ import {
   getAgentErrors,
   getBenchmarksForAgent,
   listAgents,
+  retireAgent,
   rotateAgentToken,
   updateAgent,
 } from '../../services/agents.js'
@@ -340,6 +342,50 @@ dashboardAgentRoutes.openapi(rotateTokenRoute, async (c) => {
   }
   c.header('Cache-Control', 'no-store')
   return c.json({ token: result.token }, 200)
+})
+
+// ─── POST /:id/retire (admin only) ──────────────────────────────────
+//
+// Issue #106 U8/U9: retirement is terminal — there is no agent restore
+// path, so unlike the reversible archive/restore surfaces (campaigns,
+// resources, attacks — all `requireMembershipRole('admin', 'contributor')`)
+// this is admin-only, matching the precedent set by rotate-token above
+// (the other irreversible-outside-band agent action in this file).
+
+const retireAgentRoute = createRoute({
+  method: 'post',
+  path: '/{id}/retire',
+  tags: ['Agents'],
+  summary: 'Retire an agent (admin only); terminal, no restore path',
+  description:
+    'Flips the agent to the terminal `retired` status and releases any task it currently holds (assigned/running) back to `pending` with `agent_id` cleared so the scheduler can reassign it (R8). The agent row and all of its history (tasks, benchmarks, errors) are retained (R9) — this is a status change, not a delete. A retired agent is excluded from the default `listAgents` view and its heartbeats can never revert the status.',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin')] as const,
+  request: { params: agentIdParamSchema },
+  responses: {
+    200: {
+      description: 'Retire outcome and the ids of any tasks released back to pending.',
+      content: { 'application/json': { schema: agentRetireResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+dashboardAgentRoutes.openapi(retireAgentRoute, async (c) => {
+  const { id: agentId } = c.req.valid('param')
+  const { projectId, userId } = c.get('scopedUser')!
+  const result = await retireAgent(agentId, projectId, { actorType: 'user', actorId: userId })
+
+  switch (result.kind) {
+    case 'not_found':
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Agent not found')
+    case 'already_retired':
+      return c.json({ outcome: 'already_retired' as const, releasedTaskIds: [] }, 200)
+    case 'retired':
+      return c.json({ outcome: 'retired' as const, releasedTaskIds: result.releasedTaskIds }, 200)
+  }
 })
 
 export { dashboardAgentRoutes }

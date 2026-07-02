@@ -193,6 +193,17 @@ export const agents = pgTable(
      * path so a partial rotation never locks an agent out.
      */
     authTokenFormat: varchar('auth_token_format', { length: 16 }).notNull().default('plaintext'),
+    /**
+     * Agent lifecycle status. No DB check constraint enforces the
+     * vocabulary (unlike the lifecycle-marker tables' archive-consistency
+     * checks) — validation lives entirely in `agentStatusSchema`
+     * (`@hashhive/shared`): 'offline' | 'online' | 'busy' | 'error' |
+     * 'benchmarked' | 'retired'. `retired` (issue #106 U8) is terminal and
+     * server-set-only via `retireAgent`; the row and its full history
+     * (tasks, benchmarks, errors) are retained, never deleted (R9). See
+     * `decideHeartbeatTransition` for the guard that keeps a heartbeat
+     * from a still-running rig from un-retiring the row.
+     */
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),

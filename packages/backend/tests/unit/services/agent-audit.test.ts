@@ -165,6 +165,9 @@ if (!IS_ISOLATED) {
   mock.module('../../../src/services/events.js', () => ({
     emitAgentStatus: mock(),
     emitAgentError: mock(),
+    // issue #106 U8: services/agents.ts now imports emitTaskUpdate at top
+    // level for retireAgent's post-commit task-released broadcast.
+    emitTaskUpdate: mock(),
   }))
 
   // ─── Token lib mocks (for enrollment-tokens) ────────────────────────────────

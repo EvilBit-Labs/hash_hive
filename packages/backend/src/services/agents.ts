@@ -7,13 +7,13 @@ import type {
 } from '@hashhive/shared'
 
 import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { REVIEW_RECOMMENDED_THRESHOLD, WHITELISTED_SEVERITY } from './agents/whitelist.js'
 import { type RecordAuditEventInput, recordAuditEvent } from './audit-log.js'
-import { emitAgentError, emitAgentStatus } from './events.js'
+import { emitAgentStatus, emitAgentError } from './events.js'
 
 // ─── Actor type ──────────────────────────────────────────────────────────────
 
@@ -169,6 +169,15 @@ export async function listAgents(filters: {
   }
   if (filters.status) {
     conditions.push(eq(agents.status, filters.status))
+  } else {
+    // Default active-fleet view excludes retired agents (R7/R10, issue
+    // #106 U8) — a decommissioned agent should not clutter the fleet list
+    // an operator sees by default. An explicit `status=retired` filter
+    // still reaches them (the branch above), which doubles as the
+    // "explicit filter to reveal them" escape hatch R10 asks for, mirroring
+    // the `showArchived` pattern used by resources/attacks without adding
+    // a second query param for a status the `status` filter already covers.
+    conditions.push(ne(agents.status, 'retired'))
   }
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
@@ -333,7 +342,11 @@ export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status'
 // Anchored to `AgentHeartbeat['status']` so the service layer cannot
 // drift from the zod boundary.
 type HeartbeatStatusLiteral = AgentHeartbeat['status']
-type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error'
+// 'retired' is added for the terminal-status guard below: a retired
+// agent's heartbeat resolves to effectiveStatus 'retired' (never the
+// payload status), even though agents never self-report 'retired' in a
+// heartbeat payload (HeartbeatStatusLiteral doesn't include it).
+type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error' | 'retired'
 
 /**
  * Discriminated union: a heartbeat either resolves to a no-op transition
@@ -370,6 +383,20 @@ export function decideHeartbeatTransition(input: {
   errorSeverity?: AgentHeartbeatError['severity'] | undefined
   priorStatus: string | null
 }): HeartbeatTransition {
+  // Terminal-status guard (issue #106 U8, R8/R9): once an agent is
+  // retired, no heartbeat can un-retire it. A still-running rig that
+  // hasn't been told to stop keeps polling with `status: 'online'`; without
+  // this guard `priorStatus !== effectiveStatus` below would be true, the
+  // transition would flip the row back to 'online', and the agent would
+  // become claim-eligible again (`computeHighPriorityHint` / the agent
+  // task-claim endpoint both gate on `agents.status`). Checked before the
+  // fatal-error override too, so a fatal-severity heartbeat from a retired
+  // agent cannot resurrect it into 'error' either — retired is a dead end
+  // no heartbeat payload can escape.
+  if (input.priorStatus === 'retired') {
+    return { kind: 'noop', effectiveStatus: 'retired', isFatalError: false }
+  }
+
   const isFatalError = input.errorSeverity === 'fatal'
   const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus
 
@@ -781,3 +808,12 @@ export async function getAgentBenchmarkForMode(
 // from this module's path) keep compiling without touching their
 // import paths.
 export { processHeartbeat, __resetWarnedEmptyCapsForTesting } from './agents/heartbeat.js'
+
+// ─── Re-exports from ./agents-retire.ts (issue #106 U8) ─────────────
+//
+// retireAgent lives in its own module (mirrors resources.ts /
+// resources-archive.ts and campaigns.ts / campaigns-attacks-archive.ts)
+// so this file's core CRUD/heartbeat layer stays under the project's
+// file-size guideline. Re-exported here so existing callers keep
+// importing from services/agents.js unchanged.
+export { retireAgent, type RetireAgentResult } from './agents-retire.js'

@@ -250,8 +250,24 @@ export { hashListListResponseSchema, hashListSummarySchema } from './hash-lists.
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
+ *
+ * `retired` (issue #106 U8) is a terminal, server-set-only status: an
+ * operator decommissions an agent via `retireAgent`, which is the only
+ * writer of this value. No agent ever self-reports it in a heartbeat
+ * (see `benchmarkSubmissionSchema`'s narrower heartbeat status union
+ * below), and no code path transitions a retired agent back to any other
+ * status — `decideHeartbeatTransition` short-circuits a retired agent's
+ * heartbeat before the status comparison so a still-running rig cannot
+ * un-retire itself.
  */
-export const agentStatusSchema = z.enum(['offline', 'online', 'busy', 'error', 'benchmarked'])
+export const agentStatusSchema = z.enum([
+  'offline',
+  'online',
+  'busy',
+  'error',
+  'benchmarked',
+  'retired',
+])
 
 /**
  * Heartbeat status is intentionally a subset of `agentStatusSchema` — agents
@@ -1095,6 +1111,29 @@ export const attackRestoreResponseSchema = z.object({
   results: z.array(
     z.object({ id: z.number().int().positive(), outcome: attackRestoreOutcomeSchema })
   ),
+})
+
+// ─── Agent retire (dashboard) ────────────────────────────────────────
+//
+// Retirement is terminal — there is no agent restore path (ADR-0019's
+// reversible archive/restore pattern does not apply to agents; R9 keeps
+// the row and all history, but the status transition itself is one-way).
+// Unlike the bulk `{ ids }` archive/restore surfaces above, retire always
+// targets exactly one agent via the `:id` path param, so the response
+// carries a single outcome rather than a per-id `results` array.
+// `releasedTaskIds` surfaces which in-flight tasks were returned to
+// `pending` so the operator can see the blast radius of the retirement
+// (R8).
+
+export const agentRetireOutcomeSchema = z.enum([
+  'retired',
+  // Idempotent no-op: the agent was already retired by an earlier call.
+  'already_retired',
+])
+
+export const agentRetireResponseSchema = z.object({
+  outcome: agentRetireOutcomeSchema,
+  releasedTaskIds: z.array(z.number().int().positive()),
 })
 
 /**
