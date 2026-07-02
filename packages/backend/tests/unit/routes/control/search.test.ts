@@ -68,7 +68,7 @@ if (!IS_ISOLATED) {
 
   // ─── Controllable state ──────────────────────────────────────────────────────
 
-  let activeProjectId: number | null = 1
+  let activeProjectId = 1
   let isMember = true
   let activeSearchResult: SearchResult = makeSearchResult()
 
@@ -104,10 +104,6 @@ if (!IS_ISOLATED) {
 
   mock.module('../../../../src/routes/control/helpers.js', () => ({
     requireProjectMembership: async () => {
-      if (activeProjectId === null) {
-        const err = Object.assign(new Error('No project selected'), { status: 400 })
-        throw err
-      }
       if (!isMember) {
         const err = Object.assign(new Error('Not a member of this project'), { status: 403 })
         throw err

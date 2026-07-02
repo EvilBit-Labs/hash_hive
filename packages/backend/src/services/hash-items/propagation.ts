@@ -86,7 +86,7 @@ export async function propagateCrack(
     }
   }
 
-  logger.info({ hashValue, updated: totalUpdated }, 'propagateCrack: propagation complete')
+  logger.info({ updated: totalUpdated }, 'propagateCrack: propagation complete')
 
   return { updated: totalUpdated }
 }

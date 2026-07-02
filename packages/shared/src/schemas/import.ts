@@ -36,7 +36,7 @@ export const importSummarySchema = z
  * Maximum byte-length of the `content` field in a pre-cracked import
  * request. Bounds an amplified-memory DoS from an authenticated
  * admin/contributor while still accommodating large production imports.
- * 32 MiB of UTF-8 characters.
+ * 32 MiB measured in UTF-8 bytes (not JavaScript char/code-unit count).
  */
 export const IMPORT_CONTENT_MAX_LENGTH = 33_554_432
 
@@ -54,7 +54,17 @@ export const importRequestSchema = z
     content: z
       .string()
       .min(1, 'content must not be empty')
-      .max(IMPORT_CONTENT_MAX_LENGTH, 'content is too large'),
+      // Cheap char-count gate first; the superRefine below enforces the
+      // stricter UTF-8 byte bound for non-ASCII payloads.
+      .max(IMPORT_CONTENT_MAX_LENGTH, 'content is too large')
+      .superRefine((val, ctx) => {
+        if (new TextEncoder().encode(val).length > IMPORT_CONTENT_MAX_LENGTH) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'content exceeds the 32 MiB UTF-8 byte limit',
+          })
+        }
+      }),
     format: importFormatSchema,
   })
   .strict()

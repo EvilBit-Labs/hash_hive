@@ -29,7 +29,7 @@ import {
   SEARCH_MAX_LIMIT,
   SEARCH_MAX_Q_LENGTH,
 } from '@hashhive/shared'
-import { and, count, eq, or, sql } from 'drizzle-orm'
+import { and, asc, count, eq, or, sql } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
@@ -107,6 +107,7 @@ export async function searchHashes(
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
       .where(whereClause)
+      .orderBy(asc(hashItems.id))
       .limit(limit)
       .offset(offset),
 

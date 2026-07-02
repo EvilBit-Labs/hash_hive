@@ -37,6 +37,13 @@ export function generatorToReadableStream(
         controller.error(err)
       }
     },
+    async cancel() {
+      // Client disconnect mid-download — release the DB cursor by signalling
+      // the AsyncGenerator to run its finally block and close any open DB
+      // resources. Without this the cursor stays open until the generator is
+      // garbage-collected.
+      await rows.return?.(undefined)
+    },
   })
 }
 

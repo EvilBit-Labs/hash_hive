@@ -268,6 +268,38 @@ describe('searchHashes — escapeLike: literal % is not a wildcard', () => {
 
 // ─── (new) test 10: limit is capped to SEARCH_MAX_LIMIT ──────────────────────
 
+describe('searchHashes — stable pagination via ORDER BY id (item C)', () => {
+  it('page 1 and page 2 results are stable and non-overlapping', async () => {
+    const prefix = 'hash-search-order-stable-v11'
+    const hashValues = Array.from({ length: 6 }, (_, i) => `${prefix}-${i}`)
+
+    await db
+      .insert(hashItems)
+      .values(hashValues.map((hashValue) => ({ hashListId: listOneId, hashValue })))
+
+    try {
+      const page1 = await searchHashes(projId, prefix, { limit: 3, offset: 0 })
+      const page2 = await searchHashes(projId, prefix, { limit: 3, offset: 3 })
+
+      expect(page1.results).toHaveLength(3)
+      expect(page2.results).toHaveLength(3)
+
+      const page1Values = page1.results.map((r) => r.hashValue)
+      const page2Values = page2.results.map((r) => r.hashValue)
+
+      const overlap = page1Values.filter((v) => page2Values.includes(v))
+      expect(overlap).toHaveLength(0)
+
+      const combined = new Set([...page1Values, ...page2Values])
+      for (const hv of hashValues) {
+        expect(combined.has(hv)).toBe(true)
+      }
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.hashListId, listOneId))
+    }
+  })
+})
+
 describe('searchHashes — limit cap at SEARCH_MAX_LIMIT (100)', () => {
   it('caps a caller-supplied limit above 100 and still returns all matching rows', async () => {
     const prefix = 'hash-search-lim-cap-v10'

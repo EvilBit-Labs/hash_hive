@@ -30,7 +30,7 @@
 import type { ImportSummary } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
-import { hashItems } from '@hashhive/shared'
+import { auditLogs, hashItems } from '@hashhive/shared'
 import { type ConnectionOptions, UnrecoverableError, Worker } from 'bullmq'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 
@@ -129,7 +129,11 @@ async function upsertTargetListBatches(
         set: {
           plaintext: sql`EXCLUDED.plaintext`,
           crackedAt: sql`EXCLUDED.cracked_at`,
-          source: sql`EXCLUDED.source`,
+          // Preserve the row's existing source ('upload') on conflict — the
+          // source column records how the ROW entered the list, not how it
+          // was cracked. COALESCE keeps the existing origin when set; only
+          // fills NULL origins (e.g. a bare INSERT without source) from import.
+          source: sql`COALESCE(${hashItems.source}, EXCLUDED.source)`,
           // COALESCE so an import pair without a username (e.g. a plain
           // hash:plaintext potfile line) does NOT null out an existing username
           // on an uncracked row (a `user:hash:` upload leaves username set but
@@ -148,19 +152,49 @@ async function upsertTargetListBatches(
  *
  * Called after all upserts so the summary counts are final (KTD9). Entity scope
  * is hash_list / 'updated' — the import is a bulk mutation of the list's hash
- * items. The newRow carries the import summary so the audit trail documents
- * what the operator pushed in.
+ * items. The newRow carries `importKey` (the staging key) so the audit trail
+ * can deduplicate on BullMQ retries: if a retry re-runs Phase 2, the
+ * read-before-write check below finds the existing row and skips the insert.
  *
  * POSITION IS INTENTIONAL — must run after Phase 1 (counts are final) and
  * before Phase 3 (audit gap if propagation fails permanently).
+ *
+ * Race safety: BullMQ processes one attempt of a given jobId at a time — there
+ * is no concurrent retry — so the SELECT + conditional INSERT is race-safe here.
  */
 async function recordImportAudit(
   actor: AuditActor,
   projectId: number,
   hashListId: number,
   counts: { totalMatched: number; totalCracked: number },
-  skippedFromParse: number
+  skippedFromParse: number,
+  stagingKey: string
 ): Promise<void> {
+  // Dedup check: skip if we already wrote an audit row for this staging key.
+  // `changes->'importKey'->>'new'` navigates the computed diff JSON that
+  // recordAuditEvent stores — importKey appears as `{ "new": "<stagingKey>" }`
+  // because the allowlisted synthetic key has no oldRow counterpart.
+  const existing = await db
+    .select({ id: auditLogs.id })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entityType, 'hash_list'),
+        eq(auditLogs.entityId, hashListId),
+        eq(auditLogs.reason, 'import'),
+        sql`${auditLogs.changes}->'importKey'->>'new' = ${stagingKey}`
+      )
+    )
+    .limit(1)
+
+  if (existing.length > 0) {
+    logger.info(
+      { hashListId, stagingKey },
+      'hash-import-worker: skipping duplicate audit row (BullMQ retry)'
+    )
+    return
+  }
+
   await recordAuditEvent({
     actor,
     projectId,
@@ -172,6 +206,7 @@ async function recordImportAudit(
       matchedInList: counts.totalMatched,
       crackedInList: counts.totalCracked,
       skipped: skippedFromParse,
+      importKey: stagingKey,
     },
   })
 }
@@ -206,10 +241,7 @@ async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promis
     if (!hashesToPropagate.has(pair.hashValue)) continue
     const { updated } = await propagateCrack(pair.hashValue, pair.plaintext)
     if (updated > 0) {
-      logger.debug(
-        { hashValue: pair.hashValue, updated },
-        'hash-import-worker: propagated crack to other lists'
-      )
+      logger.debug({ updated }, 'hash-import-worker: propagated crack to other lists')
     }
   }
 }
@@ -227,13 +259,17 @@ async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promis
  * @param projectId      The project owning the hash list (for audit scope).
  * @param actor          Auth-context actor from the originating request.
  * @param skippedFromParse  Lines skipped during U6 parsing — passed through for summary.
+ * @param stagingKey        The S3 staging key for this import batch; used as an
+ *                          idempotency token in the audit row so BullMQ retries
+ *                          do not write a duplicate audit event (item I).
  */
 export async function processImportPairs(
   pairs: readonly ParsedImportPair[],
   hashListId: number,
   projectId: number,
   actor: AuditActor,
-  skippedFromParse: number
+  skippedFromParse: number,
+  stagingKey: string
 ): Promise<ImportSummary> {
   // Deduplicate by hashValue: last occurrence wins within a single import.
   // Prevents "cannot affect the same row twice in a single command" errors
@@ -259,7 +295,8 @@ export async function processImportPairs(
     projectId,
     hashListId,
     { totalMatched, totalCracked },
-    skippedFromParse
+    skippedFromParse,
+    stagingKey
   )
 
   // Phase 3: system-wide propagation
@@ -323,7 +360,14 @@ export async function runHashImportJob(
     )
   }
 
-  const result = await processImportPairs(pairs, hashListId, projectId, actor, skippedFromParse)
+  const result = await processImportPairs(
+    pairs,
+    hashListId,
+    projectId,
+    actor,
+    skippedFromParse,
+    stagingKey
+  )
 
   logger.info({ jobId, hashListId, ...result }, 'hash-import-worker: complete')
 

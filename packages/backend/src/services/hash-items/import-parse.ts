@@ -129,15 +129,19 @@ function makePair(
  *   a) returns `{ username?, hashValue, plaintext }` instead of a DB-insert shape.
  *   b) SKIPS lines with no plaintext — importing cracked material only.
  *
- * Token rules:
+ * Token rules (mode-aware for the 3-token case):
  *   1 token  → hash only              → SKIP (no plaintext)
  *   2 tokens → `hash:plain`           → `{ hashValue, plaintext }`
- *   3 tokens → `user:hash:plain`      → `{ username, hashValue, plaintext }`
- *              `:hash:plain`           → empty username → 2-token semantics
- *              `user:hash:`            → empty plaintext → SKIP
+ *   3 tokens, unsalted/null mode:
+ *              `user:hash:plain`      → `{ username, hashValue, plaintext }`
+ *              `:hash:plain`          → empty username → 2-token semantics
+ *              `user:hash:`           → empty plaintext → SKIP
+ *   3 tokens, salted mode (fieldCount=2):
+ *              `hash:salt:plain`      → `{ hashValue:'hash:salt', plaintext }`
+ *              `hash:salt:`           → empty plaintext → SKIP
  *   4+ tokens → first-colon-as-separator (plaintext may contain colons)
  */
-function parsePairsLine(line: string): ParsedImportPair | null {
+function parsePairsLine(line: string, hashcatMode: number | null): ParsedImportPair | null {
   const firstColon = line.indexOf(':')
   if (firstColon === -1) return null // 1 token: no plaintext
 
@@ -150,6 +154,15 @@ function parsePairsLine(line: string): ParsedImportPair | null {
   }
 
   if (tokens.length === 3) {
+    const fieldCount = getHashIdentifierFieldCount(hashcatMode)
+    if (fieldCount === 2) {
+      // Salted mode: line is hash:salt:plaintext; stored identifier is 'hash:salt'
+      const [hashPart, saltPart, plaintext] = tokens as [string, string, string]
+      const hashValue = `${hashPart}:${saltPart}`
+      if (!plaintext) return null
+      return makePair(hashValue, plaintext)
+    }
+    // Unsalted or unknown mode: line is user:hash:plaintext
     const [username, hashValue, plaintext] = tokens as [string, string, string]
     if (!hashValue) return null
     if (!plaintext) return null
@@ -257,7 +270,7 @@ export function parseImportContent(
 
     let pair: ParsedImportPair | null
     if (format === 'pairs') {
-      pair = parsePairsLine(raw)
+      pair = parsePairsLine(raw, hashcatMode)
     } else if (format === 'hashcat-potfile') {
       pair = parseHashcatPotfileLine(raw, hashcatMode)
     } else {

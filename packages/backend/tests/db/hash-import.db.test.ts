@@ -162,9 +162,10 @@ describe('processImportPairs — provenance write', () => {
     const plaintext = 'importedPassword'
     const username = 'jdoe'
 
+    // Seed with source='upload' — import must NOT overwrite the existing origin (item B)
     const [row] = await db
       .insert(hashItems)
-      .values({ hashListId: targetListId, hashValue })
+      .values({ hashListId: targetListId, hashValue, source: 'upload' })
       .returning({ id: hashItems.id })
 
     try {
@@ -173,7 +174,8 @@ describe('processImportPairs — provenance write', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-prov-v1'
       )
 
       // Summary counts: 1 matched (pre-existing uncracked), 1 cracked
@@ -197,7 +199,8 @@ describe('processImportPairs — provenance write', () => {
 
       expect(after!.plaintext).toBe(plaintext)
       expect(after!.crackedAt).toBeInstanceOf(Date)
-      expect(after!.source).toBe('import')
+      // Origin preserved — COALESCE keeps the existing 'upload' source (item B)
+      expect(after!.source).toBe('upload')
       expect(after!.username).toBe(username)
       // Attribution FKs must stay null — import does not set campaign provenance
       expect(after!.campaignId).toBeNull()
@@ -246,7 +249,8 @@ describe('processImportPairs — setWhere guard (KTD2)', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-guard-v1'
       )
 
       // matchedInList = 1 (row exists), crackedInList = 0 (row was already cracked)
@@ -306,7 +310,8 @@ describe('processImportPairs — cross-project propagation (R11)', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-cross-v1'
       )
 
       // Target row: full provenance (source='import')
@@ -373,7 +378,8 @@ describe('processImportPairs — zap integration (scenario 4)', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-zap-v1'
       )
 
       // After import: hash is cracked, so the zap query picks it up
@@ -403,12 +409,14 @@ describe('processImportPairs — audit event (scenario 5)', () => {
     try {
       const actor = { actorType: 'user' as const, actorId: 42 }
 
+      const stagingKey = 'staging-key-audit-v1'
       await processImportPairs(
         [{ hashValue, plaintext: 'auditPass' }],
         targetListId,
         targetProjId,
         actor,
-        3 // pretend 3 lines were skipped during parsing
+        3, // pretend 3 lines were skipped during parsing
+        stagingKey
       )
 
       // Fetch all audit rows for this hash list (scoped by entityId, not projectId,
@@ -435,6 +443,54 @@ describe('processImportPairs — audit event (scenario 5)', () => {
       expect(evt!.actorId).toBe(42)
       expect(evt!.projectId).toBe(targetProjId)
       expect(evt!.reason).toBe('import')
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.id, row!.id))
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+})
+
+describe('processImportPairs — audit dedup on retry (item I)', () => {
+  it('skips a second audit write when the same stagingKey is used (BullMQ retry simulation)', async () => {
+    const hashValue = 'hash-import-audit-dedup-v1'
+    const stagingKey = 'staging-key-dedup-retry-v1'
+    const actor = { actorType: 'user' as const, actorId: 99 }
+
+    const [row] = await db
+      .insert(hashItems)
+      .values({ hashListId: targetListId, hashValue })
+      .returning({ id: hashItems.id })
+
+    try {
+      // First call — writes the audit row
+      await processImportPairs(
+        [{ hashValue, plaintext: 'retryPass' }],
+        targetListId,
+        targetProjId,
+        actor,
+        0,
+        stagingKey
+      )
+      // Second call with the same stagingKey — simulates a BullMQ retry.
+      // The dedup check must detect the existing row and skip the insert.
+      await processImportPairs(
+        [{ hashValue, plaintext: 'retryPass' }],
+        targetListId,
+        targetProjId,
+        actor,
+        0,
+        stagingKey
+      )
+
+      const auditRows = await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+
+      // Exactly one audit row regardless of how many times processImportPairs ran
+      expect(auditRows).toHaveLength(1)
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, row!.id))
       await db
@@ -484,7 +540,8 @@ describe('processImportPairs — username COALESCE preservation', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-coalesce-1a'
       )
 
       const [after] = await db
@@ -517,7 +574,8 @@ describe('processImportPairs — username COALESCE preservation', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-coalesce-1b'
       )
 
       const [after] = await db
@@ -551,7 +609,8 @@ describe('processImportPairs — new row insert', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-newrow-v2'
       )
 
       expect(result.matchedInList).toBe(0)
@@ -602,7 +661,8 @@ describe('processImportPairs — duplicate hashValue deduplication', () => {
         targetListId,
         targetProjId,
         SYSTEM_ACTOR,
-        0
+        0,
+        'staging-key-dedup-v3'
       )
 
       // New row (not pre-existing) → both summary counts are 0

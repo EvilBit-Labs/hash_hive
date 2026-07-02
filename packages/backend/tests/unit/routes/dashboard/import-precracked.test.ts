@@ -126,7 +126,7 @@ if (!IS_ISOLATED) {
       return null
     },
     findProjectMembership: async (userId: number, projectId: number) => {
-      if (activeProjectId === null || projectId !== activeProjectId) return null
+      if (projectId !== activeProjectId) return null
       if (userId !== 1) return null
       return { projectId, roles: activeMembershipRoles }
     },

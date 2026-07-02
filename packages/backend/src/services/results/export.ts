@@ -18,7 +18,21 @@
 import type { ExportFormat, ExportVariant } from '@hashhive/shared'
 
 import { attacks, campaigns, hashItems, hashLists, hashTypes } from '@hashhive/shared'
-import { and, count, desc, eq, inArray, isNotNull, isNull, lt, not, or } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  not,
+  or,
+  sql,
+} from 'drizzle-orm'
 
 import type { db as _db } from '../../db/index.js'
 
@@ -180,9 +194,29 @@ type ProjectScopeParams = { scope: 'project'; projectId: number }
 
 export type ExportScopeParams = HashListScopeParams | CampaignScopeParams | ProjectScopeParams
 
+/** Optional search and date-range filters applied to export queries. */
+export type ExportFilters = {
+  readonly q?: string | undefined
+  readonly startDate?: string | undefined
+  readonly endDate?: string | undefined
+}
+
 export type ExportServiceParams = ExportScopeParams & {
   variant: ExportVariant
   format: ExportFormat
+  /** Optional search/date filters to restrict exported rows. */
+  filters?: ExportFilters
+}
+
+/**
+ * Escape `%`, `_`, and `\` in a search term for use in ILIKE.
+ *
+ * Inlined here rather than imported from resources.ts because resources.ts
+ * imports `db` at module scope, which would break the invariant that this
+ * file loads in test phases without a live database connection.
+ */
+function escapeLikeForExport(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&')
 }
 
 // ─── Cursor types ───────────────────────────────────────────────────────────────
@@ -216,23 +250,38 @@ export type ExportOverrides = {
 
 const DEFAULT_BATCH_SIZE = 1_000
 
-function buildCrackedBaseConditions(params: ExportScopeParams) {
+function buildCrackedBaseConditions(params: ExportScopeParams, filters?: ExportFilters) {
   const base = [eq(hashLists.projectId, params.projectId), isNotNull(hashItems.crackedAt)]
-  if (params.scope === 'hash-list') {
-    return [...base, eq(hashItems.hashListId, params.hashListId)]
-  }
-  if (params.scope === 'campaign') {
-    return [...base, eq(hashItems.campaignId, params.campaignId)]
-  }
-  return base
+
+  const withScope =
+    params.scope === 'hash-list'
+      ? [...base, eq(hashItems.hashListId, params.hashListId)]
+      : params.scope === 'campaign'
+        ? [...base, eq(hashItems.campaignId, params.campaignId)]
+        : base
+
+  const { q, startDate, endDate } = filters ?? {}
+  const escapedQ = q != null ? escapeLikeForExport(q) : null
+
+  return [
+    ...withScope,
+    ...(escapedQ != null
+      ? [
+          sql`(${hashItems.hashValue} ILIKE ${`%${escapedQ}%`} ESCAPE '\\' OR ${hashItems.plaintext} ILIKE ${`%${escapedQ}%`} ESCAPE '\\')`,
+        ]
+      : []),
+    ...(startDate != null ? [gte(hashItems.crackedAt, new Date(startDate))] : []),
+    ...(endDate != null ? [lte(hashItems.crackedAt, new Date(endDate))] : []),
+  ]
 }
 
 function createDefaultCrackedFetcher(
   db: Db,
   params: ExportScopeParams,
-  batchSize: number
+  batchSize: number,
+  filters?: ExportFilters
 ): CrackedBatchFetcher {
-  const baseConditions = buildCrackedBaseConditions(params)
+  const baseConditions = buildCrackedBaseConditions(params, filters)
 
   return async (cursor) => {
     const conditions = [
@@ -273,12 +322,21 @@ function createDefaultCrackedFetcher(
 function createDefaultUncrackedFetcher(
   db: Db,
   params: ExportScopeParams,
-  batchSize: number
+  batchSize: number,
+  filters?: ExportFilters
 ): UncrackedBatchFetcher {
+  // q filter applies to uncracked rows (hashValue only; plaintext is NULL for uncracked).
+  // Date filters are omitted — crackedAt is NULL for all uncracked rows by definition,
+  // so a crackedAt date range would exclude every row in this variant.
+  const escapedQ = filters?.q != null ? escapeLikeForExport(filters.q) : null
+
   return async (cursor) => {
     const baseConds = [
       eq(hashLists.projectId, params.projectId),
       isNull(hashItems.crackedAt),
+      ...(escapedQ != null
+        ? [sql`${hashItems.hashValue} ILIKE ${`%${escapedQ}%`} ESCAPE '\\'`]
+        : []),
       ...(cursor != null ? [lt(hashItems.id, cursor.id)] : []),
     ]
 
@@ -323,7 +381,8 @@ function createDefaultUncrackedFetcher(
 function createDefaultSkippedCounter(
   db: Db,
   params: ExportScopeParams,
-  format: ExportFormat
+  format: ExportFormat,
+  filters?: ExportFilters
 ): SkippedCounter {
   return async () => {
     if (format === 'csv') return 0
@@ -342,7 +401,7 @@ function createDefaultSkippedCounter(
             isNull(hashItems.plaintext)
           )
 
-    const conditions = [...buildCrackedBaseConditions(params), modeFilter]
+    const conditions = [...buildCrackedBaseConditions(params, filters), modeFilter]
 
     const [row] = await db
       .select({ n: count(hashItems.id) })
@@ -428,18 +487,18 @@ export async function createExport(
   overrides: ExportOverrides = {}
 ): Promise<ExportResult> {
   const batchSize = overrides.batchSize ?? DEFAULT_BATCH_SIZE
-  const { variant, format } = params
+  const { variant, format, filters } = params
 
   // Skip-counting only applies to potfile formats — CSV emits every row regardless
   // of hash type. Uncracked rows can never produce a potfile (schema rejects it).
   const needsSkipCount = variant !== 'uncracked' && format !== 'csv'
   const skippedCount = needsSkipCount
-    ? await (overrides.countSkipped ?? createDefaultSkippedCounter(db, params, format))()
+    ? await (overrides.countSkipped ?? createDefaultSkippedCounter(db, params, format, filters))()
     : 0
 
   if (variant === 'uncracked') {
     const fetchBatch =
-      overrides.fetchUncrackedBatch ?? createDefaultUncrackedFetcher(db, params, batchSize)
+      overrides.fetchUncrackedBatch ?? createDefaultUncrackedFetcher(db, params, batchSize, filters)
 
     async function* uncrackedStream(): AsyncGenerator<string> {
       yield EXPORT_CSV_HEADERS.uncracked
@@ -450,7 +509,7 @@ export async function createExport(
   }
 
   const fetchBatch =
-    overrides.fetchCrackedBatch ?? createDefaultCrackedFetcher(db, params, batchSize)
+    overrides.fetchCrackedBatch ?? createDefaultCrackedFetcher(db, params, batchSize, filters)
 
   async function* crackedStream(): AsyncGenerator<string> {
     if (format === 'csv') yield EXPORT_CSV_HEADERS[variant]

@@ -57,7 +57,7 @@ export const exportQuerySchema = z
     if (isPotfileVariantConflict(data.format, data.variant)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `format '${data.format}' requires variant 'cracked-pairs'; '${data.variant}' does not include hash values`,
+        message: `format '${data.format}' requires the cracked-pairs variant — potfiles need both the hash and its plaintext, which '${data.variant}' does not provide.`,
         path: ['format'],
       })
     }

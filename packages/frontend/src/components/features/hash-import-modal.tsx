@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useImportPrecracked } from '../../hooks/use-hash-import'
 import { useHashListSummaries } from '../../hooks/use-hash-lists'
 import { cn } from '../../lib/utils'
+import { useUiStore } from '../../stores/ui'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -40,6 +41,7 @@ interface HashImportModalProps {
 
 export function HashImportModal({ open, onClose, preselectedHashListId }: HashImportModalProps) {
   const queryClient = useQueryClient()
+  const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const importMutation = useImportPrecracked()
   const hashListsQuery = useHashListSummaries({ enabled: open })
 
@@ -151,9 +153,13 @@ export function HashImportModal({ open, onClose, preselectedHashListId }: HashIm
     const id = Number(targetListId)
     void queryClient.invalidateQueries({ queryKey: ['hash-list-items', id] })
     void queryClient.invalidateQueries({ queryKey: ['results'] })
+    // Invalidate the summary list so the cracked-count badge refreshes, and
+    // the detail so the hash-list detail panel shows up-to-date stats.
+    void queryClient.invalidateQueries({ queryKey: ['hash-list-summaries', selectedProjectId] })
+    void queryClient.invalidateQueries({ queryKey: ['hash-list-detail', id] })
     handleReset()
     onClose()
-  }, [queryClient, targetListId, handleReset, onClose])
+  }, [queryClient, targetListId, selectedProjectId, handleReset, onClose])
 
   /** Close from the input phase — just dismiss. */
   const handleInputClose = useCallback(() => {

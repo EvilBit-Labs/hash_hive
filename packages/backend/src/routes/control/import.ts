@@ -52,6 +52,7 @@ const importPrecrackedRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     503: sharedControlResponse(CONTROL_RESPONSE_REFS.ServiceUnavailable),
+    500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
 

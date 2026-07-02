@@ -113,6 +113,29 @@ describe('parseImportContent — pairs format', () => {
     expect(result.pairs).toHaveLength(0)
     expect(result.skipped).toBe(1)
   })
+
+  // Regression for item A — salted pairs misparse
+  it('parses hash:salt:plain as { hashValue:"hash:salt", plaintext } in salted pairs mode', () => {
+    // In a salted mode (e.g. 10), a 3-token pairs line is hash:salt:plaintext, not user:hash:plain.
+    // The stored identifier for mode 10 is 'hash:salt' so the import must reconstruct it.
+    const result = parseImportContent('abc123:mysalt:password', 'pairs', 10)
+
+    expect(result.pairs).toHaveLength(1)
+    expect(result.pairs[0]).toEqual({ hashValue: 'abc123:mysalt', plaintext: 'password' })
+    expect(result.skipped).toBe(0)
+  })
+
+  it('still parses user:hash:plain under unsalted mode (item A regression guard)', () => {
+    // hashcatMode=0 is unsalted; 3-token form is user:hash:plain
+    const result = parseImportContent('alice:deadbeef:password', 'pairs', 0)
+
+    expect(result.pairs).toHaveLength(1)
+    expect(result.pairs[0]).toEqual({
+      username: 'alice',
+      hashValue: 'deadbeef',
+      plaintext: 'password',
+    })
+  })
 })
 
 // ─── hashcat-potfile format ───────────────────────────────────────────────────

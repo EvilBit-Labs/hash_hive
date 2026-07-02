@@ -105,6 +105,13 @@ if (!IS_ISOLATED) {
               }),
             }),
           }),
+          // Supports the select().from().where().limit() chain used by
+          // getHashListById / getCampaignById for ownership checks (item D).
+          // Returns a stub that represents a valid resource belonging to projectId=1,
+          // so the ownership guard passes for all tests in this file.
+          where: () => ({
+            limit: () => Promise.resolve([{ id: 1, projectId: 1, name: 'Stub' }]),
+          }),
         }),
       }),
       insert: () => ({ values: () => ({ returning: () => Promise.resolve([]) }) }),
@@ -131,6 +138,13 @@ if (!IS_ISOLATED) {
       disconnect() {}
     },
   }))
+
+  // NOTE: resources.js and campaigns.js are NOT mocked here because they re-export
+  // dozens of symbols — a partial mock breaks any statically-linked import that
+  // expects a missing export (bun:test SyntaxError at link time).
+  // Instead, the DB mock below is extended to support the select().from().where().limit()
+  // chain used by getHashListById / getCampaignById so the ownership guards (item D)
+  // pass transparently.
 
   // Mock the export service — results.ts imports both createExport and escapeCsv.
   // Both must be present to avoid link-time SyntaxError (KTD8 / trap #2).
@@ -248,6 +262,25 @@ if (!IS_ISOLATED) {
         hashListId: 42,
         variant: 'cracked-pairs',
         format: 'csv',
+      })
+    })
+
+    it('threads q, startDate, and endDate into createExport filters', async () => {
+      // startDate/endDate must be full ISO 8601 datetime strings (isoDateTimeFilterQuery uses .datetime())
+      const start = '2025-01-01T00:00:00.000Z'
+      const end = '2025-12-31T23:59:59.000Z'
+      await app.request(
+        `${EXPORT}?scope=project&variant=cracked-pairs&format=csv&q=hello&startDate=${encodeURIComponent(start)}&endDate=${encodeURIComponent(end)}`,
+        { method: 'GET', headers: makeHeaders() }
+      )
+
+      expect(mockCreateExport).toHaveBeenCalledTimes(1)
+      const [_db, params] = mockCreateExport.mock.calls[0]!
+      expect(params).toMatchObject({
+        scope: 'project',
+        variant: 'cracked-pairs',
+        format: 'csv',
+        filters: { q: 'hello', startDate: start, endDate: end },
       })
     })
 

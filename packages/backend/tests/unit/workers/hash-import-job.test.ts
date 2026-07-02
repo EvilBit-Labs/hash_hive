@@ -59,7 +59,13 @@ if (!IS_ISOLATED) {
     db: {
       select: () => ({
         from: () => ({
-          where: () => Promise.resolve([{ matched: 0, willCrack: 0 }]),
+          where: () => {
+            // Most callers await this directly (count query in upsertTargetListBatches).
+            // The audit-dedup check (item I) chains .limit(1) before awaiting, so
+            // attach a .limit() method that returns an empty array (no existing row).
+            const p = Promise.resolve([{ matched: 0, willCrack: 0 }])
+            return Object.assign(p, { limit: () => Promise.resolve([]) })
+          },
         }),
       }),
       selectDistinct: () => ({

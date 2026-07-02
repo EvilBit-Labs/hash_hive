@@ -73,7 +73,7 @@ if (!IS_ISOLATED) {
 
   // ─── Controllable state ──────────────────────────────────────────────────────
 
-  let activeProjectId: number | null = 1
+  let activeProjectId = 1
   let activeMembershipRoles: string[] = ['admin']
   let activeHashList: Exclude<HashList, null> | null = makeHashList()
   let activeParseResult: ParseResult = makeParseResult()
@@ -127,10 +127,6 @@ if (!IS_ISOLATED) {
 
   mock.module('../../../../src/routes/control/helpers.js', () => ({
     requireProjectRole: async () => {
-      if (activeProjectId === null) {
-        const err = Object.assign(new Error('No project selected'), { status: 400 })
-        throw err
-      }
       if (
         !activeMembershipRoles.includes('admin') &&
         !activeMembershipRoles.includes('contributor')

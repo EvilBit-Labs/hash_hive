@@ -111,6 +111,7 @@ const importPrecrackedRoute = createRoute({
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     503: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ServiceUnavailable),
+    500: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.InternalError),
   },
 })
 

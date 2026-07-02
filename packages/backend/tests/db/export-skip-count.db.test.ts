@@ -133,6 +133,52 @@ describe('createExport: skip count via default SQL counter', () => {
   })
 })
 
+// ─── q filter restricts exported rows ────────────────────────────────────────
+
+describe('createExport: q filter restricts exported rows', () => {
+  it('cracked-pairs CSV export returns only rows matching q (hashValue ILIKE)', async () => {
+    // Seed data contains 'deadbeef00', 'deadbeef01', 'deadbeef02'.
+    // q='deadbeef00' matches exactly the first item (no plaintext contains this term).
+    const { skippedCount, rows } = await createExport(db, {
+      scope: 'project',
+      projectId,
+      variant: 'cracked-pairs',
+      format: 'csv',
+      filters: { q: 'deadbeef00' },
+    })
+
+    const lines: string[] = []
+    for await (const line of rows) {
+      lines.push(line)
+    }
+
+    expect(skippedCount).toBe(0) // CSV never skips
+    // Header line + exactly 1 data row for the matching hash item
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain('deadbeef00')
+    expect(lines[1]).not.toContain('deadbeef01')
+    expect(lines[1]).not.toContain('deadbeef02')
+  })
+
+  it('q filter with no matches returns only the CSV header', async () => {
+    const { skippedCount, rows } = await createExport(db, {
+      scope: 'project',
+      projectId,
+      variant: 'cracked-pairs',
+      format: 'csv',
+      filters: { q: 'xyzzy-no-match' },
+    })
+
+    const lines: string[] = []
+    for await (const line of rows) {
+      lines.push(line)
+    }
+
+    expect(skippedCount).toBe(0)
+    expect(lines).toHaveLength(1) // header only
+  })
+})
+
 // ─── (new) test 8: campaign-scope export skips correctly ─────────────────────
 
 describe('createExport: campaign-scope skip count', () => {

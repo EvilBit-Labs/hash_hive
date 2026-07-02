@@ -28,7 +28,8 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
-import { escapeLike } from '../../services/resources.js'
+import { getCampaignById } from '../../services/campaigns.js'
+import { escapeLike, getHashListById } from '../../services/resources.js'
 import {
   buildExportScopeParams,
   buildExportTimestamp,
@@ -371,11 +372,30 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
         {
           error: {
             code: 'INVALID_REQUEST',
-            message: `format '${resolvedFormat}' requires variant 'cracked-pairs'; '${resolvedVariant}' does not include hash values`,
+            message: `format '${resolvedFormat}' requires the cracked-pairs variant — potfiles need both the hash and its plaintext, which '${resolvedVariant}' does not provide.`,
           },
         },
         400
       )
+    }
+
+    // Ownership check (item D): verify the scoped resource belongs to the project
+    // before building scopeParams. Without this, any valid hashListId or
+    // campaignId — even from a different project — could be passed to createExport.
+    if (resolvedScope === 'hash-list' && hashListId != null) {
+      const hl = await getHashListById(hashListId, projectId)
+      if (!hl) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Hash list not found' } },
+          404
+        )
+      }
+    }
+    if (resolvedScope === 'campaign' && campaignId != null) {
+      const camp = await getCampaignById(campaignId)
+      if (!camp || camp.projectId !== projectId) {
+        return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
+      }
     }
 
     const scopeParams = buildExportScopeParams(resolvedScope, projectId, hashListId, campaignId)
@@ -396,6 +416,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
       ...scopeParams,
       variant: resolvedVariant,
       format: resolvedFormat,
+      filters: { q, startDate, endDate },
     })
 
     const timestamp = buildExportTimestamp()
