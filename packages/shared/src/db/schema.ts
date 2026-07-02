@@ -673,10 +673,23 @@ export const attacks = pgTable(
     // aggregates + the campaign's status (issue #99). A persisted column would
     // race campaign auto-completion and drift against a value nothing queries.
     dependencies: integer('dependencies').array(),
+    // ADR-0019 lifecycle markers (#106). `is_permanent` latches true on first
+    // task generation and is never cleared (governs deletability). `archived_at`
+    // hides a run attack from the campaign editor / scheduler, cleared on restore.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('attacks_campaign_id_idx').on(table.campaignId)]
+  (table) => [
+    index('attacks_campaign_id_idx').on(table.campaignId),
+    // No status clause (attacks carry no persisted status, #99): an attack may be
+    // archived in any derived state, but only once permanent. See ADR-0019 / #106.
+    check(
+      'attacks_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR ${table.isPermanent} = true`
+    ),
+  ]
 )
 
 export const tasks = pgTable(
