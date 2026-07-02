@@ -181,6 +181,20 @@ if (!IS_ISOLATED) {
     }
   }
 
+  // Reclaimed-shell re-upload checksum mismatch (issue #106 U12 / R12).
+  class ChecksumMismatchErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(
+        `${resourceType} ${resourceId} is a reclaimed shell; the re-uploaded file does not match the original checksum`
+      )
+      this.name = 'ChecksumMismatchError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
+    }
+  }
+
   mock.module('../../src/services/resources.js', () => ({
     // Hash list flow
     createHashList: mockCreateHashList,
@@ -284,6 +298,7 @@ if (!IS_ISOLATED) {
     UploadTooLargeError: UploadTooLargeErrorMock,
     ResourceInUseError: ResourceInUseErrorMock,
     UploadResourceNotFoundError: UploadResourceNotFoundErrorMock,
+    ChecksumMismatchError: ChecksumMismatchErrorMock,
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 

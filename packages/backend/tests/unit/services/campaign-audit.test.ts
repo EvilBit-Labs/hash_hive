@@ -196,7 +196,10 @@ if (!IS_ISOLATED) {
   }))
 
   mock.module('../../../src/services/campaign-resources.js', () => ({
-    validateCampaignResources: mock(async () => ({ valid: true, missing: [] })),
+    validateCampaignResources: mock(async () => ({ valid: true, missing: [], reclaimed: [] })),
+    // `services/campaigns.js` re-exports this (issue #106 U12); the named
+    // export fails to link if the campaign-resources.js mock omits it.
+    findReclaimedResourceRefs: mock(async () => []),
   }))
 
   mock.module('../../../src/services/campaign-dag.js', () => ({

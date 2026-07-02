@@ -27,6 +27,14 @@ export const DASHBOARD_ERROR_CODES = [
   'RESOURCE_NOT_FOUND',
   'RESOURCE_IN_USE',
   'RESOURCE_MISSING',
+  // A word/rule/mask list is a reclaimed shell (blob_reclaimed_at IS NOT
+  // NULL) — present, but unusable until re-uploaded and checksum-verified.
+  // Refused as an attack resource reference (issue #106 U12 / R12).
+  'RESOURCE_RECLAIMED',
+  // A re-upload targeting a reclaimed shell did not match the original
+  // file's checksum — rejected, the resource stays a shell (issue #106
+  // U12 / R12).
+  'CHECKSUM_MISMATCH',
   'RESOURCE_VALIDATION_FAILED',
   'DUPLICATE_NAME',
   'NOT_DRAFT',

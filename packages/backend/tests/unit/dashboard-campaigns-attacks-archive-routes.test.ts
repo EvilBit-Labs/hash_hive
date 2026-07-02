@@ -221,6 +221,11 @@ if (!IS_ISOLATED) {
     resolveGenerationStrategy: () => 'inline' as const,
     INLINE_GENERATION_THRESHOLD: 100,
     _deps: {},
+    // `control/attacks.ts` statically imports this (issue #106 U12); since
+    // this file loads the full app (`src/index.ts`), the named import fails
+    // to link if the campaigns.js mock omits it. No refs are ever reclaimed
+    // in this archive/restore-focused suite.
+    findReclaimedResourceRefs: mock(async () => []),
   }))
 
   const { app } = await import('../../src/index.js')

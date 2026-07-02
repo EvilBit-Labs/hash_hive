@@ -26,6 +26,7 @@ import {
   archiveAttacks,
   createAttack,
   deleteAttack,
+  findReclaimedResourceRefs,
   getAttackById,
   getCampaignById,
   listAttacksPaginated,
@@ -244,6 +245,7 @@ const createAttackRoute = createRoute({
     401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -255,6 +257,20 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
     const campaign = await getCampaignById(data.campaignId)
     if (!campaign || campaign.projectId !== projectId) {
       return problemResponse(c, 404, 'not_found', 'campaign not found')
+    }
+    // Reclaimed-shell guard (issue #106 U12 / R12): the Control surface has
+    // no existing pre-check chokepoint (unlike the dashboard's
+    // checkResourcesOrErrorResponse), so this is checked directly. A
+    // word/rule/mask list swept by the blob-reclamation worker is present
+    // but unusable until re-uploaded and checksum-verified.
+    const reclaimed = await findReclaimedResourceRefs(projectId, data)
+    if (reclaimed.length > 0) {
+      return problemResponse(
+        c,
+        409,
+        'conflict',
+        `Referenced resources are reclaimed shells (re-upload required): ${reclaimed.join(', ')}`
+      )
     }
     const user = c.get('currentUser')
     const attack = await createAttack(
@@ -289,6 +305,7 @@ const updateAttackRoute = createRoute({
     401: sharedControlResponse(CONTROL_RESPONSE_REFS.AuthError),
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
+    409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -299,8 +316,27 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
     const { id } = c.req.valid('param')
     const existing = await loadAttackInProject(id, projectId)
     if (!existing) return problemResponse(c, 404, 'not_found', 'attack not found')
+    const body = c.req.valid('json')
+    // Reclaimed-shell guard (issue #106 U12 / R12) — only fires when a
+    // resource ref is actually being changed, mirroring the dashboard's
+    // hasResourceRefChange gate.
+    const hasResourceRefChange =
+      body.wordlistId !== undefined ||
+      body.rulelistId !== undefined ||
+      body.masklistId !== undefined
+    if (hasResourceRefChange) {
+      const reclaimed = await findReclaimedResourceRefs(projectId, body)
+      if (reclaimed.length > 0) {
+        return problemResponse(
+          c,
+          409,
+          'conflict',
+          `Referenced resources are reclaimed shells (re-upload required): ${reclaimed.join(', ')}`
+        )
+      }
+    }
     const user = c.get('currentUser')
-    const updated = await updateAttack(id, c.req.valid('json'), {
+    const updated = await updateAttack(id, body, {
       actorType: 'user',
       actorId: user.userId,
     })

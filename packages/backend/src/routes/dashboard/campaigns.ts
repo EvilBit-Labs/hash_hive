@@ -279,6 +279,18 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'resource_reclaimed') {
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_RECLAIMED',
+          message: `Referenced resources are reclaimed shells (re-upload required): ${result.reclaimed.join(', ')}`,
+        },
+      },
+      409
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
 })
 

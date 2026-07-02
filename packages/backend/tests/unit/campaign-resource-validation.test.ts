@@ -196,7 +196,7 @@ if (!IS_ISOLATED) {
     test('reports hashList(id) missing when scoped lookup returns empty', async () => {
       expectFromCall('hashLists', [])
       const result = await validateCampaignResources({ projectId: 1, hashListId: 42 }, [])
-      expect(result).toEqual({ valid: false, missing: ['hashList(42)'] })
+      expect(result).toEqual({ valid: false, missing: ['hashList(42)'], reclaimed: [] })
     })
 
     test('reports per-table missing ids with the right label', async () => {
@@ -249,7 +249,35 @@ if (!IS_ISOLATED) {
       const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
         { wordlistId: 99 },
       ])
-      expect(result).toEqual({ valid: false, missing: ['wordlist(99)'] })
+      expect(result).toEqual({ valid: false, missing: ['wordlist(99)'], reclaimed: [] })
+    })
+
+    test('flags a reclaimed-shell wordlist as invalid, distinct from missing (issue #106 U12)', async () => {
+      // Found (blob_reclaimed_at is set) but not missing — the row exists.
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: new Date('2025-01-01T00:00:00Z') }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42 },
+      ])
+      expect(result).toEqual({ valid: false, missing: [], reclaimed: ['wordlist(42)'] })
+    })
+
+    test('does not flag a usable (non-shell) wordlist as reclaimed', async () => {
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: null }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42 },
+      ])
+      expect(result).toEqual({ valid: true })
+    })
+
+    test('reclaimed-shell check fires only one SELECT per table (folded into the existence query)', async () => {
+      // If the implementation regressed to a second query, the queue would
+      // underflow (rowsForTable throws) since only one response is queued.
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: new Date('2025-01-01T00:00:00Z') }])
+      expectFromCall('ruleLists', [{ id: 13, blobReclaimedAt: null }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42, rulelistId: 13 },
+      ])
+      expect(result).toEqual({ valid: false, missing: [], reclaimed: ['wordlist(42)'] })
     })
   })
 

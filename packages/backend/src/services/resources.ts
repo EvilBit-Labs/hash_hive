@@ -27,6 +27,7 @@ import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
+import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -92,6 +93,27 @@ export class UploadTooLargeError extends Error {
     this.name = 'UploadTooLargeError'
     this.size = size
     this.limit = limit
+  }
+}
+
+/**
+ * Thrown when a re-upload targeting a reclaimed-shell resource
+ * (`blob_reclaimed_at IS NOT NULL`) doesn't checksum-match the file that was
+ * reclaimed (issue #106 U12 / R12). The row is left untouched — still a
+ * shell — and no bytes are written to storage on the direct-upload path (the
+ * checksum is computed from the in-memory buffer before `uploadFile` is
+ * called). Routes catch this and surface a 409.
+ */
+export class ChecksumMismatchError extends Error {
+  readonly resourceId: number
+  readonly resourceType: string
+  constructor(resourceId: number, resourceType: string) {
+    super(
+      `${resourceType} ${resourceId} is a reclaimed shell; the re-uploaded file does not match the original checksum`
+    )
+    this.name = 'ChecksumMismatchError'
+    this.resourceId = resourceId
+    this.resourceType = resourceType
   }
 }
 
@@ -870,16 +892,27 @@ export async function uploadResourceFile(
     throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
+  const resourceType = resourceTypeOf(table)
   const ext = extname(file.name)
   const key = `${resource.projectId}/${prefix}/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
+
+  // Checksum computed from the in-memory buffer BEFORE the S3 write (issue
+  // #106 U12 / R12): a reclaimed-shell re-upload that fails to match is
+  // rejected here, before any bytes are written to storage or the row is
+  // touched — the resource stays exactly the shell it was.
+  const checksum = sha256HexFromBuffer(buffer)
+  const isReclaimedShell = resource.blobReclaimedAt !== null
+  if (isReclaimedShell && resource.fileChecksum && resource.fileChecksum !== checksum) {
+    throw new ChecksumMismatchError(resourceId, resourceType)
+  }
+
   await uploadFile(key, buffer, file.type || 'application/octet-stream')
 
   // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
   // the common upload path never needs the async worker, using the same utils
   // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
   // sized by line count; a masklist by its summed mask keyspace (#231).
-  const resourceType = resourceTypeOf(table)
   const text = buffer.toString('utf8')
   let lineCount: number | null = null
   let masklistKeyspace: string | null = null
@@ -910,6 +943,14 @@ export async function uploadResourceFile(
     ...(lineCount !== null ? { lineCount } : {}),
     ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
     status: 'ready' as const,
+    // Capture the checksum on every finalize (issue #106 U12) — including a
+    // brand-new resource's first upload — so a future archive + reclaim of
+    // THIS resource has something to verify a re-upload against. A matching
+    // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
+    // resource usable again (R12); isReclaimedShell is false for a normal
+    // (non-shell) upload, so this key is simply omitted there.
+    fileChecksum: checksum,
+    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
     updatedAt: new Date(),
   }
 
@@ -1170,6 +1211,30 @@ export async function completeChunkedUpload(
   // Complete S3 multipart upload
   await completeMultipartUpload(fileRef.key, s3UploadId, parts)
 
+  // Checksum capture (issue #106 U12): `initiateChunkedUpload` always
+  // creates a fresh resource row, so `completeChunkedUpload` never targets
+  // an existing reclaimed shell — there is no re-upload comparison to make
+  // here, only capture. Word/rule/mask lists only (hash lists carry no
+  // `file_checksum` column; reclamation is word/rule/mask only). Computed
+  // by streaming the just-completed object rather than buffering it —
+  // chunked upload's entire purpose is avoiding a server-side buffer for
+  // files too large for the direct-upload path. Best-effort: a failure
+  // here must not fail an otherwise-successful upload — the resource is
+  // already durably `ready`. A resource with no captured checksum simply
+  // never becomes a blob-reclamation candidate (U11's candidate predicate
+  // requires `file_checksum IS NOT NULL`), which is a safe degrade.
+  let checksum: string | null = null
+  if (!isHashList) {
+    try {
+      checksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
+    } catch (err) {
+      logger.warn(
+        { err, resourceId, resourceType },
+        'checksum capture after chunked upload failed; resource stays checksum-less until a future upload'
+      )
+    }
+  }
+
   // Update resource status to ready
   const updatedFileRef = {
     bucket: fileRef.bucket ?? env.S3_BUCKET,
@@ -1186,6 +1251,7 @@ export async function completeChunkedUpload(
       status: isHashList ? 'uploaded' : 'ready',
       fileRef: updatedFileRef,
       ...(isHashList ? {} : { fileSize: fileRef.fileSize }),
+      ...(checksum !== null ? { fileChecksum: checksum } : {}),
       updatedAt: new Date(),
     })
     .where(eq(table.id, resourceId))

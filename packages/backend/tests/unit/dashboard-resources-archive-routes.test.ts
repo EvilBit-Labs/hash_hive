@@ -158,6 +158,11 @@ if (!IS_ISOLATED) {
     UploadTooLargeError: class UploadTooLargeErrorMock extends Error {},
     ResourceInUseError: class ResourceInUseErrorMock extends Error {},
     UploadResourceNotFoundError: class UploadResourceNotFoundErrorMock extends Error {},
+    // Reclaimed-shell re-upload checksum mismatch (issue #106 U12 / R12) —
+    // the route imports this as a value for `instanceof`; no test in this
+    // archive/restore-focused file exercises it, but the named export must
+    // be present or the import fails to link.
+    ChecksumMismatchError: class ChecksumMismatchErrorMock extends Error {},
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 
@@ -187,6 +192,12 @@ if (!IS_ISOLATED) {
     restoreHashLists: mockRestoreHashLists,
     archiveResources: mockArchiveResources,
     restoreResources: mockRestoreResources,
+    // `queue/workers/blob-reclamation.js` (issue #106 U11, loaded for real
+    // via `queue/manager.js`'s static import, part of this app's graph)
+    // imports `attackFkColumnForTable` at module scope. GOTCHAS.md
+    // "mock.module merges exports" — the named import fails to link if
+    // this mock omits it. No test in this file exercises reclamation.
+    attackFkColumnForTable: mock(() => ({}) as never),
   }))
 
   mock.module('../../src/services/hash-analysis.js', () => ({

@@ -1,12 +1,19 @@
 /**
  * Service-level tests for the direct-upload masklist sizing + keyspace fan-out
- * in `uploadResourceFile` (issue #231).
+ * in `uploadResourceFile` (issue #231), and its reclaimed-shell checksum
+ * verification (issue #106 U12).
  *
  * The route-level suite fully mocks `uploadResourceFile`, so the real sizing and
  * the fan-out *decision* are only exercised here. The discriminating case is an
  * UNCOMPUTABLE masklist: its keyspace persists as null AND the fan-out still
  * fires (a dependent attack is rewritten to null) — proving the direct-upload
  * path propagates null instead of leaving dependents on a stale value.
+ *
+ * The U12 block proves: a normal (non-shell) upload captures `fileChecksum`;
+ * a reclaimed-shell re-upload with a matching checksum clears
+ * `blobReclaimedAt` and calls `uploadFile`; a mismatched checksum throws
+ * `ChecksumMismatchError` BEFORE `uploadFile` is ever called (so no bytes
+ * reach storage) and the row is left untouched.
  *
  * Mocks only the lowest boundaries (logger, storage, db); `keyspace.js` and
  * `attacks/complexity.js` run for real so the count -> persist -> fan-out wiring
@@ -16,6 +23,11 @@
  */
 import { attacks, maskLists, wordLists } from '@hashhive/shared'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { createHash } from 'node:crypto'
+
+function sha256Hex(content: string): string {
+  return createHash('sha256').update(Buffer.from(content, 'utf8')).digest('hex')
+}
 
 const IS_ISOLATED = process.env['RESOURCES_UPLOAD_TEST_ISOLATED'] === '1'
 
@@ -48,6 +60,7 @@ if (IS_ISOLATED) {
   }))
 
   // Only what services/resources.ts (and its transitive line-count.ts) import.
+  const uploadFile = mock(() => Promise.resolve())
   mock.module('../../../src/config/storage.js', () => ({
     abortMultipartUpload: mock(),
     completeMultipartUpload: mock(),
@@ -55,7 +68,7 @@ if (IS_ISOLATED) {
     deleteFile: mock(),
     getPresignedUrl: mock(),
     listParts: mock(),
-    uploadFile: mock(() => Promise.resolve()),
+    uploadFile,
     uploadPart: mock(),
     downloadFile: mock(),
   }))
@@ -72,6 +85,10 @@ if (IS_ISOLATED) {
   let persistedMasklistKeyspace: string | null = null
   const masklistKeyspaceWrites: Array<string | null> = []
   const attackKeyspaceWrites: Array<number | string | null> = []
+  // Captures the resource's own metadata update (fileRef/fileChecksum/
+  // blobReclaimedAt/status/etc) — the branch below that is NEITHER a
+  // maskLists keyspace write NOR an attacks keyspace write (issue #106 U12).
+  let lastResourceUpdateValues: Record<string, unknown> | null = null
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
@@ -129,6 +146,8 @@ if (IS_ISOLATED) {
                 masklistKeyspaceWrites.push(values['keyspace'] as string | null)
               } else if (table === attacks && 'keyspace' in values) {
                 attackKeyspaceWrites.push(values['keyspace'] as number | string | null)
+              } else {
+                lastResourceUpdateValues = values
               }
               return {
                 where: () => ({ returning: () => Promise.resolve([resourceRow ?? {}]) }),
@@ -161,7 +180,9 @@ if (IS_ISOLATED) {
     persistedMasklistKeyspace = null
     masklistKeyspaceWrites.length = 0
     attackKeyspaceWrites.length = 0
+    lastResourceUpdateValues = null
     warn.mockClear()
+    uploadFile.mockClear()
   })
 
   describe('uploadResourceFile - masklist direct-upload sizing + fan-out (#231)', () => {
@@ -200,6 +221,56 @@ if (IS_ISOLATED) {
       await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile('alpha\nbravo\ncharlie'))
 
       expect(masklistKeyspaceWrites).toHaveLength(0)
+    })
+  })
+
+  describe('uploadResourceFile - reclaimed-shell checksum verification (issue #106 U12)', () => {
+    test('a normal (non-shell) upload captures file_checksum and leaves blob_reclaimed_at untouched', async () => {
+      resourceRow = { id: 2, projectId: 7, blobReclaimedAt: null, fileChecksum: null }
+      const content = 'alpha\nbravo\ncharlie'
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(sha256Hex(content))
+      // Non-shell upload: blobReclaimedAt is simply omitted from the update
+      // (never forced to null — there is nothing to clear).
+      expect(lastResourceUpdateValues).not.toHaveProperty('blobReclaimedAt')
+    })
+
+    test('a reclaimed-shell re-upload with a matching checksum clears blob_reclaimed_at and uploads', async () => {
+      const content = 'alpha\nbravo\ncharlie'
+      const originalChecksum = sha256Hex(content)
+      resourceRow = {
+        id: 2,
+        projectId: 7,
+        blobReclaimedAt: new Date('2026-01-01T00:00:00Z'),
+        fileChecksum: originalChecksum,
+      }
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(originalChecksum)
+      expect(lastResourceUpdateValues?.['blobReclaimedAt']).toBeNull()
+    })
+
+    test('a reclaimed-shell re-upload with a mismatched checksum is rejected before any storage write', async () => {
+      resourceRow = {
+        id: 2,
+        projectId: 7,
+        blobReclaimedAt: new Date('2026-01-01T00:00:00Z'),
+        fileChecksum: sha256Hex('the-original-file-content'),
+      }
+
+      await expect(
+        uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile('a-completely-different-file'))
+      ).rejects.toThrow(/reclaimed shell/i)
+
+      // The whole point of computing the checksum before the S3 write: a
+      // mismatch must never reach storage, and the row must stay untouched.
+      expect(uploadFile).not.toHaveBeenCalled()
+      expect(lastResourceUpdateValues).toBeNull()
     })
   })
 }

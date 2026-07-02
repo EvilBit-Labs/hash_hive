@@ -200,8 +200,12 @@ export async function restoreHashLists(
   )
 }
 
-/** The `attacks` FK column that references a given resource table. */
-function attackFkColumnForTable(table: ResourceTable) {
+/**
+ * The `attacks` FK column that references a given resource table. Exported
+ * for reuse by the blob-reclamation worker (issue #106 U11), which folds the
+ * same "no active referencing attack" guard into its atomic intent-stamp.
+ */
+export function attackFkColumnForTable(table: ResourceTable) {
   if (table === wordLists) return attacks.wordlistId
   if (table === ruleLists) return attacks.rulelistId
   return attacks.masklistId

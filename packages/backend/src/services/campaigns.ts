@@ -96,7 +96,7 @@ export {
   shouldAutoCompleteCampaign,
   updateCampaignProgress,
 } from './campaign-progress.js'
-export { validateCampaignResources } from './campaign-resources.js'
+export { findReclaimedResourceRefs, validateCampaignResources } from './campaign-resources.js'
 // Attack archive/restore (issue #106 U6) — mirrors the resources-archive.ts
 // split: kept out of this file to stay under the 800-line guideline,
 // re-exported here so callers use the same `services/campaigns` facade as
@@ -393,6 +393,9 @@ export type CreateCampaignWithAttacksResult =
     }
   | { kind: 'dag_invalid'; error: string }
   | { kind: 'resource_missing'; missing: string[] }
+  // A referenced word/rule/mask list is a reclaimed shell (issue #106 U12 /
+  // R12) — present, but unusable until re-uploaded and checksum-verified.
+  | { kind: 'resource_reclaimed'; reclaimed: string[] }
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -446,6 +449,9 @@ export async function createCampaignWithAttacks(input: {
     }))
   )
   if (!resourceCheck.valid) {
+    if (resourceCheck.reclaimed.length > 0) {
+      return { kind: 'resource_reclaimed', reclaimed: resourceCheck.reclaimed }
+    }
     return { kind: 'resource_missing', missing: resourceCheck.missing }
   }
 
@@ -879,6 +885,12 @@ export async function transitionCampaign(
       }
     }
     if (!resourceCheck.valid) {
+      if (resourceCheck.reclaimed.length > 0) {
+        return {
+          error: `Referenced resources are reclaimed shells (re-upload required): ${resourceCheck.reclaimed.join(', ')}`,
+          code: 'RESOURCE_RECLAIMED' as const,
+        }
+      }
       return {
         error: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
         code: 'RESOURCE_MISSING' as const,

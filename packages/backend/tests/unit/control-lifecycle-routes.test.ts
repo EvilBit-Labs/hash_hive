@@ -81,6 +81,11 @@ if (!IS_ISOLATED) {
     restoreHashLists: mockRestoreHashLists,
     archiveResources: mockArchiveResources,
     restoreResources: mockRestoreResources,
+    // `queue/workers/blob-reclamation.js` (issue #106 U11) imports
+    // `attackFkColumnForTable` at module scope; if it (or anything else
+    // pulling in `queue/manager.js`) loads in this process, the named
+    // import fails to link if this mock omits it.
+    attackFkColumnForTable: mock(() => ({}) as never),
   }))
 
   // ─── services/resources.js — inert stubs for the rest of the surface
@@ -119,6 +124,10 @@ if (!IS_ISOLATED) {
     getCampaignById: mock(async () => null),
     listAttacksPaginated: mock(async () => ({ items: [], total: 0 })),
     updateAttack: mock(async () => null),
+    // control/attacks.ts statically imports this (issue #106 U12); the named
+    // import fails to link if the campaigns.js mock omits it. No refs are
+    // ever reclaimed in this lifecycle-focused suite.
+    findReclaimedResourceRefs: mock(async () => []),
   }))
 
   // ─── services/agents.js — controllable retireAgent, inert stubs for

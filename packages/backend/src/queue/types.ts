@@ -50,6 +50,10 @@ export interface AuditRetentionJob {
   triggeredAt: string
 }
 
+export interface BlobReclamationJob {
+  triggeredAt: string
+}
+
 /**
  * Payload for the hash import propagation job (U7).
  *
@@ -89,4 +93,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.LINE_COUNT]: LineCountJob
   [QUEUE_NAMES.AUDIT_RETENTION]: AuditRetentionJob
   [QUEUE_NAMES.HASH_IMPORT_PROPAGATION]: HashImportPropagationJob
+  [QUEUE_NAMES.BLOB_RECLAMATION]: BlobReclamationJob
 }

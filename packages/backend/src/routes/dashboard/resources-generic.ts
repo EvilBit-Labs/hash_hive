@@ -15,6 +15,7 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
 import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
+  ChecksumMismatchError,
   createResource,
   deleteResource,
   getResourceById,
@@ -157,6 +158,10 @@ export function registerGenericResourceRoutes(
       401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
       403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
       404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      409: {
+        description: 'Checksum mismatch on a reclaimed-shell re-upload',
+        content: { 'application/json': { schema: passthroughObject('ChecksumMismatchError') } },
+      },
       411: {
         description: 'Length Required (chunked transfer-encoding rejected)',
         content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
@@ -203,6 +208,9 @@ export function registerGenericResourceRoutes(
           },
           413
         )
+      }
+      if (err instanceof ChecksumMismatchError) {
+        return dashboardError(c, 409, 'CHECKSUM_MISMATCH', err.message)
       }
       throw err
     }

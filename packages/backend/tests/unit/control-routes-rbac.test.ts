@@ -240,6 +240,11 @@ if (!IS_ISOLATED) {
     // tasks.ts/retry.ts statically import this (#97 U6); the named import
     // fails to link if the campaigns.js mock omits it.
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
+    // `control/attacks.ts` statically imports this (issue #106 U12) to
+    // reject a reclaimed-shell resource ref on create/update; the named
+    // import fails to link if the campaigns.js mock omits it. No refs are
+    // ever reclaimed in this RBAC-focused suite.
+    findReclaimedResourceRefs: mock(() => Promise.resolve([])),
   }))
 
   const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {

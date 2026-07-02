@@ -75,6 +75,12 @@ export function respondToTransition(c: Context<AppEnv>, result: TransitionResult
       // than 400 — the request was well-formed, the state isn't.
       return dashboardError(c, 409, 'RESOURCE_MISSING', result.error)
     }
+    if (code === 'RESOURCE_RECLAIMED') {
+      // A referenced word/rule/mask list is a reclaimed shell — present,
+      // but unusable until re-uploaded and checksum-verified (issue #106
+      // U12 / R12). 409 for the same reason as RESOURCE_MISSING above.
+      return dashboardError(c, 409, 'RESOURCE_RECLAIMED', result.error)
+    }
     if (code === 'STALE_STATE') {
       // Optimistic-concurrency loss: another writer transitioned this
       // campaign between our read and write. 409 signals the client
@@ -109,6 +115,21 @@ export async function checkResourcesOrErrorResponse(
   try {
     const result = await validateCampaignResources(campaign, attacks)
     if (result.valid) return null
+    // Reclaimed-shell refs take precedence in the message: a resource that
+    // is both missing (impossible here — it exists) and reclaimed can't
+    // occur, but checking reclaimed first keeps the branch order matching
+    // the outcome's severity (unusable vs. entirely absent).
+    if (result.reclaimed.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: 'RESOURCE_RECLAIMED',
+            message: `Referenced resources are reclaimed shells (re-upload required): ${result.reclaimed.join(', ')}`,
+          },
+        },
+        409
+      )
+    }
     return c.json(
       {
         error: {
