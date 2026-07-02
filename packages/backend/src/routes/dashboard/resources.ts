@@ -38,18 +38,21 @@ import {
   uploadHashListFile,
   UploadTooLargeError,
 } from '../../services/resources.js'
+import { registerHashListArchiveRoutes } from './resources-archive-routes.js'
 import { registerChunkedUploadRoutes } from './resources-chunked-upload.js'
 import { registerGenericResourceRoutes } from './resources-generic.js'
 // `enforceMultipartSizeLimit`, `passthroughObject`, `idParamSchema`,
-// `tags`, `security` and the chunked-upload query shape live in
-// `./resources-shared.ts` so the generic-resource factory and
-// chunked-upload route modules can reuse them without re-creating an
-// import cycle through this main router module.
+// `tags`, `security`, `showArchivedQuerySchema` and the chunked-upload
+// query shape live in `./resources-shared.ts` so the generic-resource
+// factory, archive-routes factory, and chunked-upload route modules can
+// reuse them without re-creating an import cycle through this main
+// router module.
 import {
   enforceMultipartSizeLimit,
   idParamSchema,
   passthroughObject,
   security,
+  showArchivedQuerySchema,
   tags,
 } from './resources-shared.js'
 
@@ -92,6 +95,7 @@ const listHashListsRoute = createRoute({
   summary: 'List hash lists in the active project',
   security,
   middleware: [requireProjectAccess()] as const,
+  request: { query: showArchivedQuerySchema },
   responses: {
     200: {
       description: 'Hash list collection',
@@ -108,8 +112,9 @@ const listHashListsRoute = createRoute({
 
 resourceRoutes.openapi(listHashListsRoute, async (c) => {
   const { projectId } = c.get('scopedUser')!
+  const { showArchived } = c.req.valid('query')
 
-  const hashLists = await listHashLists(projectId)
+  const hashLists = await listHashLists(projectId, { showArchived })
   return c.json({ hashLists }, 200)
 })
 
@@ -791,5 +796,6 @@ registerGenericResourceRoutes(resourceRoutes, 'wordlists', wordLists)
 registerGenericResourceRoutes(resourceRoutes, 'rulelists', ruleLists)
 registerGenericResourceRoutes(resourceRoutes, 'masklists', maskLists)
 registerChunkedUploadRoutes(resourceRoutes)
+registerHashListArchiveRoutes(resourceRoutes)
 
 export { resourceRoutes }

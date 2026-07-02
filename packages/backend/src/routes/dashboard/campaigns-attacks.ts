@@ -69,6 +69,16 @@ const listAttacksResponseSchema = z.object({
   attacks: z.array(attackRowSchema),
 })
 
+// Archived attacks are excluded by default (ADR-0019 / issue #106 R6, R10);
+// `?showArchived=true` includes them. Permissive coercion mirrors
+// `campaigns.ts`'s `listCampaignsQuerySchema.showArchived`.
+const listAttacksQuerySchema = z.object({
+  showArchived: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+})
+
 const attackResponseSchema = z.object({
   attack: attackRowSchema,
 })
@@ -128,6 +138,7 @@ const listAttacksRoute = createRoute({
   middleware: [requireProjectAccess()] as const,
   request: {
     params: campaignIdParamSchema,
+    query: listAttacksQuerySchema,
   },
   responses: {
     200: {
@@ -301,7 +312,8 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
-    const campaignAttacks = await listAttacks(campaignId)
+    const { showArchived } = c.req.valid('query')
+    const campaignAttacks = await listAttacks(campaignId, { showArchived })
     return c.json({ attacks: campaignAttacks }, 200)
   })
 

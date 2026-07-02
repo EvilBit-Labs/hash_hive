@@ -106,6 +106,20 @@ export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
+/**
+ * Archived hash lists / resources are excluded from list views by default
+ * (ADR-0019 / issue #106 R10); `?showArchived=true` includes them.
+ * Permissive coercion mirrors `campaigns.ts`'s `listCampaignsQuerySchema`:
+ * only the literal "true" enables it, anything else (or absent) is
+ * false — never 400s the list request.
+ */
+export const showArchivedQuerySchema = z.object({
+  showArchived: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+})
+
 export const uploadIdParamSchema = z.object({
   uploadId: z.string().min(1),
 })

@@ -29,6 +29,7 @@ import {
   validateCampaignDAG,
 } from '../../services/campaigns.js'
 import { registerCampaignArchiveRoutes } from './campaigns-archive.js'
+import { registerCampaignAttackArchiveRoutes } from './campaigns-attacks-archive.js'
 import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
 import { registerCampaignLifecycleRoutes } from './campaigns-lifecycle.js'
 import { attackRowSchema, campaignIdParamSchema, campaignRowSchema } from './campaigns-shared.js'
@@ -670,5 +671,6 @@ campaignRoutes.openapi(validateCampaignRoute, async (c) => {
 registerCampaignLifecycleRoutes(campaignRoutes)
 registerCampaignAttackRoutes(campaignRoutes)
 registerCampaignArchiveRoutes(campaignRoutes)
+registerCampaignAttackArchiveRoutes(campaignRoutes)
 
 export { campaignRoutes }

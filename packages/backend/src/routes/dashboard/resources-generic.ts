@@ -25,11 +25,13 @@ import {
   uploadResourceFile,
   UploadTooLargeError,
 } from '../../services/resources.js'
+import { registerResourceArchiveRoutes } from './resources-archive-routes.js'
 import {
   enforceMultipartSizeLimit,
   idParamSchema,
   passthroughObject,
   security,
+  showArchivedQuerySchema,
   tags,
 } from './resources-shared.js'
 
@@ -49,6 +51,7 @@ export function registerGenericResourceRoutes(
     summary: `List ${prefix} for the active project`,
     security,
     middleware: [requireProjectAccess()] as const,
+    request: { query: showArchivedQuerySchema },
     responses: {
       200: {
         description: `${prefix} collection`,
@@ -61,8 +64,9 @@ export function registerGenericResourceRoutes(
 
   router.openapi(listResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
+    const { showArchived } = c.req.valid('query')
 
-    const items = await listResources(table, projectId)
+    const items = await listResources(table, projectId, { showArchived })
     return c.json({ [prefix]: items }, 200)
   })
 
@@ -300,4 +304,7 @@ export function registerGenericResourceRoutes(
     })
     return c.json({ url }, 200)
   })
+
+  // ADR-0019 / issue #106 U4: POST /{prefix}/archive + /{prefix}/restore.
+  registerResourceArchiveRoutes(router, prefix, table)
 }

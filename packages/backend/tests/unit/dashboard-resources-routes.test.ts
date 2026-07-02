@@ -209,6 +209,15 @@ if (!IS_ISOLATED) {
     },
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
+    // `resources-archive.ts` (ADR-0019 / issue #106 U3/U4, loaded for real
+    // by this app's route registration via `resources-archive-routes.ts`)
+    // imports `entityTypeForTable` at module scope. GOTCHAS.md "mock.module
+    // merges exports" — every consumer's top-level import must be present
+    // on the mock factory or the import fails at load time (SyntaxError:
+    // export not found) for every test file in this run. No test in this
+    // file exercises the archive/restore routes, so the return value is
+    // never actually read.
+    entityTypeForTable: mock(() => 'word_list' as const),
     // Real getHashItems returns `{items, total, limit, offset} | null`.
     // Mock shape pinned via `satisfies` so the mirror-service-not-schema
     // convention's static-fixture pattern fails type-check (in any tool
