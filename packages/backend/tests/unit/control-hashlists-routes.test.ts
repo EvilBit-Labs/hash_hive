@@ -54,6 +54,13 @@ if (!IS_ISOLATED) {
     getHashListStats: mock(async () => ({ totalCount: 0, crackedCount: 0, crackRate: 0 })),
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
     setHashListType: mockSetHashListType,
+    // The real (unmocked) `resources-archive.ts` imports this at module
+    // scope — issue #106 U10 added `archiveHashLists`/`restoreHashLists`
+    // imports to `control/hashlists.ts`, pulling `resources-archive.ts`
+    // into this test's module graph. This stub is for the transitive
+    // static-import binding only (mirrors
+    // `dashboard-resources-archive-routes.test.ts`).
+    entityTypeForTable: mock(() => 'hash_list' as const),
     isForeignKeyViolation: (err: unknown, expectedConstraint?: string): boolean => {
       if (!(err instanceof Error)) return false
       const code = 'code' in err ? ((err as { code?: string }).code ?? undefined) : undefined
@@ -72,6 +79,18 @@ if (!IS_ISOLATED) {
   // without standing up the real Bearer-token middleware chain.
   mock.module('../../src/routes/control/helpers.js', () => ({
     requireProjectMembership: async () => {
+      if (activeProjectId === null) {
+        const err = new Error('project not selected')
+        ;(err as Error & { status?: number }).status = 400
+        throw err
+      }
+      return { projectId: activeProjectId, roles: activeMembershipRoles }
+    },
+    // The archive/restore routes added in issue #106 U10 call
+    // `requireProjectRole` — this test file's PATCH-only suite never
+    // exercises the archive/restore endpoints, but the stub must exist
+    // for the static import to link.
+    requireProjectRole: async () => {
       if (activeProjectId === null) {
         const err = new Error('project not selected')
         ;(err as Error & { status?: number }).status = 400

@@ -117,7 +117,7 @@ if (!IS_ISOLATED) {
   )
   const mockUploadHashListFile = mock(async () => ({ key: 'some/key', size: 123 }))
   const mockImportHashList = mock(async () => ({ status: 'processing' as const, queued: true }))
-  const mockDeleteHashList = mock(async () => true)
+  const mockDeleteHashList = mock(async () => ({ kind: 'deleted' as const }))
   const mockGetHashListById = mock(async (id: number) => makeHashList({ id, status: 'processing' }))
   // PATCH /hash-lists/{id} set-hash-type mock. Default: row not in
   // project (null) → route maps to 404. Tests override per-case via
@@ -132,6 +132,12 @@ if (!IS_ISOLATED) {
   // signatures (`uploadChunkPart → { etag }`, `completeChunkedUpload →
   // { resourceId }`) so mock drift doesn't silently mask a real wire
   // contract change.
+  const mockInitiateChunkedUpload = mock(async () => ({
+    uploadId: 'u',
+    resourceId: 1,
+    partSize: 64 * 1024 * 1024,
+    key: 'k',
+  }))
   const mockUploadChunkPart = mock(async () => ({ etag: 'e' }))
   const mockCompleteChunkedUpload = mock(async () => ({ resourceId: 1 }))
 
@@ -181,6 +187,33 @@ if (!IS_ISOLATED) {
     }
   }
 
+  // Reclaimed-shell re-upload checksum mismatch (issue #106 U12 / R12).
+  class ChecksumMismatchErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(
+        `${resourceType} ${resourceId} is a reclaimed shell; the re-uploaded file does not match the original checksum`
+      )
+      this.name = 'ChecksumMismatchError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
+    }
+  }
+
+  // Chunked-upload restore session target that isn't actually a reclaimed
+  // shell (issue #106 F3 code review).
+  class ResourceNotReclaimedShellErrorMock extends Error {
+    resourceId: number
+    resourceType: string
+    constructor(resourceId: number, resourceType: string) {
+      super(`${resourceType} ${resourceId} is not a reclaimed shell; nothing to restore`)
+      this.name = 'ResourceNotReclaimedShellError'
+      this.resourceId = resourceId
+      this.resourceType = resourceType
+    }
+  }
+
   mock.module('../../src/services/resources.js', () => ({
     // Hash list flow
     createHashList: mockCreateHashList,
@@ -209,6 +242,15 @@ if (!IS_ISOLATED) {
     },
     listHashLists: inertList,
     listHashListsPaginated: mock(async () => ({ items: [], total: 0 })),
+    // `resources-archive.ts` (ADR-0019 / issue #106 U3/U4, loaded for real
+    // by this app's route registration via `resources-archive-routes.ts`)
+    // imports `entityTypeForTable` at module scope. GOTCHAS.md "mock.module
+    // merges exports" — every consumer's top-level import must be present
+    // on the mock factory or the import fails at load time (SyntaxError:
+    // export not found) for every test file in this run. No test in this
+    // file exercises the archive/restore routes, so the return value is
+    // never actually read.
+    entityTypeForTable: mock(() => 'word_list' as const),
     // Real getHashItems returns `{items, total, limit, offset} | null`.
     // Mock shape pinned via `satisfies` so the mirror-service-not-schema
     // convention's static-fixture pattern fails type-check (in any tool
@@ -235,8 +277,15 @@ if (!IS_ISOLATED) {
     createResource: mock(async () => ({ id: 1 })),
     getResourceById: mock(async () => null),
     uploadResourceFile: mock(async () => ({ key: 'k', size: 0 })),
-    deleteResource: mock(async () => true),
+    deleteResource: mock(async () => ({ kind: 'deleted' as const })),
     getResourcePresignedUrl: mock(async () => 'https://example/test'),
+    // `services/campaigns.js` (loaded for real by this app's route
+    // registration) imports `latchResourcePermanent` at module scope
+    // (ADR-0019 / issue #106 U3). GOTCHAS.md "mock.module merges exports" —
+    // every consumer's top-level import must be present on the mock
+    // factory or the import fails at load time for every test file in
+    // this run.
+    latchResourcePermanent: mock(async () => undefined),
     // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
     // dashboard route consumes this service from this test file's
     // surface, but `routes/agent/index.ts` imports the function at
@@ -257,7 +306,7 @@ if (!IS_ISOLATED) {
     // String helper used by results routes.
     escapeLike: (s: string) => s,
     // Chunked upload
-    initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),
+    initiateChunkedUpload: mockInitiateChunkedUpload,
     uploadChunkPart: mockUploadChunkPart,
     completeChunkedUpload: mockCompleteChunkedUpload,
     abortChunkedUpload: noop,
@@ -268,6 +317,8 @@ if (!IS_ISOLATED) {
     UploadTooLargeError: UploadTooLargeErrorMock,
     ResourceInUseError: ResourceInUseErrorMock,
     UploadResourceNotFoundError: UploadResourceNotFoundErrorMock,
+    ChecksumMismatchError: ChecksumMismatchErrorMock,
+    ResourceNotReclaimedShellError: ResourceNotReclaimedShellErrorMock,
     MAX_DIRECT_UPLOAD_BYTES: 10 * 1024 * 1024,
   }))
 
@@ -470,7 +521,7 @@ if (!IS_ISOLATED) {
         queued: true,
       }))
       mockDeleteHashList.mockReset()
-      mockDeleteHashList.mockImplementation(async () => true)
+      mockDeleteHashList.mockImplementation(async () => ({ kind: 'deleted' as const }))
 
       const { body, boundary } = buildMultipart([
         { name: 'name', value: 'too-big' },
@@ -594,7 +645,7 @@ if (!IS_ISOLATED) {
         throw new Error('S3 down')
       })
       mockDeleteHashList.mockReset()
-      mockDeleteHashList.mockImplementation(async () => true)
+      mockDeleteHashList.mockImplementation(async () => ({ kind: 'deleted' as const }))
       mockImportHashList.mockReset()
       mockImportHashList.mockImplementation(async () => ({
         status: 'processing' as const,
@@ -784,6 +835,135 @@ if (!IS_ISOLATED) {
       expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
       // Same generic-message pin as the upload-part case above.
       expect(json.error?.message).toBe('Upload not found')
+    })
+  })
+
+  describe('chunked-upload restore-after-reclaim (F3, issue #106 code review)', () => {
+    const UPLOAD_INITIATE_URL = '/api/v1/dashboard/resources/upload/initiate'
+    const UPLOAD_COMPLETE_URL = '/api/v1/dashboard/resources/upload/u-1/complete'
+
+    it('POST /upload/initiate forwards restoreResourceId to the service', async () => {
+      mockInitiateChunkedUpload.mockClear()
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(201)
+      expect(mockInitiateChunkedUpload).toHaveBeenCalledTimes(1)
+      const [data] = mockInitiateChunkedUpload.mock.calls[0]!
+      expect(data).toMatchObject({ restoreResourceId: 42, resourceType: 'wordlists' })
+    })
+
+    it('POST /upload/initiate rejects restoreResourceId with resourceType hash-lists at the schema layer (400)', async () => {
+      mockInitiateChunkedUpload.mockClear()
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'hash-lists',
+          name: 'restored-hashlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(400)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('VALIDATION_ERROR')
+      expect(mockInitiateChunkedUpload).not.toHaveBeenCalled()
+    })
+
+    it('POST /upload/initiate maps UploadResourceNotFoundError to 404 RESOURCE_NOT_FOUND', async () => {
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => {
+        throw new UploadResourceNotFoundErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(404)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_FOUND')
+
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => ({
+        uploadId: 'u',
+        resourceId: 1,
+        partSize: 64 * 1024 * 1024,
+        key: 'k',
+      }))
+    })
+
+    it('POST /upload/initiate maps ResourceNotReclaimedShellError to 409 RESOURCE_NOT_RECLAIMED', async () => {
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => {
+        throw new ResourceNotReclaimedShellErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_INITIATE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          resourceType: 'wordlists',
+          name: 'restored-wordlist.txt',
+          fileSize: 50_000_000,
+          restoreResourceId: 42,
+        }),
+      })
+
+      expect(res.status).toBe(409)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('RESOURCE_NOT_RECLAIMED')
+
+      mockInitiateChunkedUpload.mockReset()
+      mockInitiateChunkedUpload.mockImplementation(async () => ({
+        uploadId: 'u',
+        resourceId: 1,
+        partSize: 64 * 1024 * 1024,
+        key: 'k',
+      }))
+    })
+
+    it('POST /upload/{id}/complete maps ChecksumMismatchError to 409 CHECKSUM_MISMATCH', async () => {
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => {
+        throw new ChecksumMismatchErrorMock(42, 'wordlists')
+      })
+
+      const res = await app.request(UPLOAD_COMPLETE_URL, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: 'e' }],
+          resourceId: 42,
+          resourceType: 'wordlists',
+        }),
+      })
+
+      expect(res.status).toBe(409)
+      const json = (await res.json()) as { error?: { code?: string } }
+      expect(json.error?.code).toBe('CHECKSUM_MISMATCH')
+
+      mockCompleteChunkedUpload.mockReset()
+      mockCompleteChunkedUpload.mockImplementation(async () => ({ resourceId: 1 }))
     })
   })
 

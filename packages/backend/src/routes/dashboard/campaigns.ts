@@ -29,6 +29,7 @@ import {
   validateCampaignDAG,
 } from '../../services/campaigns.js'
 import { registerCampaignArchiveRoutes } from './campaigns-archive.js'
+import { registerCampaignAttackArchiveRoutes } from './campaigns-attacks-archive.js'
 import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
 import { registerCampaignLifecycleRoutes } from './campaigns-lifecycle.js'
 import { attackRowSchema, campaignIdParamSchema, campaignRowSchema } from './campaigns-shared.js'
@@ -272,6 +273,30 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
         error: {
           code: 'RESOURCE_MISSING',
           message: `Referenced resources missing: ${result.missing.join(', ')}`,
+        },
+      },
+      409
+    )
+  }
+
+  if (result.kind === 'resource_reclaimed') {
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_RECLAIMED',
+          message: `Referenced resources are reclaimed shells (re-upload required): ${result.reclaimed.join(', ')}`,
+        },
+      },
+      409
+    )
+  }
+
+  if (result.kind === 'resource_archived') {
+    return c.json(
+      {
+        error: {
+          code: 'RESOURCE_ARCHIVED',
+          message: `Referenced resources are archived: ${result.archived.join(', ')}`,
         },
       },
       409
@@ -670,5 +695,6 @@ campaignRoutes.openapi(validateCampaignRoute, async (c) => {
 registerCampaignLifecycleRoutes(campaignRoutes)
 registerCampaignAttackRoutes(campaignRoutes)
 registerCampaignArchiveRoutes(campaignRoutes)
+registerCampaignAttackArchiveRoutes(campaignRoutes)
 
 export { campaignRoutes }

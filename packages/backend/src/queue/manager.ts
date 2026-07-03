@@ -9,6 +9,7 @@ import { logger } from '../config/logger.js'
 import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES, type QueueName } from '../config/queue.js'
 import { createRedisClient, getRedisStatus } from '../config/redis.js'
 import { AUDIT_RETENTION_SCHEDULER_INTERVAL_MS } from './workers/audit-retention.js'
+import { BLOB_RECLAMATION_SCHEDULER_INTERVAL_MS } from './workers/blob-reclamation.js'
 
 export interface QueueHealth {
   status: 'connected' | 'disconnected'
@@ -103,6 +104,23 @@ export class QueueManager {
         'audit-retention-sweep',
         { every: AUDIT_RETENTION_SCHEDULER_INTERVAL_MS },
         { data: { triggeredAt: new Date().toISOString() } }
+      )
+    }
+
+    // Schedule daily blob-reclamation sweep (issue #106 U11). attempts +
+    // exponential backoff (mirroring enqueue()'s job template) so a
+    // transient sweep failure (e.g. a momentary DB or S3 blip) retries
+    // same-day instead of silently waiting a full 24h for the next
+    // scheduled tick.
+    const blobReclamationQueue = this.queues.get(QUEUE_NAMES.BLOB_RECLAMATION)
+    if (blobReclamationQueue) {
+      await blobReclamationQueue.upsertJobScheduler(
+        'blob-reclamation-sweep',
+        { every: BLOB_RECLAMATION_SCHEDULER_INTERVAL_MS },
+        {
+          data: { triggeredAt: new Date().toISOString() },
+          opts: { attempts: DEFAULT_JOB_ATTEMPTS, backoff: { type: 'exponential', delay: 5_000 } },
+        }
       )
     }
 

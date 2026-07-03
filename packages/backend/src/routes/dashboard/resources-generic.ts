@@ -15,6 +15,7 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
 import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
+  ChecksumMismatchError,
   createResource,
   deleteResource,
   getResourceById,
@@ -25,11 +26,13 @@ import {
   uploadResourceFile,
   UploadTooLargeError,
 } from '../../services/resources.js'
+import { registerResourceArchiveRoutes } from './resources-archive-routes.js'
 import {
   enforceMultipartSizeLimit,
   idParamSchema,
   passthroughObject,
   security,
+  showArchivedQuerySchema,
   tags,
 } from './resources-shared.js'
 
@@ -49,6 +52,7 @@ export function registerGenericResourceRoutes(
     summary: `List ${prefix} for the active project`,
     security,
     middleware: [requireProjectAccess()] as const,
+    request: { query: showArchivedQuerySchema },
     responses: {
       200: {
         description: `${prefix} collection`,
@@ -61,8 +65,9 @@ export function registerGenericResourceRoutes(
 
   router.openapi(listResourceRoute, async (c) => {
     const { projectId } = c.get('scopedUser')!
+    const { showArchived } = c.req.valid('query')
 
-    const items = await listResources(table, projectId)
+    const items = await listResources(table, projectId, { showArchived })
     return c.json({ [prefix]: items }, 200)
   })
 
@@ -153,6 +158,10 @@ export function registerGenericResourceRoutes(
       401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
       403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
       404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+      409: {
+        description: 'Checksum mismatch on a reclaimed-shell re-upload',
+        content: { 'application/json': { schema: passthroughObject('ChecksumMismatchError') } },
+      },
       411: {
         description: 'Length Required (chunked transfer-encoding rejected)',
         content: { 'application/json': { schema: passthroughObject('LengthRequiredError') } },
@@ -200,6 +209,9 @@ export function registerGenericResourceRoutes(
           413
         )
       }
+      if (err instanceof ChecksumMismatchError) {
+        return dashboardError(c, 409, 'CHECKSUM_MISMATCH', err.message)
+      }
       throw err
     }
   })
@@ -231,11 +243,22 @@ export function registerGenericResourceRoutes(
     const actor = { actorType: 'user' as const, actorId: userId }
     const { id } = c.req.valid('param')
     try {
-      const deleted = await deleteResource(table, id, projectId, prefix, actor)
-      if (!deleted) {
-        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
+      const result = await deleteResource(table, id, projectId, prefix, actor)
+      switch (result.kind) {
+        case 'not_found':
+          return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', `${prefix} item not found`)
+        case 'not_deletable':
+          // ADR-0019 / issue #106 U3: a resource that has ever been
+          // referenced by an attack is permanent — archive-only.
+          return dashboardError(
+            c,
+            409,
+            'NOT_DELETABLE',
+            `${prefix} item has been used by an attack and is now permanent; it cannot be deleted, only archived.`
+          )
+        case 'deleted':
+          return c.body(null, 204)
       }
-      return c.body(null, 204)
     } catch (err) {
       if (err instanceof ResourceInUseError) {
         return dashboardError(c, 409, 'RESOURCE_IN_USE', err.message)
@@ -289,4 +312,7 @@ export function registerGenericResourceRoutes(
     })
     return c.json({ url }, 200)
   })
+
+  // ADR-0019 / issue #106 U4: POST /{prefix}/archive + /{prefix}/restore.
+  registerResourceArchiveRoutes(router, prefix, table)
 }

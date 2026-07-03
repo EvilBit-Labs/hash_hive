@@ -193,6 +193,17 @@ export const agents = pgTable(
      * path so a partial rotation never locks an agent out.
      */
     authTokenFormat: varchar('auth_token_format', { length: 16 }).notNull().default('plaintext'),
+    /**
+     * Agent lifecycle status. No DB check constraint enforces the
+     * vocabulary (unlike the lifecycle-marker tables' archive-consistency
+     * checks) — validation lives entirely in `agentStatusSchema`
+     * (`@hashhive/shared`): 'offline' | 'online' | 'busy' | 'error' |
+     * 'benchmarked' | 'retired'. `retired` (issue #106 U8) is terminal and
+     * server-set-only via `retireAgent`; the row and its full history
+     * (tasks, benchmarks, errors) are retained, never deleted (R9). See
+     * `decideHeartbeatTransition` for the guard that keeps a heartbeat
+     * from a still-running rig from un-retiring the row.
+     */
     status: varchar('status', { length: 20 }).notNull().default('offline'),
     capabilities: jsonb('capabilities').default({}),
     hardwareProfile: jsonb('hardware_profile').default({}),
@@ -415,12 +426,26 @@ export const hashLists = pgTable(
       .$type<ResourceStatusLiteral>()
       .notNull()
       .default('uploading'),
+    // Latches true the first time this hash list is referenced by a campaign and
+    // is never cleared. Governs deletability: hard-deletable only while false.
+    // See ADR-0019.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    // Set when a permanent hash list is archived (hidden from active views),
+    // cleared on restore. NULL = not archived. See ADR-0019.
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('hash_lists_project_id_idx').on(table.projectId),
     index('hash_lists_status_idx').on(table.status),
+    // A row may only carry archived_at when it is permanent and in the `ready`
+    // terminal state (a resource is only referenceable — hence permanent — once
+    // ready). Closes off illegal combinations (archived draft/in-flight).
+    check(
+      'hash_lists_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} = 'ready')`
+    ),
   ]
 )
 
@@ -460,60 +485,109 @@ export const hashItems = pgTable(
   ]
 )
 
-export const wordLists = pgTable('word_lists', {
-  id: serial('id').primaryKey(),
-  projectId: integer('project_id')
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }),
-  name: varchar('name', { length: 255 }).notNull(),
-  fileRef: jsonb('file_ref').default({}),
-  lineCount: bigint('line_count', { mode: 'number' }),
-  fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 })
-    .$type<ResourceStatusLiteral>()
-    .notNull()
-    .default('pending'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const wordLists = pgTable(
+  'word_lists',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    fileRef: jsonb('file_ref').default({}),
+    lineCount: bigint('line_count', { mode: 'number' }),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    status: varchar('status', { length: 20 })
+      .$type<ResourceStatusLiteral>()
+      .notNull()
+      .default('pending'),
+    // ADR-0019 lifecycle markers. `is_permanent` latches on first reference by an
+    // attack; `archived_at` hides a permanent resource from active views (cleared
+    // on restore). See ADR-0019.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    // Set by the blob-reclamation sweep after the retention window: the object
+    // store blob has been purged while the row and attribution are kept. NULL =
+    // blob still present. See #106.
+    blobReclaimedAt: timestamp('blob_reclaimed_at', { withTimezone: true }),
+    // SHA-256 of the uploaded file, captured at finalization and retained through
+    // archive/reclaim so a reclaimed resource can be restored by re-upload.
+    fileChecksum: varchar('file_checksum', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      'word_lists_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} = 'ready')`
+    ),
+  ]
+)
 
-export const ruleLists = pgTable('rule_lists', {
-  id: serial('id').primaryKey(),
-  projectId: integer('project_id')
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }),
-  name: varchar('name', { length: 255 }).notNull(),
-  fileRef: jsonb('file_ref').default({}),
-  lineCount: bigint('line_count', { mode: 'number' }),
-  fileSize: bigint('file_size', { mode: 'number' }),
-  status: varchar('status', { length: 20 })
-    .$type<ResourceStatusLiteral>()
-    .notNull()
-    .default('pending'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const ruleLists = pgTable(
+  'rule_lists',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    fileRef: jsonb('file_ref').default({}),
+    lineCount: bigint('line_count', { mode: 'number' }),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    status: varchar('status', { length: 20 })
+      .$type<ResourceStatusLiteral>()
+      .notNull()
+      .default('pending'),
+    // ADR-0019 lifecycle markers; see wordLists for semantics.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    blobReclaimedAt: timestamp('blob_reclaimed_at', { withTimezone: true }),
+    fileChecksum: varchar('file_checksum', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      'rule_lists_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} = 'ready')`
+    ),
+  ]
+)
 
-export const maskLists = pgTable('mask_lists', {
-  id: serial('id').primaryKey(),
-  projectId: integer('project_id')
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }),
-  name: varchar('name', { length: 255 }).notNull(),
-  fileRef: jsonb('file_ref').default({}),
-  lineCount: bigint('line_count', { mode: 'number' }),
-  fileSize: bigint('file_size', { mode: 'number' }),
-  // Summed keyspace of the masklist (Σ per-line calculateMaskKeyspace), a
-  // decimal string mirroring attacks.keyspace. Null when uncomputable
-  // (custom-charset / unknown-token lines) or not yet counted (#231).
-  keyspace: varchar('keyspace', { length: 255 }),
-  status: varchar('status', { length: 20 })
-    .$type<ResourceStatusLiteral>()
-    .notNull()
-    .default('pending'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const maskLists = pgTable(
+  'mask_lists',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    fileRef: jsonb('file_ref').default({}),
+    lineCount: bigint('line_count', { mode: 'number' }),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    // Summed keyspace of the masklist (Σ per-line calculateMaskKeyspace), a
+    // decimal string mirroring attacks.keyspace. Null when uncomputable
+    // (custom-charset / unknown-token lines) or not yet counted (#231).
+    keyspace: varchar('keyspace', { length: 255 }),
+    status: varchar('status', { length: 20 })
+      .$type<ResourceStatusLiteral>()
+      .notNull()
+      .default('pending'),
+    // ADR-0019 lifecycle markers; see wordLists for semantics.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    blobReclaimedAt: timestamp('blob_reclaimed_at', { withTimezone: true }),
+    fileChecksum: varchar('file_checksum', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      'mask_lists_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} = 'ready')`
+    ),
+  ]
+)
 
 // ─── Attack Templates ──────────────────────────────────────────────
 
@@ -610,10 +684,23 @@ export const attacks = pgTable(
     // aggregates + the campaign's status (issue #99). A persisted column would
     // race campaign auto-completion and drift against a value nothing queries.
     dependencies: integer('dependencies').array(),
+    // ADR-0019 lifecycle markers (#106). `is_permanent` latches true on first
+    // task generation and is never cleared (governs deletability). `archived_at`
+    // hides a run attack from the campaign editor / scheduler, cleared on restore.
+    isPermanent: boolean('is_permanent').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('attacks_campaign_id_idx').on(table.campaignId)]
+  (table) => [
+    index('attacks_campaign_id_idx').on(table.campaignId),
+    // No status clause (attacks carry no persisted status, #99): an attack may be
+    // archived in any derived state, but only once permanent. See ADR-0019 / #106.
+    check(
+      'attacks_archive_consistency_chk',
+      sql`${table.archivedAt} IS NULL OR ${table.isPermanent} = true`
+    ),
+  ]
 )
 
 export const tasks = pgTable(
@@ -890,6 +977,10 @@ export const AUDIT_ACTION_VALUES = [
   'deleted',
   'status_changed',
   'token_issued',
+  'archived',
+  'restored',
+  'retired',
+  'reclaimed',
 ] as const
 
 export const auditLogs = pgTable(
@@ -949,7 +1040,7 @@ export const auditLogs = pgTable(
     // Sync with: AUDIT_ACTION_VALUES / auditActionSchema in ../schemas/index.ts
     check(
       'audit_logs_action_chk',
-      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued')`
+      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued', 'archived', 'restored', 'retired', 'reclaimed')`
     ),
   ]
 )

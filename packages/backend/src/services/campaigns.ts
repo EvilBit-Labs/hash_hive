@@ -4,7 +4,11 @@ import {
   type CampaignSortOrder,
   type CampaignStatus,
   campaigns,
+  hashLists,
+  maskLists,
+  ruleLists,
   tasks,
+  wordLists,
 } from '@hashhive/shared'
 import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
@@ -16,7 +20,58 @@ import { validateProposedDAG } from './campaign-dag.js'
 import { validateCampaignResources } from './campaign-resources.js'
 import { MIN_CHUNK_SIZE } from './chunk-sizing.js'
 import { emitCampaignStatus } from './events.js'
+import { latchResourcePermanent } from './resources.js'
 import { enqueueLineCountForUncountedResources } from './resources/line-count-trigger.js'
+
+// ─── Permanence latch (ADR-0019 / issue #106 U3) ─────────────────────
+//
+// Every write site that sets attacks.wordlistId/rulelistId/masklistId
+// (createAttack, updateAttack, and the per-attack insert loop in
+// createCampaignWithAttacks) funnels through this helper so a word/rule/mask
+// list becomes permanent the moment it is first referenced. Called with the
+// attack row's CURRENT (post-write) values — not the caller's raw input —
+// so it latches whichever resource is actually in effect after the write,
+// covering both "new reference on create" and "swapped to a new resource on
+// update" uniformly. Must run inside the same transaction as the attack
+// write (see latchResourcePermanent).
+async function latchAttackResources(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  attack: {
+    wordlistId: number | null
+    rulelistId: number | null
+    masklistId: number | null
+  }
+): Promise<void> {
+  if (attack.wordlistId != null) {
+    await latchResourcePermanent(tx, wordLists, attack.wordlistId)
+  }
+  if (attack.rulelistId != null) {
+    await latchResourcePermanent(tx, ruleLists, attack.rulelistId)
+  }
+  if (attack.masklistId != null) {
+    await latchResourcePermanent(tx, maskLists, attack.masklistId)
+  }
+}
+
+type CampaignsDbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Latch an attack's `is_permanent = true` the first time it generates a
+ * task row (issue #106 U6) — the attack analog of `latchResourcePermanent`
+ * for word/rule/mask lists (see resources.ts). One-way: the guarded
+ * `WHERE isPermanent = false` makes a repeat call on an already-permanent
+ * attack a no-op, so `generateTasksForAttack` (services/tasks.ts) can
+ * invoke this unconditionally on every generation run — including the
+ * "already has tasks" re-generation path — without checking current state
+ * first. Must run inside the same transaction as the task-creating INSERT
+ * so a crash between the two can never leave a run attack un-latched.
+ */
+export async function latchAttackPermanent(tx: CampaignsDbTx, attackId: number): Promise<void> {
+  await tx
+    .update(attacks)
+    .set({ isPermanent: true, updatedAt: new Date() })
+    .where(and(eq(attacks.id, attackId), eq(attacks.isPermanent, false)))
+}
 
 export { validateCampaignDAG, validateProposedDAG } from './campaign-dag.js'
 // Re-export from sibling modules so existing callers (route handlers,
@@ -41,7 +96,12 @@ export {
   shouldAutoCompleteCampaign,
   updateCampaignProgress,
 } from './campaign-progress.js'
-export { validateCampaignResources } from './campaign-resources.js'
+export { findReclaimedResourceRefs, validateCampaignResources } from './campaign-resources.js'
+// Attack archive/restore (issue #106 U6) — mirrors the resources-archive.ts
+// split: kept out of this file to stay under the 800-line guideline,
+// re-exported here so callers use the same `services/campaigns` facade as
+// every other attack-management function.
+export { archiveAttacks, restoreAttacks } from './campaigns-attacks-archive.js'
 
 // Threshold: inline generation when estimated tasks < 100, async enqueue when >= 100
 export const INLINE_GENERATION_THRESHOLD = 100
@@ -283,6 +343,12 @@ export async function createCampaign(
 
     if (!campaign) return null
 
+    // Permanence latch (ADR-0019 / issue #106 U3): a hash list becomes
+    // referenced the moment a campaign is created against it, regardless of
+    // the campaign's own draft/permanent state. One-way and idempotent — see
+    // latchResourcePermanent.
+    await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+
     await recordAuditEvent(
       {
         actor,
@@ -327,6 +393,13 @@ export type CreateCampaignWithAttacksResult =
     }
   | { kind: 'dag_invalid'; error: string }
   | { kind: 'resource_missing'; missing: string[] }
+  // A referenced word/rule/mask list is a reclaimed shell (issue #106 U12 /
+  // R12) — present, but unusable until re-uploaded and checksum-verified.
+  | { kind: 'resource_reclaimed'; reclaimed: string[] }
+  // A referenced hash list / word/rule/mask list is archived (issue #106
+  // F5 code review) — present, but hidden from listings and refused as a
+  // reference for new work.
+  | { kind: 'resource_archived'; archived: string[] }
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -380,6 +453,12 @@ export async function createCampaignWithAttacks(input: {
     }))
   )
   if (!resourceCheck.valid) {
+    if (resourceCheck.reclaimed.length > 0) {
+      return { kind: 'resource_reclaimed', reclaimed: resourceCheck.reclaimed }
+    }
+    if (resourceCheck.archived.length > 0) {
+      return { kind: 'resource_archived', archived: resourceCheck.archived }
+    }
     return { kind: 'resource_missing', missing: resourceCheck.missing }
   }
 
@@ -414,6 +493,9 @@ export async function createCampaignWithAttacks(input: {
       if (!campaign) {
         throw new Error('Campaign insert returned no row')
       }
+
+      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign.
+      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
 
       await recordAuditEvent(
         {
@@ -463,6 +545,9 @@ export async function createCampaignWithAttacks(input: {
           throw new Error('Attack insert returned no row — txn invariant violated')
         }
         realIdByIndex.push(row.id)
+
+        // Permanence latch (ADR-0019 / issue #106 U3): see latchAttackResources.
+        await latchAttackResources(tx, row)
 
         await recordAuditEvent(
           {
@@ -807,6 +892,18 @@ export async function transitionCampaign(
       }
     }
     if (!resourceCheck.valid) {
+      if (resourceCheck.reclaimed.length > 0) {
+        return {
+          error: `Referenced resources are reclaimed shells (re-upload required): ${resourceCheck.reclaimed.join(', ')}`,
+          code: 'RESOURCE_RECLAIMED' as const,
+        }
+      }
+      if (resourceCheck.archived.length > 0) {
+        return {
+          error: `Referenced resources are archived: ${resourceCheck.archived.join(', ')}`,
+          code: 'RESOURCE_ARCHIVED' as const,
+        }
+      }
       return {
         error: `Referenced resources missing: ${resourceCheck.missing.join(', ')}`,
         code: 'RESOURCE_MISSING' as const,
@@ -1046,20 +1143,50 @@ export async function transitionCampaign(
 
 // ─── Attack Management ──────────────────────────────────────────────
 
-export async function listAttacks(campaignId: number) {
-  return db.select().from(attacks).where(eq(attacks.campaignId, campaignId)).orderBy(attacks.id)
+/**
+ * Lists a campaign's attacks. Archived attacks are excluded by default
+ * (ADR-0019 / issue #106 U6, R6, R10) — this covers both the campaign
+ * editor's attack listing (dashboard `GET /:id/attacks`) and the
+ * scheduler's task-generation query (`transitionCampaign`'s `running`
+ * branch below), so an archived attack is hidden from the editor and
+ * never receives newly generated tasks without either caller needing
+ * its own filter. Pass `showArchived: true` for callers that need the
+ * full graph regardless of archive state (e.g. DAG cycle/dependency-
+ * existence validation, where an archived attack can still be a valid
+ * dependency target).
+ */
+export async function listAttacks(
+  campaignId: number,
+  opts: { showArchived?: boolean | undefined } = {}
+) {
+  const conditions = [eq(attacks.campaignId, campaignId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(attacks.archivedAt))
+  }
+  return db
+    .select()
+    .from(attacks)
+    .where(and(...conditions))
+    .orderBy(attacks.id)
 }
 
 /**
  * Paginated variant of `listAttacks` for the Control API. Same shape
  * as the other paginated services (`{ items, total }` via `LIMIT/
  * OFFSET` + `count(*)`). Deterministic order by `attacks.id` ascending.
+ * Archived attacks are excluded by default (ADR-0019 / issue #106 U6,
+ * R10) — pass `showArchived: true` to include them, matching
+ * `listAttacks`'s non-paginated sibling.
  */
 export async function listAttacksPaginated(
   campaignId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(attacks.campaignId, campaignId)
+  const conditions = [eq(attacks.campaignId, campaignId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(attacks.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -1117,6 +1244,9 @@ export async function createAttack(
       .returning()
 
     if (inserted) {
+      // Permanence latch (ADR-0019 / issue #106 U3): see latchAttackResources.
+      await latchAttackResources(tx, inserted)
+
       await recordAuditEvent(
         {
           actor,
@@ -1191,6 +1321,11 @@ export async function updateAttack(
       .returning()
 
     if (row) {
+      // Permanence latch (ADR-0019 / issue #106 U3): latch whichever
+      // resource is in effect AFTER the update (see latchAttackResources) —
+      // covers both a fresh reference and a swap to a new resource.
+      await latchAttackResources(tx, row)
+
       await recordAuditEvent(
         {
           actor,
@@ -1223,30 +1358,67 @@ export async function updateAttack(
   return updated
 }
 
+/**
+ * Outcome of an attack delete attempt (issue #106 U6). Mirrors
+ * `DeleteCampaignResult` / `DeleteResourceResult`: a purely backend-internal
+ * discriminated union — routes translate `kind` into the HTTP envelope, it
+ * is never serialized verbatim, so it does not need a shared Zod schema.
+ */
+export type DeleteAttackResult =
+  | { kind: 'not_found' }
+  // Latched permanent (has generated at least one task, ever) —
+  // archive-only, never hard-deletable again even after the campaign
+  // stops or every task is cancelled.
+  | { kind: 'not_deletable' }
+  | { kind: 'deleted'; id: number; projectId: number }
+
 export async function deleteAttack(
   id: number,
   actor: AuditActor = {
     actorType: 'system',
     actorId: null,
   }
-) {
-  // Delete and audit run in one transaction so a crash between the two
-  // cannot leave a deleted attack with no audit record (R4 atomicity).
-  return db.transaction(async (tx) => {
-    const [deleted] = await tx.delete(attacks).where(eq(attacks.id, id)).returning()
-    if (deleted) {
+): Promise<DeleteAttackResult> {
+  class LatchedDuringDelete extends Error {}
+
+  try {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(attacks).where(eq(attacks.id, id)).limit(1)
+      if (!existing) return { kind: 'not_found' } as const
+      if (existing.isPermanent) return { kind: 'not_deletable' } as const
+
+      // Atomic guard: only delete while still non-permanent. A concurrent
+      // task-generation run that latched permanence between the pre-check
+      // and this statement returns zero rows; throw so the caller (below)
+      // reclassifies the race as not_deletable rather than reporting a
+      // delete that didn't actually happen.
+      const deleted = await tx
+        .delete(attacks)
+        .where(and(eq(attacks.id, id), eq(attacks.isPermanent, false)))
+        .returning()
+      const row = deleted[0]
+      if (!row) {
+        throw new LatchedDuringDelete()
+      }
+
       await recordAuditEvent(
         {
           actor,
-          projectId: deleted.projectId,
+          projectId: row.projectId,
           entityType: 'attack',
-          entityId: deleted.id,
+          entityId: row.id,
           action: 'deleted',
-          oldRow: deleted as Record<string, unknown>,
+          oldRow: existing as Record<string, unknown>,
         },
         tx
       )
+
+      return { kind: 'deleted', id: row.id, projectId: row.projectId } as const
+    })
+  } catch (err) {
+    if (err instanceof LatchedDuringDelete) {
+      return { kind: 'not_deletable' }
     }
-    return deleted ?? null
-  })
+    throw err
+  }
 }

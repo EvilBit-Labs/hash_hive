@@ -418,3 +418,80 @@ describe('U11 concurrency — only one agent wins an expired-lease task', () => 
     await db.delete(tasks).where(eq(tasks.id, taskId))
   })
 })
+
+// ─── F1 (issue #106 code review) — retire-vs-claim race ────────────────────
+
+describe('F1: agent-status eligibility is atomic with the claim, not a separate pre-check', () => {
+  it('a retire landing between the pre-check and the claim statement blocks the claim', async () => {
+    // A dedicated agent (not fix.agentA/B) so retiring it here cannot affect
+    // any other test in this file.
+    const [raceAgent] = await db
+      .insert(agents)
+      .values({
+        name: 'lease-race-agent',
+        projectId: fix.projectId,
+        capabilities: { gpu: false },
+        status: 'online',
+      })
+      .returning({ id: agents.id })
+    const raceAgentId = raceAgent!.id
+    const taskId = await insertPendingTask(fix.attackId, fix.campaignId)
+
+    // onBeforeClaim fires after assignNextTask's eligibility pre-check has
+    // already read 'online', but before the claim CTE statement runs —
+    // exactly the window a concurrent retire could land in. Flip the
+    // agent's status directly (not via retireAgent, to isolate the claim
+    // CTE's own EXISTS guard from retireAgent's separate task-release step).
+    const assigned = await assignNextTask(raceAgentId, {
+      onBeforeClaim: async () => {
+        await db.update(agents).set({ status: 'retired' }).where(eq(agents.id, raceAgentId))
+      },
+    })
+
+    // The claim statement's EXISTS guard re-checks eligibility against the
+    // now-retired status, so the candidate CTE returns zero rows and the
+    // task is never assigned to the retired agent.
+    expect(assigned).toBeNull()
+
+    const state = await readTaskState(taskId)
+    expect(state?.status).toBe('pending')
+    expect(state?.agentId).toBeNull()
+
+    await db.delete(tasks).where(eq(tasks.id, taskId))
+    await db.delete(agents).where(eq(agents.id, raceAgentId))
+  })
+
+  it('a retire landing between the pre-check and the claim statement does not steal an in-flight lease reclaim either', async () => {
+    // Same race, but against the expired-lease reclaim branch of the
+    // candidate predicate (not just the idle-pending branch).
+    const [raceAgent] = await db
+      .insert(agents)
+      .values({
+        name: 'lease-race-agent-reclaim',
+        projectId: fix.projectId,
+        capabilities: { gpu: false },
+        status: 'online',
+      })
+      .returning({ id: agents.id })
+    const raceAgentId = raceAgent!.id
+    const pastLease = new Date(Date.now() - 1_000)
+    const taskId = await insertAssignedTask(fix.attackId, fix.campaignId, fix.agentAId, pastLease)
+
+    const assigned = await assignNextTask(raceAgentId, {
+      onBeforeClaim: async () => {
+        await db.update(agents).set({ status: 'retired' }).where(eq(agents.id, raceAgentId))
+      },
+    })
+
+    expect(assigned).toBeNull()
+
+    const state = await readTaskState(taskId)
+    // Untouched by the blocked claim attempt — still owned by the original
+    // (unrelated) agent with its expired lease, available for a legitimate
+    // reclaimer.
+    expect(state?.agentId).toBe(fix.agentAId)
+
+    await db.delete(tasks).where(eq(tasks.id, taskId))
+    await db.delete(agents).where(eq(agents.id, raceAgentId))
+  })
+})

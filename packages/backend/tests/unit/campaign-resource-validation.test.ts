@@ -150,6 +150,12 @@ if (!IS_ISOLATED) {
   }
   mock.module('../../src/services/resources.js', () => ({
     getHashListStats: mock(async () => hashListStatsQueue.shift() ?? defaultHashListStats),
+    // `services/campaigns.js` (loaded for real by this file — see header)
+    // imports `latchResourcePermanent` at module scope (ADR-0019 / issue
+    // #106 U3). GOTCHAS.md "mock.module merges exports" — every consumer's
+    // top-level import must be present on the mock factory or the import
+    // fails at load time for every test file in this run.
+    latchResourcePermanent: mock(async () => undefined),
   }))
 
   // Import service AFTER mocks are in place.
@@ -190,7 +196,12 @@ if (!IS_ISOLATED) {
     test('reports hashList(id) missing when scoped lookup returns empty', async () => {
       expectFromCall('hashLists', [])
       const result = await validateCampaignResources({ projectId: 1, hashListId: 42 }, [])
-      expect(result).toEqual({ valid: false, missing: ['hashList(42)'] })
+      expect(result).toEqual({
+        valid: false,
+        missing: ['hashList(42)'],
+        reclaimed: [],
+        archived: [],
+      })
     })
 
     test('reports per-table missing ids with the right label', async () => {
@@ -243,7 +254,103 @@ if (!IS_ISOLATED) {
       const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
         { wordlistId: 99 },
       ])
-      expect(result).toEqual({ valid: false, missing: ['wordlist(99)'] })
+      expect(result).toEqual({
+        valid: false,
+        missing: ['wordlist(99)'],
+        reclaimed: [],
+        archived: [],
+      })
+    })
+
+    test('flags a reclaimed-shell wordlist as invalid, distinct from missing (issue #106 U12)', async () => {
+      // Found (blob_reclaimed_at is set) but not missing — the row exists.
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: new Date('2025-01-01T00:00:00Z') }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42 },
+      ])
+      expect(result).toEqual({
+        valid: false,
+        missing: [],
+        reclaimed: ['wordlist(42)'],
+        archived: [],
+      })
+    })
+
+    test('does not flag a usable (non-shell) wordlist as reclaimed', async () => {
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: null }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42 },
+      ])
+      expect(result).toEqual({ valid: true })
+    })
+
+    test('reclaimed-shell check fires only one SELECT per table (folded into the existence query)', async () => {
+      // If the implementation regressed to a second query, the queue would
+      // underflow (rowsForTable throws) since only one response is queued.
+      expectFromCall('wordLists', [{ id: 42, blobReclaimedAt: new Date('2025-01-01T00:00:00Z') }])
+      expectFromCall('ruleLists', [{ id: 13, blobReclaimedAt: null }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 42, rulelistId: 13 },
+      ])
+      expect(result).toEqual({
+        valid: false,
+        missing: [],
+        reclaimed: ['wordlist(42)'],
+        archived: [],
+      })
+    })
+
+    // ─── F5 (issue #106 code review): archived resource refs ──────────
+
+    test('flags an archived hash list as invalid, distinct from missing (issue #106 F5)', async () => {
+      expectFromCall('hashLists', [{ id: 42, archivedAt: new Date('2025-01-01T00:00:00Z') }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: 42 }, [])
+      expect(result).toEqual({
+        valid: false,
+        missing: [],
+        reclaimed: [],
+        archived: ['hashList(42)'],
+      })
+    })
+
+    test('does not flag a non-archived hash list', async () => {
+      expectFromCall('hashLists', [{ id: 42, archivedAt: null }])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: 42 }, [])
+      expect(result).toEqual({ valid: true })
+    })
+
+    test('flags an archived wordlist as invalid, distinct from missing/reclaimed (issue #106 F5)', async () => {
+      expectFromCall('wordLists', [
+        { id: 7, archivedAt: new Date('2025-01-01T00:00:00Z'), blobReclaimedAt: null },
+      ])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 7 },
+      ])
+      expect(result).toEqual({
+        valid: false,
+        missing: [],
+        reclaimed: [],
+        archived: ['wordlist(7)'],
+      })
+    })
+
+    test('a wordlist that is both archived and reclaimed reports both', async () => {
+      expectFromCall('wordLists', [
+        {
+          id: 7,
+          archivedAt: new Date('2025-01-01T00:00:00Z'),
+          blobReclaimedAt: new Date('2025-06-01T00:00:00Z'),
+        },
+      ])
+      const result = await validateCampaignResources({ projectId: 1, hashListId: null }, [
+        { wordlistId: 7 },
+      ])
+      expect(result).toEqual({
+        valid: false,
+        missing: [],
+        reclaimed: ['wordlist(7)'],
+        archived: ['wordlist(7)'],
+      })
     })
   })
 

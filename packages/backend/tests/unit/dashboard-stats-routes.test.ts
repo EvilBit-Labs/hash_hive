@@ -356,13 +356,16 @@ describe('Dashboard stats route — auth and membership gates', () => {
 })
 
 describe('Dashboard stats route — project-scoped query construction', () => {
-  it('agents query: where(...) references agents.projectId === session.projectId', async () => {
+  it('agents query: where(...) scopes to session.projectId and excludes retired agents', async () => {
     const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
     expect(res.status).toBe(200)
     expect(queryRows.whereCalls.agents.length).toBe(1)
     const predicate = queryRows.whereCalls.agents[0]!
     expect(referencesColumn(predicate, agents.projectId)).toBe(true)
-    expect(paramValuesOf(predicate)).toEqual([1])
+    // Retired agents are decommissioned and excluded from the active-fleet
+    // stats (ADR-0019 / #106), so the predicate also references agents.status.
+    expect(referencesColumn(predicate, agents.status)).toBe(true)
+    expect(paramValuesOf(predicate)).toEqual([1, 'retired'])
   })
 
   it('campaigns query: where(...) references campaigns.projectId === session.projectId', async () => {

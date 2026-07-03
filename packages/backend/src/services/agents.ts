@@ -7,13 +7,13 @@ import type {
 } from '@hashhive/shared'
 
 import { agentBenchmarks, agentErrors, agents, attacks, campaigns, tasks } from '@hashhive/shared'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { REVIEW_RECOMMENDED_THRESHOLD, WHITELISTED_SEVERITY } from './agents/whitelist.js'
 import { type RecordAuditEventInput, recordAuditEvent } from './audit-log.js'
-import { emitAgentError, emitAgentStatus } from './events.js'
+import { emitAgentStatus, emitAgentError } from './events.js'
 
 // ─── Actor type ──────────────────────────────────────────────────────────────
 
@@ -169,6 +169,15 @@ export async function listAgents(filters: {
   }
   if (filters.status) {
     conditions.push(eq(agents.status, filters.status))
+  } else {
+    // Default active-fleet view excludes retired agents (R7/R10, issue
+    // #106 U8) — a decommissioned agent should not clutter the fleet list
+    // an operator sees by default. An explicit `status=retired` filter
+    // still reaches them (the branch above), which doubles as the
+    // "explicit filter to reveal them" escape hatch R10 asks for, mirroring
+    // the `showArchived` pattern used by resources/attacks without adding
+    // a second query param for a status the `status` filter already covers.
+    conditions.push(ne(agents.status, 'retired'))
   }
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
@@ -333,7 +342,11 @@ export type StatusTransitionReason = 'fatal_error' | 'heartbeat_status'
 // Anchored to `AgentHeartbeat['status']` so the service layer cannot
 // drift from the zod boundary.
 type HeartbeatStatusLiteral = AgentHeartbeat['status']
-type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error'
+// 'retired' is added for the terminal-status guard below: a retired
+// agent's heartbeat resolves to effectiveStatus 'retired' (never the
+// payload status), even though agents never self-report 'retired' in a
+// heartbeat payload (HeartbeatStatusLiteral doesn't include it).
+type ResolvedStatusLiteral = HeartbeatStatusLiteral | 'error' | 'retired'
 
 /**
  * Discriminated union: a heartbeat either resolves to a no-op transition
@@ -370,6 +383,20 @@ export function decideHeartbeatTransition(input: {
   errorSeverity?: AgentHeartbeatError['severity'] | undefined
   priorStatus: string | null
 }): HeartbeatTransition {
+  // Terminal-status guard (issue #106 U8, R8/R9): once an agent is
+  // retired, no heartbeat can un-retire it. A still-running rig that
+  // hasn't been told to stop keeps polling with `status: 'online'`; without
+  // this guard `priorStatus !== effectiveStatus` below would be true, the
+  // transition would flip the row back to 'online', and the agent would
+  // become claim-eligible again (`computeHighPriorityHint` / the agent
+  // task-claim endpoint both gate on `agents.status`). Checked before the
+  // fatal-error override too, so a fatal-severity heartbeat from a retired
+  // agent cannot resurrect it into 'error' either — retired is a dead end
+  // no heartbeat payload can escape.
+  if (input.priorStatus === 'retired') {
+    return { kind: 'noop', effectiveStatus: 'retired', isFatalError: false }
+  }
+
   const isFatalError = input.errorSeverity === 'fatal'
   const effectiveStatus: ResolvedStatusLiteral = isFatalError ? 'error' : input.payloadStatus
 
@@ -488,13 +515,42 @@ export function scrubAgentErrorContext(value: unknown, depth = 0): unknown {
 }
 
 /**
- * Update an agent, enforcing project scope inside the UPDATE WHERE
- * predicate. The atomic form closes the TOCTOU window the previous
- * "read with getAgentById then write with updateAgent" pattern left
- * open: ownership could change between the read and the write, and
- * the write would still land. Returns null when the row does not
- * exist OR when it belongs to a different project -- both cases
- * collapse to "not found" at the caller.
+ * Typed outcome of `updateAgent` (issue #106 F4 code review), mirroring the
+ * `retireAgent` / campaign-archive-service convention (`{ kind }`
+ * discriminant, no thrown exceptions for expected outcomes). Backend-
+ * internal only — routes translate `kind` into the HTTP envelope, never
+ * serialized verbatim, so it does not need a shared Zod schema (see
+ * `DeleteResourceResult` in `services/resources.ts` for the same pattern).
+ */
+export type UpdateAgentResult =
+  | { kind: 'updated'; agent: typeof agents.$inferSelect }
+  // Row missing OR belongs to a different project -- both collapse to
+  // "not found" at the caller (unchanged from the prior `null` contract).
+  | { kind: 'not_found' }
+  // The agent exists and is in this project, but is retired. Retirement is
+  // terminal (ADR-0019 / issue #106 R9, no restore path) and the generic
+  // PATCH path must not be able to reverse it -- see the guarded UPDATE
+  // WHERE below.
+  | { kind: 'retired' }
+
+/**
+ * Update an agent, enforcing project scope AND the retired-is-immutable
+ * invariant inside the UPDATE WHERE predicate. The atomic form closes two
+ * TOCTOU windows the previous "read with getAgentById then write with
+ * updateAgent" pattern left open:
+ *   1. Ownership could change between the read and the write.
+ *   2. (F4) A contributor could PATCH `status: 'online'` on a
+ *      just-retired agent, reversing admin-only terminal retirement --
+ *      `retireAgent` folds `ne(status, 'retired')` into ITS guarded
+ *      UPDATE for the same reason; this generic PATCH path needs the
+ *      identical guard so retirement can't be undone through it.
+ *
+ * `oldRow` is read inside the same transaction as the guarded UPDATE, so a
+ * zero-row UPDATE after `oldRow` was found unambiguously means the
+ * retired-guard fired (existence + project match were already proven by
+ * the `oldRow` read in this same transaction) -- there is no separate
+ * race-loss case to re-classify here, unlike the archive/restore services'
+ * pre-check-outside-the-transaction pattern.
  */
 export async function updateAgent(
   agentId: number,
@@ -504,26 +560,28 @@ export async function updateAgent(
   },
   projectId: number,
   actor?: Actor
-) {
+): Promise<UpdateAgentResult> {
   const DEFAULT_SYSTEM_ACTOR: Actor = { actorType: 'system', actorId: null }
   const resolvedActor = actor ?? DEFAULT_SYSTEM_ACTOR
 
-  const updated = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx): Promise<UpdateAgentResult> => {
     const [oldRow] = await tx
       .select()
       .from(agents)
       .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
       .limit(1)
 
-    if (!oldRow) return null
+    if (!oldRow) return { kind: 'not_found' }
 
     const [updatedRow] = await tx
       .update(agents)
       .set({ ...data, updatedAt: new Date() })
-      .where(and(eq(agents.id, agentId), eq(agents.projectId, projectId)))
+      .where(
+        and(eq(agents.id, agentId), eq(agents.projectId, projectId), ne(agents.status, 'retired'))
+      )
       .returning()
 
-    if (!updatedRow) return null
+    if (!updatedRow) return { kind: 'retired' }
 
     await recordAuditEvent(
       {
@@ -538,14 +596,14 @@ export async function updateAgent(
       tx
     )
 
-    return updatedRow
+    return { kind: 'updated', agent: updatedRow }
   })
 
-  if (updated && data.status) {
-    emitAgentStatus(updated.projectId, updated.id, data.status)
+  if (result.kind === 'updated' && data.status) {
+    emitAgentStatus(result.agent.projectId, result.agent.id, data.status)
   }
 
-  return updated ?? null
+  return result
 }
 
 /**
@@ -781,3 +839,12 @@ export async function getAgentBenchmarkForMode(
 // from this module's path) keep compiling without touching their
 // import paths.
 export { processHeartbeat, __resetWarnedEmptyCapsForTesting } from './agents/heartbeat.js'
+
+// ─── Re-exports from ./agents-retire.ts (issue #106 U8) ─────────────
+//
+// retireAgent lives in its own module (mirrors resources.ts /
+// resources-archive.ts and campaigns.ts / campaigns-attacks-archive.ts)
+// so this file's core CRUD/heartbeat layer stays under the project's
+// file-size guideline. Re-exported here so existing callers keep
+// importing from services/agents.js unchanged.
+export { retireAgent, type RetireAgentResult } from './agents-retire.js'

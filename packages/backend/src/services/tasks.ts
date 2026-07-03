@@ -9,7 +9,11 @@ import { db } from '../db/index.js'
 import { updateAgentObservedRate } from './agent-rate.js'
 import { getAgentBenchmarkForMode } from './agents.js'
 import { computeAttackKeyspace } from './attacks/complexity.js'
-import { enqueuePreemptionEvaluation, updateCampaignProgress } from './campaigns.js'
+import {
+  enqueuePreemptionEvaluation,
+  latchAttackPermanent,
+  updateCampaignProgress,
+} from './campaigns.js'
 import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
 import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
@@ -122,16 +126,23 @@ export async function generateTasksForAttack(
   if (totalKeyspace <= 0n) {
     // No keyspace available - emit a single placeholder task so downstream
     // assignment / progress / failure paths still have a row to operate on.
-    const [task] = await db
-      .insert(tasks)
-      .values({
-        attackId: attack.id,
-        campaignId: attack.campaignId,
-        status: 'pending',
-        workRange: { start: 0, end: 0, total: 0 },
-        requiredCapabilities,
-      })
-      .returning()
+    // Insert + permanence latch (ADR-0019 / issue #106 U6) run in one
+    // transaction: this is the attack's first task row, so a crash between
+    // the two could otherwise leave a run attack un-latched (deletable).
+    const [task] = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(tasks)
+        .values({
+          attackId: attack.id,
+          campaignId: attack.campaignId,
+          status: 'pending',
+          workRange: { start: 0, end: 0, total: 0 },
+          requiredCapabilities,
+        })
+        .returning()
+      await latchAttackPermanent(tx, attack.id)
+      return inserted
+    })
 
     return { tasks: [task], count: 1 }
   }
@@ -178,18 +189,26 @@ export async function generateTasksForAttack(
     })
   }
 
-  const createdTasks = await db
-    .insert(tasks)
-    .values(
-      chunks.map((range) => ({
-        attackId: attack.id,
-        campaignId: attack.campaignId,
-        status: 'pending' as const,
-        workRange: range,
-        requiredCapabilities,
-      }))
-    )
-    .returning()
+  // Insert + permanence latch (ADR-0019 / issue #106 U6) run in one
+  // transaction — see the placeholder-task branch above for why. The
+  // guarded `WHERE isPermanent = false` inside the latch makes a
+  // re-generation run (attack already permanent) a no-op.
+  const createdTasks = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(tasks)
+      .values(
+        chunks.map((range) => ({
+          attackId: attack.id,
+          campaignId: attack.campaignId,
+          status: 'pending' as const,
+          workRange: range,
+          requiredCapabilities,
+        }))
+      )
+      .returning()
+    await latchAttackPermanent(tx, attack.id)
+    return inserted
+  })
 
   return { tasks: createdTasks, count: createdTasks.length }
 }
@@ -336,12 +355,32 @@ function logAssignmentSuccess(agentId: number, projectId: number, taskId: number
  * race lost). The public return contract is unchanged; the operator-
  * facing diagnostic is the structured `task_assignment` info log.
  */
-export async function assignNextTask(agentId: number): Promise<AssignedTask | null> {
+export async function assignNextTask(
+  agentId: number,
+  opts: {
+    /**
+     * Test-only hook (issue #106 F1 code review) invoked after the
+     * eligibility pre-check SELECT resolves but before the atomic claim
+     * statement runs. Lets DB-lane tests deterministically prove the
+     * retire-vs-claim race is closed: mutate the agent's status
+     * (simulating a concurrent retire landing in the gap) inside the
+     * hook, then assert the claim statement's EXISTS guard sees the
+     * mutated status and claims nothing. No-op by default — production
+     * callers never pass this. Mirrors
+     * `queue/workers/blob-reclamation.ts`'s `onBeforeStamp`.
+     */
+    onBeforeClaim?: () => Promise<void>
+  } = {}
+): Promise<AssignedTask | null> {
   // Verify agent exists and is online or benchmarked
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1)
   if (!agent || (agent.status !== 'online' && agent.status !== 'benchmarked')) {
     logAssignmentSkip(agentId, agent?.projectId ?? null, 'agent_not_eligible')
     return null
+  }
+
+  if (opts.onBeforeClaim) {
+    await opts.onBeforeClaim()
   }
 
   const projectId = agent.projectId
@@ -361,6 +400,15 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
   //
   // The SET clause stamps a fresh lease_expires_at so the lessee must report
   // progress within TASK_LEASE_DURATION_MS or lose the task to reclaim.
+  //
+  // F1 (issue #106 code review): the eligibility check above (lines
+  // 359-364) is a plain unlocked SELECT — an admin retiring this agent can
+  // commit between that SELECT and this statement. Re-checking eligibility
+  // via an EXISTS subquery folded into THIS statement's WHERE closes the
+  // race: the claim and the eligibility check now read the agent's status
+  // from the same statement snapshot as the UPDATE that assigns the task,
+  // so a retire that commits before this statement starts makes the EXISTS
+  // false and the whole candidate CTE returns zero rows — no claim happens.
   const result = await db.execute(sql`
     WITH candidate AS (
       SELECT ${tasks.id} AS task_id,
@@ -380,6 +428,11 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
       )
         AND ${campaigns.projectId} = ${projectId}
         AND ${capabilityPredicate}
+        AND EXISTS (
+          SELECT 1 FROM ${agents}
+          WHERE ${agents.id} = ${agentId}
+            AND ${agents.status} IN ('online', 'benchmarked')
+        )
         AND NOT EXISTS (
           SELECT 1 FROM ${tasks} t2
           WHERE t2.agent_id = ${agentId}
@@ -454,6 +507,24 @@ export async function assignNextTask(agentId: number): Promise<AssignedTask | nu
     // turning the diagnostic into a new failure mode.
     let reason: AssignmentSkipReason = 'claim_race_lost'
     try {
+      // F1: a zero-row result can now also mean the CTE's agent-eligibility
+      // EXISTS check lost the race (the agent was retired/offlined between
+      // the pre-check above and this statement). Re-check eligibility first
+      // so that case is reported accurately instead of the generic
+      // task-contention diagnosis.
+      const [currentAgent] = await db
+        .select({ status: agents.status })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1)
+      if (
+        !currentAgent ||
+        (currentAgent.status !== 'online' && currentAgent.status !== 'benchmarked')
+      ) {
+        reason = 'agent_not_eligible'
+        logAssignmentSkip(agentId, projectId, reason)
+        return null
+      }
       reason = await diagnoseAssignmentSkip(projectId, capabilityPredicate)
     } catch (err: unknown) {
       logger.warn(

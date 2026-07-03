@@ -144,17 +144,31 @@ function buildBackendEnv(databaseUrl: string, redisUrl: string, s3Endpoint: stri
 }
 
 function runMigrations(databaseUrl: string, redisUrl: string, s3Endpoint: string): void {
-  console.log('[E2E] Pushing database schema...')
+  console.log('[E2E] Applying database migrations...')
   try {
-    execFileSync('bun', ['run', 'db:push'], {
+    // Use the real migration path via setup-test-db.ts, NOT `drizzle-kit
+    // push`/`migrate`. Two reasons:
+    //   1. db:push diffs schema.ts against the live DB and is blind to the
+    //      hand-written TimescaleDB DDL in migration 0022 (hypertable +
+    //      continuous aggregate) — it fails on the Timescale dev DB and
+    //      under-applies against a fresh one.
+    //   2. drizzle-kit auto-loads `.env`, so its DATABASE_URL is forced back to
+    //      the dev database regardless of what we pass — it would migrate the
+    //      wrong DB and leave the e2e DB empty ("relation users does not
+    //      exist"). setup-test-db.ts reads an explicit TEST_DATABASE_URL and
+    //      applies migrations programmatically against exactly that DB.
+    execFileSync('bun', ['run', 'src/scripts/setup-test-db.ts'], {
       cwd: BACKEND_CWD,
-      env: buildBackendEnv(databaseUrl, redisUrl, s3Endpoint),
+      env: {
+        ...buildBackendEnv(databaseUrl, redisUrl, s3Endpoint),
+        TEST_DATABASE_URL: databaseUrl,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    console.log('[E2E] Schema push complete')
+    console.log('[E2E] Migrations applied')
   } catch (err) {
     const stderr = err instanceof Error && 'stderr' in err ? String(err.stderr) : String(err)
-    throw new Error(`Schema push failed: ${stderr}`)
+    throw new Error(`Schema migration failed: ${stderr}`, { cause: err })
   }
 }
 
@@ -293,7 +307,11 @@ async function setupWithTestcontainers(): Promise<TestContainersState> {
 
   // Start containers in parallel
   const [pgContainer, redisContainer, minioContainer] = await Promise.all([
-    new PostgreSqlContainer('postgres:16-alpine')
+    // Must match docker-compose.yml's timescale/timescaledb image: the schema
+    // is applied via real drizzle migrations (runMigrations), and migration
+    // 0022 creates a TimescaleDB hypertable + continuous aggregate that a plain
+    // postgres image cannot run. Keep the tag in sync with docker-compose.yml.
+    new PostgreSqlContainer('timescale/timescaledb:2.17.2-pg16')
       .withDatabase('hashhive_test')
       .withUsername('hashhive')
       .withPassword('hashhive')

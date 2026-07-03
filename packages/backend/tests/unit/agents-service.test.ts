@@ -372,6 +372,60 @@ describe('decideHeartbeatTransition', () => {
     // pure decision stays silent.
     expect(result.kind).toBe('noop')
   })
+
+  // ─── Terminal-status guard (issue #106 U8) ──────────────────────────
+  //
+  // A retired agent must never be un-retired by its own heartbeat. A
+  // still-running rig that hasn't been told to stop keeps polling with
+  // status:'online'; without this guard the payload status would win
+  // (priorStatus 'retired' !== effectiveStatus 'online') and flip the row
+  // back to 'online', making the agent claim-eligible again.
+
+  it('returns kind=noop with effectiveStatus retired when priorStatus is retired and payload reports online', () => {
+    // Arrange — the exact zombie-rig scenario the plan's review flagged.
+    const input = { payloadStatus: 'online' as const, priorStatus: 'retired' }
+
+    // Act
+    const result = decideHeartbeatTransition(input)
+
+    // Assert — status is pinned at 'retired', not overwritten to the
+    // payload's 'online'.
+    expect(result.kind).toBe('noop')
+    expect(result.effectiveStatus).toBe('retired')
+    expect(result.isFatalError).toBe(false)
+  })
+
+  it('ignores a fatal-severity error from a retired agent instead of flipping it to error', () => {
+    // Arrange — a retired agent reporting a fatal error must not resurrect
+    // into 'error' status either; retired is a dead end for every payload.
+    const input = {
+      payloadStatus: 'error' as const,
+      errorSeverity: 'fatal' as const,
+      priorStatus: 'retired',
+    }
+
+    // Act
+    const result = decideHeartbeatTransition(input)
+
+    // Assert
+    expect(result.kind).toBe('noop')
+    expect(result.effectiveStatus).toBe('retired')
+    expect(result.isFatalError).toBe(false)
+  })
+
+  it('leaves status alone even when the payload also reports retired (idempotent no-op)', () => {
+    // Arrange — defensive: agents never self-report 'retired' (it's not in
+    // HeartbeatStatusLiteral), but the guard's own priorStatus check must
+    // not depend on the payload shape.
+    const input = { payloadStatus: 'busy' as const, priorStatus: 'retired' }
+
+    // Act
+    const result = decideHeartbeatTransition(input)
+
+    // Assert
+    expect(result.kind).toBe('noop')
+    expect(result.effectiveStatus).toBe('retired')
+  })
 })
 
 describe('scrubAgentErrorContext', () => {

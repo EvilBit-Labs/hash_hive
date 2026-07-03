@@ -27,9 +27,31 @@ export const DASHBOARD_ERROR_CODES = [
   'RESOURCE_NOT_FOUND',
   'RESOURCE_IN_USE',
   'RESOURCE_MISSING',
+  // A word/rule/mask list is a reclaimed shell (blob_reclaimed_at IS NOT
+  // NULL) — present, but unusable until re-uploaded and checksum-verified.
+  // Refused as an attack resource reference (issue #106 U12 / R12).
+  'RESOURCE_RECLAIMED',
+  // A hash list / word/rule/mask list is archived (archived_at IS NOT
+  // NULL) — present, but hidden from listings. Refused as a campaign or
+  // attack resource reference so an archived resource can never silently
+  // power new work (issue #106 F5 code review).
+  'RESOURCE_ARCHIVED',
+  // A re-upload targeting a reclaimed shell did not match the original
+  // file's checksum — rejected, the resource stays a shell (issue #106
+  // U12 / R12).
+  'CHECKSUM_MISMATCH',
+  // A chunked-upload restore session's `restoreResourceId` points at a
+  // resource that exists and is in project scope, but is NOT a reclaimed
+  // shell (`blob_reclaimed_at IS NULL`) — restore-via-chunked-upload only
+  // resurrects a reclaimed shell (issue #106 F3 code review / R12).
+  'RESOURCE_NOT_RECLAIMED',
   'RESOURCE_VALIDATION_FAILED',
   'DUPLICATE_NAME',
   'NOT_DRAFT',
+  // Permanent (latched by ADR-0019 / issue #106) — archive-only, refuses
+  // hard delete. Used by campaigns (existing, raw c.json) and hash
+  // lists/resources (issue #106 U3).
+  'NOT_DELETABLE',
   'INVALID_TRANSITION',
   'STALE_STATE',
   'DELETE_FAILED',
@@ -71,6 +93,10 @@ export const DASHBOARD_ERROR_CODES = [
   'AGENT_CONFIG_UPDATE_FAILED',
   'FLEET_CONFIG_UPDATE_FAILED',
   'RAW_FLAG_INVALID',
+  // Retirement is terminal (ADR-0019 / issue #106 R9, no restore path) --
+  // the generic PATCH /agents/:id path refuses to update a retired agent
+  // (issue #106 F4 code review).
+  'AGENT_RETIRED',
   // ─── Generic ──────────────────────────────────────────────────────
   'INTERNAL_ERROR',
 ] as const

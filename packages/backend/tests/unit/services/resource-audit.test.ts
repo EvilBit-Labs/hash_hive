@@ -74,8 +74,14 @@ if (!IS_ISOLATED) {
           returning: () => Promise.resolve([makeHashListRow(rowOverride)]),
         }),
       }),
+      // The guarded owner-delete (ADR-0019 / issue #106 U3) now does
+      // `.where(...).returning({id}).then((rows) => rows.length)` instead of
+      // a bare `.where(...)` — return one row so the not_deletable race guard
+      // sees a non-empty delete and the happy path proceeds.
       delete: () => ({
-        where: () => Promise.resolve(),
+        where: () => ({
+          returning: () => Promise.resolve([{ id: 1 }]),
+        }),
       }),
       // tx.execute used by deleteHashItemsBatched (hash list cascade)
       execute: async () => ({ rowCount: 0 }),
@@ -114,8 +120,11 @@ if (!IS_ISOLATED) {
           returning: () => Promise.resolve([makeHashListRow(txState.rowOverride)]),
         }),
       }),
+      // See makeTxMock's delete mock for why this now supports `.returning()`.
       delete: () => ({
-        where: () => Promise.resolve(),
+        where: () => ({
+          returning: () => Promise.resolve([{ id: 1 }]),
+        }),
       }),
       transaction: async (fn: (tx: ReturnType<typeof makeTxMock>) => Promise<unknown>) => {
         const tx = makeTxMock(txState.rowOverride)
@@ -254,7 +263,7 @@ if (!IS_ISOLATED) {
 
         const deleted = await deleteHashList(10, 5, USER_ACTOR)
 
-        expect(deleted).toBe(true)
+        expect(deleted).toEqual({ kind: 'deleted' })
         expect(recordAuditEventSpy).toHaveBeenCalledTimes(1)
         const [input] = recordAuditEventSpy.mock.calls[0]!
         expect(input.action).toBe('deleted')
@@ -283,7 +292,7 @@ if (!IS_ISOLATED) {
         const result = await deleteHashList(10, 5, USER_ACTOR)
 
         // Assert
-        expect(result).toBe(false)
+        expect(result).toEqual({ kind: 'not_found' })
         expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })

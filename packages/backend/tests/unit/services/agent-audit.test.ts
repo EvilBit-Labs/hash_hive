@@ -84,10 +84,14 @@ if (!IS_ISOLATED) {
   const txState: {
     agentRow: Record<string, unknown>
     notFound: boolean
+    // issue #106 F4: simulates the guarded UPDATE's `ne(status, 'retired')`
+    // clause matching zero rows (agent is retired).
+    updateReturnsEmpty: boolean
     capturedTx: ReturnType<typeof makeTxMock> | null
   } = {
     agentRow: makeAgentRow(),
     notFound: false,
+    updateReturnsEmpty: false,
     capturedTx: null,
   }
 
@@ -104,7 +108,7 @@ if (!IS_ISOLATED) {
     update: () => ({
       set: () => ({
         where: () => ({
-          returning: () => Promise.resolve([agentRow]),
+          returning: () => Promise.resolve(txState.updateReturnsEmpty ? [] : [agentRow]),
         }),
       }),
     }),
@@ -165,6 +169,9 @@ if (!IS_ISOLATED) {
   mock.module('../../../src/services/events.js', () => ({
     emitAgentStatus: mock(),
     emitAgentError: mock(),
+    // issue #106 U8: services/agents.ts now imports emitTaskUpdate at top
+    // level for retireAgent's post-commit task-released broadcast.
+    emitTaskUpdate: mock(),
   }))
 
   // ─── Token lib mocks (for enrollment-tokens) ────────────────────────────────
@@ -211,6 +218,7 @@ if (!IS_ISOLATED) {
       generateEnrollmentTokenMock.mockClear()
       txState.agentRow = makeAgentRow()
       txState.notFound = false
+      txState.updateReturnsEmpty = false
       txState.capturedTx = null
     })
 
@@ -270,7 +278,7 @@ if (!IS_ISOLATED) {
         expect(input.action).toBe('updated')
       })
 
-      it('returns null and records no audit event when agent not found', async () => {
+      it('returns not_found and records no audit event when agent not found', async () => {
         // Arrange: make the in-tx select return [] so the agent lookup fails
         txState.notFound = true
 
@@ -278,7 +286,21 @@ if (!IS_ISOLATED) {
         const result = await updateAgent(AGENT_ID, { name: 'ghost' }, PROJECT_ID, USER_ACTOR)
 
         // Assert
-        expect(result).toBeNull()
+        expect(result).toEqual({ kind: 'not_found' })
+        expect(recordAuditEventSpy).not.toHaveBeenCalled()
+      })
+
+      it('returns retired and records no audit event when the guarded UPDATE affects zero rows (issue #106 F4)', async () => {
+        // Arrange: the pre-mutation select finds the row (agent exists, in
+        // project), but the guarded UPDATE's `ne(status, 'retired')` clause
+        // makes it affect zero rows — simulating a retired agent (or a
+        // concurrent retire that landed between the select and the update).
+        txState.agentRow = makeAgentRow({ status: 'retired' })
+        txState.updateReturnsEmpty = true
+
+        const result = await updateAgent(AGENT_ID, { status: 'online' }, PROJECT_ID, USER_ACTOR)
+
+        expect(result).toEqual({ kind: 'retired' })
         expect(recordAuditEventSpy).not.toHaveBeenCalled()
       })
     })

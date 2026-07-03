@@ -178,6 +178,9 @@ if (!IS_ISOLATED) {
     getBenchmarksForAgent: mock(async () => []),
     getAgentBenchmarkForMode: mock(async () => null),
     rotateAgentToken: mock(async () => null),
+    // issue #106 U8/U9: dashboardAgentRoutes now imports retireAgent at
+    // module scope for POST /:id/retire.
+    retireAgent: mock(async () => ({ kind: 'not_found' as const })),
     updateAgent: mock(async () => null),
     logAgentError: mock(async () => {}),
     submitBenchmarks: mock(async () => {}),

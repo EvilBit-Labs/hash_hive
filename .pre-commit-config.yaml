@@ -57,7 +57,7 @@ repos:
       # Note: No well-maintained 3rd party hook exists for tsc, so we use a local hook
       - id: type-check
         name: TypeScript Type Check
-        entry: bash -c 'bun run type-check'
+        entry: bash -c 'mise x -- bun run type-check'
         language: system
         types: [javascript, jsx, ts, tsx]
         pass_filenames: false

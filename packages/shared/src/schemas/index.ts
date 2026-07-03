@@ -250,8 +250,24 @@ export { hashListListResponseSchema, hashListSummarySchema } from './hash-lists.
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.
+ *
+ * `retired` (issue #106 U8) is a terminal, server-set-only status: an
+ * operator decommissions an agent via `retireAgent`, which is the only
+ * writer of this value. No agent ever self-reports it in a heartbeat
+ * (see `benchmarkSubmissionSchema`'s narrower heartbeat status union
+ * below), and no code path transitions a retired agent back to any other
+ * status — `decideHeartbeatTransition` short-circuits a retired agent's
+ * heartbeat before the status comparison so a still-running rig cannot
+ * un-retire itself.
  */
-export const agentStatusSchema = z.enum(['offline', 'online', 'busy', 'error', 'benchmarked'])
+export const agentStatusSchema = z.enum([
+  'offline',
+  'online',
+  'busy',
+  'error',
+  'benchmarked',
+  'retired',
+])
 
 /**
  * Heartbeat status is intentionally a subset of `agentStatusSchema` — agents
@@ -999,6 +1015,161 @@ export const campaignRestoreResponseSchema = z.object({
   results: z.array(
     z.object({ id: z.number().int().positive(), outcome: campaignRestoreOutcomeSchema })
   ),
+})
+
+// ─── Resource archive / restore (dashboard) ─────────────────────────
+//
+// Shared by hash lists, word lists, rule lists, and mask lists — all four
+// mirror the same permanence-latch + reversible-archive state machine
+// (ADR-0019, issue #106 U3). One outcome vocabulary suffices because the
+// eligibility rules are identical across the four tables (permanent +
+// status='ready', not already archived, not referenced by a non-archived
+// dependent); only the dependent kind differs (campaigns for hash lists,
+// attacks for word/rule/mask lists) and that lives in the service layer,
+// not the wire shape. Bulk-capable, same `.min(1).max(200)` cap as
+// campaign archive/restore.
+
+export const resourceArchiveRequestSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200),
+})
+
+export const resourceArchiveOutcomeSchema = z.enum([
+  'archived',
+  'not_found',
+  'not_archivable',
+  'already_archived',
+  // Refused because a non-archived dependent (campaign or attack) still
+  // references the resource (R3).
+  'in_use',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
+])
+
+export const resourceArchiveResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: resourceArchiveOutcomeSchema })
+  ),
+})
+
+export const resourceRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Per-id failure (see resourceArchiveOutcomeSchema).
+  'error',
+])
+
+export const resourceRestoreResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: resourceRestoreOutcomeSchema })
+  ),
+})
+
+// ─── Attack archive / restore (dashboard & control) ─────────────────
+//
+// Attacks carry no `status` column (issue #99) and nothing references an
+// attack the way campaigns reference hash lists, so the outcome
+// vocabulary has neither a status-based archivable-set nor an `in_use`
+// guard — eligibility is just `is_permanent = true` (ADR-0019, issue
+// #106 U6). The shape happens to match campaign archive/restore exactly
+// since both share the same "permanent + not already archived"
+// eligibility rule; kept as separate named schemas (rather than reused)
+// so each surface's OpenAPI document names the type after its own entity.
+
+export const attackArchiveRequestSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200),
+})
+
+export const attackArchiveOutcomeSchema = z.enum([
+  'archived',
+  'not_found',
+  // Refused because the attack has never generated a task (never latched
+  // permanent) — draft/task-less attacks stay hard-deletable instead.
+  'not_archivable',
+  'already_archived',
+  // A per-id failure (e.g. a DB error) so one bad id never fails the whole
+  // batch with a 500 — the caller sees exactly which ids errored.
+  'error',
+])
+
+export const attackArchiveResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: attackArchiveOutcomeSchema })
+  ),
+})
+
+export const attackRestoreOutcomeSchema = z.enum([
+  'restored',
+  'not_found',
+  'not_archived',
+  // Refused because the attack references a word/rule/mask list that is a
+  // reclaimed shell (blob_reclaimed_at IS NOT NULL) — restoring would make
+  // the attack live again while referencing a resource whose underlying
+  // file was already deleted by the blob-reclamation sweep (issue #106 F2
+  // code review / R12).
+  'resource_reclaimed',
+  // Per-id failure (see attackArchiveOutcomeSchema).
+  'error',
+])
+
+export const attackRestoreResponseSchema = z.object({
+  results: z.array(
+    z.object({ id: z.number().int().positive(), outcome: attackRestoreOutcomeSchema })
+  ),
+})
+
+// ─── Archive / restore (Control API) ────────────────────────────────
+//
+// The Control API's archive/restore endpoints operate on a single
+// resource per call (`POST /{id}/archive`) rather than the dashboard's
+// bulk `{ ids }` shape — automation clients act on one id at a time, and
+// a single-resource outcome maps cleanly onto an HTTP status per call
+// instead of a per-id array inside a 200. Reuses the same outcome enums
+// as the dashboard schemas above (`resourceArchiveOutcomeSchema`,
+// `attackArchiveOutcomeSchema`, etc.) so the two surfaces can never
+// drift on what "archived" vs "not_archivable" means; only the envelope
+// shape differs. One pair of resource schemas covers hash lists AND
+// word/rule/mask lists, mirroring the dashboard's reuse of
+// `resourceArchiveResponseSchema` across both (issue #106 U10).
+
+export const controlResourceArchiveResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: resourceArchiveOutcomeSchema })
+  .openapi('ControlResourceArchiveResponse')
+
+export const controlResourceRestoreResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: resourceRestoreOutcomeSchema })
+  .openapi('ControlResourceRestoreResponse')
+
+export const controlAttackArchiveResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: attackArchiveOutcomeSchema })
+  .openapi('ControlAttackArchiveResponse')
+
+export const controlAttackRestoreResponseSchema = z
+  .object({ id: z.number().int().positive(), outcome: attackRestoreOutcomeSchema })
+  .openapi('ControlAttackRestoreResponse')
+
+// ─── Agent retire (dashboard) ────────────────────────────────────────
+//
+// Retirement is terminal — there is no agent restore path (ADR-0019's
+// reversible archive/restore pattern does not apply to agents; R9 keeps
+// the row and all history, but the status transition itself is one-way).
+// Unlike the bulk `{ ids }` archive/restore surfaces above, retire always
+// targets exactly one agent via the `:id` path param, so the response
+// carries a single outcome rather than a per-id `results` array.
+// `releasedTaskIds` surfaces which in-flight tasks were returned to
+// `pending` so the operator can see the blast radius of the retirement
+// (R8).
+
+export const agentRetireOutcomeSchema = z.enum([
+  'retired',
+  // Idempotent no-op: the agent was already retired by an earlier call.
+  'already_retired',
+])
+
+export const agentRetireResponseSchema = z.object({
+  outcome: agentRetireOutcomeSchema,
+  releasedTaskIds: z.array(z.number().int().positive()),
 })
 
 /**

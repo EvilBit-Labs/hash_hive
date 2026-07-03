@@ -28,9 +28,11 @@ import { requireMembershipRole } from '../../middleware/rbac.js'
 import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
   abortChunkedUpload,
+  ChecksumMismatchError,
   completeChunkedUpload,
   getChunkedUploadStatus,
   initiateChunkedUpload,
+  ResourceNotReclaimedShellError,
   uploadChunkPart,
   UploadResourceNotFoundError,
 } from '../../services/resources.js'
@@ -46,12 +48,23 @@ import {
 
 // ─── Schemas ────────────────────────────────────────────────────────
 
-const initiateUploadSchema = z.object({
-  resourceType: z.enum(RESOURCE_TYPES),
-  name: z.string().min(1).max(255),
-  fileSize: z.number().int().positive().max(500_000_000_000),
-  contentType: z.string().optional(),
-})
+const initiateUploadSchema = z
+  .object({
+    resourceType: z.enum(RESOURCE_TYPES),
+    name: z.string().min(1).max(255),
+    fileSize: z.number().int().positive().max(500_000_000_000),
+    contentType: z.string().optional(),
+    // Restore-after-reclaim over chunked upload (issue #106 F3 code
+    // review / R12): when set, this session targets an EXISTING
+    // reclaimed-shell resource instead of creating a new one. Hash lists
+    // have no blob-reclamation lifecycle, so the combination is rejected
+    // here rather than surfacing as an opaque service-layer error.
+    restoreResourceId: z.number().int().positive().optional(),
+  })
+  .refine((data) => !(data.restoreResourceId !== undefined && data.resourceType === 'hash-lists'), {
+    message: 'restoreResourceId is not supported for hash-lists (no blob-reclamation lifecycle)',
+    path: ['restoreResourceId'],
+  })
 
 const uploadPartQuerySchema = z.object({
   resourceId: z.coerce.number().int().positive(),
@@ -95,6 +108,11 @@ const initiateUploadRoute = createRoute({
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'restoreResourceId targets a resource that is not a reclaimed shell.',
+      content: { 'application/json': { schema: passthroughObject('UploadRestoreConflictError') } },
+    },
     500: {
       description: 'Upload initiation failed',
       content: { 'application/json': { schema: passthroughObject('UploadInitFailedError') } },
@@ -158,6 +176,10 @@ const completeUploadRoute = createRoute({
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Checksum mismatch completing a reclaimed-shell restore session.',
+      content: { 'application/json': { schema: passthroughObject('ChecksumMismatchError') } },
+    },
     500: {
       description: 'Upload completion failed',
       content: { 'application/json': { schema: passthroughObject('UploadCompleteFailedError') } },
@@ -227,6 +249,18 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
       const result = await initiateChunkedUpload({ ...data, projectId }, actor)
       return c.json(result, 201)
     } catch (err) {
+      // F3 (issue #106 code review): a restore session (restoreResourceId
+      // set) can fail with two typed, documented outcomes instead of the
+      // generic 500 — a missing/out-of-scope target (404) or a target that
+      // exists but isn't actually a reclaimed shell (409).
+      if (err instanceof UploadResourceNotFoundError) {
+        logger.debug({ err, projectId }, 'Initiate chunked upload restore: resource not found')
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Resource not found')
+      }
+      if (err instanceof ResourceNotReclaimedShellError) {
+        logger.debug({ err, projectId }, 'Initiate chunked upload restore: not a reclaimed shell')
+        return dashboardError(c, 409, 'RESOURCE_NOT_RECLAIMED', err.message)
+      }
       logger.error({ err }, 'Failed to initiate chunked upload')
       return dashboardError(c, 500, 'UPLOAD_INIT_FAILED', 'Failed to initiate upload')
     }
@@ -310,6 +344,8 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
     const uploadId = c.req.param('uploadId')
     const { parts, resourceId, resourceType } = c.req.valid('json')
     const { projectId } = c.get('scopedUser')!
+    const { userId } = c.get('currentUser')
+    const actor = { actorType: 'user' as const, actorId: userId }
 
     try {
       const result = await completeChunkedUpload(
@@ -317,7 +353,8 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
         parts,
         resourceId,
         resourceType,
-        projectId
+        projectId,
+        actor
       )
       return c.json(result, 200)
     } catch (err) {
@@ -335,6 +372,16 @@ export function registerChunkedUploadRoutes(router: OpenAPIHono<AppEnv>): void {
           'Complete upload: resource not found'
         )
         return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Upload not found')
+      }
+      // F3 (issue #106 code review): a restore session's checksum
+      // verification failed (mismatch or unverifiable) — the resource
+      // stays a shell. Mirrors the direct-upload path's 409 mapping.
+      if (err instanceof ChecksumMismatchError) {
+        logger.debug(
+          { err, uploadId, resourceId: err.resourceId, resourceType: err.resourceType, projectId },
+          'Complete upload: reclaimed-shell restore checksum mismatch'
+        )
+        return dashboardError(c, 409, 'CHECKSUM_MISMATCH', err.message)
       }
       logger.error({ err, uploadId }, 'Failed to complete chunked upload')
       return dashboardError(c, 500, 'UPLOAD_COMPLETE_FAILED', 'Failed to complete upload')

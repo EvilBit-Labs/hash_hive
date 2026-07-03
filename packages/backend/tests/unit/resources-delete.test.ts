@@ -57,11 +57,21 @@ if (IS_ISOLATED) {
   }))
 
   // ─── Mock DB with per-test controllable behavior ─────────────────────
+  //
+  // The guarded owner-delete (`deleteHashList`/`deleteResource`) now runs
+  // `.delete(table).where(...).returning({id}).then((rows) => rows.length)`
+  // instead of a bare `.where(...)` — the count backs the not_deletable
+  // race guard (ADR-0019 / issue #106 U3). `deleteImpl` resolves the
+  // `.returning()` row array directly so both the "deleted" (non-empty
+  // array) and "raced to not_deletable" (empty array) paths are
+  // controllable per test.
   type SelectResult = unknown[]
   let selectByTable: Map<string, SelectResult> = new Map()
-  let deleteImpl: (table: string) => Promise<unknown> = () => Promise.resolve()
+  let deleteImpl: (table: string) => Promise<unknown[]> = () => Promise.resolve([{ id: 1 }])
   const mockDelete = mock((_table: unknown) => ({
-    where: mock(() => deleteImpl(_table === HASH_LISTS_SENTINEL ? 'hash_lists' : 'other')),
+    where: mock(() => ({
+      returning: mock(() => deleteImpl(_table === HASH_LISTS_SENTINEL ? 'hash_lists' : 'other')),
+    })),
   }))
   // Sentinel objects so the mock can route by table identity. The real Drizzle
   // table objects are imported at module load — but since the mock factory runs
@@ -79,6 +89,7 @@ if (IS_ISOLATED) {
     // `services/resources.ts` now transitively imports `services/attacks/complexity.ts`
     // (the keyspace fan-out), which references the attacks table.
     attacks: Symbol('attacks'),
+    campaigns: Symbol('campaigns'),
   }))
 
   mock.module('../../src/db/index.js', () => ({
@@ -121,34 +132,69 @@ if (IS_ISOLATED) {
       mockDeleteFile.mockReset()
       mockDelete.mockReset()
       // mockReset clears the implementation per GOTCHAS.md — restore the
-      // chainable factory so `db.delete(table).where(...)` resolves to a
-      // routable Promise instead of `undefined`.
+      // chainable factory so `db.delete(table).where(...).returning(...)`
+      // resolves to a routable Promise instead of `undefined`.
       mockDeleteFile.mockImplementation((_key: string, _bucket?: string) => deleteFileImpl())
       mockDelete.mockImplementation((_table: unknown) => ({
-        where: mock(() => deleteImpl(_table === HASH_LISTS_SENTINEL ? 'hash_lists' : 'other')),
+        where: mock(() => ({
+          returning: mock(() =>
+            deleteImpl(_table === HASH_LISTS_SENTINEL ? 'hash_lists' : 'other')
+          ),
+        })),
       }))
       deleteFileImpl = () => Promise.resolve()
-      deleteImpl = () => Promise.resolve()
+      deleteImpl = () => Promise.resolve([{ id: 1 }])
     })
 
-    test('returns false when the hash list is not in the project (404 path)', async () => {
+    test('returns not_found when the hash list is not in the project (404 path)', async () => {
       // Empty select result = not found.
       selectByTable.set('hash_lists', [])
       const { deleteHashList } = await import('../../src/services/resources.js')
       const result = await deleteHashList(42, 1)
-      expect(result).toBe(false)
+      expect(result).toEqual({ kind: 'not_found' })
       // No S3 or DB delete should have run.
       expect(mockDeleteFile).not.toHaveBeenCalled()
       expect(mockDelete).not.toHaveBeenCalled()
     })
 
-    test('returns true after deleting the hash list and cascading hash items', async () => {
+    test('returns not_deletable for a permanent hash list without attempting the cascade (R2)', async () => {
       selectByTable.set('hash_lists', [
-        { id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'hash-lists/5/file.txt' } },
+        { id: 5, projectId: 1, isPermanent: true, fileRef: { bucket: 'b', key: 'k' } },
       ])
       const { deleteHashList } = await import('../../src/services/resources.js')
       const result = await deleteHashList(5, 1)
-      expect(result).toBe(true)
+      expect(result).toEqual({ kind: 'not_deletable' })
+      // The permanence pre-check short-circuits before any cascade/delete/S3 work.
+      expect(mockDelete).not.toHaveBeenCalled()
+      expect(mockDeleteFile).not.toHaveBeenCalled()
+    })
+
+    test('returns not_deletable when permanence is latched between the pre-check and the guarded DELETE (race)', async () => {
+      selectByTable.set('hash_lists', [
+        { id: 5, projectId: 1, isPermanent: false, fileRef: { bucket: 'b', key: 'k' } },
+      ])
+      // The guarded DELETE's WHERE (folding is_permanent = false) returns zero
+      // rows — simulating a concurrent latch winning the race.
+      deleteImpl = () => Promise.resolve([])
+      const { deleteHashList } = await import('../../src/services/resources.js')
+      const result = await deleteHashList(5, 1)
+      expect(result).toEqual({ kind: 'not_deletable' })
+      // S3 must not be touched when the DB delete didn't actually happen.
+      expect(mockDeleteFile).not.toHaveBeenCalled()
+    })
+
+    test('deletes the hash list and cascades hash items', async () => {
+      selectByTable.set('hash_lists', [
+        {
+          id: 5,
+          projectId: 1,
+          isPermanent: false,
+          fileRef: { bucket: 'b', key: 'hash-lists/5/file.txt' },
+        },
+      ])
+      const { deleteHashList } = await import('../../src/services/resources.js')
+      const result = await deleteHashList(5, 1)
+      expect(result).toEqual({ kind: 'deleted' })
       expect(mockDeleteFile).toHaveBeenCalledTimes(1)
       expect(mockDeleteFile).toHaveBeenCalledWith('hash-lists/5/file.txt', 'b')
       // hash_items cascade runs via tx.execute (raw SQL), hash_lists delete
@@ -158,18 +204,20 @@ if (IS_ISOLATED) {
 
     test('proceeds with DB delete when S3 object is already gone', async () => {
       selectByTable.set('hash_lists', [
-        { id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'gone.txt' } },
+        { id: 5, projectId: 1, isPermanent: false, fileRef: { bucket: 'b', key: 'gone.txt' } },
       ])
       deleteFileImpl = () => Promise.reject(new Error('NoSuchKey'))
       const { deleteHashList } = await import('../../src/services/resources.js')
       const result = await deleteHashList(5, 1)
-      expect(result).toBe(true)
+      expect(result).toEqual({ kind: 'deleted' })
       expect(mockDeleteFile).toHaveBeenCalledTimes(1)
       expect(mockDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
     })
 
     test('throws ResourceInUseError when the hash_lists DELETE hits an FK violation (SQLSTATE 23503)', async () => {
-      selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'k' } }])
+      selectByTable.set('hash_lists', [
+        { id: 5, projectId: 1, isPermanent: false, fileRef: { bucket: 'b', key: 'k' } },
+      ])
       // Post-R10 refactor: hash_items cascade runs via tx.execute (mocked
       // to no-op above), THEN tx.delete(hash_lists) — which raises the FK
       // violation. cascadeDeleteResource maps it to ResourceInUseError.
@@ -181,7 +229,7 @@ if (IS_ISOLATED) {
           err.code = '23503'
           return Promise.reject(err)
         }
-        return Promise.resolve()
+        return Promise.resolve([{ id: 1 }])
       }
       const { deleteHashList, ResourceInUseError } = await import('../../src/services/resources.js')
       await expect(deleteHashList(5, 1)).rejects.toBeInstanceOf(ResourceInUseError)
@@ -191,7 +239,9 @@ if (IS_ISOLATED) {
     })
 
     test('FK detection: regex fallback fires when SQLSTATE 23503 is missing (mocked driver)', async () => {
-      selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: { bucket: 'b', key: 'k' } }])
+      selectByTable.set('hash_lists', [
+        { id: 5, projectId: 1, isPermanent: false, fileRef: { bucket: 'b', key: 'k' } },
+      ])
       // Driver/mock that doesn't surface `code` on the error — must still
       // map to ResourceInUseError via the message-regex fallback.
       deleteImpl = (table: string) => {
@@ -200,7 +250,7 @@ if (IS_ISOLATED) {
             new Error('update or delete on table "hash_lists" violates foreign key constraint')
           )
         }
-        return Promise.resolve()
+        return Promise.resolve([{ id: 1 }])
       }
       const { deleteHashList, ResourceInUseError } = await import('../../src/services/resources.js')
       await expect(deleteHashList(5, 1)).rejects.toBeInstanceOf(ResourceInUseError)
@@ -208,10 +258,10 @@ if (IS_ISOLATED) {
     })
 
     test('skips S3 delete when fileRef is null (upload never finished)', async () => {
-      selectByTable.set('hash_lists', [{ id: 5, projectId: 1, fileRef: null }])
+      selectByTable.set('hash_lists', [{ id: 5, projectId: 1, isPermanent: false, fileRef: null }])
       const { deleteHashList } = await import('../../src/services/resources.js')
       const result = await deleteHashList(5, 1)
-      expect(result).toBe(true)
+      expect(result).toEqual({ kind: 'deleted' })
       expect(mockDeleteFile).not.toHaveBeenCalled()
     })
   })

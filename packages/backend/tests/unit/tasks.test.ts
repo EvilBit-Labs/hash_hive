@@ -117,6 +117,12 @@ if (isIsolated) {
     // tasks.ts + retry.ts now statically import this (#97 U6 completion
     // trigger); the named import fails to link if the mock omits it.
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
+    // tasks.ts's generateTasksForAttack now statically imports this
+    // (issue #106 U6 permanence latch); the named import fails to link
+    // if the mock omits it. No-op here — the generateTasksForAttack
+    // describe block below overrides `db.transaction` to route the
+    // real latch UPDATE through its own capturing mock.
+    latchAttackPermanent: mock(() => Promise.resolve()),
   }))
 
   mockGetAgentBenchmarkForMode = mock(() => Promise.resolve(null))
@@ -1229,6 +1235,17 @@ if (isIsolated) {
         }),
       }))
       ;(db as Record<string, unknown>)['insert'] = mockInsert
+
+      // generateTasksForAttack now wraps its task INSERT + permanence-latch
+      // call in db.transaction (issue #106 U6) so the two are atomic. The
+      // latch itself (`latchAttackPermanent`, imported from the mocked
+      // campaigns.js module above) is a no-op stub, so the tx handle only
+      // needs to satisfy `tx.insert(...).values(...).returning()` — route
+      // it through the same capturing `mockInsert` so the chunk assertions
+      // below still hold.
+      ;(db as Record<string, unknown>)['transaction'] = mock((cb: (tx: unknown) => unknown) =>
+        cb({ insert: mockInsert })
+      )
     })
 
     test('mode 3 mask attack with computed keyspace inserts the right chunks', async () => {

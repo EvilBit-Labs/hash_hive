@@ -7,7 +7,7 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, isNotNull, type SQL, sql } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -27,6 +27,7 @@ import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
+import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -96,6 +97,27 @@ export class UploadTooLargeError extends Error {
 }
 
 /**
+ * Thrown when a re-upload targeting a reclaimed-shell resource
+ * (`blob_reclaimed_at IS NOT NULL`) doesn't checksum-match the file that was
+ * reclaimed (issue #106 U12 / R12). The row is left untouched — still a
+ * shell — and no bytes are written to storage on the direct-upload path (the
+ * checksum is computed from the in-memory buffer before `uploadFile` is
+ * called). Routes catch this and surface a 409.
+ */
+export class ChecksumMismatchError extends Error {
+  readonly resourceId: number
+  readonly resourceType: string
+  constructor(resourceId: number, resourceType: string) {
+    super(
+      `${resourceType} ${resourceId} is a reclaimed shell; the re-uploaded file does not match the original checksum`
+    )
+    this.name = 'ChecksumMismatchError'
+    this.resourceId = resourceId
+    this.resourceType = resourceType
+  }
+}
+
+/**
  * Thrown by `uploadChunkPart` and `completeChunkedUpload` when the
  * underlying resource row is missing or out-of-project-scope. Routes
  * catch this and map to 404 `RESOURCE_NOT_FOUND` so the runtime
@@ -116,6 +138,26 @@ export class UploadResourceNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown by `initiateChunkedUpload` when a caller supplies `restoreResourceId`
+ * (issue #106 F3 code review — chunked-upload restore-after-reclaim) that
+ * points at a resource which exists and is in project scope, but is NOT a
+ * reclaimed shell (`blob_reclaimed_at IS NULL`). Restore-via-chunked-upload
+ * is only for resurrecting a reclaimed shell; hijacking an active resource's
+ * upload session through this path is refused. Routes catch this and
+ * surface a 409.
+ */
+export class ResourceNotReclaimedShellError extends Error {
+  readonly resourceId: number
+  readonly resourceType: string
+  constructor(resourceId: number, resourceType: string) {
+    super(`${resourceType} ${resourceId} is not a reclaimed shell; nothing to restore`)
+    this.name = 'ResourceNotReclaimedShellError'
+    this.resourceId = resourceId
+    this.resourceType = resourceType
+  }
+}
+
 // ─── Hash Types ──────────────────────────────────────────────────────
 
 export async function listHashTypes() {
@@ -129,11 +171,20 @@ export async function getHashTypeById(id: number) {
 
 // ─── Hash Lists ─────────────────────────────────────────────────────
 
-export async function listHashLists(projectId: number) {
+export async function listHashLists(
+  projectId: number,
+  opts: { showArchived?: boolean | undefined } = {}
+) {
+  // Archived hash lists are excluded from active list views by default
+  // (ADR-0019 / R10); pass showArchived to include them.
+  const conditions = [eq(hashLists.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(hashLists.archivedAt))
+  }
   return db
     .select()
     .from(hashLists)
-    .where(eq(hashLists.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(desc(hashLists.createdAt))
 }
 
@@ -146,9 +197,13 @@ export async function listHashLists(projectId: number) {
  */
 export async function listHashListsPaginated(
   projectId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(hashLists.projectId, projectId)
+  const conditions = [eq(hashLists.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(hashLists.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -190,21 +245,77 @@ export function isForeignKeyViolation(err: unknown, expectedConstraint?: string)
   return constraint === expectedConstraint
 }
 
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+type DbRunner = DbTx | typeof db
+
+// ─── Permanence latch (ADR-0019 / issue #106 U3) ────────────────────
+//
+// Any table this latch can target — hash lists plus the three generic
+// resource tables. All four share the same `id` / `isPermanent` /
+// `updatedAt` column shapes, so one function covers every reference-write
+// site instead of four near-duplicates.
+type LatchableTable = typeof hashLists | ResourceTable
+
+/**
+ * Latch `is_permanent = true` the first time a hash list or word/rule/mask
+ * list becomes referenced by a campaign or attack — the resource analog of
+ * a campaign leaving `draft` (see `transitionCampaign`'s latch). One-way:
+ * the guarded `WHERE isPermanent = false` makes a repeat call on an
+ * already-permanent row a no-op, so callers can invoke this unconditionally
+ * on every reference-creating write without checking current state first.
+ *
+ * Must run inside the same transaction as the reference-creating write
+ * (campaign/attack insert or update) so a crash between the two can never
+ * leave a referenced resource un-latched.
+ */
+export async function latchResourcePermanent(
+  tx: DbTx,
+  table: LatchableTable,
+  id: number
+): Promise<void> {
+  await tx
+    .update(table)
+    .set({ isPermanent: true, updatedAt: new Date() })
+    .where(and(eq(table.id, id), eq(table.isPermanent, false)))
+}
+
+// ─── Delete guard ─────────────────────────────────────────────────────
+
+/**
+ * Outcome of a hash-list / resource delete attempt. Mirrors
+ * `DeleteCampaignResult` (`campaign-dashboard.ts`): a purely backend-internal
+ * discriminated union — routes translate `kind` into the HTTP envelope, it is
+ * never serialized verbatim, so it does not need a shared Zod schema.
+ */
+export type DeleteResourceResult =
+  | { kind: 'not_found' }
+  // Latched permanent (referenced at least once, ever) — archive-only,
+  // never hard-deletable again even if every reference is later removed.
+  | { kind: 'not_deletable' }
+  | { kind: 'deleted' }
+
 /**
  * Shared cascade-delete flow for resource tables. Steps:
  *   1. Ownership check (404 if not in project) - handled by the caller via
  *      `lookup`.
- *   2. DB delete FIRST (inside a tx when `cascade` is supplied so a late
- *      FK violation rolls back the children).
- *   3. Best-effort S3 object delete on the row's fileRef.
+ *   2. Permanence pre-check (409-equivalent `not_deletable`) - skips the
+ *      cascade entirely for an already-latched row so a hash list with
+ *      millions of `hash_items` is never scanned for a delete that the
+ *      guard will refuse anyway.
+ *   3. DB delete FIRST (inside a tx when `cascade` is supplied so a late
+ *      FK violation rolls back the children). The owner delete folds
+ *      `is_permanent = false` into its own WHERE so a concurrent latch
+ *      (a reference created between step 2 and here) is caught atomically
+ *      instead of racing past the pre-check.
+ *   4. Best-effort S3 object delete on the row's fileRef.
  *
  * Throws `ResourceInUseError` if a FK from another table still references
- * the row. Idempotent: returns `false` when the row was already gone.
+ * the row (the pristine-but-referenced case: never latched, still blocked
+ * by RESTRICT/child rows).
  */
-type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
-type DbRunner = DbTx | typeof db
-
-async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
+async function cascadeDeleteResource<
+  TRow extends { fileRef?: unknown; isPermanent: boolean },
+>(args: {
   id: number
   projectId: number
   resourceLabel: string
@@ -213,45 +324,46 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
   actor: Actor
   lookup: () => Promise<TRow | null>
   cascade?: (tx: DbTx) => Promise<void>
-  deleteOwner: (runner: DbRunner) => Promise<void>
-}): Promise<boolean> {
+  // Performs the guarded DELETE (folding `isPermanent = false` into its
+  // WHERE) and returns the number of rows actually removed, so the caller
+  // can detect a race where permanence latched between the pre-check and
+  // this statement.
+  deleteOwner: (runner: DbRunner) => Promise<number>
+}): Promise<DeleteResourceResult> {
   const row = await args.lookup()
-  if (!row) return false
+  if (!row) return { kind: 'not_found' }
+  if (row.isPermanent) return { kind: 'not_deletable' }
+
+  class LatchedDuringDelete extends Error {}
 
   try {
-    if (args.cascade) {
-      await db.transaction(async (tx) => {
-        await args.cascade!(tx)
-        await args.deleteOwner(tx)
-        await recordAuditEvent(
-          {
-            actor: args.actor,
-            projectId: args.projectId,
-            entityType: args.entityType,
-            entityId: args.id,
-            action: 'deleted',
-            oldRow: row as Record<string, unknown>,
-          },
-          tx
-        )
-      })
-    } else {
-      await db.transaction(async (tx) => {
-        await args.deleteOwner(tx)
-        await recordAuditEvent(
-          {
-            actor: args.actor,
-            projectId: args.projectId,
-            entityType: args.entityType,
-            entityId: args.id,
-            action: 'deleted',
-            oldRow: row as Record<string, unknown>,
-          },
-          tx
-        )
-      })
-    }
+    await db.transaction(async (tx) => {
+      if (args.cascade) {
+        await args.cascade(tx)
+      }
+      const deletedCount = await args.deleteOwner(tx)
+      if (deletedCount === 0) {
+        // Race: a reference-creating write latched is_permanent=true between
+        // the pre-check above and this guarded DELETE. Throw to roll back
+        // any cascade deletes already applied in this transaction.
+        throw new LatchedDuringDelete()
+      }
+      await recordAuditEvent(
+        {
+          actor: args.actor,
+          projectId: args.projectId,
+          entityType: args.entityType,
+          entityId: args.id,
+          action: 'deleted',
+          oldRow: row as Record<string, unknown>,
+        },
+        tx
+      )
+    })
   } catch (err) {
+    if (err instanceof LatchedDuringDelete) {
+      return { kind: 'not_deletable' }
+    }
     if (isForeignKeyViolation(err)) {
       throw new ResourceInUseError(args.resourceLabel, args.id, args.referencedBy)
     }
@@ -272,7 +384,7 @@ async function cascadeDeleteResource<TRow extends { fileRef?: unknown }>(args: {
       )
     }
   }
-  return true
+  return { kind: 'deleted' }
 }
 
 // Maximum hash_items rows to remove per DELETE chunk during cascade. Bounds
@@ -324,7 +436,7 @@ export async function deleteHashList(
   id: number,
   projectId: number,
   actor: Actor = DEFAULT_SYSTEM_ACTOR
-): Promise<boolean> {
+): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
     projectId,
@@ -340,13 +452,27 @@ export async function deleteHashList(
     deleteOwner: (runner) =>
       runner
         .delete(hashLists)
-        .where(and(eq(hashLists.id, id), eq(hashLists.projectId, projectId)))
-        .then(() => undefined),
+        .where(
+          and(
+            eq(hashLists.id, id),
+            eq(hashLists.projectId, projectId),
+            // Draft-only hard-delete guard (ADR-0019 / R2): a hash list that
+            // has ever been referenced is permanent and archive-only. Folded
+            // into the WHERE so a concurrent latch loses the race atomically
+            // rather than deleting a now-permanent row.
+            eq(hashLists.isPermanent, false)
+          )
+        )
+        .returning({ id: hashLists.id })
+        .then((rows) => rows.length),
   })
 }
 
-/** Map a resource table to its audit entity type. */
-function entityTypeForTable(table: ResourceTable): AuditEntityType {
+/**
+ * Map a resource table to its audit entity type. Exported for reuse by
+ * `resources-archive.ts` (ADR-0019 / issue #106 U3 archive/restore).
+ */
+export function entityTypeForTable(table: ResourceTable): AuditEntityType {
   if (table === wordLists) return 'word_list'
   if (table === ruleLists) return 'rule_list'
   return 'mask_list'
@@ -358,7 +484,7 @@ export async function deleteResource(
   projectId: number,
   resourceType: string,
   actor: Actor = DEFAULT_SYSTEM_ACTOR
-): Promise<boolean> {
+): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
     projectId,
@@ -370,8 +496,16 @@ export async function deleteResource(
     deleteOwner: (runner) =>
       runner
         .delete(table)
-        .where(and(eq(table.id, id), eq(table.projectId, projectId)))
-        .then(() => undefined),
+        .where(
+          and(
+            eq(table.id, id),
+            eq(table.projectId, projectId),
+            // Draft-only hard-delete guard (ADR-0019 / R2): see deleteHashList.
+            eq(table.isPermanent, false)
+          )
+        )
+        .returning({ id: table.id })
+        .then((rows) => rows.length),
   })
 }
 
@@ -645,11 +779,21 @@ export async function getHashListStats(hashListId: number): Promise<{
 
 export type ResourceTable = typeof wordLists | typeof ruleLists | typeof maskLists
 
-export async function listResources(table: ResourceTable, projectId: number) {
+export async function listResources(
+  table: ResourceTable,
+  projectId: number,
+  opts: { showArchived?: boolean | undefined } = {}
+) {
+  // Archived resources are excluded from active list views by default
+  // (ADR-0019 / R10); pass showArchived to include them.
+  const conditions = [eq(table.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(table.archivedAt))
+  }
   return db
     .select()
     .from(table)
-    .where(eq(table.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(desc(table.createdAt))
 }
 
@@ -662,9 +806,13 @@ export async function listResources(table: ResourceTable, projectId: number) {
 export async function listResourcesPaginated(
   table: ResourceTable,
   projectId: number,
-  opts: { limit: number; offset: number }
+  opts: { limit: number; offset: number; showArchived?: boolean | undefined }
 ) {
-  const whereClause = eq(table.projectId, projectId)
+  const conditions = [eq(table.projectId, projectId)]
+  if (!opts.showArchived) {
+    conditions.push(isNull(table.archivedAt))
+  }
+  const whereClause = and(...conditions)
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -764,16 +912,27 @@ export async function uploadResourceFile(
     throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
+  const resourceType = resourceTypeOf(table)
   const ext = extname(file.name)
   const key = `${resource.projectId}/${prefix}/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
+
+  // Checksum computed from the in-memory buffer BEFORE the S3 write (issue
+  // #106 U12 / R12): a reclaimed-shell re-upload that fails to match is
+  // rejected here, before any bytes are written to storage or the row is
+  // touched — the resource stays exactly the shell it was.
+  const checksum = sha256HexFromBuffer(buffer)
+  const isReclaimedShell = resource.blobReclaimedAt !== null
+  if (isReclaimedShell && resource.fileChecksum && resource.fileChecksum !== checksum) {
+    throw new ChecksumMismatchError(resourceId, resourceType)
+  }
+
   await uploadFile(key, buffer, file.type || 'application/octet-stream')
 
   // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
   // the common upload path never needs the async worker, using the same utils
   // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
   // sized by line count; a masklist by its summed mask keyspace (#231).
-  const resourceType = resourceTypeOf(table)
   const text = buffer.toString('utf8')
   let lineCount: number | null = null
   let masklistKeyspace: string | null = null
@@ -804,6 +963,14 @@ export async function uploadResourceFile(
     ...(lineCount !== null ? { lineCount } : {}),
     ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
     status: 'ready' as const,
+    // Capture the checksum on every finalize (issue #106 U12) — including a
+    // brand-new resource's first upload — so a future archive + reclaim of
+    // THIS resource has something to verify a re-upload against. A matching
+    // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
+    // resource usable again (R12); isReclaimedShell is false for a normal
+    // (non-shell) upload, so this key is simply omitted there.
+    fileChecksum: checksum,
+    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
     updatedAt: new Date(),
   }
 
@@ -932,6 +1099,20 @@ export async function initiateChunkedUpload(
     fileSize: number
     projectId: number
     contentType?: string | undefined
+    /**
+     * Restore-after-reclaim over chunked upload (issue #106 F3 code
+     * review / R12). When supplied, this session targets an EXISTING
+     * resource row that is a reclaimed shell (`blob_reclaimed_at IS NOT
+     * NULL`) instead of creating a new row — the counterpart to
+     * `uploadResourceFile`'s direct-upload restore guard, but for large
+     * word/rule/mask lists, which always go through chunked upload.
+     * Ownership + shell-state are verified up front here;
+     * `completeChunkedUpload` does the checksum verification once the
+     * upload actually lands. Hash lists have no blob-reclamation
+     * lifecycle (`isHashList`), so this is rejected for that resource
+     * type.
+     */
+    restoreResourceId?: number | undefined
   },
   actor: Actor = DEFAULT_SYSTEM_ACTOR
 ): Promise<{
@@ -940,7 +1121,7 @@ export async function initiateChunkedUpload(
   partSize: number
   key: string
 }> {
-  const { resourceType, name, fileSize, projectId, contentType } = data
+  const { resourceType, name, fileSize, projectId, contentType, restoreResourceId } = data
 
   // Hash lists use the hashLists table with different create logic
   const isHashList = resourceType === 'hash-lists'
@@ -951,10 +1132,30 @@ export async function initiateChunkedUpload(
   if (!table) {
     throw new Error(`Unknown resource type: ${resourceType}`)
   }
+  if (isHashList && restoreResourceId != null) {
+    throw new Error(
+      'restoreResourceId is not supported for hash lists (no blob-reclamation lifecycle)'
+    )
+  }
 
-  // Create DB record
+  // Create DB record — OR, for a restore session, reuse an existing
+  // reclaimed-shell row instead of creating a new one.
   let resourceId: number
-  if (isHashList) {
+  const isRestore = restoreResourceId != null
+  if (isRestore) {
+    const [existing] = await db
+      .select()
+      .from(table as ResourceTable)
+      .where(
+        and(eq((table as ResourceTable).id, restoreResourceId), eq(table.projectId, projectId))
+      )
+      .limit(1)
+    if (!existing) throw new UploadResourceNotFoundError(restoreResourceId, resourceType)
+    if (existing.blobReclaimedAt === null) {
+      throw new ResourceNotReclaimedShellError(restoreResourceId, resourceType)
+    }
+    resourceId = existing.id
+  } else if (isHashList) {
     const hl = await createHashList({ projectId, name, source: 'upload' }, actor)
     if (!hl) throw new Error('Failed to create hash list')
     resourceId = hl.id
@@ -964,21 +1165,33 @@ export async function initiateChunkedUpload(
     resourceId = row.id
   }
 
-  // Generate S3 key
+  // Generate S3 key. A restore session always mints a fresh key: the
+  // ORIGINAL blob (whatever key the shell's fileRef used to point at) was
+  // already deleted by the blob-reclamation sweep, so there's nothing to
+  // reuse — the re-upload lands at a new location and fileRef is
+  // overwritten to point at it on completion.
   const prefix = isHashList ? 'hash-lists' : resourceType
   const key = `${projectId}/${prefix}/${randomUUID()}`
   const ct = contentType ?? 'application/octet-stream'
 
-  // Initiate S3 multipart upload - clean up orphan DB record on failure
+  // Initiate S3 multipart upload - clean up orphan DB record on failure.
+  // A restore session's resource row is NOT an orphan (it pre-existed as
+  // a reclaimed shell) — never delete it here, only the fileRef/status
+  // update below is skipped by simply not touching it further, so the row
+  // is left exactly as it was (still a shell, uninitiated retry-safe).
   let s3UploadId: string
   try {
     s3UploadId = await createMultipartUpload(key, ct)
   } catch (err) {
     logger.error(
-      { err, resourceId, resourceType },
-      'S3 multipart initiation failed, removing orphan DB record'
+      { err, resourceId, resourceType, isRestore },
+      isRestore
+        ? 'S3 multipart initiation failed for a restore session; leaving the reclaimed-shell row untouched'
+        : 'S3 multipart initiation failed, removing orphan DB record'
     )
-    await db.delete(table).where(eq(table.id, resourceId))
+    if (!isRestore) {
+      await db.delete(table).where(eq(table.id, resourceId))
+    }
     throw err
   }
 
@@ -1039,7 +1252,8 @@ export async function completeChunkedUpload(
   parts: ReadonlyArray<{ partNumber: number; etag: string }>,
   resourceId: number,
   resourceType: string,
-  projectId: number
+  projectId: number,
+  actor: Actor = DEFAULT_SYSTEM_ACTOR
 ): Promise<{ resourceId: number }> {
   const isHashList = resourceType === 'hash-lists'
   const table = isHashList ? hashLists : RESOURCE_TYPE_TABLE[resourceType]
@@ -1061,8 +1275,88 @@ export async function completeChunkedUpload(
   } | null
   if (!fileRef?.key) throw new Error('Resource has no file reference')
 
+  // F3 (issue #106 code review): a chunked-upload session started by
+  // `initiateChunkedUpload`'s restore path (`restoreResourceId`) targets
+  // an EXISTING reclaimed-shell row, so — unlike the historical
+  // "always-fresh-row" assumption — completion here CAN be a restore.
+  // `row.blobReclaimedAt` is the ground truth (set independently of which
+  // init path was used), so this is derived directly rather than threaded
+  // through as a separate flag, mirroring `uploadResourceFile`'s
+  // `isReclaimedShell` check on the direct-upload path.
+  //
+  // `table` (and therefore `row`) is typed as a union that includes
+  // `hashLists`, which carries neither column — cast defensively; the
+  // `!isHashList` guard is what actually makes this safe at runtime.
+  const reclaimableRow = row as unknown as {
+    blobReclaimedAt: Date | null
+    fileChecksum: string | null
+  }
+  const isReclaimedShell = !isHashList && reclaimableRow.blobReclaimedAt !== null
+
   // Complete S3 multipart upload
   await completeMultipartUpload(fileRef.key, s3UploadId, parts)
+
+  // Checksum capture / verification (issue #106 U12, F3). Word/rule/mask
+  // lists only (hash lists carry no `file_checksum` column; reclamation is
+  // word/rule/mask only). Computed by streaming the just-completed object
+  // rather than buffering it — chunked upload's entire purpose is avoiding
+  // a server-side buffer for files too large for the direct-upload path.
+  //
+  // Two distinct policies depending on whether this is a restore:
+  //   - NOT a reclaimed shell (the common case): best-effort capture only.
+  //     A failure here must not fail an otherwise-successful upload — the
+  //     resource is already durably `ready`. A resource with no captured
+  //     checksum simply never becomes a blob-reclamation candidate (U11's
+  //     candidate predicate requires `file_checksum IS NOT NULL`), which
+  //     is a safe degrade.
+  //   - A reclaimed shell (restore-after-reclaim, R12): verification is
+  //     load-bearing, not best-effort. Unlike the direct-upload path
+  //     (`uploadResourceFile`), the checksum can only be computed AFTER
+  //     the bytes already landed in S3 — chunked upload streams parts
+  //     straight through, there is no in-memory buffer to hash first. A
+  //     mismatch (including a checksum-computation failure, which can't
+  //     be distinguished from "unverifiable" here) throws
+  //     `ChecksumMismatchError` and the mismatched object is best-effort
+  //     deleted so it doesn't linger as an orphan; the row is left
+  //     exactly as it was (still a shell) and no DB write happens below.
+  let checksum: string | null = null
+  if (isReclaimedShell) {
+    let computedChecksum: string
+    try {
+      computedChecksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
+    } catch (err) {
+      logger.error(
+        { err, resourceId, resourceType },
+        'checksum verification failed for a reclaimed-shell restore; rejecting the re-upload'
+      )
+      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
+        logger.warn(
+          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
+          'failed to clean up unverifiable chunked-upload object; continuing'
+        )
+      })
+      throw new ChecksumMismatchError(resourceId, resourceType)
+    }
+    if (reclaimableRow.fileChecksum && reclaimableRow.fileChecksum !== computedChecksum) {
+      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
+        logger.warn(
+          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
+          'failed to clean up mismatched chunked-upload object; continuing'
+        )
+      })
+      throw new ChecksumMismatchError(resourceId, resourceType)
+    }
+    checksum = computedChecksum
+  } else if (!isHashList) {
+    try {
+      checksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
+    } catch (err) {
+      logger.warn(
+        { err, resourceId, resourceType },
+        'checksum capture after chunked upload failed; resource stays checksum-less until a future upload'
+      )
+    }
+  }
 
   // Update resource status to ready
   const updatedFileRef = {
@@ -1073,18 +1367,48 @@ export async function completeChunkedUpload(
     name: fileRef.name,
     uploadedAt: new Date().toISOString(),
   }
+  const updateValues = {
+    status: isHashList ? ('uploaded' as const) : ('ready' as const),
+    fileRef: updatedFileRef,
+    ...(isHashList ? {} : { fileSize: fileRef.fileSize }),
+    ...(checksum !== null ? { fileChecksum: checksum } : {}),
+    // A checksum-verified match clears the shell (R12) — the resource is
+    // usable again. Only reachable when isReclaimedShell is true AND the
+    // checksum comparison above didn't throw.
+    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
+    updatedAt: new Date(),
+  }
 
-  await db
-    .update(table)
-    .set({
-      status: isHashList ? 'uploaded' : 'ready',
-      fileRef: updatedFileRef,
-      ...(isHashList ? {} : { fileSize: fileRef.fileSize }),
-      updatedAt: new Date(),
+  if (isReclaimedShell) {
+    // Restore path: wrap the write in a transaction with an audit event
+    // (mirroring `uploadResourceFile`'s reclaimed-shell restore) so the
+    // shell-clearing is captured in the audit trail the same way whether
+    // the re-upload came through the direct or chunked path.
+    await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(table)
+        .set(updateValues)
+        .where(eq(table.id, resourceId))
+        .returning()
+
+      await recordAuditEvent(
+        {
+          actor,
+          projectId,
+          entityType: entityTypeForTable(table as ResourceTable),
+          entityId: resourceId,
+          action: 'updated',
+          oldRow: row as Record<string, unknown>,
+          newRow: (updated ?? { ...row, ...updateValues }) as Record<string, unknown>,
+        },
+        tx
+      )
     })
-    .where(eq(table.id, resourceId))
+  } else {
+    await db.update(table).set(updateValues).where(eq(table.id, resourceId))
+  }
 
-  logger.info({ resourceId, resourceType }, 'Chunked upload completed')
+  logger.info({ resourceId, resourceType, isReclaimedShell }, 'Chunked upload completed')
 
   // A chunked upload streams parts straight to S3 and never buffers the file
   // to count lines, so a wordlist/rulelist arrives ready with a null line

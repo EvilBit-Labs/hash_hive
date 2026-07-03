@@ -104,6 +104,17 @@ export const envSchema = z.object({
   // interpolation vector even though the source is operator-controlled env.
   AUDIT_LOG_RETENTION: z.string().regex(INTERVAL_LITERAL).default('365 days'),
 
+  // Blob-reclamation retention window (issue #106 U11).
+  // Postgres interval literal — e.g. "90 days", "30 days".
+  // The blob-reclamation worker runs a daily bounded sweep and purges the
+  // object-store blob (not the row) of word/rule/mask list resources archived
+  // longer than this window, provided no active (non-archived) attack still
+  // references them. A misconfiguration fails loudly here at startup rather
+  // than as a swallowed SQL error later, and the regex closes the bind-
+  // parameter interpolation vector even though the source is operator-
+  // controlled env.
+  BLOB_RECLAMATION_RETENTION: z.string().regex(INTERVAL_LITERAL).default('90 days'),
+
   // Raw-flags denylist override (#104). The agent advanced-config raw-flags
   // escape hatch rejects any hashcat flag in this list. It is a FOOTGUN GUARD,
   // not a security boundary (the model trusts agents): the default blocks the

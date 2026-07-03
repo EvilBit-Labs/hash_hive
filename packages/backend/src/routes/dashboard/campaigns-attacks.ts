@@ -69,6 +69,16 @@ const listAttacksResponseSchema = z.object({
   attacks: z.array(attackRowSchema),
 })
 
+// Archived attacks are excluded by default (ADR-0019 / issue #106 R6, R10);
+// `?showArchived=true` includes them. Permissive coercion mirrors
+// `campaigns.ts`'s `listCampaignsQuerySchema.showArchived`.
+const listAttacksQuerySchema = z.object({
+  showArchived: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+})
+
 const attackResponseSchema = z.object({
   attack: attackRowSchema,
 })
@@ -128,6 +138,7 @@ const listAttacksRoute = createRoute({
   middleware: [requireProjectAccess()] as const,
   request: {
     params: campaignIdParamSchema,
+    query: listAttacksQuerySchema,
   },
   responses: {
     200: {
@@ -195,6 +206,10 @@ const deleteAttackRoute = createRoute({
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+    409: {
+      description: 'Attack has run and is now permanent; only archiving is allowed.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
   },
 })
 
@@ -250,7 +265,11 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     // the listAttacks read keeps the hot path cheap. Mirrors the same
     // optimization on the PATCH /:id/attacks/:attackId route.
     if (data.dependencies && data.dependencies.length > 0) {
-      const currentAttacks = await listAttacks(campaignId)
+      // Include archived attacks (issue #106 U6): an archived attack is
+      // hidden from the editor listing but remains a structurally valid
+      // dependency target — excluding it here would make the DAG
+      // validator misreport a real dependency as "non-existent".
+      const currentAttacks = await listAttacks(campaignId, { showArchived: true })
       const proposed = [
         ...currentAttacks.map((a) => ({
           id: a.id,
@@ -293,7 +312,8 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
     }
 
-    const campaignAttacks = await listAttacks(campaignId)
+    const { showArchived } = c.req.valid('query')
+    const campaignAttacks = await listAttacks(campaignId, { showArchived })
     return c.json({ attacks: campaignAttacks }, 200)
   })
 
@@ -346,7 +366,8 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     // changed. Other field changes (mode, wordlist, etc.) do not affect
     // the dependency graph, so skipping the load avoids the extra query.
     if (data.dependencies !== undefined) {
-      const currentAttacks = await listAttacks(campaignId)
+      // Include archived attacks — see the create-route comment above.
+      const currentAttacks = await listAttacks(campaignId, { showArchived: true })
       const proposed = currentAttacks.map((a) => ({
         id: a.id,
         dependencies:
@@ -388,12 +409,22 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     }
 
     const { userId } = c.get('scopedUser')!
-    const attack = await deleteAttack(attackId, { actorType: 'user', actorId: userId })
+    const result = await deleteAttack(attackId, { actorType: 'user', actorId: userId })
 
-    if (!attack) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+    switch (result.kind) {
+      case 'not_found':
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+      case 'not_deletable':
+        // ADR-0019 / issue #106 U6: an attack that has generated at least
+        // one task is permanent — archive-only.
+        return dashboardError(
+          c,
+          409,
+          'NOT_DELETABLE',
+          'Attack has run and is now permanent; it cannot be deleted, only archived.'
+        )
+      case 'deleted':
+        return c.json({ deleted: true as const }, 200)
     }
-
-    return c.json({ deleted: true as const }, 200)
   })
 }

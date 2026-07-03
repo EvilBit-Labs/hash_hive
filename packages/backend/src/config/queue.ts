@@ -31,6 +31,11 @@ export const QUEUE_NAMES = {
   // Deduped per import via a deterministic jobId built from hashListId +
   // staging key; QueueManager auto-pairs with removeOnComplete/removeOnFail.
   HASH_IMPORT_PROPAGATION: 'jobs-hash-import-propagation',
+  // Blob-reclamation sweep (issue #106 U11). Scheduled daily: reclaims the
+  // object-store blob (not the row) of word/rule/mask list resources
+  // archived past BLOB_RECLAMATION_RETENTION, closing the restore-vs-sweep
+  // race with an atomic intent-stamp before any deleteFile call.
+  BLOB_RECLAMATION: 'jobs-blob-reclamation',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

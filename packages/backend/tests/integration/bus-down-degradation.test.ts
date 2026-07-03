@@ -111,6 +111,11 @@ if (!IS_ISOLATED) {
   mock.module('../../src/services/campaigns.js', () => ({
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),
     updateCampaignProgress: mock(() => Promise.resolve()),
+    // tasks.ts's generateTasksForAttack statically imports this (issue #106
+    // U6 permanence latch); the named import fails to link if the mock
+    // omits it. This suite only exercises updateTaskProgress, not
+    // generateTasksForAttack, so a no-op stub is sufficient.
+    latchAttackPermanent: mock(() => Promise.resolve()),
   }))
   mock.module('../../src/services/chunk-sizing.js', () => ({
     pickChunkSize: mock(() => 1000n),

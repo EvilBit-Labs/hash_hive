@@ -45,7 +45,8 @@ export const lifecycleResponseSchema = z.object({
  * deferred attack save behaves the same as a lifecycle transition.
  *
  * **Status codes returned:** 200 (success), 400 (INVALID_TRANSITION),
- * 409 (RESOURCE_MISSING / STALE_STATE), 500 (TASK_GENERATION_FAILED),
+ * 409 (RESOURCE_MISSING / RESOURCE_RECLAIMED / RESOURCE_ARCHIVED /
+ * STALE_STATE), 500 (TASK_GENERATION_FAILED),
  * 503 (SERVICE_UNAVAILABLE — wraps QUEUE_UNAVAILABLE and
  * RESOURCE_VALIDATION_FAILED). The exhaustive list is checked by the
  * lifecycle/alias route definitions' `responses` block: every status
@@ -75,6 +76,19 @@ export function respondToTransition(c: Context<AppEnv>, result: TransitionResult
       // than 400 — the request was well-formed, the state isn't.
       return dashboardError(c, 409, 'RESOURCE_MISSING', result.error)
     }
+    if (code === 'RESOURCE_RECLAIMED') {
+      // A referenced word/rule/mask list is a reclaimed shell — present,
+      // but unusable until re-uploaded and checksum-verified (issue #106
+      // U12 / R12). 409 for the same reason as RESOURCE_MISSING above.
+      return dashboardError(c, 409, 'RESOURCE_RECLAIMED', result.error)
+    }
+    if (code === 'RESOURCE_ARCHIVED') {
+      // A referenced hash list / word/rule/mask list is archived —
+      // present, but hidden from listings and refused as a reference for
+      // new work (issue #106 F5 code review). 409 for the same reason as
+      // RESOURCE_MISSING/RESOURCE_RECLAIMED above.
+      return dashboardError(c, 409, 'RESOURCE_ARCHIVED', result.error)
+    }
     if (code === 'STALE_STATE') {
       // Optimistic-concurrency loss: another writer transitioned this
       // campaign between our read and write. 409 signals the client
@@ -95,6 +109,10 @@ export function respondToTransition(c: Context<AppEnv>, result: TransitionResult
  * envelope. Returns:
  *   - `null` when validation succeeded (caller proceeds)
  *   - a 409 `RESOURCE_MISSING` Response when refs are missing
+ *   - a 409 `RESOURCE_RECLAIMED` Response when a referenced word/rule/
+ *     mask list is a reclaimed shell (issue #106 U12 / R12)
+ *   - a 409 `RESOURCE_ARCHIVED` Response when a referenced resource is
+ *     archived (issue #106 F5 code review)
  *   - a 503 `SERVICE_UNAVAILABLE` Response when the lookup itself
  *     threw (DB blip, query error) — mirrors `transitionCampaign`'s
  *     `RESOURCE_VALIDATION_FAILED` mapping so attack-write paths
@@ -109,6 +127,33 @@ export async function checkResourcesOrErrorResponse(
   try {
     const result = await validateCampaignResources(campaign, attacks)
     if (result.valid) return null
+    // Reclaimed-shell and archived refs take precedence in the message: a
+    // resource that is both missing (impossible here — it exists) and
+    // reclaimed/archived can't occur, but checking them first keeps the
+    // branch order matching the outcome's severity (unusable/hidden vs.
+    // entirely absent).
+    if (result.reclaimed.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: 'RESOURCE_RECLAIMED',
+            message: `Referenced resources are reclaimed shells (re-upload required): ${result.reclaimed.join(', ')}`,
+          },
+        },
+        409
+      )
+    }
+    if (result.archived.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: 'RESOURCE_ARCHIVED',
+            message: `Referenced resources are archived: ${result.archived.join(', ')}`,
+          },
+        },
+        409
+      )
+    }
     return c.json(
       {
         error: {

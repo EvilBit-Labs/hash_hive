@@ -224,7 +224,9 @@ if (!IS_ISOLATED) {
       }>
   )
 
-  type ResourceCheckResult = { valid: true } | { valid: false; missing: string[] }
+  type ResourceCheckResult =
+    | { valid: true }
+    | { valid: false; missing: string[]; reclaimed: string[]; archived: string[] }
   const mockValidateCampaignResources = mock(
     async (
       _campaign: { projectId: number; hashListId: number | null },
@@ -310,7 +312,7 @@ if (!IS_ISOLATED) {
     createAttack: mockCreateAttack,
     getAttackById: mockGetAttackByIdImpl,
     updateAttack: mockUpdateAttackImpl,
-    deleteAttack: mock(async () => null),
+    deleteAttack: mock(async () => ({ kind: 'not_found' as const })),
     transitionCampaign: mockTransitionCampaign,
     validateCampaignDAG: mock(async () => ({ valid: true })),
     // Cross-project resource pre-check on draft writes. Default to
@@ -325,6 +327,10 @@ if (!IS_ISOLATED) {
     updateCampaignProgress: mock(async () => undefined),
     // Likewise required by tasks.ts/retry.ts (#97 U6 completion trigger).
     enqueuePreemptionEvaluation: mock(async () => undefined),
+    // Likewise required by tasks.ts's generateTasksForAttack (issue #106
+    // U6 permanence latch) — no-op stub, no test in this file exercises
+    // real task generation against a real transaction.
+    latchAttackPermanent: mock(async () => undefined),
     resolveGenerationStrategy: () => 'inline' as const,
     INLINE_GENERATION_THRESHOLD: 100,
     _deps: {},
@@ -1023,6 +1029,8 @@ if (!IS_ISOLATED) {
       mockValidateCampaignResources.mockResolvedValueOnce({
         valid: false,
         missing: ['wordlist(99)'],
+        reclaimed: [],
+        archived: [],
       })
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
         method: 'POST',
@@ -1051,6 +1059,8 @@ if (!IS_ISOLATED) {
       mockValidateCampaignResources.mockResolvedValueOnce({
         valid: false,
         missing: ['rulelist(13)'],
+        reclaimed: [],
+        archived: [],
       })
       const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
         method: 'PATCH',
