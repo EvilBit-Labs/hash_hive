@@ -53,7 +53,12 @@ async function insertAgent(name: string): Promise<number> {
   return row!.id
 }
 
-async function insertTask(overrides: { agentId: number | null; status: string }): Promise<number> {
+async function insertTask(overrides: {
+  agentId: number | null
+  status: string
+  pausedReason?: string
+  preemptedByCampaignId?: number
+}): Promise<number> {
   const [row] = await db
     .insert(tasks)
     .values({
@@ -62,6 +67,8 @@ async function insertTask(overrides: { agentId: number | null; status: string })
       agentId: overrides.agentId,
       status: overrides.status,
       workRange: { start: 0, end: 100, total: 100 },
+      pausedReason: overrides.pausedReason ?? null,
+      preemptedByCampaignId: overrides.preemptedByCampaignId ?? null,
     })
     .returning({ id: tasks.id })
   return row!.id
@@ -208,6 +215,30 @@ describe('retireAgent: releases in-flight tasks (U8, R8)', () => {
     const completedAfter = await readTask(completedTaskId)
     expect(completedAfter?.status).toBe('exhausted')
     expect(completedAfter?.agentId).toBe(agentId)
+  })
+
+  it('releases a paused (preempted) task and clears its preemption metadata', async () => {
+    // Preemption leaves a task `paused` while RETAINING its agent_id. Retiring
+    // the agent must release those too, or they'd linger on the decommissioned
+    // agent until the next resume sweep.
+    const agentId = await insertAgent('retire-with-paused')
+    const pausedTaskId = await insertTask({
+      agentId,
+      status: 'paused',
+      pausedReason: 'preempted',
+      preemptedByCampaignId: ctx.campaignId,
+    })
+
+    const result = await retireAgent(agentId, ctx.projectId, SYSTEM_ACTOR)
+    expect(result.kind).toBe('retired')
+    if (result.kind !== 'retired') throw new Error('unreachable')
+    expect(result.releasedTaskIds).toContain(pausedTaskId)
+
+    const pausedAfter = await readTask(pausedTaskId)
+    expect(pausedAfter?.status).toBe('pending')
+    expect(pausedAfter?.agentId).toBeNull()
+    expect(pausedAfter?.pausedReason).toBeNull()
+    expect(pausedAfter?.preemptedByCampaignId).toBeNull()
   })
 
   it('a retired agent with released tasks runs no further work', async () => {

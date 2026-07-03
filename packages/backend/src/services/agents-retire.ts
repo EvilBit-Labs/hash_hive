@@ -33,7 +33,8 @@ export type RetireAgentResult =
  * Retire an agent: a terminal status flip with no restore path (unlike
  * the reversible archive/restore ADR-0019 pattern used by campaigns,
  * resources, and attacks). R8/R9: any task the agent currently holds
- * (`assigned` or `running`) is released back to `pending` with `agent_id`
+ * (`assigned`, `running`, or a preempted `paused` task that still carries
+ * its `agent_id`) is released back to `pending` with `agent_id`
  * cleared so the scheduler can reassign it to another agent, and the
  * agent's row plus all of its history (tasks, benchmarks, errors) is
  * retained — nothing is deleted.
@@ -111,9 +112,20 @@ export async function retireAgent(
         // The chunk is redone in full by whichever agent claims it next.
         progress: {},
         retryCount: 0,
+        // A preempted task sits in `paused` while RETAINING its agent_id (so
+        // the heartbeat stop-signal stays derivable). Retirement must release
+        // those too, or they'd linger on the decommissioned agent until the
+        // next resume sweep — clear the preemption metadata as we return them
+        // to `pending` so the scheduler treats them as fresh claimable work.
+        pausedReason: null,
+        preemptedByCampaignId: null,
+        pausedAt: null,
+        resumedAt: null,
         updatedAt: new Date(),
       })
-      .where(and(eq(tasks.agentId, agentId), inArray(tasks.status, ['assigned', 'running'])))
+      .where(
+        and(eq(tasks.agentId, agentId), inArray(tasks.status, ['assigned', 'running', 'paused']))
+      )
       .returning({ id: tasks.id, campaignId: tasks.campaignId })
 
     await recordAuditEvent(

@@ -168,7 +168,7 @@ function runMigrations(databaseUrl: string, redisUrl: string, s3Endpoint: string
     console.log('[E2E] Migrations applied')
   } catch (err) {
     const stderr = err instanceof Error && 'stderr' in err ? String(err.stderr) : String(err)
-    throw new Error(`Schema migration failed: ${stderr}`)
+    throw new Error(`Schema migration failed: ${stderr}`, { cause: err })
   }
 }
 
