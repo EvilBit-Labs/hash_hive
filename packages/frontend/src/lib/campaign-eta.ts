@@ -1,8 +1,6 @@
 import type { CampaignActiveAgent, CampaignTaskStats } from '../hooks/use-dashboard'
 
-const SECONDS_PER_MINUTE = 60
-const MINUTES_PER_HOUR = 60
-const HOURS_PER_DAY = 24
+import { formatDuration } from './duration'
 
 /**
  * Hashes-per-task floor used by the client-side ETA approximation. The
@@ -45,35 +43,4 @@ export function computeEta(
   const remainingHashes = remaining * HASHES_PER_TASK_PROXY
   const remainingSeconds = remainingHashes / aggregateSpeed
   return formatDuration(remainingSeconds)
-}
-
-/**
- * Format a duration (seconds) as a compact human string. Rounds to the
- * nearest minute for durations under a day, and to the nearest hour for
- * longer durations.
- *
- * Exported for tests; callers should prefer `computeEta`.
- */
-export function formatDuration(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '--'
-
-  const totalMinutes = Math.round(totalSeconds / SECONDS_PER_MINUTE)
-  if (totalMinutes < 1) {
-    return `${Math.round(totalSeconds)}s`
-  }
-
-  if (totalMinutes < MINUTES_PER_HOUR) {
-    return `${totalMinutes}m`
-  }
-
-  const totalHours = Math.floor(totalMinutes / MINUTES_PER_HOUR)
-  const minutes = totalMinutes - totalHours * MINUTES_PER_HOUR
-
-  if (totalHours < HOURS_PER_DAY) {
-    return minutes > 0 ? `${totalHours}h ${minutes}m` : `${totalHours}h`
-  }
-
-  const days = Math.floor(totalHours / HOURS_PER_DAY)
-  const hours = totalHours - days * HOURS_PER_DAY
-  return hours > 0 ? `${days}d ${hours}h` : `${days}d`
 }

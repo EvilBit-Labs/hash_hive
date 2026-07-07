@@ -1,4 +1,4 @@
-import { formatDuration } from './campaign-eta'
+import { formatDuration } from './duration'
 
 const SECONDS_PER_YEAR = 31_536_000
 
