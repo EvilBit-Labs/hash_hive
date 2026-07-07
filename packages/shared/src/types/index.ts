@@ -33,6 +33,7 @@ import type {
   campaignActiveAgentSchema,
   campaignAttackRowSchema,
   campaignDetailPayloadSchema,
+  campaignEtaSchema,
   campaignLifecycleActionSchema,
   campaignPriorityBucketSchema,
   campaignSortFieldSchema,
@@ -266,6 +267,7 @@ export type AgentRetireOutcome = z.infer<typeof agentRetireOutcomeSchema>
 export type AgentRetireResponse = z.infer<typeof agentRetireResponseSchema>
 export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
+export type CampaignEta = z.infer<typeof campaignEtaSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>
 export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js'
 

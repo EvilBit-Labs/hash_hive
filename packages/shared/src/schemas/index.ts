@@ -1217,6 +1217,42 @@ export const campaignAttackRowSchema = z.object({
 })
 
 /**
+ * Campaign-level ETA (issue #100): a read-time rollup of
+ * `campaignAttackRowSchema.estimatedSecondsRemaining` across a campaign's
+ * non-terminal attacks, encoded as a discriminated union so every display
+ * surface renders the same honesty state instead of inventing its own
+ * copy for "no data yet". Modeled as a union (not a bare nullable number)
+ * because the reason a number is absent — still estimating, paused, no
+ * agents, or genuinely complete — changes what the UI should say, and
+ * `lower_bound` needs an extra `pendingAttacks` count that no other state
+ * carries. `seconds` reuses `keyspaceCoordSchema` because the underlying
+ * per-attack values are bigint-safe (`number | string`) and a campaign-wide
+ * sum can only be larger.
+ *
+ * - `ready` — every non-terminal attack resolved; `seconds` is exact.
+ * - `lower_bound` — at least one non-terminal attack has no throughput/
+ *   keyspace yet; `seconds` sums only the resolved attacks and
+ *   `pendingAttacks` counts the rest, so the UI can render "≥ Xh (N still
+ *   estimating)" instead of silently understating or blanking the field.
+ * - `estimating` — no non-terminal attack has resolved yet.
+ * - `paused` — the campaign is paused; a sum would be stale, not live.
+ * - `no_agents` — no agent is currently working the campaign.
+ * - `complete` — zero non-terminal attacks remain (never a computed "0h").
+ */
+export const campaignEtaSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('ready'), seconds: keyspaceCoordSchema }),
+  z.object({
+    state: z.literal('lower_bound'),
+    seconds: keyspaceCoordSchema,
+    pendingAttacks: z.number().int().positive(),
+  }),
+  z.object({ state: z.literal('estimating') }),
+  z.object({ state: z.literal('paused') }),
+  z.object({ state: z.literal('no_agents') }),
+  z.object({ state: z.literal('complete') }),
+])
+
+/**
  * Full response shape of `GET /dashboard/campaigns/:id`. Single
  * authoritative contract that both the route handler and the
  * `useCampaignDetail` hook validate against.
@@ -1226,6 +1262,7 @@ export const campaignDetailPayloadSchema = z.object({
   attacks: z.array(campaignAttackRowSchema),
   taskStats: campaignTaskStatsSchema,
   activeAgents: z.array(campaignActiveAgentSchema),
+  eta: campaignEtaSchema,
 })
 
 // ─── Realtime / WebSocket connection ────────────────────────────────

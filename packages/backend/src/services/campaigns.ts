@@ -90,6 +90,10 @@ export {
 // imports it from the same `services/campaigns` facade as its sibling
 // payload builders (keeps that route's service mock to one module).
 export { getCampaignAttacksWithRuntime } from './attacks/runtime.js'
+// Campaign-level ETA rollup (issue #100 U1) — re-exported here so the
+// detail/list routes (U2) reach it through the same facade as every other
+// campaign payload builder above.
+export { getCampaignEta, getCampaignEtasBatch } from './campaign-eta-rollup.js'
 export {
   _progressDeps,
   computeCampaignEta,
