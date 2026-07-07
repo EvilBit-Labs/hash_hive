@@ -24,6 +24,7 @@ import {
 import { deriveAttackRuntimes } from '../../services/attacks/runtime.js'
 import {
   archiveAttacks,
+  checkSingleHashModePerCampaign,
   createAttack,
   deleteAttack,
   findReclaimedResourceRefs,
@@ -246,6 +247,7 @@ const createAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -282,6 +284,22 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
         `Referenced resources are archived: ${archived.join(', ')}`
       )
     }
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): the
+    // campaign ETA rollup sums per-attack estimates across every
+    // non-terminal attack, which is only exact when they share one
+    // hashcat mode. The Control surface has no existing pre-check
+    // chokepoint (see the reclaimed/archived guard above), so this is
+    // checked directly rather than via validateCampaignResources, which
+    // this route never calls.
+    const modeCheck = await checkSingleHashModePerCampaign(data.campaignId, data.mode)
+    if (!modeCheck.valid) {
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+      )
+    }
     const user = c.get('currentUser')
     const attack = await createAttack(
       { ...data, projectId },
@@ -316,6 +334,7 @@ const updateAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -350,6 +369,19 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
           409,
           'conflict',
           `Referenced resources are archived: ${archived.join(', ')}`
+        )
+      }
+    }
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1) — only
+    // fires when `mode` is actually part of the patch.
+    if (body.mode !== undefined) {
+      const modeCheck = await checkSingleHashModePerCampaign(existing.campaignId, body.mode, id)
+      if (!modeCheck.valid) {
+        return problemResponse(
+          c,
+          422,
+          'attack_mode_conflict',
+          `Attack mode ${body.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
         )
       }
     }

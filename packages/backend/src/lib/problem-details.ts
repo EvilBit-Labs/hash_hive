@@ -24,6 +24,10 @@ export type ProblemCode =
   // A record is permanent (has run / been referenced) and is archive-only —
   // used by the attack DELETE guard (ADR-0019, issue #106 U6/U10).
   | 'not_deletable'
+  // A campaign's non-terminal attacks must share one hashcat mode so the
+  // sum-of-ETAs model stays exact (issue #100 R15 / AS1). Used by the
+  // attack create/update mode-consistency guard.
+  | 'attack_mode_conflict'
 
 interface ProblemMeta {
   type: string
@@ -66,6 +70,10 @@ const PROBLEM_REGISTRY: Record<ProblemCode, ProblemMeta> = {
   not_deletable: {
     type: 'https://hashhive.dev/errors/not-deletable',
     title: 'Not deletable',
+  },
+  attack_mode_conflict: {
+    type: 'https://hashhive.dev/errors/attack-mode-conflict',
+    title: 'Attack mode conflict',
   },
 }
 

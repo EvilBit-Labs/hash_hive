@@ -245,6 +245,11 @@ if (!IS_ISOLATED) {
     // the named import fails to link if the campaigns.js mock omits it.
     // No refs are ever reclaimed or archived in this RBAC-focused suite.
     findReclaimedResourceRefs: mock(() => Promise.resolve({ reclaimed: [], archived: [] })),
+    // Issue #100 U5 — single-hash-mode-per-campaign guard. `control/
+    // attacks.ts` statically imports this too; the named import fails to
+    // link if the campaigns.js mock omits it. No mode conflicts are
+    // exercised in this RBAC-focused suite.
+    checkSingleHashModePerCampaign: mock(() => Promise.resolve({ valid: true })),
   }))
 
   const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {

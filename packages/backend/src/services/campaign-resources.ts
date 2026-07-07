@@ -6,10 +6,11 @@
  * createCampaignWithAttacks, the standalone attack-write routes) keep
  * importing through the `services/campaigns.ts` facade.
  */
-import { hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
-import { and, eq, inArray } from 'drizzle-orm'
+import { attacks, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { deriveAttackRuntimes } from './attacks/runtime.js'
 
 // ─── Global (non-archivable) lookups ─────────────────────────────────
 //
@@ -296,6 +297,90 @@ export async function findReclaimedResourceRefs(
     reclaimed: results.flatMap((r) => r.reclaimed),
     archived: results.flatMap((r) => r.archived),
   }
+}
+
+// ─── Single-hash-mode-per-campaign enforcement (issue #100 R15 / AS1) ────
+//
+// The campaign ETA rollup sums per-attack `estimateSecondsRemaining`
+// across every non-terminal attack in a campaign. That sum is only the
+// correct expected search time when every non-terminal attack shares one
+// fleet-throughput figure — i.e. one hashcat mode. Nothing at the schema
+// layer prevents a mixed-mode campaign, so this check makes single-mode
+// an enforced invariant at attack write time rather than an assumption.
+//
+// Standalone (mirrors `findReclaimedResourceRefs` above) because the
+// Control API attack routes (`routes/control/attacks.ts`) never call
+// `validateCampaignResources` — they validate resource refs via FK
+// constraints alone. Burying this inside `validateCampaignResources`
+// would silently skip the Control surface.
+
+const NON_TERMINAL_ATTACK_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'paused'])
+
+export type ModeConsistencyResult =
+  | { valid: true }
+  | { valid: false; conflictingMode: number; conflictingAttackId: number }
+
+/**
+ * Verify `newMode` matches every other non-terminal (pending/running/
+ * paused), non-archived attack already in `campaignId`. A campaign with
+ * no such siblings (first attack, or every existing attack has reached a
+ * terminal status / is archived) always passes — mixed-mode history from
+ * before this check landed is out of scope (see plan AS1).
+ *
+ * Reuses `deriveAttackRuntimes` for the status ladder rather than
+ * re-deriving it from task aggregates here, so this check can never drift
+ * from the read-time status the dashboard and Control surfaces already
+ * show (issue #99).
+ *
+ * `excludeAttackId` lets the update path exclude the attack being
+ * updated from its own sibling set.
+ */
+export async function checkSingleHashModePerCampaign(
+  campaignId: number,
+  newMode: number,
+  excludeAttackId?: number
+): Promise<ModeConsistencyResult> {
+  // Archived attacks are hidden from the campaign editor / scheduler
+  // (schema.ts comment on `attacks.archivedAt`) — a user creating a new
+  // attack has no visibility into an archived sibling's mode, so it does
+  // not count as a conflicting sibling here (mirrors `listAttacks()`'s
+  // default exclusion of archived rows).
+  const isSibling =
+    excludeAttackId === undefined
+      ? and(eq(attacks.campaignId, campaignId), isNull(attacks.archivedAt))
+      : and(
+          eq(attacks.campaignId, campaignId),
+          isNull(attacks.archivedAt),
+          ne(attacks.id, excludeAttackId)
+        )
+
+  const siblingRows = await db
+    .select({
+      id: attacks.id,
+      campaignId: attacks.campaignId,
+      projectId: attacks.projectId,
+      mode: attacks.mode,
+      keyspace: attacks.keyspace,
+    })
+    .from(attacks)
+    .where(isSibling)
+
+  if (siblingRows.length === 0) return { valid: true }
+
+  const runtimes = await deriveAttackRuntimes(siblingRows)
+  const conflictingSibling = siblingRows.find((row) => {
+    if (row.mode === newMode) return false
+    const status = runtimes.get(row.id)?.status ?? 'pending'
+    return NON_TERMINAL_ATTACK_STATUSES.has(status)
+  })
+
+  return conflictingSibling
+    ? {
+        valid: false,
+        conflictingMode: conflictingSibling.mode,
+        conflictingAttackId: conflictingSibling.id,
+      }
+    : { valid: true }
 }
 
 function dedupIds<T extends Record<string, unknown>>(

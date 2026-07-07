@@ -252,6 +252,20 @@ if (!IS_ISOLATED) {
     ): Promise<ResourceCheckResult> => ({ valid: true })
   )
 
+  // Issue #100 U5: single-hash-mode-per-campaign guard. Default to valid
+  // so existing attack-write tests that don't care about mode conflicts
+  // are unaffected; individual tests override via .mockResolvedValueOnce.
+  type ModeCheckResult =
+    | { valid: true }
+    | { valid: false; conflictingMode: number; conflictingAttackId: number }
+  const mockCheckSingleHashModePerCampaign = mock(
+    async (
+      _campaignId: number,
+      _newMode: number,
+      _excludeAttackId?: number
+    ): Promise<ModeCheckResult> => ({ valid: true })
+  )
+
   const mockCreateCampaign = mock<CampaignsService['createCampaign']>(async (data) =>
     makeCampaign({ name: data.name, projectId: data.projectId, hashListId: data.hashListId })
   )
@@ -339,6 +353,7 @@ if (!IS_ISOLATED) {
     // Cross-project resource pre-check on draft writes. Default to
     // valid; individual tests override per case via mockResolvedValueOnce.
     validateCampaignResources: mockValidateCampaignResources,
+    checkSingleHashModePerCampaign: mockCheckSingleHashModePerCampaign,
     // Real production implementation — caught by the dynamic-import
     // above. Production drift now fails the tests immediately instead
     // of silently diverging from a hand-ported stub.
@@ -1201,6 +1216,71 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(503)
       const body = (await res.json()) as { error?: { code?: string } }
       expect(body.error?.code).toBe('SERVICE_UNAVAILABLE')
+    })
+  })
+
+  describe('Single-hash-mode-per-campaign guard (issue #100 R15, AE6)', () => {
+    it('POST /:id/attacks returns 422 ATTACK_MODE_CONFLICT when the mode conflicts with a non-terminal sibling', async () => {
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('1000')
+      expect(body.error?.message).toContain('42')
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 1000)
+    })
+
+    it('POST /:id/attacks succeeds when the mode matches existing siblings (or the campaign has none)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      })
+      expect(res.status).toBe(201)
+    })
+
+    it('PATCH /:id/attacks/:attackId returns 422 ATTACK_MODE_CONFLICT when changing to a conflicting mode', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] })
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 1000, 5)
+    })
+
+    it('PATCH /:id/attacks/:attackId skips the mode-consistency check when mode is not part of the patch', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] })
+      mockCheckSingleHashModePerCampaign.mockClear()
+      // A prior test in this file may have left validateCampaignResources
+      // reset to no implementation (mockReset, no restored default) —
+      // this PATCH changes rulelistId, so the resource-ref check runs and
+      // needs a resolved value to reach 200.
+      mockValidateCampaignResources.mockResolvedValueOnce({ valid: true })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ rulelistId: 13 }),
+      })
+      expect(res.status).toBe(200)
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledTimes(0)
     })
   })
 

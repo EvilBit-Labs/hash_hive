@@ -24,6 +24,7 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
 import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
+  checkSingleHashModePerCampaign,
   createAttack,
   deleteAttack,
   getAttackById,
@@ -122,6 +123,10 @@ const createAttackRoute = createRoute({
       description: 'Referenced resources missing or cross-project.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
+    422: {
+      description: 'Attack mode conflicts with an existing non-terminal attack in this campaign.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
     503: {
       description: 'Resource validation lookup unavailable.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -178,6 +183,10 @@ const updateAttackRoute = createRoute({
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Referenced resources missing or cross-project.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    422: {
+      description: 'Attack mode conflicts with an existing non-terminal attack in this campaign.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     503: {
@@ -255,6 +264,22 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
         { route: 'POST /:id/attacks', campaignId, projectId: campaign.projectId }
       )
       if (errResp) return errResp
+    }
+
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): the
+    // campaign ETA rollup sums per-attack estimates across every
+    // non-terminal attack, which is only exact when they share one
+    // hashcat mode. Reject before the DAG check so a mode conflict is
+    // reported without also validating a dependency graph that would be
+    // discarded anyway.
+    const modeCheck = await checkSingleHashModePerCampaign(campaignId, data.mode)
+    if (!modeCheck.valid) {
+      return dashboardError(
+        c,
+        422,
+        'ATTACK_MODE_CONFLICT',
+        `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+      )
     }
 
     // Pre-insert DAG validation: build the proposed graph (current
@@ -360,6 +385,21 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
         { route: 'PATCH /:id/attacks/:attackId', campaignId, projectId: parentCampaign.projectId }
       )
       if (errResp) return errResp
+    }
+
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): only
+    // fires when `mode` is actually part of the patch — an update that
+    // doesn't touch mode cannot introduce a conflict.
+    if (data.mode !== undefined) {
+      const modeCheck = await checkSingleHashModePerCampaign(campaignId, data.mode, attackId)
+      if (!modeCheck.valid) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+        )
+      }
     }
 
     // Pre-update DAG validation: only when dependencies are being

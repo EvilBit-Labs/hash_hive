@@ -110,7 +110,11 @@ export {
   shouldAutoCompleteCampaign,
   updateCampaignProgress,
 } from './campaign-progress.js'
-export { findReclaimedResourceRefs, validateCampaignResources } from './campaign-resources.js'
+export {
+  checkSingleHashModePerCampaign,
+  findReclaimedResourceRefs,
+  validateCampaignResources,
+} from './campaign-resources.js'
 // Attack archive/restore (issue #106 U6) — mirrors the resources-archive.ts
 // split: kept out of this file to stay under the 800-line guideline,
 // re-exported here so callers use the same `services/campaigns` facade as

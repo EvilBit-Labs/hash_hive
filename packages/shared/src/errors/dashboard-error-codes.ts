@@ -78,6 +78,11 @@ export const DASHBOARD_ERROR_CODES = [
   // ─── Campaign DAG ─────────────────────────────────────────────────
   'DAG_INVALID',
   'TASK_GENERATION_FAILED',
+  // A campaign's non-terminal attacks must share one hashcat mode so the
+  // sum-of-ETAs model stays exact (issue #100 R15 / AS1). Rejects attack
+  // create/update when the new mode differs from an existing non-terminal
+  // sibling attack in the same campaign.
+  'ATTACK_MODE_CONFLICT',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

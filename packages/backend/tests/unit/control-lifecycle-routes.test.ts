@@ -115,19 +115,85 @@ if (!IS_ISOLATED) {
     ids.map((id): Outcome => ({ id, outcome: 'restored' }))
   )
 
+  // Controllable create/update fixtures (issue #100 U5 — mode-conflict
+  // guard tests below). Campaign 100 / attack 5 are the only ids these
+  // tests exercise; everything else 404s like the rest of this file.
+  interface AttackRow {
+    id: number
+    campaignId: number
+    projectId: number
+    mode: number
+    keyspace: string | null
+  }
+  const mockGetCampaignByIdCtrl = mock(async (id: number) =>
+    id === 100 ? { id: 100, projectId: 1 } : null
+  )
+  const mockGetAttackByIdCtrl = mock(
+    async (id: number): Promise<AttackRow | null> =>
+      id === 5 ? { id: 5, campaignId: 100, projectId: 1, mode: 0, keyspace: null } : null
+  )
+  const mockCreateAttackCtrl = mock(
+    async (data: { campaignId: number; projectId: number; mode: number }): Promise<AttackRow> => ({
+      id: 555,
+      campaignId: data.campaignId,
+      projectId: data.projectId,
+      mode: data.mode,
+      keyspace: null,
+    })
+  )
+  const mockUpdateAttackCtrl = mock(
+    async (id: number, data: { mode?: number }): Promise<AttackRow> => ({
+      id,
+      campaignId: 100,
+      projectId: 1,
+      mode: data.mode ?? 0,
+      keyspace: null,
+    })
+  )
+
+  // Issue #100 U5: single-hash-mode-per-campaign guard. Defaults to valid;
+  // individual tests override via .mockResolvedValueOnce.
+  type ModeCheckResult =
+    | { valid: true }
+    | { valid: false; conflictingMode: number; conflictingAttackId: number }
+  const mockCheckSingleHashModePerCampaign = mock(
+    async (
+      _campaignId: number,
+      _newMode: number,
+      _excludeAttackId?: number
+    ): Promise<ModeCheckResult> => ({ valid: true })
+  )
+
   mock.module('../../src/services/campaigns.js', () => ({
     archiveAttacks: mockArchiveAttacks,
     restoreAttacks: mockRestoreAttacks,
-    createAttack: mock(async () => null),
+    createAttack: mockCreateAttackCtrl,
     deleteAttack: mock(async () => ({ kind: 'not_found' as const })),
-    getAttackById: mock(async () => null),
-    getCampaignById: mock(async () => null),
+    getAttackById: mockGetAttackByIdCtrl,
+    getCampaignById: mockGetCampaignByIdCtrl,
     listAttacksPaginated: mock(async () => ({ items: [], total: 0 })),
-    updateAttack: mock(async () => null),
+    updateAttack: mockUpdateAttackCtrl,
+    checkSingleHashModePerCampaign: mockCheckSingleHashModePerCampaign,
     // control/attacks.ts statically imports this (issue #106 U12); the named
     // import fails to link if the campaigns.js mock omits it. No refs are
     // ever reclaimed or archived in this lifecycle-focused suite.
     findReclaimedResourceRefs: mock(async () => ({ reclaimed: [], archived: [] })),
+  }))
+
+  // `control/attacks.ts` imports `deriveAttackRuntimes` directly from
+  // `services/attacks/runtime.js` (not through the campaigns.js facade)
+  // to attach derived status/ETA via `withRuntime`/`withRuntimeMany`. Mock
+  // it here rather than exercising the real aggregate-query path — the
+  // `db/index.js` stub below has no `.groupBy()` and this file's focus is
+  // route wiring, not the runtime ladder (covered elsewhere).
+  const mockDeriveAttackRuntimes = mock(async (attackList: ReadonlyArray<{ id: number }>) => {
+    const result = new Map<number, { status: string; estimatedSecondsRemaining: null }>()
+    for (const a of attackList)
+      result.set(a.id, { status: 'pending', estimatedSecondsRemaining: null })
+    return result
+  })
+  mock.module('../../src/services/attacks/runtime.js', () => ({
+    deriveAttackRuntimes: mockDeriveAttackRuntimes,
   }))
 
   // ─── services/agents.js — controllable retireAgent, inert stubs for
@@ -248,6 +314,11 @@ if (!IS_ISOLATED) {
     mockArchiveAttacks.mockClear()
     mockRestoreAttacks.mockClear()
     mockRetireAgent.mockClear()
+    mockCreateAttackCtrl.mockClear()
+    mockUpdateAttackCtrl.mockClear()
+    mockCheckSingleHashModePerCampaign.mockClear()
+    mockCheckSingleHashModePerCampaign.mockReset()
+    mockCheckSingleHashModePerCampaign.mockImplementation(async () => ({ valid: true }))
   })
 
   // ─── Hash lists ───────────────────────────────────────────────────
@@ -437,6 +508,83 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(409)
       const body = await res.json()
       expect(body.type).toBe('https://hashhive.dev/errors/conflict')
+    })
+  })
+
+  // ─── Single-hash-mode-per-campaign guard (issue #100 R15, AE6) ─────
+
+  describe('POST / + PATCH /{id}: single-hash-mode-per-campaign guard', () => {
+    it('creates an attack when the mode check passes', async () => {
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ campaignId: 100, mode: 0 }),
+      })
+      expect(res.status).toBe(201)
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 0)
+    })
+
+    it('rejects create with 422 attack_mode_conflict problem+json when the mode conflicts', async () => {
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ campaignId: 100, mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      expect(res.headers.get('content-type')).toContain('application/problem+json')
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/attack-mode-conflict')
+      expect(body.detail).toContain('1000')
+      expect(body.detail).toContain('42')
+      expect(mockCreateAttackCtrl).not.toHaveBeenCalled()
+    })
+
+    it('updates an attack mode when the mode check passes', async () => {
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/5', {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      })
+      expect(res.status).toBe(200)
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 0, 5)
+    })
+
+    it('rejects update with 422 attack_mode_conflict problem+json when the mode conflicts', async () => {
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/5', {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      expect(res.headers.get('content-type')).toContain('application/problem+json')
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/attack-mode-conflict')
+      expect(mockUpdateAttackCtrl).not.toHaveBeenCalled()
+    })
+
+    it('skips the mode-consistency check on update when mode is not part of the patch', async () => {
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/5', {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ advancedConfiguration: { foo: 'bar' } }),
+      })
+      expect(res.status).toBe(200)
+      expect(mockCheckSingleHashModePerCampaign).not.toHaveBeenCalled()
     })
   })
 

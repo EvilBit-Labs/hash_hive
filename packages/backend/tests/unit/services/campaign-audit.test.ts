@@ -205,6 +205,9 @@ if (!IS_ISOLATED) {
     // `services/campaigns.js` re-exports this (issue #106 U12); the named
     // export fails to link if the campaign-resources.js mock omits it.
     findReclaimedResourceRefs: mock(async () => ({ reclaimed: [], archived: [] })),
+    // `services/campaigns.js` re-exports this too (issue #100 U5); same
+    // link requirement as findReclaimedResourceRefs above.
+    checkSingleHashModePerCampaign: mock(async () => ({ valid: true })),
   }))
 
   mock.module('../../../src/services/campaign-dag.js', () => ({

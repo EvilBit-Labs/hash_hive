@@ -214,6 +214,17 @@ if (!IS_ISOLATED) {
     transitionCampaign: mock(async () => ({ campaign: makeCampaign() })),
     validateCampaignDAG: mock(async () => ({ valid: true })),
     validateCampaignResources: mock(async () => ({ valid: true })),
+    // Issue #100 U5 — single-hash-mode-per-campaign guard. This file's
+    // attack-write requests never exercise a mode conflict, so a static
+    // valid stub is enough (mirrors the other exports above).
+    checkSingleHashModePerCampaign: mock(async () => ({ valid: true })),
+    // Issue #100 U1/U2 — campaign ETA rollup exports statically imported by
+    // the dashboard campaigns route (loaded here via src/index.js). Never
+    // invoked in this archive/restore suite; stubs exist only so the named
+    // imports link (the campaigns.js mock-static-import gotcha).
+    getCampaignEta: mock(async () => ({ state: 'estimating' as const })),
+    getCampaignEtasBatch: mock(async () => new Map()),
+    computeCampaignEtaState: mock(() => ({ state: 'estimating' as const })),
     validateProposedDAG: mock(() => ({ valid: true })),
     updateCampaignProgress: mock(async () => undefined),
     enqueuePreemptionEvaluation: mock(async () => undefined),
