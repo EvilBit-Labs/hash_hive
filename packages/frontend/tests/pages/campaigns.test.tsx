@@ -324,4 +324,31 @@ describe('CampaignsPage', () => {
     expect(highRow?.textContent).toContain('high')
     expect(lowRow?.textContent).toContain('low')
   })
+
+  it('renders a per-row campaign ETA sourced from the backend rollup (issue #100)', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        status: 200,
+        body: mockCampaignsResponse({
+          count: 2,
+          campaigns: [
+            { id: 1, name: 'Ready Campaign', eta: { state: 'ready', seconds: 12000 } },
+            { id: 2, name: 'Paused Campaign', eta: { state: 'paused' } },
+          ],
+        }),
+      },
+    })
+
+    selectProject()
+    renderWithProviders(<CampaignsPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Ready Campaign')).toBeDefined()
+    })
+
+    const readyRow = screen.getByText('Ready Campaign').closest('tr')
+    const pausedRow = screen.getByText('Paused Campaign').closest('tr')
+    expect(readyRow?.textContent).toContain('3h 20m')
+    expect(pausedRow?.textContent).toContain('Paused')
+  })
 })

@@ -3,6 +3,7 @@ import type {
   AgentTaskSummary,
   AgentWorstSeverity,
   CampaignDetailPayload,
+  CampaignEta,
   DashboardStats,
   SelectAgentError,
   UseCampaignsOptions,
@@ -21,6 +22,7 @@ export type {
   CampaignActiveAgent,
   CampaignAttackRow,
   CampaignDetailPayload,
+  CampaignEta,
   CampaignLifecycleAction,
   CampaignSortField,
   CampaignSortOrder,
@@ -71,6 +73,11 @@ interface Campaign {
   createdAt: string
   startedAt: string | null
   completedAt: string | null
+  // Issue #100: read-time rollup from the batched `/dashboard/campaigns`
+  // list route. Always present on the wire (the route defaults a
+  // campaign with no eta entry to `{ state: 'complete' }`), typed
+  // optional here only because pre-#100 fixtures may omit it.
+  eta?: CampaignEta
 }
 
 // SelectAgentError has `createdAt: Date` (Drizzle row shape) but the wire

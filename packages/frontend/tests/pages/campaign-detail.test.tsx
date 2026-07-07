@@ -1,3 +1,5 @@
+import type { CampaignEta } from '@hashhive/shared'
+
 import { afterEach, describe, expect, it } from 'bun:test'
 
 import { CampaignDetailPage } from '../../src/pages/campaign-detail'
@@ -116,25 +118,62 @@ describe('CampaignDetailPage', () => {
     expect(failed.textContent).toContain('1')
   })
 
-  it('renders ETA "--" when no agents are reporting speed', async () => {
-    const data = mockCampaignDetailResponse({
-      taskStats: { total: 10, pending: 10, running: 0, completed: 0, failed: 0 },
+  describe('campaign-level ETA (issue #100)', () => {
+    async function renderWithEta(eta: CampaignEta) {
+      const data = mockCampaignDetailResponse({ eta })
+      fetchMock = mockFetch({
+        '/dashboard/campaigns/1': { status: 200, body: data },
+      })
+
+      selectProject()
+      renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
+        initialRoute: '/campaigns/1',
+      })
+
+      await waitFor(() => {
+        expect(screen.getByText('NTLM Campaign')).toBeDefined()
+      })
+    }
+
+    it('renders the backend-computed duration for the ready state, labeled as time-to-exhaust (AE1)', async () => {
+      await renderWithEta({ state: 'ready', seconds: 12000 })
+
+      const etaCell = screen.getByTestId('campaign-eta')
+      expect(etaCell.textContent).toBe('3h 20m')
+      expect(etaCell.closest('p')?.getAttribute('title')).toMatch(/estimated time to exhaust/i)
     })
 
-    fetchMock = mockFetch({
-      '/dashboard/campaigns/1': { status: 200, body: data },
+    it('renders "Estimating..." as a reason, not a number, when no throughput is live yet (AE2)', async () => {
+      await renderWithEta({ state: 'estimating' })
+
+      expect(screen.getByTestId('campaign-eta').textContent).toBe('Estimating...')
     })
 
-    selectProject()
-    renderWithRouter([{ path: '/campaigns/:id', element: <CampaignDetailPage /> }], {
-      initialRoute: '/campaigns/1',
+    it('renders "Paused" instead of a stale number when the campaign is paused (AE3)', async () => {
+      await renderWithEta({ state: 'paused' })
+
+      expect(screen.getByTestId('campaign-eta').textContent).toBe('Paused')
     })
 
-    await waitFor(() => {
-      expect(screen.getByText('NTLM Campaign')).toBeDefined()
+    it('renders a lower-bound sum with a pending-attack count, never silently understating (AE4)', async () => {
+      await renderWithEta({ state: 'lower_bound', seconds: 14400, pendingAttacks: 1 })
+
+      expect(screen.getByTestId('campaign-eta').textContent).toBe(
+        '≥ 4h (1 attack still estimating)'
+      )
     })
 
-    expect(screen.getByTestId('campaign-eta').textContent).toBe('--')
+    it('renders "No agents assigned" when no agent is currently working the campaign', async () => {
+      await renderWithEta({ state: 'no_agents' })
+
+      expect(screen.getByTestId('campaign-eta').textContent).toBe('No agents assigned')
+    })
+
+    it('renders "Complete" rather than a fabricated "0h" when no non-terminal attacks remain (AE7)', async () => {
+      await renderWithEta({ state: 'complete' })
+
+      expect(screen.getByTestId('campaign-eta').textContent).toBe('Complete')
+    })
   })
 
   it('renders the active agents table when agents are active', async () => {

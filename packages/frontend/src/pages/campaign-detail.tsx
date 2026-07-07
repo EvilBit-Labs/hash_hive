@@ -25,7 +25,7 @@ import { useCampaignDetail } from '../hooks/use-dashboard'
 import { useHashListSummaries } from '../hooks/use-hash-lists'
 import { useResults } from '../hooks/use-results'
 import { formatAttackEta, formatAttackKeyspace } from '../lib/attack-format'
-import { computeEta } from '../lib/campaign-eta'
+import { formatCampaignEta } from '../lib/campaign-eta-display'
 import { readCampaignPercentage } from '../lib/campaign-progress'
 import { RESULTS_POLL_INTERVAL_MS } from '../lib/motion-presets'
 import { Permission } from '../lib/permissions'
@@ -356,9 +356,9 @@ export function CampaignDetailPage() {
     )
   }
 
-  const { campaign, attacks, taskStats, activeAgents } = data
+  const { campaign, attacks, taskStats, activeAgents, eta } = data
   const percentage = readCampaignPercentage(campaign.progress)
-  const eta = computeEta(taskStats, activeAgents)
+  const etaDisplay = formatCampaignEta(eta)
 
   const canStart = campaign.status === 'draft' || campaign.status === 'paused'
   const canPause = campaign.status === 'running'
@@ -450,8 +450,11 @@ export function CampaignDetailPage() {
               <h3 id="progress-heading" className="text-sm font-medium">
                 Progress
               </h3>
-              <p className="font-mono text-xs text-muted-foreground tabular-nums">
-                ETA: <span data-testid="campaign-eta">{eta}</span>
+              <p
+                className="font-mono text-xs text-muted-foreground tabular-nums"
+                title="Estimated time to exhaust the search across the remaining keyspace - not a promise of when a crack lands"
+              >
+                ETA: <span data-testid="campaign-eta">{etaDisplay}</span>
               </p>
             </div>
             <ProgressBar
