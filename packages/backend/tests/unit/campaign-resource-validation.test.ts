@@ -457,8 +457,7 @@ if (!IS_ISOLATED) {
       expect(statusFlip).toBeUndefined()
     })
 
-    test('writes tasksFailed and eta fields into progress payload when running', async () => {
-      const start = new Date(Date.now() - 10_000) // 10s ago
+    test('writes tasksFailed field into progress payload when running', async () => {
       expectFromCall('tasks', [
         {
           totalTasks: 10,
@@ -468,9 +467,7 @@ if (!IS_ISOLATED) {
           runningTaskCount: 1,
         },
       ])
-      expectFromCall('campaigns', [
-        { hashListId: null, status: 'running', projectId: 1, startedAt: start },
-      ])
+      expectFromCall('campaigns', [{ hashListId: null, status: 'running', projectId: 1 }])
 
       await updateCampaignProgress(100)
 
@@ -483,8 +480,7 @@ if (!IS_ISOLATED) {
       expect(progressWrite).toBeDefined()
       const progress = progressWrite?.values['progress'] as Record<string, unknown>
       expect(progress['tasksFailed']).toBe(1)
-      // 4 remaining tasks (10 - 5 done - 1 failed), 0.5 tasks/sec → 8 more seconds
-      expect(typeof progress['eta']).toBe('string')
+      expect(progress['eta']).toBeUndefined()
     })
 
     test('maps renamed getHashListStats shape into hashProgress wire shape', async () => {

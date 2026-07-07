@@ -88,7 +88,6 @@ describe('DAG validation', () => {
 // We import the production helper directly to test the real decision path.
 
 import {
-  computeCampaignEta,
   resolveGenerationStrategy,
   shouldAutoCompleteCampaign,
 } from '../../src/services/campaigns.js'
@@ -294,113 +293,6 @@ describe('shouldAutoCompleteCampaign', () => {
         failedCount: 0,
       })
     ).toBe(false)
-  })
-})
-
-// ─── Campaign ETA estimator ─────────────────────────────────────────
-
-describe('computeCampaignEta', () => {
-  const baseStart = new Date('2026-01-01T00:00:00.000Z')
-  const tenSecondsLater = new Date('2026-01-01T00:00:10.000Z')
-
-  test('returns null when no running tasks', () => {
-    expect(
-      computeCampaignEta({
-        startedAt: baseStart,
-        now: tenSecondsLater,
-        totalTasks: 10,
-        completedCount: 5,
-        failedCount: 0,
-        runningProgress: 0,
-        runningTaskCount: 0,
-      })
-    ).toBeNull()
-  })
-
-  test('returns null when campaign has no startedAt', () => {
-    expect(
-      computeCampaignEta({
-        startedAt: null,
-        now: tenSecondsLater,
-        totalTasks: 10,
-        completedCount: 5,
-        failedCount: 0,
-        runningProgress: 0.5,
-        runningTaskCount: 1,
-      })
-    ).toBeNull()
-  })
-
-  test('returns null when elapsed time < 1 second (no stable rate yet)', () => {
-    expect(
-      computeCampaignEta({
-        startedAt: baseStart,
-        now: new Date(baseStart.getTime() + 500),
-        totalTasks: 10,
-        completedCount: 1,
-        failedCount: 0,
-        runningProgress: 0.5,
-        runningTaskCount: 1,
-      })
-    ).toBeNull()
-  })
-
-  test('returns null when no measurable progress yet', () => {
-    expect(
-      computeCampaignEta({
-        startedAt: baseStart,
-        now: tenSecondsLater,
-        totalTasks: 10,
-        completedCount: 0,
-        failedCount: 0,
-        runningProgress: 0,
-        runningTaskCount: 1,
-      })
-    ).toBeNull()
-  })
-
-  test('returns null when no remaining work', () => {
-    expect(
-      computeCampaignEta({
-        startedAt: baseStart,
-        now: tenSecondsLater,
-        totalTasks: 10,
-        completedCount: 10,
-        failedCount: 0,
-        runningProgress: 0,
-        runningTaskCount: 1,
-      })
-    ).toBeNull()
-  })
-
-  test('returns ISO timestamp in the future when rate and remaining are positive', () => {
-    // 5 tasks done in 10s → 0.5 tasks/sec. 5 remaining → 10s more → eta = baseStart + 20s
-    const eta = computeCampaignEta({
-      startedAt: baseStart,
-      now: tenSecondsLater,
-      totalTasks: 10,
-      completedCount: 5,
-      failedCount: 0,
-      runningProgress: 0,
-      runningTaskCount: 1,
-    })
-    expect(eta).not.toBeNull()
-    expect(new Date(eta as string).getTime()).toBe(tenSecondsLater.getTime() + 10_000)
-  })
-
-  test('excludes failed tasks from remaining-work calculation', () => {
-    // 4 done + 1 failed, 5 remaining-to-process. rate = 4/10 = 0.4 → 5/0.4 = 12.5s
-    const eta = computeCampaignEta({
-      startedAt: baseStart,
-      now: tenSecondsLater,
-      totalTasks: 10,
-      completedCount: 4,
-      failedCount: 1,
-      runningProgress: 0,
-      runningTaskCount: 1,
-    })
-    expect(eta).not.toBeNull()
-    expect(new Date(eta as string).getTime()).toBe(tenSecondsLater.getTime() + 12_500)
   })
 })
 

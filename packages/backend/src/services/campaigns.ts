@@ -106,7 +106,6 @@ export {
 } from './campaign-eta-rollup.js'
 export {
   _progressDeps,
-  computeCampaignEta,
   shouldAutoCompleteCampaign,
   updateCampaignProgress,
 } from './campaign-progress.js'
