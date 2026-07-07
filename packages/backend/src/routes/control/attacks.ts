@@ -472,6 +472,16 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
 //                                  NEVER succeed for this record (it's
 //                                  permanent), 409 means it can't
 //                                  succeed RIGHT NOW.
+//   - mode_conflict             → 422 `attack_mode_conflict` (issue #100
+//                                  R15 / AS1 code review fix), NOT 409.
+//                                  Deliberate exception to the reversible-
+//                                  state rule above: this is the exact
+//                                  same semantic-invariant violation the
+//                                  create/update attack routes below
+//                                  already report as 422
+//                                  `attack_mode_conflict` — restore must
+//                                  match so the same problem `type` never
+//                                  carries two different statuses.
 //   - error                     → 500 `internal` (a per-id service
 //                                  failure, e.g. a DB error).
 
@@ -545,6 +555,7 @@ const restoreAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -570,6 +581,13 @@ controlAttackRoutes.openapi(restoreAttackRoute, async (c) => {
           409,
           'conflict',
           'attack references a reclaimed-shell resource; re-upload the resource before restoring'
+        )
+      case 'mode_conflict':
+        return problemResponse(
+          c,
+          422,
+          'attack_mode_conflict',
+          'restoring this attack would reintroduce a hashcat mode conflict with another non-terminal attack in this campaign'
         )
       case 'error':
         return problemResponse(c, 500, 'internal', 'restore failed')

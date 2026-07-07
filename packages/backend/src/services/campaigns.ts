@@ -101,6 +101,7 @@ export { getCampaignAttacksWithRuntime } from './attacks/runtime.js'
 export {
   type AttackEtaInput,
   computeCampaignEtaState,
+  getArchivedAttackIds,
   getCampaignEta,
   getCampaignEtasBatch,
 } from './campaign-eta-rollup.js'
@@ -417,6 +418,13 @@ export type CreateCampaignWithAttacksResult =
   // F5 code review) — present, but hidden from listings and refused as a
   // reference for new work.
   | { kind: 'resource_archived'; archived: string[] }
+  // The inline attacks[] array mixes more than one hashcat mode (issue
+  // #100 R15 / AS1 code review fix). The standalone attack-write routes
+  // enforce single-mode-per-campaign via `checkSingleHashModePerCampaign`,
+  // which compares a proposed mode against EXISTING db rows — a batch
+  // created in one shot has no existing rows to compare against, so this
+  // path checks the proposed set directly instead.
+  | { kind: 'mode_conflict'; modes: number[] }
 
 /**
  * Transactional create: campaign + attacks land in a single DB
@@ -452,6 +460,20 @@ export async function createCampaignWithAttacks(input: {
   const preCheck = validateProposedDAG(indexValidationInput)
   if (!preCheck.valid) {
     return { kind: 'dag_invalid', error: preCheck.error ?? 'Invalid DAG' }
+  }
+
+  // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1 code review
+  // fix): a campaign created in one shot must not mix hashcat modes across
+  // its inline attacks — the same invariant the standalone attack-write
+  // routes enforce via `checkSingleHashModePerCampaign`, checked here
+  // directly over the input array (no rows exist yet to compare against).
+  // Pure and synchronous, so it runs before any I/O, same as the DAG
+  // pre-check above.
+  if (input.attacks.length > 0) {
+    const distinctModes = [...new Set(input.attacks.map((a) => a.mode))]
+    if (distinctModes.length > 1) {
+      return { kind: 'mode_conflict', modes: distinctModes }
+    }
   }
 
   // Cross-project resource pre-check: refuse to persist a campaign or

@@ -1,3 +1,5 @@
+import type { AttackStatus } from '@hashhive/shared'
+
 /**
  * Cross-project resource validator for campaigns and attacks.
  *
@@ -314,7 +316,11 @@ export async function findReclaimedResourceRefs(
 // constraints alone. Burying this inside `validateCampaignResources`
 // would silently skip the Control surface.
 
-const NON_TERMINAL_ATTACK_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'paused'])
+const NON_TERMINAL_ATTACK_STATUSES: ReadonlySet<AttackStatus> = new Set([
+  'pending',
+  'running',
+  'paused',
+])
 
 export type ModeConsistencyResult =
   | { valid: true }

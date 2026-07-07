@@ -22,7 +22,7 @@ import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
-import { findReclaimedResourceRefs } from './campaign-resources.js'
+import { checkSingleHashModePerCampaign, findReclaimedResourceRefs } from './campaign-resources.js'
 
 /**
  * Archive is refused for a task-less (never-latched) attack — see
@@ -146,6 +146,22 @@ export async function restoreAttacks(
         })
         if (reclaimed.length > 0) {
           return { id, outcome: 'resource_reclaimed' }
+        }
+
+        // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1 code
+        // review fix): restoring un-archives the attack, making it a
+        // sibling again for the mode-consistency invariant the campaign
+        // ETA rollup depends on. Without this check, archive -> create a
+        // different-mode attack -> restore would silently re-introduce a
+        // mixed-mode campaign. Checked per-id (mirrors the reclaimed-shell
+        // check above); a batch restoring two different-mode archived
+        // attacks together, with no other non-archived sibling, can still
+        // slip through both checks since neither observes the other's
+        // not-yet-committed row — an accepted, narrow race the same as
+        // every other pre-check-then-write guard on this path.
+        const modeCheck = await checkSingleHashModePerCampaign(oldRow.campaignId, oldRow.mode, id)
+        if (!modeCheck.valid) {
+          return { id, outcome: 'mode_conflict' }
         }
 
         const result = await db.transaction(async (tx) => {

@@ -33,7 +33,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { checkSingleHashModePerCampaign } from '../../src/services/campaigns.js'
+import {
+  checkSingleHashModePerCampaign,
+  createCampaignWithAttacks,
+} from '../../src/services/campaigns.js'
 import { generateTasksForAttack } from '../../src/services/tasks.js'
 
 const TEST_SLUG = 'attack-mode-consistency-test-proj'
@@ -199,5 +202,39 @@ describe('checkSingleHashModePerCampaign (issue #100 R15 / AS1 / U5)', () => {
     await insertAttack(campaignId, { mode: 5 })
     const result = await checkSingleHashModePerCampaign(campaignId, 5)
     expect(result).toEqual({ valid: true })
+  })
+})
+
+// ─── createCampaignWithAttacks: single-mode enforcement on the one-shot
+// create path (issue #100 R15 / AS1 code review fix) ────────────────────
+//
+// `checkSingleHashModePerCampaign` above guards the standalone attack-write
+// routes, which compare a proposed mode against EXISTING db rows. The
+// transactional campaign+attacks create has no existing rows to compare
+// against — its own attacks[] input is the only source of a conflict — so
+// this is a separate code path with its own real-DB coverage.
+
+describe('createCampaignWithAttacks: single-hash-mode-per-campaign guard (issue #100 R15 / AS1)', () => {
+  it('rejects a one-shot create whose inline attacks mix hashcat modes', async () => {
+    const result = await createCampaignWithAttacks({
+      projectId: ctx.projectId,
+      name: `mode-conflict-create-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      attacks: [{ mode: 0 }, { mode: 1000 }],
+    })
+    expect(result).toEqual({ kind: 'mode_conflict', modes: [0, 1000] })
+  })
+
+  it('accepts a one-shot create whose inline attacks all share one mode', async () => {
+    const result = await createCampaignWithAttacks({
+      projectId: ctx.projectId,
+      name: `mode-consistent-create-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      attacks: [{ mode: 0 }, { mode: 0 }],
+    })
+    expect(result.kind).toBe('created')
+    if (result.kind === 'created') {
+      expect(result.attacks).toHaveLength(2)
+    }
   })
 })

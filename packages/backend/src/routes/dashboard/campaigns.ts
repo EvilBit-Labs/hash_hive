@@ -25,6 +25,7 @@ import {
   deleteCampaign,
   changeRunningCampaignPriority,
   computeCampaignEtaState,
+  getArchivedAttackIds,
   getCampaignAttacksWithRuntime,
   getCampaignById,
   getCampaignEtasBatch,
@@ -219,6 +220,10 @@ const createCampaignRoute = createRoute({
       description: 'Inline attacks referenced a missing resource.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
+    422: {
+      description: 'Inline attacks mix more than one hashcat mode.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
     503: {
       description: 'Transactional create could not run (e.g. DB unavailable).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -322,6 +327,15 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'mode_conflict') {
+    return dashboardError(
+      c,
+      422,
+      'ATTACK_MODE_CONFLICT',
+      `Campaign attacks must share one hashcat mode; received modes: ${result.modes.join(', ')}`
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
 })
 
@@ -357,20 +371,28 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  const [campaignAttacks, taskStats, activeAgents] = await Promise.all([
+  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds] = await Promise.all([
     getCampaignAttacksWithRuntime(id),
     getCampaignTaskStats(id),
     listActiveAgentsByCampaign(id),
+    getArchivedAttackIds(id),
   ])
 
   // Issue #100 U2: compute the campaign-level ETA from the attack runtimes
   // and active-agent list already fetched above rather than calling
   // `getCampaignEta`, which would re-fetch the campaign's attacks and
   // re-run `deriveAttackRuntimes` a second time for the same request.
+  //
+  // Code review fix (issue #100 R1): `getCampaignAttacksWithRuntime`
+  // intentionally returns every attack regardless of archive state (the
+  // detail payload's `attacks` array is a separate concern), so archived
+  // rows are filtered out here before feeding the rollup — mirrors the
+  // `isNull(archivedAt)` filter `getCampaignEtasBatch` applies for the
+  // list view, keeping detail and list ETAs consistent.
   const eta = computeCampaignEtaState({
     campaignStatus: campaign.status,
     hasActiveAgents: activeAgents.length > 0,
-    attacks: campaignAttacks,
+    attacks: campaignAttacks.filter((attack) => !archivedAttackIds.has(attack.id)),
   })
 
   return c.json(

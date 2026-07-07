@@ -225,6 +225,9 @@ if (!IS_ISOLATED) {
     getCampaignEta: mock(async () => ({ state: 'estimating' as const })),
     getCampaignEtasBatch: mock(async () => new Map()),
     computeCampaignEtaState: mock(() => ({ state: 'estimating' as const })),
+    // Issue #100 R1 code review fix — same named-import-must-link
+    // reasoning as the eta-rollup stubs above.
+    getArchivedAttackIds: mock(async () => new Set<number>()),
     validateProposedDAG: mock(() => ({ valid: true })),
     updateCampaignProgress: mock(async () => undefined),
     enqueuePreemptionEvaluation: mock(async () => undefined),

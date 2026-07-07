@@ -90,7 +90,7 @@ const CONTROL_RESPONSE_DESCRIPTIONS: Record<ControlResponseName, string> = {
   ServiceUnavailable:
     'A required backing service is degraded or offline (e.g., Redis queue unavailable).',
   UnprocessableEntity:
-    'Request is well-formed but cannot be processed because the target record is permanent and archive-only.',
+    'Request is well-formed but cannot be processed: either the target record is permanent and archive-only, or the attack hashcat mode conflicts with another non-terminal attack in the same campaign.',
 }
 
 /**

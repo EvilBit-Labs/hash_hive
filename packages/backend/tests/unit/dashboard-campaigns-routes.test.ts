@@ -336,6 +336,10 @@ if (!IS_ISOLATED) {
     // Issue #100 U2 campaign ETA rollup — see the mock declarations above.
     computeCampaignEtaState: mockComputeCampaignEtaState,
     getCampaignEtasBatch: mockGetCampaignEtasBatch,
+    // Issue #100 R1 code review fix — the detail route filters archived
+    // attacks out of the ETA rollup input via this lookup. Default to
+    // "nothing archived" so existing eta-unrelated tests are unaffected.
+    getArchivedAttackIds: mock(async () => new Set<number>()),
     deleteCampaign: mockDeleteCampaign,
     // Inert stubs for sibling exports the routes module imports.
     createCampaign: mockCreateCampaign,
@@ -1127,6 +1131,40 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(body.error?.code).toBe('RESOURCE_MISSING')
       expect(body.error?.message).toContain('wordlist(42)')
+    })
+
+    it('returns 422 ATTACK_MODE_CONFLICT when inline attacks mix hashcat modes (issue #100 R15/AS1)', async () => {
+      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+        kind: 'mode_conflict',
+        modes: [0, 1000],
+      })
+      const res = await postCampaign({
+        name: 'Mixed modes',
+        hashListId: 1,
+        attacks: [{ mode: 0 }, { mode: 1000 }],
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('0')
+      expect(body.error?.message).toContain('1000')
+    })
+
+    it('with attacks sharing one mode: succeeds (no mode conflict)', async () => {
+      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+        kind: 'created',
+        campaign: makeCampaign({ name: 'Same mode' }),
+        attacks: [
+          { id: 800, dependencies: null },
+          { id: 801, dependencies: null },
+        ],
+      })
+      const res = await postCampaign({
+        name: 'Same mode',
+        hashListId: 1,
+        attacks: [{ mode: 0 }, { mode: 0 }],
+      })
+      expect(res.status).toBe(201)
     })
   })
 

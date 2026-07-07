@@ -38,9 +38,33 @@ const HASHCAT_MODE = 9_999_844 // unique to this test file
 interface SeedCtx {
   projectId: number
   campaignId: number
+  hashListId: number
 }
 
 let ctx: SeedCtx
+
+/**
+ * A fresh campaign for tests that must not observe (or be observed by)
+ * `ctx.campaignId`'s accumulated attacks from other tests in this file —
+ * needed once a test starts asserting on the single-hash-mode-per-campaign
+ * sibling scan (issue #100 R15 / AS1), which would otherwise see every
+ * mode-3 attack every earlier test in this file ever left non-archived in
+ * the shared campaign. Mirrors attack-mode-consistency.db.test.ts's
+ * per-test `insertCampaign`.
+ */
+async function insertCampaign(): Promise<number> {
+  const [row] = await db
+    .insert(campaigns)
+    .values({
+      projectId: ctx.projectId,
+      name: `attacks-archive-test-campaign-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      priority: 5,
+      status: 'draft',
+    })
+    .returning({ id: campaigns.id })
+  return row!.id
+}
 
 async function insertAttack(overrides: { campaignId?: number; projectId?: number } = {}) {
   const [row] = await db
@@ -108,7 +132,7 @@ beforeAll(async () => {
       status: 'draft',
     })
     .returning({ id: campaigns.id })
-  ctx = { projectId, campaignId: campaign!.id }
+  ctx = { projectId, campaignId: campaign!.id, hashListId: hashList!.id }
 })
 
 afterAll(cleanupSeed)
@@ -306,11 +330,21 @@ async function insertReclaimedWordList(): Promise<number> {
   return row!.id
 }
 
-async function insertArchivedAttackReferencing(wordlistId: number): Promise<number> {
+/**
+ * `campaignId` defaults to a FRESH campaign (not the shared `ctx.campaignId`)
+ * — restoring now also runs the single-hash-mode-per-campaign guard (issue
+ * #100 R15 / AS1), which would otherwise see every mode-3 attack every
+ * other test in this file has ever left non-archived in the shared
+ * campaign and spuriously reject the restore.
+ */
+async function insertArchivedAttackReferencing(
+  wordlistId: number,
+  campaignId?: number
+): Promise<number> {
   const [row] = await db
     .insert(attacks)
     .values({
-      campaignId: ctx.campaignId,
+      campaignId: campaignId ?? (await insertCampaign()),
       projectId: ctx.projectId,
       mode: 0,
       wordlistId,
@@ -361,5 +395,66 @@ describe('restoreAttacks: reclaimed-shell guard (F2, issue #106 code review)', (
 
     const [res] = await restoreAttacks(ctx.projectId, [id])
     expect(res?.outcome).toBe('restored')
+  })
+})
+
+// ─── restoreAttacks: single-hash-mode-per-campaign guard (issue #100
+// R15 / AS1 code review fix) ──────────────────────────────────────────
+//
+// Each test here uses its OWN fresh campaign (via `insertCampaign`), not
+// the shared `ctx.campaignId` — restoring now also runs the single-hash-
+// mode-per-campaign sibling scan, which would otherwise see every mode-3
+// attack every earlier test in this file left non-archived in the shared
+// campaign and spuriously reject (or pass) the restore for the wrong
+// reason.
+
+async function insertAttackWithMode(campaignId: number, mode: number): Promise<number> {
+  const [row] = await db
+    .insert(attacks)
+    .values({ campaignId, projectId: ctx.projectId, mode })
+    .returning({ id: attacks.id })
+  return row!.id
+}
+
+describe('restoreAttacks: single-hash-mode-per-campaign guard (issue #100 R15 / AS1)', () => {
+  it('refuses to restore an attack that would reintroduce a mode conflict, and leaves it archived', async () => {
+    const campaignId = await insertCampaign()
+
+    // A (mode 3) generates a task so it is archivable, then gets
+    // archived — at that point it has no non-archived siblings, so
+    // archiving itself never needed the mode-consistency guard.
+    const attackA = await insertAttack({ campaignId })
+    await generateTasksForAttack(attackA)
+    const [archiveRes] = await archiveAttacks(ctx.projectId, [attackA])
+    expect(archiveRes?.outcome).toBe('archived')
+
+    // B (mode 0) is created while A is archived, so B's own create-time
+    // mode check saw no non-archived mode-3 sibling to conflict with.
+    await insertAttackWithMode(campaignId, 0)
+
+    // Restoring A now would make it a non-archived mode-3 sibling of B
+    // (mode 0) — the exact mixed-mode campaign the guard exists to
+    // prevent.
+    const [restoreRes] = await restoreAttacks(ctx.projectId, [attackA])
+    expect(restoreRes?.outcome).toBe('mode_conflict')
+    expect((await readAttack(attackA))?.archivedAt).not.toBeNull()
+  })
+
+  it('restores normally once the conflicting sibling is also archived', async () => {
+    const campaignId = await insertCampaign()
+
+    const attackA = await insertAttack({ campaignId })
+    await generateTasksForAttack(attackA)
+    await archiveAttacks(ctx.projectId, [attackA])
+
+    const attackB = await insertAttackWithMode(campaignId, 0)
+    await db
+      .update(attacks)
+      .set({ archivedAt: new Date(), isPermanent: true })
+      .where(eq(attacks.id, attackB))
+
+    const [restoreRes] = await restoreAttacks(ctx.projectId, [attackA])
+    expect(restoreRes?.outcome).toBe('restored')
+    expect((await readAttack(attackA))?.archivedAt).toBeNull()
   })
 })

@@ -509,6 +509,18 @@ if (!IS_ISOLATED) {
       const body = await res.json()
       expect(body.type).toBe('https://hashhive.dev/errors/conflict')
     })
+
+    it('returns 422 attack_mode_conflict problem+json when restoring would reintroduce a mixed-mode campaign (issue #100 R15/AS1 code review fix)', async () => {
+      mockRestoreAttacks.mockImplementationOnce(async (_p, ids) =>
+        ids.map((id): Outcome => ({ id, outcome: 'mode_conflict' }))
+      )
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/50/restore', { method: 'POST', headers: authHeaders() })
+      expect(res.status).toBe(422)
+      expect(res.headers.get('content-type')).toContain('application/problem+json')
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/attack-mode-conflict')
+    })
   })
 
   // ─── Single-hash-mode-per-campaign guard (issue #100 R15, AE6) ─────

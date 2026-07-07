@@ -27,7 +27,11 @@ import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { getCampaignEta, getCampaignEtasBatch } from '../../src/services/campaign-eta-rollup.js'
+import {
+  getArchivedAttackIds,
+  getCampaignEta,
+  getCampaignEtasBatch,
+} from '../../src/services/campaign-eta-rollup.js'
 
 const SLUG = 'campaign-eta-rollup-test-proj'
 const MODE = 9_999_881
@@ -199,6 +203,37 @@ describe('campaign ETA rollup (#100 U1)', () => {
     expect(eta).toEqual({ state: 'ready', seconds: 1000 })
   })
 
+  it('code review fix (issue #100 R1): excludes an archived non-terminal attack from the sum', async () => {
+    const campaignId = await seedCampaign('running')
+    const agentId = await seedAgent('online', 'fast')
+    await seedBenchmark(agentId, 100_000) // 100k H/s
+
+    const activeAttack = await seedAttack(campaignId, '100000000') // 100M -> 1000s
+    await seedActiveTask(activeAttack, campaignId, agentId, 'running')
+
+    // Archived sibling: non-terminal (no tasks -> would derive 'pending')
+    // with a keyspace that WOULD add 2000s to the sum if it leaked in.
+    // Mirrors attack-mode-consistency.db.test.ts's archived-sibling case:
+    // an archived row must also be permanent
+    // (attacks_archive_consistency_chk).
+    await db
+      .insert(attacks)
+      .values({
+        campaignId,
+        projectId,
+        mode: MODE,
+        keyspace: '200000000',
+        isPermanent: true,
+        archivedAt: new Date(),
+      })
+      .returning({ id: attacks.id })
+
+    const eta = await getCampaignEta(campaignId)
+    // If the archived attack's estimate leaked into the sum, this would be
+    // 3000s (1000 + 2000) instead of just the active attack's 1000s.
+    expect(eta).toEqual({ state: 'ready', seconds: 1000 })
+  })
+
   it('getCampaignEtasBatch computes multiple campaigns in one pass without a per-campaign query cascade', async () => {
     const agentId = await seedAgent('online', 'fast')
     await seedBenchmark(agentId, 100_000)
@@ -214,5 +249,25 @@ describe('campaign ETA rollup (#100 U1)', () => {
     const results = await getCampaignEtasBatch([readyCampaign, pausedCampaign])
     expect(results.get(readyCampaign)).toEqual({ state: 'ready', seconds: 1000 })
     expect(results.get(pausedCampaign)).toEqual({ state: 'paused' })
+  })
+
+  it('getArchivedAttackIds (issue #100 R1): returns only archived attack ids for the campaign, used by the detail route to filter the rollup input', async () => {
+    const campaignId = await seedCampaign('running')
+    const activeAttack = await seedAttack(campaignId, '100000000')
+    const [archived] = await db
+      .insert(attacks)
+      .values({
+        campaignId,
+        projectId,
+        mode: MODE,
+        keyspace: '200000000',
+        isPermanent: true,
+        archivedAt: new Date(),
+      })
+      .returning({ id: attacks.id })
+
+    const ids = await getArchivedAttackIds(campaignId)
+    expect(ids.has(archived!.id)).toBe(true)
+    expect(ids.has(activeAttack)).toBe(false)
   })
 })

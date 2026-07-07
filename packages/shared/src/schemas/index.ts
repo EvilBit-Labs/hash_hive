@@ -1109,6 +1109,12 @@ export const attackRestoreOutcomeSchema = z.enum([
   // file was already deleted by the blob-reclamation sweep (issue #106 F2
   // code review / R12).
   'resource_reclaimed',
+  // Restoring would reintroduce a mixed-mode campaign (issue #100 R15 /
+  // AS1 code review fix): another non-terminal, non-archived attack in
+  // the same campaign already uses a different hashcat mode. Checked via
+  // `checkSingleHashModePerCampaign` immediately before clearing
+  // `archived_at`, mirroring the create/update attack routes' guard.
+  'mode_conflict',
   // Per-id failure (see attackArchiveOutcomeSchema).
   'error',
 ])

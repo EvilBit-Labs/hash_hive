@@ -26,11 +26,12 @@ import {
   campaigns,
   tasks,
 } from '@hashhive/shared'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { jsonSafeBigint } from './attacks/_internals.js'
 import { deriveAttackRuntimes } from './attacks/runtime.js'
+import { AGENT_TASK_ACTIVE_STATUSES } from './tasks/agent-projection.js'
 
 // Mirrors the terminal split at the bottom of `deriveAttackStatus`
 // (runtime.ts): completed/exhausted/failed are the three ways an attack
@@ -114,8 +115,6 @@ export function computeCampaignEtaState(input: {
     : { state: 'ready', seconds }
 }
 
-const ACTIVE_TASK_STATUSES = ['pending', 'assigned', 'running'] as const
-
 /**
  * Campaign ids that currently have at least one active task claimed by an
  * agent. Mirrors the active-task definition `listActiveAgentsByCampaign`
@@ -133,7 +132,10 @@ async function loadCampaignIdsWithActiveAgents(
     .from(tasks)
     .innerJoin(agents, eq(tasks.agentId, agents.id))
     .where(
-      and(inArray(tasks.campaignId, [...campaignIds]), inArray(tasks.status, ACTIVE_TASK_STATUSES))
+      and(
+        inArray(tasks.campaignId, [...campaignIds]),
+        inArray(tasks.status, [...AGENT_TASK_ACTIVE_STATUSES])
+      )
     )
   return new Set(rows.map((row) => row.campaignId))
 }
@@ -150,6 +152,12 @@ export async function getCampaignEtasBatch(
   const ids = [...new Set(campaignIds)]
   if (ids.length === 0) return result
 
+  // Archived attacks are hidden from the campaign editor / scheduler
+  // (schema.ts comment on `attacks.archivedAt`) and excluded from the
+  // mode-consistency guard's sibling scan (`checkSingleHashModePerCampaign`)
+  // — the ETA rollup must exclude them too (code review fix, issue #100
+  // R1), otherwise an archived attack's estimate silently inflates the
+  // campaign-wide sum even though it will never receive new tasks.
   const attackRows = await db
     .select({
       id: attacks.id,
@@ -159,7 +167,7 @@ export async function getCampaignEtasBatch(
       keyspace: attacks.keyspace,
     })
     .from(attacks)
-    .where(inArray(attacks.campaignId, ids))
+    .where(and(inArray(attacks.campaignId, ids), isNull(attacks.archivedAt)))
 
   const [runtimeByAttack, campaignRows, activeAgentCampaignIds] = await Promise.all([
     deriveAttackRuntimes(attackRows),
@@ -205,4 +213,22 @@ export async function getCampaignEtasBatch(
 export async function getCampaignEta(campaignId: number): Promise<CampaignEta> {
   const results = await getCampaignEtasBatch([campaignId])
   return results.get(campaignId) ?? { state: 'complete' }
+}
+
+/**
+ * Archived attack ids in `campaignId` (code review fix, issue #100 R1).
+ * `getCampaignAttacksWithRuntime` (attacks/runtime.ts), which the campaign-
+ * detail route uses to build its `attacks` payload, intentionally returns
+ * every attack row regardless of archive state — the detail page's attack
+ * table is a separate concern from the ETA rollup. This is a narrow,
+ * purpose-built lookup so the detail route can filter archived rows OUT of
+ * `computeCampaignEtaState`'s input without changing what the payload's
+ * `attacks` array itself contains.
+ */
+export async function getArchivedAttackIds(campaignId: number): Promise<Set<number>> {
+  const rows = await db
+    .select({ id: attacks.id })
+    .from(attacks)
+    .where(and(eq(attacks.campaignId, campaignId), isNotNull(attacks.archivedAt)))
+  return new Set(rows.map((row) => row.id))
 }
