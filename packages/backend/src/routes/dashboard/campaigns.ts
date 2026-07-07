@@ -1,6 +1,10 @@
 import type { Context } from 'hono'
 
-import { changeCampaignPriorityRequestSchema, inlineAttackRequestSchema } from '@hashhive/shared'
+import {
+  campaignEtaSchema,
+  changeCampaignPriorityRequestSchema,
+  inlineAttackRequestSchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -20,8 +24,10 @@ import {
   createCampaignWithAttacks,
   deleteCampaign,
   changeRunningCampaignPriority,
+  computeCampaignEtaState,
   getCampaignAttacksWithRuntime,
   getCampaignById,
+  getCampaignEtasBatch,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
   listCampaigns,
@@ -110,6 +116,7 @@ const campaignDetailResponseSchema = z.object({
     })
     .passthrough(),
   activeAgents: z.array(z.unknown()),
+  eta: campaignEtaSchema,
 })
 
 const deleteCampaignResponseSchema = z.object({
@@ -158,7 +165,19 @@ campaignRoutes.openapi(listCampaignsRoute, async (c) => {
     limit,
     offset,
   })
-  return c.json(result, 200)
+
+  // Issue #100 U2: one batched ETA rollup call for the whole page, never
+  // one call per row. `getCampaignEtasBatch` already does a single
+  // `inArray` attacks fetch + a single `deriveAttackRuntimes` call
+  // internally (see campaign-eta-rollup.ts), so this stays within the
+  // route's existing query budget regardless of page size.
+  const etaByCampaignId = await getCampaignEtasBatch(result.campaigns.map((row) => row.id))
+  const campaignsWithEta = result.campaigns.map((row) => ({
+    ...row,
+    eta: etaByCampaignId.get(row.id) ?? ({ state: 'complete' } as const),
+  }))
+
+  return c.json({ ...result, campaigns: campaignsWithEta }, 200)
 })
 
 // Inline-attack payload schema is canonical in @hashhive/shared so the
@@ -344,12 +363,23 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     listActiveAgentsByCampaign(id),
   ])
 
+  // Issue #100 U2: compute the campaign-level ETA from the attack runtimes
+  // and active-agent list already fetched above rather than calling
+  // `getCampaignEta`, which would re-fetch the campaign's attacks and
+  // re-run `deriveAttackRuntimes` a second time for the same request.
+  const eta = computeCampaignEtaState({
+    campaignStatus: campaign.status,
+    hasActiveAgents: activeAgents.length > 0,
+    attacks: campaignAttacks,
+  })
+
   return c.json(
     {
       campaign,
       attacks: campaignAttacks,
       taskStats,
       activeAgents,
+      eta,
     },
     200
   )

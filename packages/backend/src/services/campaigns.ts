@@ -92,8 +92,18 @@ export {
 export { getCampaignAttacksWithRuntime } from './attacks/runtime.js'
 // Campaign-level ETA rollup (issue #100 U1) — re-exported here so the
 // detail/list routes (U2) reach it through the same facade as every other
-// campaign payload builder above.
-export { getCampaignEta, getCampaignEtasBatch } from './campaign-eta-rollup.js'
+// campaign payload builder above. `computeCampaignEtaState` is the pure
+// precedence ladder: the detail route calls it directly over the attack
+// runtimes it already fetched (getCampaignAttacksWithRuntime) rather than
+// going through `getCampaignEta`, which would re-fetch and re-derive the
+// same attacks a second time. The list route has no such fetch to reuse, so
+// it calls the I/O batch entry point (`getCampaignEtasBatch`) instead.
+export {
+  type AttackEtaInput,
+  computeCampaignEtaState,
+  getCampaignEta,
+  getCampaignEtasBatch,
+} from './campaign-eta-rollup.js'
 export {
   _progressDeps,
   computeCampaignEta,

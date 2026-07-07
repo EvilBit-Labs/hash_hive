@@ -214,6 +214,24 @@ if (!IS_ISOLATED) {
     },
   ])
 
+  // Issue #100 U2: the detail route computes the campaign ETA from the
+  // attack runtimes + active-agent list it already fetched, via the pure
+  // `computeCampaignEtaState` ladder (no extra DB round trip); the list
+  // route instead calls the I/O batch entry point (`getCampaignEtasBatch`)
+  // once per page. Both are mocked here per the service-ReturnType
+  // convention so route-level tests never depend on the real precedence
+  // ladder or a live DB.
+  const mockComputeCampaignEtaState = mock<CampaignsService['computeCampaignEtaState']>(() => ({
+    state: 'estimating',
+  }))
+  const mockGetCampaignEtasBatch = mock<CampaignsService['getCampaignEtasBatch']>(async (ids) => {
+    const entries: Array<[number, { state: 'estimating' }]> = [...ids].map((id) => [
+      id,
+      { state: 'estimating' },
+    ])
+    return new Map(entries)
+  })
+
   // Per-test mock of listAttacks: defaults to empty so existing tests
   // are unaffected; DAG-validation tests override it via .mockResolvedValueOnce.
   const mockListAttacks = mock(
@@ -301,6 +319,9 @@ if (!IS_ISOLATED) {
     getCampaignTaskStats: mockGetCampaignTaskStats,
     getCampaignAttacksWithRuntime: mock(async () => []),
     listActiveAgentsByCampaign: mockListActiveAgentsByCampaign,
+    // Issue #100 U2 campaign ETA rollup — see the mock declarations above.
+    computeCampaignEtaState: mockComputeCampaignEtaState,
+    getCampaignEtasBatch: mockGetCampaignEtasBatch,
     deleteCampaign: mockDeleteCampaign,
     // Inert stubs for sibling exports the routes module imports.
     createCampaign: mockCreateCampaign,
@@ -498,6 +519,50 @@ if (!IS_ISOLATED) {
     })
   })
 
+  describe('Dashboard campaigns list: campaign ETA (issue #100 U2)', () => {
+    it('includes a per-row eta from ONE batched rollup call, not one per campaign', async () => {
+      mockListCampaigns.mockResolvedValueOnce({
+        campaigns: [makeCampaign({ id: 100 }), makeCampaign({ id: 101, status: 'running' })],
+        total: 2,
+        limit: 50,
+        offset: 0,
+      })
+      mockGetCampaignEtasBatch.mockClear()
+      mockGetCampaignEtasBatch.mockResolvedValueOnce(
+        new Map<number, { state: 'estimating' } | { state: 'ready'; seconds: number }>([
+          [100, { state: 'estimating' }],
+          [101, { state: 'ready', seconds: 3600 }],
+        ])
+      )
+
+      const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { campaigns?: Array<{ id: number; eta?: unknown }> }
+      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'estimating' })
+      expect(body.campaigns?.[1]?.eta).toEqual({ state: 'ready', seconds: 3600 })
+
+      // Batched: exactly one rollup call for the whole page, covering
+      // every campaign id on it — never a per-row call.
+      expect(mockGetCampaignEtasBatch).toHaveBeenCalledTimes(1)
+      expect(mockGetCampaignEtasBatch).toHaveBeenCalledWith([100, 101])
+    })
+
+    it('falls back to a complete state for an id the batch rollup omits', async () => {
+      mockListCampaigns.mockResolvedValueOnce({
+        campaigns: [makeCampaign({ id: 100 })],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+      mockGetCampaignEtasBatch.mockResolvedValueOnce(new Map())
+
+      const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { campaigns?: Array<{ id: number; eta?: unknown }> }
+      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'complete' })
+    })
+  })
+
   describe('Dashboard campaigns detail: enriched payload', () => {
     it('returns campaign + attacks + taskStats + activeAgents in one round-trip', async () => {
       const res = await app.request(`${DASH_CAMPAIGNS}/100`, { headers: makeHeaders() })
@@ -543,6 +608,32 @@ if (!IS_ISOLATED) {
     it('returns 404 for unknown id', async () => {
       const res = await app.request(`${DASH_CAMPAIGNS}/9999`, { headers: makeHeaders() })
       expect(res.status).toBe(404)
+    })
+  })
+
+  describe('Dashboard campaigns detail: campaign ETA (issue #100 U2)', () => {
+    it('includes the eta computed from the already-fetched attack runtimes', async () => {
+      mockComputeCampaignEtaState.mockClear()
+      mockComputeCampaignEtaState.mockReturnValueOnce({ state: 'ready', seconds: 7200 })
+
+      // Campaign 101 is seeded as status 'running' by mockGetCampaignById.
+      const res = await app.request(`${DASH_CAMPAIGNS}/101`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { eta?: unknown }
+      expect(body.eta).toEqual({ state: 'ready', seconds: 7200 })
+
+      expect(mockComputeCampaignEtaState).toHaveBeenCalledTimes(1)
+      const args = mockComputeCampaignEtaState.mock.calls[0]?.[0]
+      expect(args?.campaignStatus).toBe('running')
+      // mockListActiveAgentsByCampaign returns one row by default.
+      expect(args?.hasActiveAgents).toBe(true)
+    })
+
+    it('never calls the I/O batch rollup from the detail route (reuses the attack fetch instead)', async () => {
+      mockGetCampaignEtasBatch.mockClear()
+      const res = await app.request(`${DASH_CAMPAIGNS}/100`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      expect(mockGetCampaignEtasBatch).not.toHaveBeenCalled()
     })
   })
 
