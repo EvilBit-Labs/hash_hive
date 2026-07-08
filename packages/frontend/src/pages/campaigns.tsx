@@ -19,11 +19,13 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableHead, TableRow, Td, Th } from '../components/ui/table'
 import { useCampaignDelete, useCampaignLifecycle } from '../hooks/use-campaigns'
 import {
+  type CampaignEta,
   type CampaignSortField,
   type CampaignSortOrder,
   type UseCampaignsOptions,
   useCampaigns,
 } from '../hooks/use-dashboard'
+import { formatCampaignEta } from '../lib/campaign-eta-display'
 import { readCampaignPercentage } from '../lib/campaign-progress'
 import { Permission } from '../lib/permissions'
 import { useUiStore } from '../stores/ui'
@@ -43,6 +45,10 @@ interface CampaignRow {
     hashProgress?: { percentage: number }
   } | null
   createdAt: string
+  // Issue #100: batched read-time rollup from the list route. Optional
+  // here only so a fixture predating #100 still type-checks; the route
+  // always populates it (defaulting to `{ state: 'estimating' }`).
+  eta?: CampaignEta
 }
 
 const PRIORITY_FILTER_OPTIONS = [
@@ -280,6 +286,7 @@ export function CampaignsPage() {
                 <Th>Status</Th>
                 <Th>Priority</Th>
                 <Th>Progress</Th>
+                <Th>ETA</Th>
                 <Th>Hash List</Th>
                 <Th>Created</Th>
                 <Th>Actions</Th>
@@ -313,6 +320,12 @@ export function CampaignsPage() {
                       <span className="mt-1 block font-mono text-xs text-muted-foreground tabular-nums">
                         {(percentage <= 1 ? percentage * 100 : percentage).toFixed(1)}%
                       </span>
+                    </Td>
+                    <Td
+                      className="font-mono text-xs text-muted-foreground tabular-nums"
+                      title="Estimated time to exhaust the search across the remaining keyspace"
+                    >
+                      {campaign.eta ? formatCampaignEta(campaign.eta) : '--'}
                     </Td>
                     <Td className="font-mono text-xs text-muted-foreground">
                       #{campaign.hashListId}

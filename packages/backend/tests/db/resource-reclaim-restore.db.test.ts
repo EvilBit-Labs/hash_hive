@@ -94,6 +94,10 @@ beforeAll(async () => {
       hashListId: hl!.id,
       priority: 5,
       status: 'draft',
+      // Single-hash-mode-per-campaign DB backstop (issue #100): must match
+      // the attack inserted below (mode 0) — see schema.ts's
+      // `attacks_campaign_id_mode_..._fk`.
+      hashcatMode: 0,
     })
     .returning({ id: campaigns.id })
   ctx = { projectId, ownerCampaignId: ownerCampaign!.id }

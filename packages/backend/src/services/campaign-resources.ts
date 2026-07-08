@@ -6,10 +6,11 @@
  * createCampaignWithAttacks, the standalone attack-write routes) keep
  * importing through the `services/campaigns.ts` facade.
  */
-import { hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
-import { and, eq, inArray } from 'drizzle-orm'
+import { attacks, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { deriveAttackRuntimes, isNonTerminalAttackStatus } from './attacks/runtime.js'
 
 // ─── Global (non-archivable) lookups ─────────────────────────────────
 //
@@ -296,6 +297,145 @@ export async function findReclaimedResourceRefs(
     reclaimed: results.flatMap((r) => r.reclaimed),
     archived: results.flatMap((r) => r.archived),
   }
+}
+
+// ─── Single-hash-mode-per-campaign enforcement (issue #100 R15 / AS1) ────
+//
+// The campaign ETA rollup sums per-attack `estimateSecondsRemaining`
+// across every non-terminal attack in a campaign. That sum is only the
+// correct expected search time when every non-terminal attack shares one
+// fleet-throughput figure — i.e. one hashcat mode. Nothing at the schema
+// layer prevents a mixed-mode campaign, so this check makes single-mode
+// an enforced invariant at attack write time rather than an assumption.
+//
+// Standalone (mirrors `findReclaimedResourceRefs` above) because the
+// Control API attack routes (`routes/control/attacks.ts`) never call
+// `validateCampaignResources` — they validate resource refs via FK
+// constraints alone. Burying this inside `validateCampaignResources`
+// would silently skip the Control surface.
+
+export type ModeConsistencyResult =
+  | { valid: true }
+  | { valid: false; conflictingMode: number; conflictingAttackId: number }
+
+/**
+ * Verify `newMode` matches every other non-terminal (pending/running/
+ * paused), non-archived attack already in `campaignId`. A campaign with
+ * no such siblings (first attack, or every existing attack has reached a
+ * terminal status / is archived) passes THIS pre-check — mixed-mode history
+ * from before this check landed is out of scope for the friendly path (see
+ * plan AS1).
+ *
+ * This is the operator-friendly pre-check, not the authority: issue #100 also
+ * adds a DB-level composite FK (`attacks(campaign_id, mode)` ->
+ * `campaigns(id, hashcat_mode)`) that enforces one mode across the campaign's
+ * ENTIRE attack history, including terminal and archived rows. So a write that
+ * passes here can still be rejected by the FK (surfaced as the same typed 422)
+ * when a terminal/archived sibling holds a different mode. The pre-check exists
+ * to return a clear message in the common case; the FK is the race/history
+ * backstop.
+ *
+ * Reuses `deriveAttackRuntimes` for the status ladder rather than
+ * re-deriving it from task aggregates here, so this check can never drift
+ * from the read-time status the dashboard and Control surfaces already
+ * show (issue #99).
+ *
+ * `excludeAttackId` lets the update path exclude the attack being
+ * updated from its own sibling set.
+ */
+export async function checkSingleHashModePerCampaign(
+  campaignId: number,
+  newMode: number,
+  excludeAttackId?: number
+): Promise<ModeConsistencyResult> {
+  // Archived attacks are hidden from the campaign editor / scheduler
+  // (schema.ts comment on `attacks.archivedAt`) — a user creating a new
+  // attack has no visibility into an archived sibling's mode, so it does
+  // not count as a conflicting sibling here (mirrors `listAttacks()`'s
+  // default exclusion of archived rows).
+  const isSibling =
+    excludeAttackId === undefined
+      ? and(eq(attacks.campaignId, campaignId), isNull(attacks.archivedAt))
+      : and(
+          eq(attacks.campaignId, campaignId),
+          isNull(attacks.archivedAt),
+          ne(attacks.id, excludeAttackId)
+        )
+
+  const siblingRows = await db
+    .select({
+      id: attacks.id,
+      campaignId: attacks.campaignId,
+      projectId: attacks.projectId,
+      mode: attacks.mode,
+      keyspace: attacks.keyspace,
+    })
+    .from(attacks)
+    .where(isSibling)
+
+  if (siblingRows.length === 0) return { valid: true }
+
+  const runtimes = await deriveAttackRuntimes(siblingRows)
+  const conflictingSibling = siblingRows.find((row) => {
+    if (row.mode === newMode) return false
+    const status = runtimes.get(row.id)?.status ?? 'pending'
+    return isNonTerminalAttackStatus(status)
+  })
+
+  return conflictingSibling
+    ? {
+        valid: false,
+        conflictingMode: conflictingSibling.mode,
+        conflictingAttackId: conflictingSibling.id,
+      }
+    : { valid: true }
+}
+
+// ─── DB-level TOCTOU backstop (issue #100) ───────────────────────────
+//
+// `checkSingleHashModePerCampaign` above is a read-then-write pre-check —
+// two concurrent requests can both read "no conflicting sibling" before
+// either write lands, so it cannot close the race on its own. The
+// composite FK `attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk`
+// (attacks(campaign_id, mode) -> campaigns(id, hashcat_mode), schema.ts)
+// is the actual backstop: the race loser's write violates SQLSTATE 23503,
+// which the write paths below map to the same typed conflict outcome the
+// pre-check returns.
+//
+// Deliberately narrow and NOT the general-purpose `isForeignKeyViolation`
+// in services/resources.ts — this only ever needs to recognize this one
+// constraint, scoped to this one invariant, so it doesn't carry the
+// broader helper's legacy-mock compatibility surface or affect any other
+// FK-violation call site in the codebase.
+
+/** The composite FK this module's write paths detect a race against. */
+export const MODE_CONSISTENCY_FK_CONSTRAINT =
+  'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk'
+
+/**
+ * Detect the single-hash-mode-per-campaign composite FK violation
+ * (SQLSTATE 23503, `constraint_name` matching {@link MODE_CONSISTENCY_FK_CONSTRAINT}).
+ *
+ * drizzle-orm (0.45.x) wraps every query failure in a `DrizzleQueryError`
+ * whose `.cause` carries the real driver error — checks both `err` and
+ * `err.cause` so it recognizes the violation whether the caller passes
+ * the wrapper or an already-unwrapped/synthetic error (e.g. in tests).
+ * postgres-js surfaces the constraint name as `constraint_name` on its
+ * `PostgresError`.
+ */
+export function isModeConsistencyFkViolation(err: unknown): boolean {
+  const candidates = [err, err instanceof Error ? (err as { cause?: unknown }).cause : undefined]
+  for (const candidate of candidates) {
+    if (!(candidate instanceof Error)) continue
+    const code = 'code' in candidate ? (candidate as { code?: string }).code : undefined
+    if (code !== '23503') continue
+    const constraintName =
+      'constraint_name' in candidate
+        ? (candidate as { constraint_name?: string }).constraint_name
+        : undefined
+    if (constraintName === MODE_CONSISTENCY_FK_CONSTRAINT) return true
+  }
+  return false
 }
 
 function dedupIds<T extends Record<string, unknown>>(

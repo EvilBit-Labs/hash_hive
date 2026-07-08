@@ -4,6 +4,7 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -647,6 +648,17 @@ export const campaigns = pgTable(
     // Set when a completed/cancelled campaign is archived (retired from active
     // views), cleared on restore. NULL = not archived. See ADR-0019.
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    // Single-hash-mode-per-campaign DB backstop (issue #100). Latched from
+    // NULL to the first attack's `mode` at insert time (see
+    // `createAttack`/`createCampaignWithAttacks` in services/campaigns.ts)
+    // and never cleared. `attacks.campaignId + attacks.mode` carries a
+    // composite FK against `(campaigns.id, campaigns.hashcatMode)` below, so
+    // once set, every attack ever inserted for this campaign — including
+    // terminal ones — must share this mode; a concurrent insert of a
+    // different mode is rejected by the FK, closing the TOCTOU race the
+    // app-level `checkSingleHashModePerCampaign` pre-check cannot close on
+    // its own. NULL only for campaigns with no attacks yet.
+    hashcatMode: integer('hashcat_mode'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -660,6 +672,12 @@ export const campaigns = pgTable(
       'campaigns_archive_consistency_chk',
       sql`${table.archivedAt} IS NULL OR (${table.isPermanent} = true AND ${table.status} IN ('completed', 'cancelled'))`
     ),
+    // Composite-FK target for `attacks(campaign_id, mode)` below. Postgres
+    // requires the referenced columns to be covered by a unique
+    // constraint/index; `id` is already unique via the primary key, so this
+    // index exists purely to make `(id, hashcat_mode)` satisfy that
+    // requirement.
+    uniqueIndex('campaigns_id_hashcat_mode_idx').on(table.id, table.hashcatMode),
   ]
 )
 
@@ -700,6 +718,30 @@ export const attacks = pgTable(
       'attacks_archive_consistency_chk',
       sql`${table.archivedAt} IS NULL OR ${table.isPermanent} = true`
     ),
+    // Single-hash-mode-per-campaign DB backstop (issue #100): every attack's
+    // `mode` must match its campaign's latched `hashcatMode`. This is a
+    // deliberate tightening beyond the app-level `checkSingleHashModePerCampaign`
+    // (which only compares against non-terminal siblings, since attacks carry
+    // no persisted status) — the FK has no notion of "terminal" to exempt, so
+    // it enforces one mode across a campaign's entire attack history. See the
+    // `campaigns.hashcatMode` comment and services/campaigns.ts for the
+    // write-time latch that keeps this FK satisfiable.
+    //
+    // DRIFT NOTE: the migration (0035) adds `DEFERRABLE INITIALLY DEFERRED`
+    // to this constraint — not expressible via drizzle-orm's `foreignKey()`
+    // builder in this version, so it can't be declared here. `updateAttack`
+    // (services/campaigns.ts) needs the check deferred to COMMIT: it
+    // adaptively moves a campaign onto an edited attack's new mode via two
+    // separate statements in one transaction (campaign latch, then attack
+    // mode), and a NOT DEFERRABLE (default) FK would spuriously fail
+    // between them even when they agree by commit time. If this table is
+    // ever regenerated via `drizzle-kit generate`, re-add the DEFERRABLE
+    // clause by hand to the emitted migration.
+    foreignKey({
+      name: 'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk',
+      columns: [table.campaignId, table.mode],
+      foreignColumns: [campaigns.id, campaigns.hashcatMode],
+    }),
   ]
 )
 

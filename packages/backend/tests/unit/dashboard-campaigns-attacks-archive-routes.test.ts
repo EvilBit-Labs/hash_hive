@@ -214,6 +214,25 @@ if (!IS_ISOLATED) {
     transitionCampaign: mock(async () => ({ campaign: makeCampaign() })),
     validateCampaignDAG: mock(async () => ({ valid: true })),
     validateCampaignResources: mock(async () => ({ valid: true })),
+    // Issue #100 U5 — single-hash-mode-per-campaign guard. This file's
+    // attack-write requests never exercise a mode conflict, so a static
+    // valid stub is enough (mirrors the other exports above).
+    checkSingleHashModePerCampaign: mock(async () => ({ valid: true })),
+    // Issue #100 DB backstop — the dashboard attack-write routes (loaded
+    // here via src/index.js) statically import this too; the named import
+    // fails to link if the campaigns.js mock omits it. No FK races are
+    // exercised in this archive/restore suite.
+    isModeConsistencyFkViolation: mock(() => false),
+    // Issue #100 U1/U2 — campaign ETA rollup exports statically imported by
+    // the dashboard campaigns route (loaded here via src/index.js). Never
+    // invoked in this archive/restore suite; stubs exist only so the named
+    // imports link (the campaigns.js mock-static-import gotcha).
+    getCampaignEta: mock(async () => ({ state: 'estimating' as const })),
+    getCampaignEtasBatch: mock(async () => new Map()),
+    computeCampaignEtaState: mock(() => ({ state: 'estimating' as const })),
+    // Issue #100 R1 code review fix — same named-import-must-link
+    // reasoning as the eta-rollup stubs above.
+    getArchivedAttackIds: mock(async () => new Set<number>()),
     validateProposedDAG: mock(() => ({ valid: true })),
     updateCampaignProgress: mock(async () => undefined),
     enqueuePreemptionEvaluation: mock(async () => undefined),
@@ -314,6 +333,23 @@ if (!IS_ISOLATED) {
         body: JSON.stringify({ ids: [7001] }),
       })
       expect(res.status).toBe(403)
+    })
+
+    it('round-trips a mode_conflict outcome as 200 (dumb passthrough, issue #100 R15/AS1)', async () => {
+      // This route never inspects individual outcome values — it forwards
+      // whatever `restoreAttacks` returns. Guards against a future schema
+      // change silently dropping the `mode_conflict` enum member off the
+      // wire (the route would still 200; only a full round-trip catches a
+      // dropped value).
+      mockRestoreAttacks.mockResolvedValueOnce([{ id: 7001, outcome: 'mode_conflict' }])
+      const res = await app.request(`${DASH_CAMPAIGNS}/attacks/restore`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ ids: [7001] }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { results?: AttackOutcome[] }
+      expect(body.results).toEqual([{ id: 7001, outcome: 'mode_conflict' }])
     })
   })
 

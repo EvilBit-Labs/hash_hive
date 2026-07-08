@@ -4,7 +4,6 @@
  * Extracted from `services/campaigns.ts` to keep that module under the
  * 800-line guideline. Includes:
  *   - `shouldAutoCompleteCampaign` — pure guard for the auto-transition.
- *   - `computeCampaignEta` — pure ETA estimator.
  *   - `updateCampaignProgress` — SQL aggregation + cached progress write.
  *
  * Imports `transitionCampaign` dynamically from `./campaigns.js` to
@@ -41,34 +40,6 @@ export function shouldAutoCompleteCampaign(input: {
   if (input.status !== 'running' && input.status !== 'paused') return false
   if (input.totalTasks <= 0) return false
   return input.completedCount + input.failedCount >= input.totalTasks
-}
-
-/**
- * Pure ETA estimator: project remaining-work completion from average
- * throughput since campaign start. Returns `null` when there's no
- * throughput basis (no running tasks, no startedAt, elapsed < 1s, no
- * measurable progress, or no remaining work). Exported for unit
- * testing the rate math without mocking SQL.
- */
-export function computeCampaignEta(input: {
-  startedAt: Date | null
-  now: Date
-  totalTasks: number
-  completedCount: number
-  failedCount: number
-  runningProgress: number
-  runningTaskCount: number
-}): string | null {
-  if (input.runningTaskCount <= 0) return null
-  if (!input.startedAt) return null
-  const completedFraction = input.completedCount + input.runningProgress
-  if (completedFraction <= 0) return null
-  const elapsedMs = input.now.getTime() - input.startedAt.getTime()
-  if (elapsedMs < 1000) return null
-  const rate = completedFraction / (elapsedMs / 1000) // tasks per second
-  const remaining = Math.max(0, input.totalTasks - completedFraction - input.failedCount)
-  if (rate <= 0 || remaining <= 0) return null
-  return new Date(input.now.getTime() + (remaining / rate) * 1000).toISOString()
 }
 
 // Dynamic-import getter for transitionCampaign — breaks the static
@@ -127,7 +98,6 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
         ) FILTER (WHERE ${tasks.status} = 'running'),
         0::numeric
       ))::double precision`,
-      runningTaskCount: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'running')`,
     })
     .from(tasks)
     .where(eq(tasks.campaignId, campaignId))
@@ -138,17 +108,15 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
   const completedCount = agg?.completedCount ?? 0
   const failedCount = agg?.failedCount ?? 0
   const runningProgress = agg?.runningProgress ?? 0
-  const runningTaskCount = agg?.runningTaskCount ?? 0
 
   const overallProgress = (completedCount + runningProgress) / totalTasks
 
-  // Hash-based progress + ETA reference: load campaign metadata once.
+  // Hash-based progress: load campaign metadata once.
   const [campaign] = await db
     .select({
       hashListId: campaigns.hashListId,
       status: campaigns.status,
       projectId: campaigns.projectId,
-      startedAt: campaigns.startedAt,
     })
     .from(campaigns)
     .where(eq(campaigns.id, campaignId))
@@ -181,20 +149,6 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
     }
   }
 
-  // ETA: project completion from the average rate since campaign start.
-  // Estimate driven by task-completion velocity — the dashboard treats
-  // it as a forecast, not a guarantee. See `computeCampaignEta` for the
-  // null-handling rules.
-  const eta = computeCampaignEta({
-    startedAt: campaign?.startedAt ?? null,
-    now: new Date(),
-    totalTasks,
-    completedCount,
-    failedCount,
-    runningProgress,
-    runningTaskCount,
-  })
-
   await db
     .update(campaigns)
     .set({
@@ -202,7 +156,6 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
         totalTasks,
         completedTasks: completedCount,
         tasksFailed: failedCount,
-        eta,
         overallProgress: Math.round(overallProgress * 10000) / 10000,
         updatedAt: new Date().toISOString(),
         ...(hashProgress ? { hashProgress } : {}),

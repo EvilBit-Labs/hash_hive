@@ -7,6 +7,7 @@ import type {
   AuditLog,
   CampaignActiveAgent,
   CampaignAttackRow,
+  CampaignEta,
   CampaignTaskStats,
   CrackedResultRow,
   FileRef,
@@ -251,6 +252,10 @@ interface MockCampaign {
   createdAt: string
   startedAt: string | null
   completedAt: string | null
+  // Issue #100: read-time rollup the list/detail routes now attach to
+  // every row. Defaults to 'estimating' below — the neutral "no live
+  // data yet" state — so existing fixtures don't have to opt in.
+  eta: CampaignEta
 }
 
 interface MockCampaignsResponseOptions {
@@ -271,6 +276,7 @@ export function mockCampaignsResponse(options: MockCampaignsResponseOptions = {}
     createdAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,
+    eta: { state: 'estimating' } as CampaignEta,
     ...options.campaigns?.[i],
   }))
   return { campaigns, total: campaigns.length }
@@ -289,6 +295,10 @@ interface MockCampaignDetailResponseOptions {
   attacks?: Array<Partial<MockAttack>>
   taskStats?: Partial<CampaignTaskStats>
   activeAgents?: Array<Partial<CampaignActiveAgent>>
+  // Issue #100: the campaign-level ETA rollup. Defaults to 'estimating'
+  // (the neutral "no live data yet" state) so existing callers that only
+  // care about other fields don't have to opt in.
+  eta?: CampaignEta
 }
 
 export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOptions = {}) {
@@ -305,6 +315,8 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
     completedAt: null,
     ...options.campaign,
   }
+
+  const eta: CampaignEta = options.eta ?? { state: 'estimating' }
 
   const attacks = options.attacks
     ? options.attacks.map(
@@ -359,7 +371,7 @@ export function mockCampaignDetailResponse(options: MockCampaignDetailResponseOp
     ...agent,
   }))
 
-  return { campaign, attacks, taskStats, activeAgents }
+  return { campaign, attacks, taskStats, activeAgents, eta }
 }
 
 // --- Resource fixtures ---

@@ -267,6 +267,11 @@ beforeAll(async () => {
       hashListId: dummyHashListId,
       priority: 5,
       status: 'draft',
+      // Single-hash-mode-per-campaign DB backstop (issue #100): must match
+      // every attack `insertAttack`/`createAttack` inserts against this
+      // campaign in this file (mode 0) — see schema.ts's
+      // `attacks_campaign_id_mode_..._fk`.
+      hashcatMode: 0,
     })
     .returning({ id: campaigns.id })
   ctx = { projectId, ownerCampaignId: ownerCampaign!.id }
@@ -322,7 +327,11 @@ describe('permanence latch — word/rule/mask lists (U3, R1)', () => {
     const attack = await createAttack({
       campaignId: ctx.ownerCampaignId,
       projectId: ctx.projectId,
-      mode: 6,
+      // Single-hash-mode-per-campaign DB backstop (issue #100): must match
+      // every other attack `ctx.ownerCampaignId` receives in this file
+      // (mode 0, via `insertAttack` below) — this test only cares about
+      // the permanence latch, not the mode value itself.
+      mode: 0,
       wordlistId: wlId,
       rulelistId: rlId,
       masklistId: mlId,

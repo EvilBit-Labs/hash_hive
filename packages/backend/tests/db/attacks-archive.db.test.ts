@@ -25,11 +25,16 @@ import {
   wordLists,
 } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { archiveAttacks, restoreAttacks } from '../../src/services/campaigns-attacks-archive.js'
-import { deleteAttack, latchAttackPermanent, listAttacks } from '../../src/services/campaigns.js'
+import {
+  deleteAttack,
+  isModeConsistencyFkViolation,
+  latchAttackPermanent,
+  listAttacks,
+} from '../../src/services/campaigns.js'
 import { generateTasksForAttack } from '../../src/services/tasks.js'
 
 const TEST_SLUG = 'attacks-archive-test-proj'
@@ -38,15 +43,47 @@ const HASHCAT_MODE = 9_999_844 // unique to this test file
 interface SeedCtx {
   projectId: number
   campaignId: number
+  hashListId: number
 }
 
 let ctx: SeedCtx
 
+/**
+ * A fresh campaign for tests that must not observe (or be observed by)
+ * `ctx.campaignId`'s accumulated attacks from other tests in this file —
+ * needed once a test starts asserting on the single-hash-mode-per-campaign
+ * sibling scan (issue #100 R15 / AS1), which would otherwise see every
+ * mode-3 attack every earlier test in this file ever left non-archived in
+ * the shared campaign. Mirrors attack-mode-consistency.db.test.ts's
+ * per-test `insertCampaign`.
+ */
+async function insertCampaign(): Promise<number> {
+  const [row] = await db
+    .insert(campaigns)
+    .values({
+      projectId: ctx.projectId,
+      name: `attacks-archive-test-campaign-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      priority: 5,
+      status: 'draft',
+    })
+    .returning({ id: campaigns.id })
+  return row!.id
+}
+
 async function insertAttack(overrides: { campaignId?: number; projectId?: number } = {}) {
+  const campaignId = overrides.campaignId ?? ctx.campaignId
+  // Single-hash-mode-per-campaign DB backstop (issue #100): this raw
+  // fixture insert bypasses `createAttack`'s coordinating latch, so mirror
+  // it here (every attack this helper inserts is mode 3).
+  await db
+    .update(campaigns)
+    .set({ hashcatMode: 3 })
+    .where(and(eq(campaigns.id, campaignId), isNull(campaigns.hashcatMode)))
   const [row] = await db
     .insert(attacks)
     .values({
-      campaignId: overrides.campaignId ?? ctx.campaignId,
+      campaignId,
       projectId: overrides.projectId ?? ctx.projectId,
       // Mode 3 (mask) with an inline mask computes its keyspace synchronously
       // (no wordlist/rulelist DB rows needed) — a small, deterministic,
@@ -108,7 +145,7 @@ beforeAll(async () => {
       status: 'draft',
     })
     .returning({ id: campaigns.id })
-  ctx = { projectId, campaignId: campaign!.id }
+  ctx = { projectId, campaignId: campaign!.id, hashListId: hashList!.id }
 })
 
 afterAll(cleanupSeed)
@@ -306,11 +343,27 @@ async function insertReclaimedWordList(): Promise<number> {
   return row!.id
 }
 
-async function insertArchivedAttackReferencing(wordlistId: number): Promise<number> {
+/**
+ * `campaignId` defaults to a FRESH campaign (not the shared `ctx.campaignId`)
+ * — restoring now also runs the single-hash-mode-per-campaign guard (issue
+ * #100 R15 / AS1), which would otherwise see every mode-3 attack every
+ * other test in this file has ever left non-archived in the shared
+ * campaign and spuriously reject the restore.
+ */
+async function insertArchivedAttackReferencing(
+  wordlistId: number,
+  campaignId?: number
+): Promise<number> {
+  const resolvedCampaignId = campaignId ?? (await insertCampaign())
+  // Single-hash-mode-per-campaign DB backstop (issue #100): see insertAttack.
+  await db
+    .update(campaigns)
+    .set({ hashcatMode: 0 })
+    .where(and(eq(campaigns.id, resolvedCampaignId), isNull(campaigns.hashcatMode)))
   const [row] = await db
     .insert(attacks)
     .values({
-      campaignId: ctx.campaignId,
+      campaignId: resolvedCampaignId,
       projectId: ctx.projectId,
       mode: 0,
       wordlistId,
@@ -361,5 +414,68 @@ describe('restoreAttacks: reclaimed-shell guard (F2, issue #106 code review)', (
 
     const [res] = await restoreAttacks(ctx.projectId, [id])
     expect(res?.outcome).toBe('restored')
+  })
+})
+
+// ─── restoreAttacks: single-hash-mode-per-campaign guard (issue #100
+// R15 / AS1 code review fix) ──────────────────────────────────────────
+//
+// Each test here uses its OWN fresh campaign (via `insertCampaign`), not
+// the shared `ctx.campaignId` — restoring now also runs the single-hash-
+// mode-per-campaign sibling scan, which would otherwise see every mode-3
+// attack every earlier test in this file left non-archived in the shared
+// campaign and spuriously reject (or pass) the restore for the wrong
+// reason.
+
+async function insertAttackWithMode(campaignId: number, mode: number): Promise<number> {
+  const [row] = await db
+    .insert(attacks)
+    .values({ campaignId, projectId: ctx.projectId, mode })
+    .returning({ id: attacks.id })
+  return row!.id
+}
+
+describe('restoreAttacks: single-hash-mode-per-campaign guard (issue #100 R15 / AS1)', () => {
+  // Issue #100 DB backstop (composite FK on attacks(campaign_id, mode) ->
+  // campaigns(id, hashcat_mode)): this guard was written for a scenario —
+  // an archived attack of one mode coexisting with a non-archived attack
+  // of a DIFFERENT mode in the same campaign — that the FK now makes
+  // impossible to construct at all, in any archive state. Once the first
+  // attack's mode latches `campaigns.hashcat_mode`, every subsequent
+  // attack insert into that campaign (archived or not) is rejected by the
+  // FK before `restoreAttacks` ever runs. `checkSingleHashModePerCampaign`
+  // stays wired into `restoreAttacks` as defense-in-depth (issue #100
+  // task requirement — the app-level check is not removed), but its
+  // `mode_conflict` outcome is now unreachable via any FK-respecting write
+  // path. The test below proves the enforcement moved earlier (to the
+  // sibling's insert) instead of asserting the now-impossible outcome.
+  it('a differently-moded sibling can no longer be created once the first attack has set the campaign mode', async () => {
+    const campaignId = await insertCampaign()
+
+    // A (mode 3) generates a task so it is archivable, then gets
+    // archived — at that point it has no non-archived siblings, so
+    // archiving itself never needed the mode-consistency guard.
+    const attackA = await insertAttack({ campaignId })
+    await generateTasksForAttack(attackA)
+    const [archiveRes] = await archiveAttacks(ctx.projectId, [attackA])
+    expect(archiveRes?.outcome).toBe('archived')
+
+    // The fixture the old restore-time-conflict test relied on — a
+    // mode-0 sibling B — can no longer be inserted at all, even while A
+    // is archived: `campaigns.hashcat_mode` was already latched to 3 by
+    // A's insert (see `insertAttack`'s latch above) and never clears.
+    let caught: unknown
+    try {
+      await insertAttackWithMode(campaignId, 0)
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeDefined()
+    expect(isModeConsistencyFkViolation(caught)).toBe(true)
+
+    // No conflicting sibling was ever created, so A restores normally.
+    const [restoreRes] = await restoreAttacks(ctx.projectId, [attackA])
+    expect(restoreRes?.outcome).toBe('restored')
+    expect((await readAttack(attackA))?.archivedAt).toBeNull()
   })
 })

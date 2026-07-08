@@ -24,11 +24,13 @@ import {
 import { deriveAttackRuntimes } from '../../services/attacks/runtime.js'
 import {
   archiveAttacks,
+  checkSingleHashModePerCampaign,
   createAttack,
   deleteAttack,
   findReclaimedResourceRefs,
   getAttackById,
   getCampaignById,
+  isModeConsistencyFkViolation,
   listAttacksPaginated,
   restoreAttacks,
   updateAttack,
@@ -246,6 +248,7 @@ const createAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -282,6 +285,22 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
         `Referenced resources are archived: ${archived.join(', ')}`
       )
     }
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): the
+    // campaign ETA rollup sums per-attack estimates across every
+    // non-terminal attack, which is only exact when they share one
+    // hashcat mode. The Control surface has no existing pre-check
+    // chokepoint (see the reclaimed/archived guard above), so this is
+    // checked directly rather than via validateCampaignResources, which
+    // this route never calls.
+    const modeCheck = await checkSingleHashModePerCampaign(data.campaignId, data.mode)
+    if (!modeCheck.valid) {
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+      )
+    }
     const user = c.get('currentUser')
     const attack = await createAttack(
       { ...data, projectId },
@@ -290,6 +309,23 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
     if (!attack) throw new Error('attack insert returned no row')
     return c.json(await withRuntime(attack), 201)
   } catch (err) {
+    // TOCTOU backstop: the `checkSingleHashModePerCampaign` pre-check above
+    // ran before this write started — a concurrent create of a different
+    // mode could have landed and latched `campaigns.hashcat_mode` in
+    // between. The composite FK catches that race at the DB level; map it
+    // to the same typed 422 the pre-check returns instead of a 500.
+    if (isModeConsistencyFkViolation(err)) {
+      // `data` is scoped to the `try` block above and not visible here;
+      // `c.req.valid('json')` re-reads the same cached validation result
+      // attached by the zod-openapi validator middleware.
+      const { mode } = c.req.valid('json')
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+      )
+    }
     return controlErrorResponse(c, err)
   }
 })
@@ -316,6 +352,7 @@ const updateAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -353,6 +390,19 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
         )
       }
     }
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1) — only
+    // fires when `mode` is actually part of the patch.
+    if (body.mode !== undefined) {
+      const modeCheck = await checkSingleHashModePerCampaign(existing.campaignId, body.mode, id)
+      if (!modeCheck.valid) {
+        return problemResponse(
+          c,
+          422,
+          'attack_mode_conflict',
+          `Attack mode ${body.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+        )
+      }
+    }
     const user = c.get('currentUser')
     const updated = await updateAttack(id, body, {
       actorType: 'user',
@@ -361,6 +411,16 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
     if (!updated) return problemResponse(c, 404, 'not_found', 'attack not found')
     return c.json(await withRuntime(updated), 200)
   } catch (err) {
+    // TOCTOU backstop — see the create-route comment above.
+    if (isModeConsistencyFkViolation(err)) {
+      const body = c.req.valid('json')
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${body.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+      )
+    }
     return controlErrorResponse(c, err)
   }
 })
@@ -440,6 +500,16 @@ controlAttackRoutes.openapi(deleteAttackRoute, async (c) => {
 //                                  NEVER succeed for this record (it's
 //                                  permanent), 409 means it can't
 //                                  succeed RIGHT NOW.
+//   - mode_conflict             → 422 `attack_mode_conflict` (issue #100
+//                                  R15 / AS1 code review fix), NOT 409.
+//                                  Deliberate exception to the reversible-
+//                                  state rule above: this is the exact
+//                                  same semantic-invariant violation the
+//                                  create/update attack routes below
+//                                  already report as 422
+//                                  `attack_mode_conflict` — restore must
+//                                  match so the same problem `type` never
+//                                  carries two different statuses.
 //   - error                     → 500 `internal` (a per-id service
 //                                  failure, e.g. a DB error).
 
@@ -513,6 +583,7 @@ const restoreAttackRoute = createRoute({
     403: sharedControlResponse(CONTROL_RESPONSE_REFS.Forbidden),
     404: sharedControlResponse(CONTROL_RESPONSE_REFS.NotFound),
     409: sharedControlResponse(CONTROL_RESPONSE_REFS.Conflict),
+    422: sharedControlResponse(CONTROL_RESPONSE_REFS.UnprocessableEntity),
     500: sharedControlResponse(CONTROL_RESPONSE_REFS.InternalError),
   },
 })
@@ -538,6 +609,13 @@ controlAttackRoutes.openapi(restoreAttackRoute, async (c) => {
           409,
           'conflict',
           'attack references a reclaimed-shell resource; re-upload the resource before restoring'
+        )
+      case 'mode_conflict':
+        return problemResponse(
+          c,
+          422,
+          'attack_mode_conflict',
+          'restoring this attack would reintroduce a hashcat mode conflict with another non-terminal attack in this campaign'
         )
       case 'error':
         return problemResponse(c, 500, 'internal', 'restore failed')

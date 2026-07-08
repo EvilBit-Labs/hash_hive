@@ -214,6 +214,24 @@ if (!IS_ISOLATED) {
     },
   ])
 
+  // Issue #100 U2: the detail route computes the campaign ETA from the
+  // attack runtimes + active-agent list it already fetched, via the pure
+  // `computeCampaignEtaState` ladder (no extra DB round trip); the list
+  // route instead calls the I/O batch entry point (`getCampaignEtasBatch`)
+  // once per page. Both are mocked here per the service-ReturnType
+  // convention so route-level tests never depend on the real precedence
+  // ladder or a live DB.
+  const mockComputeCampaignEtaState = mock<CampaignsService['computeCampaignEtaState']>(() => ({
+    state: 'estimating',
+  }))
+  const mockGetCampaignEtasBatch = mock<CampaignsService['getCampaignEtasBatch']>(async (ids) => {
+    const entries: Array<[number, { state: 'estimating' }]> = [...ids].map((id) => [
+      id,
+      { state: 'estimating' },
+    ])
+    return new Map(entries)
+  })
+
   // Per-test mock of listAttacks: defaults to empty so existing tests
   // are unaffected; DAG-validation tests override it via .mockResolvedValueOnce.
   const mockListAttacks = mock(
@@ -232,6 +250,20 @@ if (!IS_ISOLATED) {
       _campaign: { projectId: number; hashListId: number | null },
       _attacks: ReadonlyArray<Record<string, unknown>>
     ): Promise<ResourceCheckResult> => ({ valid: true })
+  )
+
+  // Issue #100 U5: single-hash-mode-per-campaign guard. Default to valid
+  // so existing attack-write tests that don't care about mode conflicts
+  // are unaffected; individual tests override via .mockResolvedValueOnce.
+  type ModeCheckResult =
+    | { valid: true }
+    | { valid: false; conflictingMode: number; conflictingAttackId: number }
+  const mockCheckSingleHashModePerCampaign = mock(
+    async (
+      _campaignId: number,
+      _newMode: number,
+      _excludeAttackId?: number
+    ): Promise<ModeCheckResult> => ({ valid: true })
   )
 
   const mockCreateCampaign = mock<CampaignsService['createCampaign']>(async (data) =>
@@ -301,6 +333,13 @@ if (!IS_ISOLATED) {
     getCampaignTaskStats: mockGetCampaignTaskStats,
     getCampaignAttacksWithRuntime: mock(async () => []),
     listActiveAgentsByCampaign: mockListActiveAgentsByCampaign,
+    // Issue #100 U2 campaign ETA rollup — see the mock declarations above.
+    computeCampaignEtaState: mockComputeCampaignEtaState,
+    getCampaignEtasBatch: mockGetCampaignEtasBatch,
+    // Issue #100 R1 code review fix — the detail route filters archived
+    // attacks out of the ETA rollup input via this lookup. Default to
+    // "nothing archived" so existing eta-unrelated tests are unaffected.
+    getArchivedAttackIds: mock(async () => new Set<number>()),
     deleteCampaign: mockDeleteCampaign,
     // Inert stubs for sibling exports the routes module imports.
     createCampaign: mockCreateCampaign,
@@ -318,6 +357,29 @@ if (!IS_ISOLATED) {
     // Cross-project resource pre-check on draft writes. Default to
     // valid; individual tests override per case via mockResolvedValueOnce.
     validateCampaignResources: mockValidateCampaignResources,
+    checkSingleHashModePerCampaign: mockCheckSingleHashModePerCampaign,
+    // Single-hash-mode-per-campaign DB backstop (issue #100): mirrors the
+    // real `isModeConsistencyFkViolation` (services/campaign-resources.ts)
+    // so the FK-race tests below can simulate the composite FK's SQLSTATE
+    // 23503 (wrapped in a DrizzleQueryError, per the real driver shape)
+    // without a real DB.
+    isModeConsistencyFkViolation: (err: unknown): boolean => {
+      const candidates = [
+        err,
+        err instanceof Error ? (err as { cause?: unknown }).cause : undefined,
+      ]
+      for (const candidate of candidates) {
+        if (!(candidate instanceof Error)) continue
+        const code = 'code' in candidate ? (candidate as { code?: string }).code : undefined
+        if (code !== '23503') continue
+        const constraintName =
+          'constraint_name' in candidate
+            ? (candidate as { constraint_name?: string }).constraint_name
+            : undefined
+        if (constraintName === 'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk') return true
+      }
+      return false
+    },
     // Real production implementation — caught by the dynamic-import
     // above. Production drift now fails the tests immediately instead
     // of silently diverging from a hand-ported stub.
@@ -498,6 +560,53 @@ if (!IS_ISOLATED) {
     })
   })
 
+  describe('Dashboard campaigns list: campaign ETA (issue #100 U2)', () => {
+    it('includes a per-row eta from ONE batched rollup call, not one per campaign', async () => {
+      mockListCampaigns.mockResolvedValueOnce({
+        campaigns: [makeCampaign({ id: 100 }), makeCampaign({ id: 101, status: 'running' })],
+        total: 2,
+        limit: 50,
+        offset: 0,
+      })
+      mockGetCampaignEtasBatch.mockClear()
+      mockGetCampaignEtasBatch.mockResolvedValueOnce(
+        new Map<number, { state: 'estimating' } | { state: 'ready'; seconds: number }>([
+          [100, { state: 'estimating' }],
+          [101, { state: 'ready', seconds: 3600 }],
+        ])
+      )
+
+      const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { campaigns?: Array<{ id: number; eta?: unknown }> }
+      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'estimating' })
+      expect(body.campaigns?.[1]?.eta).toEqual({ state: 'ready', seconds: 3600 })
+
+      // Batched: exactly one rollup call for the whole page, covering
+      // every campaign id on it — never a per-row call.
+      expect(mockGetCampaignEtasBatch).toHaveBeenCalledTimes(1)
+      expect(mockGetCampaignEtasBatch).toHaveBeenCalledWith([100, 101])
+    })
+
+    it('falls back to a neutral estimating state for an id the batch rollup omits', async () => {
+      mockListCampaigns.mockResolvedValueOnce({
+        campaigns: [makeCampaign({ id: 100 })],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+      mockGetCampaignEtasBatch.mockResolvedValueOnce(new Map())
+
+      const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { campaigns?: Array<{ id: number; eta?: unknown }> }
+      // Code review fix: a lookup miss must never render as "Complete" for a
+      // still-running campaign — the neutral "no data yet" state is the safe
+      // fallback here, not `complete`.
+      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'estimating' })
+    })
+  })
+
   describe('Dashboard campaigns detail: enriched payload', () => {
     it('returns campaign + attacks + taskStats + activeAgents in one round-trip', async () => {
       const res = await app.request(`${DASH_CAMPAIGNS}/100`, { headers: makeHeaders() })
@@ -543,6 +652,32 @@ if (!IS_ISOLATED) {
     it('returns 404 for unknown id', async () => {
       const res = await app.request(`${DASH_CAMPAIGNS}/9999`, { headers: makeHeaders() })
       expect(res.status).toBe(404)
+    })
+  })
+
+  describe('Dashboard campaigns detail: campaign ETA (issue #100 U2)', () => {
+    it('includes the eta computed from the already-fetched attack runtimes', async () => {
+      mockComputeCampaignEtaState.mockClear()
+      mockComputeCampaignEtaState.mockReturnValueOnce({ state: 'ready', seconds: 7200 })
+
+      // Campaign 101 is seeded as status 'running' by mockGetCampaignById.
+      const res = await app.request(`${DASH_CAMPAIGNS}/101`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { eta?: unknown }
+      expect(body.eta).toEqual({ state: 'ready', seconds: 7200 })
+
+      expect(mockComputeCampaignEtaState).toHaveBeenCalledTimes(1)
+      const args = mockComputeCampaignEtaState.mock.calls[0]?.[0]
+      expect(args?.campaignStatus).toBe('running')
+      // mockListActiveAgentsByCampaign returns one row by default.
+      expect(args?.hasActiveAgents).toBe(true)
+    })
+
+    it('never calls the I/O batch rollup from the detail route (reuses the attack fetch instead)', async () => {
+      mockGetCampaignEtasBatch.mockClear()
+      const res = await app.request(`${DASH_CAMPAIGNS}/100`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      expect(mockGetCampaignEtasBatch).not.toHaveBeenCalled()
     })
   })
 
@@ -1022,6 +1157,39 @@ if (!IS_ISOLATED) {
       expect(body.error?.code).toBe('RESOURCE_MISSING')
       expect(body.error?.message).toContain('wordlist(42)')
     })
+
+    it('returns 422 ATTACK_MODE_CONFLICT when inline attacks mix hashcat modes (issue #100 R15/AS1)', async () => {
+      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+        kind: 'mode_conflict',
+        modes: [0, 1000],
+      })
+      const res = await postCampaign({
+        name: 'Mixed modes',
+        hashListId: 1,
+        attacks: [{ mode: 0 }, { mode: 1000 }],
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('0, 1000')
+    })
+
+    it('with attacks sharing one mode: succeeds (no mode conflict)', async () => {
+      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+        kind: 'created',
+        campaign: makeCampaign({ name: 'Same mode' }),
+        attacks: [
+          { id: 800, dependencies: null },
+          { id: 801, dependencies: null },
+        ],
+      })
+      const res = await postCampaign({
+        name: 'Same mode',
+        hashListId: 1,
+        attacks: [{ mode: 0 }, { mode: 0 }],
+      })
+      expect(res.status).toBe(201)
+    })
   })
 
   describe('Attack-write-time cross-project resource validation', () => {
@@ -1110,6 +1278,142 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(503)
       const body = (await res.json()) as { error?: { code?: string } }
       expect(body.error?.code).toBe('SERVICE_UNAVAILABLE')
+    })
+  })
+
+  describe('Single-hash-mode-per-campaign guard (issue #100 R15, AE6)', () => {
+    it('POST /:id/attacks returns 422 ATTACK_MODE_CONFLICT when the mode conflicts with a non-terminal sibling', async () => {
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('1000')
+      expect(body.error?.message).toContain('42')
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 1000)
+    })
+
+    it('POST /:id/attacks succeeds when the mode matches existing siblings (or the campaign has none)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 0 }),
+      })
+      expect(res.status).toBe(201)
+    })
+
+    it('PATCH /:id/attacks/:attackId returns 422 ATTACK_MODE_CONFLICT when changing to a conflicting mode', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] })
+      mockCheckSingleHashModePerCampaign.mockResolvedValueOnce({
+        valid: false,
+        conflictingMode: 0,
+        conflictingAttackId: 42,
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledWith(100, 1000, 5)
+    })
+
+    it('PATCH /:id/attacks/:attackId skips the mode-consistency check when mode is not part of the patch', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] })
+      mockCheckSingleHashModePerCampaign.mockClear()
+      // A prior test in this file may have left validateCampaignResources
+      // reset to no implementation (mockReset, no restored default) —
+      // this PATCH changes rulelistId, so the resource-ref check runs and
+      // needs a resolved value to reach 200.
+      mockValidateCampaignResources.mockResolvedValueOnce({ valid: true })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ rulelistId: 13 }),
+      })
+      expect(res.status).toBe(200)
+      expect(mockCheckSingleHashModePerCampaign).toHaveBeenCalledTimes(0)
+    })
+
+    // ─── DB-level TOCTOU backstop (issue #100): the composite FK on
+    // attacks(campaign_id, mode) -> campaigns(id, hashcat_mode) is what
+    // actually blocks a race the read-then-write pre-check above cannot —
+    // two concurrent requests can both pass `checkSingleHashModePerCampaign`
+    // before either write lands. Simulated here by having the pre-check
+    // report valid (as it would to the race loser, which read stale data)
+    // while the underlying create/update throws the real Postgres FK error
+    // (SQLSTATE 23503) that the DB actually raises. `isModeConsistencyFkViolation`
+    // is mocked above (mirroring the real services/campaign-resources.ts
+    // implementation) since this file mocks services/campaigns.js wholesale.
+
+    function makeModeConsistencyFkError(): Error {
+      const err = new Error(
+        'insert or update on table "attacks" violates foreign key constraint ' +
+          '"attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk"'
+      )
+      ;(err as Error & { code?: string; constraint_name?: string }).code = '23503'
+      ;(err as Error & { code?: string; constraint_name?: string }).constraint_name =
+        'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk'
+      return err
+    }
+
+    it('POST /:id/attacks maps the FK race backstop to 422 ATTACK_MODE_CONFLICT instead of a 500', async () => {
+      mockCreateAttack.mockImplementationOnce(async () => {
+        throw makeModeConsistencyFkError()
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('1000')
+    })
+
+    it('PATCH /:id/attacks/:attackId maps the FK race backstop to 422 ATTACK_MODE_CONFLICT instead of a 500', async () => {
+      mockGetAttackByIdImpl.mockResolvedValueOnce({ id: 5, campaignId: 100, dependencies: [] })
+      mockUpdateAttackImpl.mockImplementationOnce(async () => {
+        throw makeModeConsistencyFkError()
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks/5`, {
+        method: 'PATCH',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
+      expect(body.error?.message).toContain('1000')
+    })
+
+    it('POST /:id/attacks: an unrelated FK violation (different constraint) still 500s rather than being misclassified', async () => {
+      mockCreateAttack.mockImplementationOnce(async () => {
+        const err = new Error(
+          'violates foreign key constraint "attacks_hash_type_id_hash_types_id_fk"'
+        )
+        ;(err as Error & { code?: string; constraint_name?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint_name?: string }).constraint_name =
+          'attacks_hash_type_id_hash_types_id_fk'
+        throw err
+      })
+      const res = await app.request(`${DASH_CAMPAIGNS}/100/attacks`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(500)
     })
   })
 

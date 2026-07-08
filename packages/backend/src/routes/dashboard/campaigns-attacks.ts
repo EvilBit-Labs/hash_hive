@@ -24,10 +24,12 @@ import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireMembershipRole, requireProjectAccess } from '../../middleware/rbac.js'
 import { DASHBOARD_RESPONSE_REFS, sharedDashboardResponse } from '../../openapi/components.js'
 import {
+  checkSingleHashModePerCampaign,
   createAttack,
   deleteAttack,
   getAttackById,
   getCampaignById,
+  isModeConsistencyFkViolation,
   listAttacks,
   updateAttack,
   validateProposedDAG,
@@ -122,6 +124,10 @@ const createAttackRoute = createRoute({
       description: 'Referenced resources missing or cross-project.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
+    422: {
+      description: 'Attack mode conflicts with an existing non-terminal attack in this campaign.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
     503: {
       description: 'Resource validation lookup unavailable.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
@@ -178,6 +184,10 @@ const updateAttackRoute = createRoute({
     404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
     409: {
       description: 'Referenced resources missing or cross-project.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    422: {
+      description: 'Attack mode conflicts with an existing non-terminal attack in this campaign.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     503: {
@@ -257,6 +267,22 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       if (errResp) return errResp
     }
 
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): the
+    // campaign ETA rollup sums per-attack estimates across every
+    // non-terminal attack, which is only exact when they share one
+    // hashcat mode. Reject before the DAG check so a mode conflict is
+    // reported without also validating a dependency graph that would be
+    // discarded anyway.
+    const modeCheck = await checkSingleHashModePerCampaign(campaignId, data.mode)
+    if (!modeCheck.valid) {
+      return dashboardError(
+        c,
+        422,
+        'ATTACK_MODE_CONFLICT',
+        `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+      )
+    }
+
     // Pre-insert DAG validation: build the proposed graph (current
     // attacks + this new attack with a synthetic id) and reject the
     // request if it would introduce a cycle or reference a missing
@@ -287,16 +313,33 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     }
 
     const { userId } = c.get('scopedUser')!
-    const attack = await createAttack(
-      {
-        ...data,
-        campaignId,
-        projectId: campaign.projectId,
-      },
-      { actorType: 'user', actorId: userId }
-    )
+    try {
+      const attack = await createAttack(
+        {
+          ...data,
+          campaignId,
+          projectId: campaign.projectId,
+        },
+        { actorType: 'user', actorId: userId }
+      )
 
-    return c.json({ attack }, 201)
+      return c.json({ attack }, 201)
+    } catch (err) {
+      // TOCTOU backstop: the `checkSingleHashModePerCampaign` pre-check
+      // above ran before this write started — a concurrent create of a
+      // different mode could have landed and latched `campaigns.hashcat_mode`
+      // in between. The composite FK catches that race at the DB level;
+      // map it to the same typed 422 the pre-check returns instead of a 500.
+      if (isModeConsistencyFkViolation(err)) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+        )
+      }
+      throw err
+    }
   })
 
   router.openapi(listAttacksRoute, async (c) => {
@@ -362,6 +405,21 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
       if (errResp) return errResp
     }
 
+    // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1): only
+    // fires when `mode` is actually part of the patch — an update that
+    // doesn't touch mode cannot introduce a conflict.
+    if (data.mode !== undefined) {
+      const modeCheck = await checkSingleHashModePerCampaign(campaignId, data.mode, attackId)
+      if (!modeCheck.valid) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} conflicts with mode ${modeCheck.conflictingMode} used by another non-terminal attack (id ${modeCheck.conflictingAttackId}) in this campaign; a campaign may only run one hashcat mode at a time`
+        )
+      }
+    }
+
     // Pre-update DAG validation: only when dependencies are being
     // changed. Other field changes (mode, wordlist, etc.) do not affect
     // the dependency graph, so skipping the load avoids the extra query.
@@ -380,13 +438,26 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     }
 
     const { userId } = c.get('scopedUser')!
-    const attack = await updateAttack(attackId, data, { actorType: 'user', actorId: userId })
+    try {
+      const attack = await updateAttack(attackId, data, { actorType: 'user', actorId: userId })
 
-    if (!attack) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+      if (!attack) {
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+      }
+
+      return c.json({ attack }, 200)
+    } catch (err) {
+      // TOCTOU backstop — see the create-route comment above.
+      if (isModeConsistencyFkViolation(err)) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+        )
+      }
+      throw err
     }
-
-    return c.json({ attack }, 200)
   })
 
   router.openapi(deleteAttackRoute, async (c) => {

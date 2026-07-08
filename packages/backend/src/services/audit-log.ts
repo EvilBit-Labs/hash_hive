@@ -160,6 +160,9 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'startedAt',
     'completedAt',
     'archivedAt',
+    // Single-hash-mode-per-campaign DB backstop (issue #100): latched from
+    // NULL to the first attack's mode; worth auditing like `attack.mode`.
+    'hashcatMode',
     // createdAt / updatedAt excluded
   ]),
 

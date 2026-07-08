@@ -1,6 +1,11 @@
 import type { Context } from 'hono'
 
-import { changeCampaignPriorityRequestSchema, inlineAttackRequestSchema } from '@hashhive/shared'
+import {
+  type CampaignStatus,
+  campaignEtaSchema,
+  changeCampaignPriorityRequestSchema,
+  inlineAttackRequestSchema,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
@@ -20,8 +25,11 @@ import {
   createCampaignWithAttacks,
   deleteCampaign,
   changeRunningCampaignPriority,
+  computeCampaignEtaState,
+  getArchivedAttackIds,
   getCampaignAttacksWithRuntime,
   getCampaignById,
+  getCampaignEtasBatch,
   getCampaignTaskStats,
   listActiveAgentsByCampaign,
   listCampaigns,
@@ -110,6 +118,7 @@ const campaignDetailResponseSchema = z.object({
     })
     .passthrough(),
   activeAgents: z.array(z.unknown()),
+  eta: campaignEtaSchema,
 })
 
 const deleteCampaignResponseSchema = z.object({
@@ -158,7 +167,23 @@ campaignRoutes.openapi(listCampaignsRoute, async (c) => {
     limit,
     offset,
   })
-  return c.json(result, 200)
+
+  // Issue #100 U2: one batched ETA rollup call for the whole page, never
+  // one call per row. `getCampaignEtasBatch` already does a single
+  // `inArray` attacks fetch + a single `deriveAttackRuntimes` call
+  // internally (see campaign-eta-rollup.ts), so this stays within the
+  // route's existing query budget regardless of page size.
+  const etaByCampaignId = await getCampaignEtasBatch(result.campaigns.map((row) => row.id))
+  const campaignsWithEta = result.campaigns.map((row) => ({
+    ...row,
+    // Unreachable today — the batch rollup returns an entry per requested
+    // id. Falls back to the neutral "no data yet" state (not `complete`)
+    // so a future lookup miss can never misrender a still-running campaign
+    // as finished (code review fix).
+    eta: etaByCampaignId.get(row.id) ?? ({ state: 'estimating' } as const),
+  }))
+
+  return c.json({ ...result, campaigns: campaignsWithEta }, 200)
 })
 
 // Inline-attack payload schema is canonical in @hashhive/shared so the
@@ -198,6 +223,10 @@ const createCampaignRoute = createRoute({
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Inline attacks referenced a missing resource.',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    422: {
+      description: 'Inline attacks mix more than one hashcat mode.',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     503: {
@@ -303,6 +332,15 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'mode_conflict') {
+    return dashboardError(
+      c,
+      422,
+      'ATTACK_MODE_CONFLICT',
+      `Campaign attacks must share one hashcat mode; received modes: ${result.modes.join(', ')}`
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
 })
 
@@ -338,11 +376,32 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  const [campaignAttacks, taskStats, activeAgents] = await Promise.all([
+  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds] = await Promise.all([
     getCampaignAttacksWithRuntime(id),
     getCampaignTaskStats(id),
     listActiveAgentsByCampaign(id),
+    getArchivedAttackIds(id),
   ])
+
+  // Issue #100 U2: compute the campaign-level ETA from the attack runtimes
+  // and active-agent list already fetched above rather than calling
+  // `getCampaignEta`, which would re-fetch the campaign's attacks and
+  // re-run `deriveAttackRuntimes` a second time for the same request.
+  //
+  // Code review fix (issue #100 R1): `getCampaignAttacksWithRuntime`
+  // intentionally returns every attack regardless of archive state (the
+  // detail payload's `attacks` array is a separate concern), so archived
+  // rows are filtered out here before feeding the rollup — mirrors the
+  // `isNull(archivedAt)` filter `getCampaignEtasBatch` applies for the
+  // list view, keeping detail and list ETAs consistent.
+  const eta = computeCampaignEtaState({
+    // `campaigns.status` is a `varchar(20)` column — Drizzle infers `string`,
+    // not the narrower `CampaignStatus` literal union (mirrors the same cast
+    // in `campaign-eta-rollup.ts`'s batch path).
+    campaignStatus: campaign.status as CampaignStatus,
+    hasActiveAgents: activeAgents.length > 0,
+    attacks: campaignAttacks.filter((attack) => !archivedAttackIds.has(attack.id)),
+  })
 
   return c.json(
     {
@@ -350,6 +409,7 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
       attacks: campaignAttacks,
       taskStats,
       activeAgents,
+      eta,
     },
     200
   )

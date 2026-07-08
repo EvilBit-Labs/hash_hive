@@ -22,7 +22,11 @@ import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
-import { findReclaimedResourceRefs } from './campaign-resources.js'
+import {
+  checkSingleHashModePerCampaign,
+  findReclaimedResourceRefs,
+  isModeConsistencyFkViolation,
+} from './campaign-resources.js'
 
 /**
  * Archive is refused for a task-less (never-latched) attack — see
@@ -148,6 +152,22 @@ export async function restoreAttacks(
           return { id, outcome: 'resource_reclaimed' }
         }
 
+        // Single-hash-mode-per-campaign guard (issue #100 R15 / AS1 code
+        // review fix): restoring un-archives the attack, making it a
+        // sibling again for the mode-consistency invariant the campaign
+        // ETA rollup depends on. Without this check, archive -> create a
+        // different-mode attack -> restore would silently re-introduce a
+        // mixed-mode campaign. Checked per-id (mirrors the reclaimed-shell
+        // check above); a batch restoring two different-mode archived
+        // attacks together, with no other non-archived sibling, can still
+        // slip through both checks since neither observes the other's
+        // not-yet-committed row — an accepted, narrow race the same as
+        // every other pre-check-then-write guard on this path.
+        const modeCheck = await checkSingleHashModePerCampaign(oldRow.campaignId, oldRow.mode, id)
+        if (!modeCheck.valid) {
+          return { id, outcome: 'mode_conflict' }
+        }
+
         const result = await db.transaction(async (tx) => {
           const updated = await tx
             .update(attacks)
@@ -191,6 +211,16 @@ export async function restoreAttacks(
           .limit(1)
         return { id, outcome: row ? 'not_archived' : 'not_found' }
       } catch (err) {
+        // Single-hash-mode-per-campaign DB backstop (issue #100): restoring
+        // never touches `campaignId`/`mode` (only `archivedAt`), so Postgres
+        // has no reason to re-check the composite FK here — the pre-check
+        // above is expected to be the only gate that fires in practice.
+        // This mapping is a defensive backstop in case that invariant ever
+        // breaks, so a race still surfaces as the typed `mode_conflict`
+        // outcome rather than a generic per-id `error`.
+        if (isModeConsistencyFkViolation(err)) {
+          return { id, outcome: 'mode_conflict' }
+        }
         logger.error({ err, attackId: id, projectId }, 'restoreAttacks: per-id failure')
         return { id, outcome: 'error' }
       }
