@@ -159,7 +159,7 @@ describe('CampaignDetailPage', () => {
       await renderWithEta({ state: 'lower_bound', seconds: 14400, pendingAttacks: 1 })
 
       expect(screen.getByTestId('campaign-eta').textContent).toBe(
-        '≥ 4h (1 attack still estimating)'
+        '>= 4h (1 attack still estimating)'
       )
     })
 

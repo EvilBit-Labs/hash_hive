@@ -1149,8 +1149,7 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(422)
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(body.error?.code).toBe('ATTACK_MODE_CONFLICT')
-      expect(body.error?.message).toContain('0')
-      expect(body.error?.message).toContain('1000')
+      expect(body.error?.message).toContain('0, 1000')
     })
 
     it('with attacks sharing one mode: succeeds (no mode conflict)', async () => {

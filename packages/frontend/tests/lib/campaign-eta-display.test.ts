@@ -20,14 +20,14 @@ describe('formatCampaignEta', () => {
     expect(formatCampaignEta(eta)).toBe('> 1 year')
   })
 
-  it('renders lower_bound with a "≥" prefix and singular attack noun for one pending attack (AE4)', () => {
+  it('renders lower_bound with a ">=" prefix and singular attack noun for one pending attack (AE4)', () => {
     const eta: CampaignEta = { state: 'lower_bound', seconds: 14400, pendingAttacks: 1 }
-    expect(formatCampaignEta(eta)).toBe('≥ 4h (1 attack still estimating)')
+    expect(formatCampaignEta(eta)).toBe('>= 4h (1 attack still estimating)')
   })
 
   it('pluralizes the attack noun for more than one pending attack', () => {
     const eta: CampaignEta = { state: 'lower_bound', seconds: 14400, pendingAttacks: 3 }
-    expect(formatCampaignEta(eta)).toBe('≥ 4h (3 attacks still estimating)')
+    expect(formatCampaignEta(eta)).toBe('>= 4h (3 attacks still estimating)')
   })
 
   it('renders the estimating state as a reason, not a number (AE2)', () => {

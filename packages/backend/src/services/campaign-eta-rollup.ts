@@ -84,6 +84,10 @@ export function computeCampaignEtaState(input: {
   const nonTerminal = input.attacks.filter((attack) => isNonTerminalAttackStatus(attack.status))
 
   if (nonTerminal.length === 0) return { state: 'complete' }
+  // A cancelled campaign's non-terminal attacks will never receive new tasks,
+  // so treat it as terminal rather than projecting a live ETA over stopped
+  // work (same staleness the `paused` guard prevents; ARCHITECTURE.md lifecycle).
+  if (input.campaignStatus === 'cancelled') return { state: 'complete' }
   if (input.campaignStatus === 'paused') return { state: 'paused' }
   if (!input.hasActiveAgents) return { state: 'no_agents' }
 

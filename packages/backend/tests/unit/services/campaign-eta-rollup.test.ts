@@ -54,4 +54,19 @@ describe('computeCampaignEtaState', () => {
 
     expect(eta).toEqual({ state: 'complete' })
   })
+
+  it('does not project a live ETA for a cancelled campaign with non-terminal attacks', () => {
+    // A cancelled campaign's non-terminal attacks will never run, so it must
+    // short-circuit like a terminal state instead of falling through to
+    // ready/lower_bound/estimating and showing a duration for stopped work.
+    const attacks: AttackEtaInput[] = [{ status: 'running', estimatedSecondsRemaining: '5000' }]
+
+    const eta = computeCampaignEtaState({
+      campaignStatus: 'cancelled',
+      hasActiveAgents: true,
+      attacks,
+    })
+
+    expect(eta).toEqual({ state: 'complete' })
+  })
 })
