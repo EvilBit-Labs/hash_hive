@@ -1391,7 +1391,7 @@ export async function updateAttack(
     if (data.mode !== undefined) {
       await tx.execute(sql`
         UPDATE campaigns
-        SET hashcat_mode = ${data.mode}
+        SET hashcat_mode = ${data.mode}, updated_at = now()
         WHERE id = ${existing.campaignId}
           AND NOT EXISTS (
             SELECT 1 FROM attacks

@@ -322,8 +322,18 @@ export type ModeConsistencyResult =
  * Verify `newMode` matches every other non-terminal (pending/running/
  * paused), non-archived attack already in `campaignId`. A campaign with
  * no such siblings (first attack, or every existing attack has reached a
- * terminal status / is archived) always passes — mixed-mode history from
- * before this check landed is out of scope (see plan AS1).
+ * terminal status / is archived) passes THIS pre-check — mixed-mode history
+ * from before this check landed is out of scope for the friendly path (see
+ * plan AS1).
+ *
+ * This is the operator-friendly pre-check, not the authority: issue #100 also
+ * adds a DB-level composite FK (`attacks(campaign_id, mode)` ->
+ * `campaigns(id, hashcat_mode)`) that enforces one mode across the campaign's
+ * ENTIRE attack history, including terminal and archived rows. So a write that
+ * passes here can still be rejected by the FK (surfaced as the same typed 422)
+ * when a terminal/archived sibling holds a different mode. The pre-check exists
+ * to return a clear message in the common case; the FK is the race/history
+ * backstop.
  *
  * Reuses `deriveAttackRuntimes` for the status ladder rather than
  * re-deriving it from task aggregates here, so this check can never drift

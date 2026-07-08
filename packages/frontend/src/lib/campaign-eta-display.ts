@@ -25,7 +25,11 @@ export function formatCampaignEta(eta: CampaignEta): string {
     case 'lower_bound': {
       const duration = formatAttackEta(eta.seconds) ?? FALLBACK_DURATION
       const attackNoun = eta.pendingAttacks === 1 ? 'attack' : 'attacks'
-      return `>= ${duration} (${eta.pendingAttacks} ${attackNoun} still estimating)`
+      // formatAttackEta clamps astronomically-large ETAs to "> 1 year", which
+      // already reads as a lower bound; adding the ">= " marker would produce
+      // the awkward ">= > 1 year". A normal duration keeps the ">= " marker.
+      const prefix = duration.startsWith('>') ? '' : '>= '
+      return `${prefix}${duration} (${eta.pendingAttacks} ${attackNoun} still estimating)`
     }
     case 'estimating':
       return 'Estimating...'

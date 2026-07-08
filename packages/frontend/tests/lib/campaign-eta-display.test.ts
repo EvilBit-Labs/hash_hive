@@ -30,6 +30,13 @@ describe('formatCampaignEta', () => {
     expect(formatCampaignEta(eta)).toBe('>= 4h (3 attacks still estimating)')
   })
 
+  it('does not double-prefix when the lower-bound duration is clamped to "> 1 year"', () => {
+    // formatAttackEta clamps ETAs beyond a year to "> 1 year"; the display must
+    // not render the awkward ">= > 1 year".
+    const eta: CampaignEta = { state: 'lower_bound', seconds: 40_000_000, pendingAttacks: 1 }
+    expect(formatCampaignEta(eta)).toBe('> 1 year (1 attack still estimating)')
+  })
+
   it('renders the estimating state as a reason, not a number (AE2)', () => {
     const eta: CampaignEta = { state: 'estimating' }
     expect(formatCampaignEta(eta)).toBe('Estimating...')
