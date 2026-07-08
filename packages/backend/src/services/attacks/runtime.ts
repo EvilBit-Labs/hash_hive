@@ -57,6 +57,34 @@ async function getFleetBenchmarksForMode(
     )
 }
 
+/**
+ * The terminal/non-terminal partition of `AttackStatus` — the single
+ * canonical source both the campaign ETA rollup (campaign-eta-rollup.ts,
+ * which sums only non-terminal attacks' `estimatedSecondsRemaining`) and the
+ * single-hash-mode-per-campaign guard (campaign-resources.ts, which only
+ * treats non-terminal siblings as mode conflicts) must agree on. Previously
+ * each file kept its own independent set — the rollup's was a terminal
+ * allow-list (fails safe: an unrecognized status is treated as non-terminal),
+ * while the mode guard's was a non-terminal allow-list (fails OPEN: an
+ * unrecognized status is silently treated as terminal, letting a mixed-mode
+ * campaign through). Defining ONE set here and deriving both predicates from
+ * it removes that asymmetry — a new `AttackStatus` value now has to be
+ * triaged into this set once, not independently in every consumer.
+ */
+export const TERMINAL_ATTACK_STATUSES: ReadonlySet<AttackStatus> = new Set([
+  'completed',
+  'exhausted',
+  'failed',
+])
+
+export function isTerminalAttackStatus(status: AttackStatus): boolean {
+  return TERMINAL_ATTACK_STATUSES.has(status)
+}
+
+export function isNonTerminalAttackStatus(status: AttackStatus): boolean {
+  return !TERMINAL_ATTACK_STATUSES.has(status)
+}
+
 /** Per-attack task-status tallies the ladder reasons over. */
 export interface AttackStatusCounts {
   total: number

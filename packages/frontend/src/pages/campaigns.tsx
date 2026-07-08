@@ -47,7 +47,7 @@ interface CampaignRow {
   createdAt: string
   // Issue #100: batched read-time rollup from the list route. Optional
   // here only so a fixture predating #100 still type-checks; the route
-  // always populates it (defaulting to `{ state: 'complete' }`).
+  // always populates it (defaulting to `{ state: 'estimating' }`).
   eta?: CampaignEta
 }
 

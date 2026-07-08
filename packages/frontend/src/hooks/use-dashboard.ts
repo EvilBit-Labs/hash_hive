@@ -75,7 +75,7 @@ interface Campaign {
   completedAt: string | null
   // Issue #100: read-time rollup from the batched `/dashboard/campaigns`
   // list route. Always present on the wire (the route defaults a
-  // campaign with no eta entry to `{ state: 'complete' }`), typed
+  // campaign with no eta entry to `{ state: 'estimating' }`), typed
   // optional here only because pre-#100 fixtures may omit it.
   eta?: CampaignEta
 }

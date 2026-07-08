@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 
 import {
+  type CampaignStatus,
   campaignEtaSchema,
   changeCampaignPriorityRequestSchema,
   inlineAttackRequestSchema,
@@ -175,7 +176,11 @@ campaignRoutes.openapi(listCampaignsRoute, async (c) => {
   const etaByCampaignId = await getCampaignEtasBatch(result.campaigns.map((row) => row.id))
   const campaignsWithEta = result.campaigns.map((row) => ({
     ...row,
-    eta: etaByCampaignId.get(row.id) ?? ({ state: 'complete' } as const),
+    // Unreachable today — the batch rollup returns an entry per requested
+    // id. Falls back to the neutral "no data yet" state (not `complete`)
+    // so a future lookup miss can never misrender a still-running campaign
+    // as finished (code review fix).
+    eta: etaByCampaignId.get(row.id) ?? ({ state: 'estimating' } as const),
   }))
 
   return c.json({ ...result, campaigns: campaignsWithEta }, 200)
@@ -390,7 +395,10 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
   // `isNull(archivedAt)` filter `getCampaignEtasBatch` applies for the
   // list view, keeping detail and list ETAs consistent.
   const eta = computeCampaignEtaState({
-    campaignStatus: campaign.status,
+    // `campaigns.status` is a `varchar(20)` column — Drizzle infers `string`,
+    // not the narrower `CampaignStatus` literal union (mirrors the same cast
+    // in `campaign-eta-rollup.ts`'s batch path).
+    campaignStatus: campaign.status as CampaignStatus,
     hasActiveAgents: activeAgents.length > 0,
     attacks: campaignAttacks.filter((attack) => !archivedAttackIds.has(attack.id)),
   })

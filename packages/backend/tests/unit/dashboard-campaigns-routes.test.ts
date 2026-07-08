@@ -566,7 +566,7 @@ if (!IS_ISOLATED) {
       expect(mockGetCampaignEtasBatch).toHaveBeenCalledWith([100, 101])
     })
 
-    it('falls back to a complete state for an id the batch rollup omits', async () => {
+    it('falls back to a neutral estimating state for an id the batch rollup omits', async () => {
       mockListCampaigns.mockResolvedValueOnce({
         campaigns: [makeCampaign({ id: 100 })],
         total: 1,
@@ -578,7 +578,10 @@ if (!IS_ISOLATED) {
       const res = await app.request(DASH_CAMPAIGNS, { headers: makeHeaders() })
       expect(res.status).toBe(200)
       const body = (await res.json()) as { campaigns?: Array<{ id: number; eta?: unknown }> }
-      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'complete' })
+      // Code review fix: a lookup miss must never render as "Complete" for a
+      // still-running campaign — the neutral "no data yet" state is the safe
+      // fallback here, not `complete`.
+      expect(body.campaigns?.[0]?.eta).toEqual({ state: 'estimating' })
     })
   })
 

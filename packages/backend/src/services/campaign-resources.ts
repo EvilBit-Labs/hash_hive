@@ -1,5 +1,3 @@
-import type { AttackStatus } from '@hashhive/shared'
-
 /**
  * Cross-project resource validator for campaigns and attacks.
  *
@@ -12,7 +10,7 @@ import { attacks, hashLists, hashTypes, maskLists, ruleLists, wordLists } from '
 import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
-import { deriveAttackRuntimes } from './attacks/runtime.js'
+import { deriveAttackRuntimes, isNonTerminalAttackStatus } from './attacks/runtime.js'
 
 // ─── Global (non-archivable) lookups ─────────────────────────────────
 //
@@ -316,12 +314,6 @@ export async function findReclaimedResourceRefs(
 // constraints alone. Burying this inside `validateCampaignResources`
 // would silently skip the Control surface.
 
-const NON_TERMINAL_ATTACK_STATUSES: ReadonlySet<AttackStatus> = new Set([
-  'pending',
-  'running',
-  'paused',
-])
-
 export type ModeConsistencyResult =
   | { valid: true }
   | { valid: false; conflictingMode: number; conflictingAttackId: number }
@@ -377,7 +369,7 @@ export async function checkSingleHashModePerCampaign(
   const conflictingSibling = siblingRows.find((row) => {
     if (row.mode === newMode) return false
     const status = runtimes.get(row.id)?.status ?? 'pending'
-    return NON_TERMINAL_ATTACK_STATUSES.has(status)
+    return isNonTerminalAttackStatus(status)
   })
 
   return conflictingSibling

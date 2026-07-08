@@ -19,8 +19,8 @@
  * per-campaign query cascade for N campaigns on a page.
  */
 import {
-  type AttackStatus,
   type CampaignEta,
+  type CampaignStatus,
   agents,
   attacks,
   campaigns,
@@ -30,23 +30,12 @@ import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { jsonSafeBigint } from './attacks/_internals.js'
-import { deriveAttackRuntimes } from './attacks/runtime.js'
+import {
+  type AttackRuntime,
+  deriveAttackRuntimes,
+  isNonTerminalAttackStatus,
+} from './attacks/runtime.js'
 import { AGENT_TASK_ACTIVE_STATUSES } from './tasks/agent-projection.js'
-
-// Mirrors the terminal split at the bottom of `deriveAttackStatus`
-// (runtime.ts): completed/exhausted/failed are the three ways an attack
-// stops needing an ETA. Kept as its own set here (not imported) because
-// this is a display-layer classification over the status enum, not part of
-// deriving the status itself.
-const TERMINAL_ATTACK_STATUSES: ReadonlySet<AttackStatus> = new Set([
-  'completed',
-  'exhausted',
-  'failed',
-])
-
-function isNonTerminal(status: AttackStatus): boolean {
-  return !TERMINAL_ATTACK_STATUSES.has(status)
-}
 
 /**
  * Convert one attack's bigint-safe `number | string` ETA into a bigint so
@@ -61,11 +50,12 @@ function sumResolved(values: ReadonlyArray<number | string>): bigint {
   return values.reduce((sum, value) => sum + toBigInt(value), 0n)
 }
 
-/** The minimal per-attack shape the rollup's precedence ladder needs. */
-export interface AttackEtaInput {
-  status: AttackStatus
-  estimatedSecondsRemaining: number | string | null
-}
+/**
+ * The minimal per-attack shape the rollup's precedence ladder needs —
+ * structurally identical to `AttackRuntime` (runtime.ts), so derived rather
+ * than independently declared to keep the two from drifting apart.
+ */
+export type AttackEtaInput = Pick<AttackRuntime, 'status' | 'estimatedSecondsRemaining'>
 
 /**
  * Pure precedence ladder — no I/O, so the full state combination space can
@@ -87,11 +77,11 @@ export interface AttackEtaInput {
  *    none resolve -> `estimating`.
  */
 export function computeCampaignEtaState(input: {
-  campaignStatus: string
+  campaignStatus: CampaignStatus
   hasActiveAgents: boolean
   attacks: ReadonlyArray<AttackEtaInput>
 }): CampaignEta {
-  const nonTerminal = input.attacks.filter((attack) => isNonTerminal(attack.status))
+  const nonTerminal = input.attacks.filter((attack) => isNonTerminalAttackStatus(attack.status))
 
   if (nonTerminal.length === 0) return { state: 'complete' }
   if (input.campaignStatus === 'paused') return { state: 'paused' }
@@ -177,7 +167,14 @@ export async function getCampaignEtasBatch(
       .where(inArray(campaigns.id, ids)),
     loadCampaignIdsWithActiveAgents(ids),
   ])
-  const campaignStatusById = new Map(campaignRows.map((row) => [row.id, row.status]))
+  // `campaigns.status` is a `varchar(20)` column (schema.ts) — Drizzle
+  // infers it as `string`, not the narrower `CampaignStatus` literal union.
+  // Cast at this boundary (a real corrupt DB value would be a data-layer
+  // bug, not something this rollup should silently coerce) so
+  // `computeCampaignEtaState`'s signature stays the strict enum type.
+  const campaignStatusById = new Map(
+    campaignRows.map((row) => [row.id, row.status as CampaignStatus])
+  )
 
   // `attacksByCampaign` is a local accumulator (mirrors the same pattern in
   // `deriveAttackRuntimes`'s own `result`/`aggByAttack` maps): the Map
@@ -212,7 +209,12 @@ export async function getCampaignEtasBatch(
 /** Single-campaign convenience wrapper over the batch entry point. */
 export async function getCampaignEta(campaignId: number): Promise<CampaignEta> {
   const results = await getCampaignEtasBatch([campaignId])
-  return results.get(campaignId) ?? { state: 'complete' }
+  // Unreachable today — `getCampaignEtasBatch` always populates an entry for
+  // every requested id, even ids with no attacks at all (vacuous `complete`).
+  // Falls back to the neutral "no data yet" state rather than `complete` so
+  // a future lookup miss can never misrender a still-running campaign as
+  // finished (code review fix).
+  return results.get(campaignId) ?? { state: 'estimating' }
 }
 
 /**

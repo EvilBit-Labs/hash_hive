@@ -329,6 +329,23 @@ if (!IS_ISOLATED) {
       })
       expect(res.status).toBe(403)
     })
+
+    it('round-trips a mode_conflict outcome as 200 (dumb passthrough, issue #100 R15/AS1)', async () => {
+      // This route never inspects individual outcome values — it forwards
+      // whatever `restoreAttacks` returns. Guards against a future schema
+      // change silently dropping the `mode_conflict` enum member off the
+      // wire (the route would still 200; only a full round-trip catches a
+      // dropped value).
+      mockRestoreAttacks.mockResolvedValueOnce([{ id: 7001, outcome: 'mode_conflict' }])
+      const res = await app.request(`${DASH_CAMPAIGNS}/attacks/restore`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ ids: [7001] }),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { results?: AttackOutcome[] }
+      expect(body.results).toEqual([{ id: 7001, outcome: 'mode_conflict' }])
+    })
   })
 
   describe('GET /campaigns/:id/attacks showArchived filter', () => {
