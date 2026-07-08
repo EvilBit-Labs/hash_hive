@@ -83,6 +83,10 @@ async function seedMinimal(): Promise<SeedResult> {
       hashListId: hashList!.id,
       priority: 1,
       status: 'running',
+      // Single-hash-mode-per-campaign DB backstop (issue #100): must match
+      // the attack inserted below (mode 0) — see schema.ts's
+      // `attacks_campaign_id_mode_..._fk`.
+      hashcatMode: 0,
     })
     .returning({ id: campaigns.id })
 

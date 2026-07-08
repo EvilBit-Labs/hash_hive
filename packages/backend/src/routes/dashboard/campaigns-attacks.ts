@@ -29,6 +29,7 @@ import {
   deleteAttack,
   getAttackById,
   getCampaignById,
+  isModeConsistencyFkViolation,
   listAttacks,
   updateAttack,
   validateProposedDAG,
@@ -312,16 +313,33 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     }
 
     const { userId } = c.get('scopedUser')!
-    const attack = await createAttack(
-      {
-        ...data,
-        campaignId,
-        projectId: campaign.projectId,
-      },
-      { actorType: 'user', actorId: userId }
-    )
+    try {
+      const attack = await createAttack(
+        {
+          ...data,
+          campaignId,
+          projectId: campaign.projectId,
+        },
+        { actorType: 'user', actorId: userId }
+      )
 
-    return c.json({ attack }, 201)
+      return c.json({ attack }, 201)
+    } catch (err) {
+      // TOCTOU backstop: the `checkSingleHashModePerCampaign` pre-check
+      // above ran before this write started — a concurrent create of a
+      // different mode could have landed and latched `campaigns.hashcat_mode`
+      // in between. The composite FK catches that race at the DB level;
+      // map it to the same typed 422 the pre-check returns instead of a 500.
+      if (isModeConsistencyFkViolation(err)) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+        )
+      }
+      throw err
+    }
   })
 
   router.openapi(listAttacksRoute, async (c) => {
@@ -420,13 +438,26 @@ export function registerCampaignAttackRoutes(router: OpenAPIHono<AppEnv>): void 
     }
 
     const { userId } = c.get('scopedUser')!
-    const attack = await updateAttack(attackId, data, { actorType: 'user', actorId: userId })
+    try {
+      const attack = await updateAttack(attackId, data, { actorType: 'user', actorId: userId })
 
-    if (!attack) {
-      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+      if (!attack) {
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Attack not found')
+      }
+
+      return c.json({ attack }, 200)
+    } catch (err) {
+      // TOCTOU backstop — see the create-route comment above.
+      if (isModeConsistencyFkViolation(err)) {
+        return dashboardError(
+          c,
+          422,
+          'ATTACK_MODE_CONFLICT',
+          `Attack mode ${data.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+        )
+      }
+      throw err
     }
-
-    return c.json({ attack }, 200)
   })
 
   router.openapi(deleteAttackRoute, async (c) => {

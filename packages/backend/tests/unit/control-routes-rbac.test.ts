@@ -250,6 +250,11 @@ if (!IS_ISOLATED) {
     // link if the campaigns.js mock omits it. No mode conflicts are
     // exercised in this RBAC-focused suite.
     checkSingleHashModePerCampaign: mock(() => Promise.resolve({ valid: true })),
+    // Issue #100 DB backstop — `control/attacks.ts` statically imports
+    // this too (FK-race mapping on create/update); the named import fails
+    // to link if the campaigns.js mock omits it. No FK races are
+    // exercised in this RBAC-focused suite.
+    isModeConsistencyFkViolation: mock(() => false),
   }))
 
   const listAgentsMock: AgentsService['listAgents'] = async ({ projectId }) => {

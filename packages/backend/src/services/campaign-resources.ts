@@ -381,6 +381,53 @@ export async function checkSingleHashModePerCampaign(
     : { valid: true }
 }
 
+// ─── DB-level TOCTOU backstop (issue #100) ───────────────────────────
+//
+// `checkSingleHashModePerCampaign` above is a read-then-write pre-check —
+// two concurrent requests can both read "no conflicting sibling" before
+// either write lands, so it cannot close the race on its own. The
+// composite FK `attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk`
+// (attacks(campaign_id, mode) -> campaigns(id, hashcat_mode), schema.ts)
+// is the actual backstop: the race loser's write violates SQLSTATE 23503,
+// which the write paths below map to the same typed conflict outcome the
+// pre-check returns.
+//
+// Deliberately narrow and NOT the general-purpose `isForeignKeyViolation`
+// in services/resources.ts — this only ever needs to recognize this one
+// constraint, scoped to this one invariant, so it doesn't carry the
+// broader helper's legacy-mock compatibility surface or affect any other
+// FK-violation call site in the codebase.
+
+/** The composite FK this module's write paths detect a race against. */
+export const MODE_CONSISTENCY_FK_CONSTRAINT =
+  'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk'
+
+/**
+ * Detect the single-hash-mode-per-campaign composite FK violation
+ * (SQLSTATE 23503, `constraint_name` matching {@link MODE_CONSISTENCY_FK_CONSTRAINT}).
+ *
+ * drizzle-orm (0.45.x) wraps every query failure in a `DrizzleQueryError`
+ * whose `.cause` carries the real driver error — checks both `err` and
+ * `err.cause` so it recognizes the violation whether the caller passes
+ * the wrapper or an already-unwrapped/synthetic error (e.g. in tests).
+ * postgres-js surfaces the constraint name as `constraint_name` on its
+ * `PostgresError`.
+ */
+export function isModeConsistencyFkViolation(err: unknown): boolean {
+  const candidates = [err, err instanceof Error ? (err as { cause?: unknown }).cause : undefined]
+  for (const candidate of candidates) {
+    if (!(candidate instanceof Error)) continue
+    const code = 'code' in candidate ? (candidate as { code?: string }).code : undefined
+    if (code !== '23503') continue
+    const constraintName =
+      'constraint_name' in candidate
+        ? (candidate as { constraint_name?: string }).constraint_name
+        : undefined
+    if (constraintName === MODE_CONSISTENCY_FK_CONSTRAINT) return true
+  }
+  return false
+}
+
 function dedupIds<T extends Record<string, unknown>>(
   rows: ReadonlyArray<T>,
   key: keyof T

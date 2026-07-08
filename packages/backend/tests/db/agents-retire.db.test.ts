@@ -121,6 +121,11 @@ beforeAll(async () => {
       hashListId: hashList!.id,
       priority: 5,
       status: 'draft',
+      // Single-hash-mode-per-campaign DB backstop (issue #100): the
+      // composite FK on attacks(campaign_id, mode) requires this to match
+      // every attack inserted below (mirrors the `createAttack` latch this
+      // raw insert bypasses).
+      hashcatMode: 3,
     })
     .returning({ id: campaigns.id })
   const [attack] = await db

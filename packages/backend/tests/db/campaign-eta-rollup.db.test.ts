@@ -47,7 +47,17 @@ async function cleanup(): Promise<void> {
 async function seedCampaign(status: string): Promise<number> {
   const [campaign] = await db
     .insert(campaigns)
-    .values({ name: `camp-${status}-${Math.random()}`, projectId, hashListId, priority: 1, status })
+    .values({
+      name: `camp-${status}-${Math.random()}`,
+      projectId,
+      hashListId,
+      priority: 1,
+      status,
+      // Single-hash-mode-per-campaign DB backstop (issue #100): every
+      // attack `seedAttack` below inserts uses `MODE` — see schema.ts's
+      // `attacks_campaign_id_mode_..._fk`.
+      hashcatMode: MODE,
+    })
     .returning({ id: campaigns.id })
   return campaign!.id
 }

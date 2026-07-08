@@ -123,9 +123,13 @@ export async function seedTestData(databaseUrl: string): Promise<{
     if (!hashList || typeof hashList['id'] !== 'number') {
       throw new Error('Failed to insert seed hash list')
     }
+    // hashcat_mode is latched here to match the attack inserted below (mode
+    // 0) — the single-hash-mode-per-campaign DB backstop (issue #100) FKs
+    // attacks(campaign_id, mode) to campaigns(id, hashcat_mode), so every
+    // attack this campaign ever owns must agree with this value.
     const [campaign] = await sql`
-      INSERT INTO campaigns (name, project_id, hash_list_id, priority, status, is_permanent)
-      VALUES (${TEST_CAMPAIGN.name}, ${projectId}, ${hashList['id']}, 5, 'running', true)
+      INSERT INTO campaigns (name, project_id, hash_list_id, priority, status, is_permanent, hashcat_mode)
+      VALUES (${TEST_CAMPAIGN.name}, ${projectId}, ${hashList['id']}, 5, 'running', true, 0)
       RETURNING id
     `
     if (!campaign || typeof campaign['id'] !== 'number') {

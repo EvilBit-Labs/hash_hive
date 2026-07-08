@@ -218,6 +218,11 @@ if (!IS_ISOLATED) {
     // attack-write requests never exercise a mode conflict, so a static
     // valid stub is enough (mirrors the other exports above).
     checkSingleHashModePerCampaign: mock(async () => ({ valid: true })),
+    // Issue #100 DB backstop — the dashboard attack-write routes (loaded
+    // here via src/index.js) statically import this too; the named import
+    // fails to link if the campaigns.js mock omits it. No FK races are
+    // exercised in this archive/restore suite.
+    isModeConsistencyFkViolation: mock(() => false),
     // Issue #100 U1/U2 — campaign ETA rollup exports statically imported by
     // the dashboard campaigns route (loaded here via src/index.js). Never
     // invoked in this archive/restore suite; stubs exist only so the named

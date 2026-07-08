@@ -108,6 +108,13 @@ if (!IS_ISOLATED) {
         returning: () => Promise.resolve([makeAttackRow()]),
       }),
     }),
+    // Issue #100 DB backstop: updateAttack's adaptive campaign-mode latch
+    // runs a raw `tx.execute(sql\`UPDATE campaigns ...\`)` inside the same
+    // transaction when `mode` is part of the patch. This suite never
+    // asserts on that statement's effect (no mode-conflict scenarios are
+    // exercised here), so a no-op resolved value is enough to keep the
+    // transaction callback from throwing.
+    execute: () => Promise.resolve([]),
   })
 
   // campaignOverrides is mutable so individual tests can set different statuses
@@ -208,6 +215,10 @@ if (!IS_ISOLATED) {
     // `services/campaigns.js` re-exports this too (issue #100 U5); same
     // link requirement as findReclaimedResourceRefs above.
     checkSingleHashModePerCampaign: mock(async () => ({ valid: true })),
+    // `services/campaigns.js` re-exports this too (issue #100 DB
+    // backstop); same link requirement as the exports above.
+    isModeConsistencyFkViolation: mock(() => false),
+    MODE_CONSISTENCY_FK_CONSTRAINT: 'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk',
   }))
 
   mock.module('../../../src/services/campaign-dag.js', () => ({

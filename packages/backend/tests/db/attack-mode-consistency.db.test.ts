@@ -30,12 +30,15 @@
 
 import { attacks, campaigns, hashLists, hashTypes, projects, tasks } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import {
   checkSingleHashModePerCampaign,
+  createAttack,
   createCampaignWithAttacks,
+  isModeConsistencyFkViolation,
+  updateAttack,
 } from '../../src/services/campaigns.js'
 import { generateTasksForAttack } from '../../src/services/tasks.js'
 
@@ -74,6 +77,16 @@ async function insertAttack(
   overrides: { mode?: number; archivedAt?: Date | null } = {}
 ): Promise<number> {
   const mode = overrides.mode ?? 3
+  // Single-hash-mode-per-campaign DB backstop (issue #100): this raw
+  // fixture insert bypasses `createAttack`'s coordinating latch, so mirror
+  // it here — every test in this file inserts a single consistent mode per
+  // campaign (the "conflicting" mode arguments passed to
+  // `checkSingleHashModePerCampaign` below are never actually persisted as
+  // a second attack row).
+  await db
+    .update(campaigns)
+    .set({ hashcatMode: mode })
+    .where(and(eq(campaigns.id, campaignId), isNull(campaigns.hashcatMode)))
   const [row] = await db
     .insert(attacks)
     .values({
@@ -236,5 +249,200 @@ describe('createCampaignWithAttacks: single-hash-mode-per-campaign guard (issue 
     if (result.kind === 'created') {
       expect(result.attacks).toHaveLength(2)
     }
+  })
+
+  it('sets campaigns.hashcatMode from the shared inline mode', async () => {
+    const result = await createCampaignWithAttacks({
+      projectId: ctx.projectId,
+      name: `mode-latch-create-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      attacks: [{ mode: 42 }, { mode: 42 }],
+    })
+    expect(result.kind).toBe('created')
+    if (result.kind !== 'created') return
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, result.campaign.id))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(42)
+  })
+
+  it('leaves campaigns.hashcatMode NULL when created with no inline attacks', async () => {
+    const result = await createCampaignWithAttacks({
+      projectId: ctx.projectId,
+      name: `mode-latch-empty-${Date.now()}-${Math.random()}`,
+      hashListId: ctx.hashListId,
+      attacks: [],
+    })
+    expect(result.kind).toBe('created')
+    if (result.kind !== 'created') return
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, result.campaign.id))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBeNull()
+  })
+})
+
+// ─── DB-level TOCTOU backstop (issue #100): the composite FK closes the
+// race `checkSingleHashModePerCampaign`'s read-then-write pre-check cannot
+// close on its own. These tests call `createAttack` directly — bypassing
+// the route-level pre-check entirely, the same way two concurrent requests
+// that both read a stale "no conflicting sibling" snapshot would — to prove
+// the FK, not the app-level check, is what actually makes a mixed-mode
+// campaign impossible to land.
+
+describe('single-hash-mode-per-campaign DB backstop: composite FK (issue #100)', () => {
+  it('createAttack latches campaigns.hashcatMode from the first attack', async () => {
+    const campaignId = await insertCampaign()
+    const attack = await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+    expect(attack).not.toBeNull()
+
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(7)
+  })
+
+  it('a second createAttack with a matching mode succeeds (the FK is satisfied, not just avoided)', async () => {
+    const campaignId = await insertCampaign()
+    await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+    const second = await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+    expect(second).not.toBeNull()
+  })
+
+  it('a second createAttack with a DIFFERENT mode is rejected by the FK, with the app-level pre-check bypassed', async () => {
+    const campaignId = await insertCampaign()
+    await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+
+    // `createAttack` never calls `checkSingleHashModePerCampaign` itself
+    // (that pre-check runs in the route handlers, before the service is
+    // invoked) — calling the service directly here proves the FK alone,
+    // with no app-level gate in front of it, still blocks a mixed mode.
+    let caught: unknown
+    try {
+      await createAttack({ campaignId, projectId: ctx.projectId, mode: 1000 })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeDefined()
+    expect(isModeConsistencyFkViolation(caught)).toBe(true)
+
+    // The rejected insert must not have landed, and the campaign's latched
+    // mode must be unchanged.
+    const siblings = await db.select().from(attacks).where(eq(attacks.campaignId, campaignId))
+    expect(siblings).toHaveLength(1)
+    expect(siblings[0]?.mode).toBe(7)
+  })
+
+  it('two concurrent createAttack calls of different modes: exactly one wins, the loser is FK-rejected', async () => {
+    const campaignId = await insertCampaign()
+
+    const results = await Promise.allSettled([
+      createAttack({ campaignId, projectId: ctx.projectId, mode: 111 }),
+      createAttack({ campaignId, projectId: ctx.projectId, mode: 222 }),
+    ])
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    const rejection = rejected[0]
+    if (rejection && rejection.status === 'rejected') {
+      expect(isModeConsistencyFkViolation(rejection.reason)).toBe(true)
+    }
+
+    // Only the winner's attack landed, and it set the campaign's mode.
+    const siblings = await db.select().from(attacks).where(eq(attacks.campaignId, campaignId))
+    expect(siblings).toHaveLength(1)
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(siblings[0]?.mode)
+  })
+})
+
+// ─── updateAttack: adaptive latch on mode edits (issue #100 product
+// follow-up) ────────────────────────────────────────────────────────
+//
+// `createAttack`'s latch is set-once (first attack ever wins forever),
+// which would make a SOLE attack's mode permanently frozen — stricter
+// than the invariant it exists to enforce (every attack in a campaign
+// shares one mode). `updateAttack` instead adopts the new mode onto the
+// campaign whenever no OTHER attack in the campaign disagrees, so editing
+// the only attack's mode (or bringing every attack into agreement) always
+// succeeds, while a real conflict still hits the FK.
+
+describe('updateAttack: adaptive campaign-mode latch (issue #100)', () => {
+  it('editing the sole attack in a campaign succeeds and campaigns.hashcatMode follows the new mode', async () => {
+    const campaignId = await insertCampaign()
+    const attackId = await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 }).then(
+      (a) => a!.id
+    )
+
+    const updated = await updateAttack(attackId, { mode: 1000 })
+    expect(updated?.mode).toBe(1000)
+
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(1000)
+  })
+
+  it('editing one attack of a multi-attack same-mode campaign to a different mode is FK-rejected', async () => {
+    const campaignId = await insertCampaign()
+    const attackA = await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 }).then(
+      (a) => a!.id
+    )
+    await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+
+    let caught: unknown
+    try {
+      await updateAttack(attackA, { mode: 1000 })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeDefined()
+    expect(isModeConsistencyFkViolation(caught)).toBe(true)
+
+    // Neither the attack's mode nor the campaign's latched mode moved.
+    const [attackRow] = await db
+      .select({ mode: attacks.mode })
+      .from(attacks)
+      .where(eq(attacks.id, attackA))
+      .limit(1)
+    expect(attackRow?.mode).toBe(7)
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(7)
+  })
+
+  it('a no-op edit that keeps the mode every attack already shares succeeds (NOT EXISTS tolerates full agreement)', async () => {
+    const campaignId = await insertCampaign()
+    const attackA = await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 }).then(
+      (a) => a!.id
+    )
+    await createAttack({ campaignId, projectId: ctx.projectId, mode: 7 })
+
+    const updated = await updateAttack(attackA, { mode: 7 })
+    expect(updated?.mode).toBe(7)
+
+    const [campaign] = await db
+      .select({ hashcatMode: campaigns.hashcatMode })
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1)
+    expect(campaign?.hashcatMode).toBe(7)
   })
 })

@@ -178,6 +178,28 @@ if (!IS_ISOLATED) {
     // import fails to link if the campaigns.js mock omits it. No refs are
     // ever reclaimed or archived in this lifecycle-focused suite.
     findReclaimedResourceRefs: mock(async () => ({ reclaimed: [], archived: [] })),
+    // Single-hash-mode-per-campaign DB backstop (issue #100): mirrors the
+    // real `isModeConsistencyFkViolation` (services/campaign-resources.ts)
+    // so the FK-race tests below can simulate the composite FK's SQLSTATE
+    // 23503 (wrapped in a DrizzleQueryError, per the real driver shape)
+    // without a real DB.
+    isModeConsistencyFkViolation: (err: unknown): boolean => {
+      const candidates = [
+        err,
+        err instanceof Error ? (err as { cause?: unknown }).cause : undefined,
+      ]
+      for (const candidate of candidates) {
+        if (!(candidate instanceof Error)) continue
+        const code = 'code' in candidate ? (candidate as { code?: string }).code : undefined
+        if (code !== '23503') continue
+        const constraintName =
+          'constraint_name' in candidate
+            ? (candidate as { constraint_name?: string }).constraint_name
+            : undefined
+        if (constraintName === 'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk') return true
+      }
+      return false
+    },
   }))
 
   // `control/attacks.ts` imports `deriveAttackRuntimes` directly from
@@ -597,6 +619,79 @@ if (!IS_ISOLATED) {
       })
       expect(res.status).toBe(200)
       expect(mockCheckSingleHashModePerCampaign).not.toHaveBeenCalled()
+    })
+
+    // ─── DB-level TOCTOU backstop (issue #100): the composite FK on
+    // attacks(campaign_id, mode) -> campaigns(id, hashcat_mode) is what
+    // actually blocks a race the read-then-write pre-check above cannot —
+    // two concurrent requests can both pass `checkSingleHashModePerCampaign`
+    // before either write lands. Simulated here by having the pre-check
+    // report valid (as it would to the race loser, which read stale data)
+    // while the underlying create/update throws the real Postgres FK error
+    // (SQLSTATE 23503) that the DB actually raises.
+
+    function makeModeConsistencyFkError(): Error {
+      const err = new Error(
+        'insert or update on table "attacks" violates foreign key constraint ' +
+          '"attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk"'
+      )
+      ;(err as Error & { code?: string; constraint_name?: string }).code = '23503'
+      ;(err as Error & { code?: string; constraint_name?: string }).constraint_name =
+        'attacks_campaign_id_mode_campaigns_id_hashcat_mode_fk'
+      return err
+    }
+
+    it('create: maps the FK race backstop to 422 attack_mode_conflict instead of a 500', async () => {
+      mockCreateAttackCtrl.mockImplementationOnce(async () => {
+        throw makeModeConsistencyFkError()
+      })
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ campaignId: 100, mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      expect(res.headers.get('content-type')).toContain('application/problem+json')
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/attack-mode-conflict')
+      expect(body.detail).toContain('1000')
+    })
+
+    it('update: maps the FK race backstop to 422 attack_mode_conflict instead of a 500', async () => {
+      mockUpdateAttackCtrl.mockImplementationOnce(async () => {
+        throw makeModeConsistencyFkError()
+      })
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/5', {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 1000 }),
+      })
+      expect(res.status).toBe(422)
+      expect(res.headers.get('content-type')).toContain('application/problem+json')
+      const body = await res.json()
+      expect(body.type).toBe('https://hashhive.dev/errors/attack-mode-conflict')
+      expect(body.detail).toContain('1000')
+    })
+
+    it('create: an unrelated FK violation (different constraint) still 500s rather than being misclassified', async () => {
+      mockCreateAttackCtrl.mockImplementationOnce(async () => {
+        const err = new Error(
+          'violates foreign key constraint "attacks_hash_type_id_hash_types_id_fk"'
+        )
+        ;(err as Error & { code?: string; constraint_name?: string }).code = '23503'
+        ;(err as Error & { code?: string; constraint_name?: string }).constraint_name =
+          'attacks_hash_type_id_hash_types_id_fk'
+        throw err
+      })
+      const app = makeApp(controlAttackRoutes)
+      const res = await app.request('/', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ campaignId: 100, mode: 1000 }),
+      })
+      expect(res.status).toBe(500)
     })
   })
 

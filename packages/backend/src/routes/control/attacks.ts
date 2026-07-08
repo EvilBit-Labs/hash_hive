@@ -30,6 +30,7 @@ import {
   findReclaimedResourceRefs,
   getAttackById,
   getCampaignById,
+  isModeConsistencyFkViolation,
   listAttacksPaginated,
   restoreAttacks,
   updateAttack,
@@ -308,6 +309,23 @@ controlAttackRoutes.openapi(createAttackRoute, async (c) => {
     if (!attack) throw new Error('attack insert returned no row')
     return c.json(await withRuntime(attack), 201)
   } catch (err) {
+    // TOCTOU backstop: the `checkSingleHashModePerCampaign` pre-check above
+    // ran before this write started — a concurrent create of a different
+    // mode could have landed and latched `campaigns.hashcat_mode` in
+    // between. The composite FK catches that race at the DB level; map it
+    // to the same typed 422 the pre-check returns instead of a 500.
+    if (isModeConsistencyFkViolation(err)) {
+      // `data` is scoped to the `try` block above and not visible here;
+      // `c.req.valid('json')` re-reads the same cached validation result
+      // attached by the zod-openapi validator middleware.
+      const { mode } = c.req.valid('json')
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+      )
+    }
     return controlErrorResponse(c, err)
   }
 })
@@ -393,6 +411,16 @@ controlAttackRoutes.openapi(updateAttackRoute, async (c) => {
     if (!updated) return problemResponse(c, 404, 'not_found', 'attack not found')
     return c.json(await withRuntime(updated), 200)
   } catch (err) {
+    // TOCTOU backstop — see the create-route comment above.
+    if (isModeConsistencyFkViolation(err)) {
+      const body = c.req.valid('json')
+      return problemResponse(
+        c,
+        422,
+        'attack_mode_conflict',
+        `Attack mode ${body.mode} does not match the hashcat mode already established for this campaign; a campaign runs a single hashcat mode for its entire lifetime`
+      )
+    }
     return controlErrorResponse(c, err)
   }
 })

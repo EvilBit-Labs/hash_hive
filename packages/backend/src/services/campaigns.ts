@@ -113,6 +113,8 @@ export {
 export {
   checkSingleHashModePerCampaign,
   findReclaimedResourceRefs,
+  isModeConsistencyFkViolation,
+  MODE_CONSISTENCY_FK_CONSTRAINT,
   validateCampaignResources,
 } from './campaign-resources.js'
 // Attack archive/restore (issue #106 U6) — mirrors the resources-archive.ts
@@ -517,6 +519,12 @@ export async function createCampaignWithAttacks(input: {
   let result: CreateCampaignWithAttacksResult
   try {
     result = await db.transaction(async (tx) => {
+      // Single-hash-mode-per-campaign DB backstop (issue #100): set
+      // hashcat_mode from the inline attacks' shared mode up front. Safe to
+      // set directly (rather than the idempotent latch `createAttack` uses)
+      // because this campaign row does not exist yet — there is no
+      // concurrent writer that could already hold a different mode for it —
+      // and `distinctModes.length > 1` was already rejected above.
       const [campaign] = await tx
         .insert(campaigns)
         .values({
@@ -527,6 +535,7 @@ export async function createCampaignWithAttacks(input: {
           priority: input.priority ?? 5,
           createdBy: input.createdBy ?? null,
           status: 'draft',
+          hashcatMode: input.attacks[0]?.mode ?? null,
         })
         .returning()
       if (!campaign) {
@@ -1266,6 +1275,21 @@ export async function createAttack(
   // Insert and audit run in one transaction so a crash between the two
   // cannot leave an attack with no audit record (R4 atomicity).
   const attack = await db.transaction(async (tx) => {
+    // Single-hash-mode-per-campaign DB backstop (issue #100): latch the
+    // campaign's hashcat_mode to this attack's mode if it hasn't been set
+    // yet. Idempotent (`WHERE hashcat_mode IS NULL`) and race-safe — this
+    // UPDATE takes a row lock on the campaign, so two concurrent
+    // first-inserts of different modes serialize here; the loser's UPDATE
+    // affects 0 rows (the winner already set hashcat_mode) and its attack
+    // insert below then hits the `attacks_campaign_id_mode_..._fk`
+    // composite FK instead of silently landing a mixed-mode campaign. This
+    // is the race backstop for `checkSingleHashModePerCampaign`'s
+    // read-then-write pre-check (TOCTOU), not a replacement for it.
+    await tx
+      .update(campaigns)
+      .set({ hashcatMode: data.mode, updatedAt: new Date() })
+      .where(and(eq(campaigns.id, data.campaignId), isNull(campaigns.hashcatMode)))
+
     const [inserted] = await tx
       .insert(attacks)
       .values({
@@ -1353,6 +1377,31 @@ export async function updateAttack(
   // UPDATE and audit run in one transaction so a crash between the two
   // cannot leave an attack update with no audit record (R4 atomicity).
   const updated = await db.transaction(async (tx) => {
+    // Single-hash-mode-per-campaign DB backstop (issue #100): unlike
+    // `createAttack`'s set-once latch (first attack ever wins forever),
+    // an edit to an EXISTING attack's mode must be allowed to move the
+    // whole campaign onto the new mode when nothing else in the campaign
+    // disagrees — otherwise the latch would make a sole attack's mode
+    // permanently frozen, which is stricter than the invariant it exists
+    // to enforce (every attack shares one mode). This conditional UPDATE
+    // adopts `data.mode` as the campaign's mode iff no OTHER attack (any
+    // status/archive state — the FK covers all) already uses a different
+    // mode; if one does, this UPDATE is a no-op and the attack UPDATE
+    // below hits the FK, which the caller maps to the typed 422.
+    if (data.mode !== undefined) {
+      await tx.execute(sql`
+        UPDATE campaigns
+        SET hashcat_mode = ${data.mode}
+        WHERE id = ${existing.campaignId}
+          AND NOT EXISTS (
+            SELECT 1 FROM attacks
+            WHERE campaign_id = ${existing.campaignId}
+              AND id <> ${id}
+              AND mode <> ${data.mode}
+          )
+      `)
+    }
+
     const [row] = await tx
       .update(attacks)
       .set({ ...data, keyspace, updatedAt: new Date() })
