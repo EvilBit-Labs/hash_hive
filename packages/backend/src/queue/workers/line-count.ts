@@ -1,6 +1,6 @@
+import type { FileRef } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
-import { type FileRef, maskLists, ruleLists, wordLists } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
@@ -16,9 +16,8 @@ import {
   countsAsWordlistLine,
 } from '../../services/resources/line-count.js'
 import { computeAndPersistMasklistKeyspace } from '../../services/resources/masklist-keyspace.js'
+import { RESOURCE_TABLE_BY_TYPE } from '../../services/resources/tables.js'
 import { attachWorkerMetrics } from './metrics.js'
-
-const RESOURCE_TABLES = { wordlist: wordLists, rulelist: ruleLists, masklist: maskLists } as const
 
 /**
  * Worker for the resource line-count queue (issue #99, masklist keyspace #231).
@@ -38,7 +37,7 @@ export function createLineCountWorker(connection: Redis): Worker<LineCountJob> {
     QUEUE_NAMES.LINE_COUNT,
     async (job) => {
       const { resourceType, resourceId } = job.data
-      const table = RESOURCE_TABLES[resourceType]
+      const table = RESOURCE_TABLE_BY_TYPE[resourceType]
 
       const [row] = await db
         .select({ fileRef: table.fileRef })

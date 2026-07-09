@@ -36,7 +36,8 @@
  * raw one. Only once the whole pass completes do we know the total
  * compressed size and can decide whether compression actually helped.
  */
-import { maskLists, ruleLists, wordLists } from '@hashhive/shared'
+import type { ResourceCompressionEncoding } from '@hashhive/shared'
+
 import { eq } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
@@ -52,10 +53,9 @@ import {
   uploadPart as uploadPartDefault,
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
+import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
 export type CompressibleResourceType = 'wordlist' | 'rulelist' | 'masklist'
-
-const RESOURCE_TABLES = { wordlist: wordLists, rulelist: ruleLists, masklist: maskLists } as const
 
 /** S3's minimum part size for every part except the last one. */
 const MULTIPART_MIN_PART_BYTES = 5 * 1024 * 1024
@@ -105,7 +105,7 @@ export async function compressChunkedResourceObject(
   resourceId: number,
   deps: Partial<CompressionStorageDeps> = {}
 ): Promise<CompressionResult> {
-  const table = RESOURCE_TABLES[resourceType]
+  const table = RESOURCE_TABLE_BY_TYPE[resourceType]
   const download = deps.downloadFile ?? downloadFileDefault
   const del = deps.deleteFile ?? deleteFileDefault
   const createMPU = deps.createMultipartUpload ?? createMultipartUploadDefault
@@ -200,10 +200,20 @@ export async function compressChunkedResourceObject(
             await once(gzip, 'drain')
           }
         }
+        gzip.end()
+      } catch (err) {
+        // A rejected `reader.read()` must still end the gzip Transform's
+        // lifecycle -- otherwise the concurrent `reading` loop (`for
+        // await ... of gzip`) hangs forever awaiting output that will
+        // never arrive. `destroy(err)`, not `end()`: `end()` would flush
+        // whatever partial bytes are buffered and drive more
+        // `uploadPart` calls during what is supposed to be an aborted
+        // download.
+        gzip.destroy(err instanceof Error ? err : new Error(String(err)))
+        throw err
       } finally {
         await reader.cancel().catch(() => {})
       }
-      gzip.end()
     })()
 
     const reading = (async (): Promise<void> => {
@@ -228,7 +238,7 @@ export async function compressChunkedResourceObject(
         .update(table)
         .set({
           fileRef: { ...fileRef, key: compressedKey },
-          compressionEncoding: 'gzip',
+          compressionEncoding: 'gzip' satisfies ResourceCompressionEncoding,
           fileChecksum: checksum,
           fileSize: rawBytes,
           updatedAt: new Date(),
@@ -258,7 +268,7 @@ export async function compressChunkedResourceObject(
     await db
       .update(table)
       .set({
-        compressionEncoding: 'none',
+        compressionEncoding: 'none' satisfies ResourceCompressionEncoding,
         fileChecksum: checksum,
         fileSize: rawBytes,
         updatedAt: new Date(),

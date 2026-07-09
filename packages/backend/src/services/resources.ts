@@ -4,6 +4,7 @@ import {
   hashLists,
   hashTypes,
   maskLists,
+  type ResourceCompressionEncoding,
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
@@ -28,7 +29,7 @@ import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
-import { type CompressionEncoding, compressBufferForStorage } from './resources/compression.js'
+import { compressBufferForStorage } from './resources/compression.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -1075,7 +1076,7 @@ export interface AgentDownloadUrlResult {
   expiresIn: number
   checksum: string | null
   size: number | null
-  encoding: CompressionEncoding | null
+  encoding: ResourceCompressionEncoding | null
 }
 
 /**
@@ -1124,7 +1125,7 @@ export async function getAgentDownloadUrl(
   const size = isHashList ? null : (resourceRow.fileSize ?? null)
   const encoding = isHashList
     ? null
-    : ((resourceRow.compressionEncoding as CompressionEncoding | undefined) ?? 'none')
+    : ((resourceRow.compressionEncoding as ResourceCompressionEncoding | undefined) ?? 'none')
 
   return { url, expiresIn, checksum, size, encoding }
 }

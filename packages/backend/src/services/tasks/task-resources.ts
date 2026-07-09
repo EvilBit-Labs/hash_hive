@@ -82,17 +82,34 @@ export async function getResourcesForTask(
     return { error: 'Task not found or not assigned to this agent' }
   }
 
-  const resources: TaskResourceEntry[] = []
-  for (const slot of RESOURCE_SLOTS) {
-    const resourceId = row[slot.column]
-    if (resourceId == null) continue
+  // Resolve populated slots concurrently -- each is an independent DB
+  // round-trip via `getAgentDownloadUrl`, and this endpoint is polled
+  // per-task by every agent. `Promise.all` preserves the input array's
+  // order regardless of completion order, so `resources` below stays in
+  // `RESOURCE_SLOTS` order exactly as the sequential loop produced.
+  const populatedSlots = RESOURCE_SLOTS.map((slot) => ({
+    slot,
+    resourceId: row[slot.column],
+  })).filter(
+    (entry): entry is { slot: (typeof RESOURCE_SLOTS)[number]; resourceId: number } =>
+      entry.resourceId != null
+  )
 
-    // A resource id set on the attack but with no uploaded file yet
-    // (upload started, checksum/compression worker hasn't finished, or
-    // the row was deleted out from under the attack) has no meaningful
-    // download URL to hand back. Omit it rather than surfacing a
-    // null-downloadUrl entry an agent would try to fetch and fail on.
-    const download = await getAgentDownloadUrl(slot.downloadType, resourceId, projectId)
+  const resolved = await Promise.all(
+    populatedSlots.map(async ({ slot, resourceId }) => ({
+      slot,
+      resourceId,
+      // A resource id set on the attack but with no uploaded file yet
+      // (upload started, checksum/compression worker hasn't finished, or
+      // the row was deleted out from under the attack) has no meaningful
+      // download URL to hand back. Omit it rather than surfacing a
+      // null-downloadUrl entry an agent would try to fetch and fail on.
+      download: await getAgentDownloadUrl(slot.downloadType, resourceId, projectId),
+    }))
+  )
+
+  const resources: TaskResourceEntry[] = []
+  for (const { slot, resourceId, download } of resolved) {
     if (!download) continue
 
     resources.push({

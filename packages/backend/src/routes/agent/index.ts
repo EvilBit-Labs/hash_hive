@@ -39,6 +39,7 @@ import {
   effectiveAgentConfigSchema,
   HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
   HEARTBEAT_ERROR_MESSAGE_MAX,
+  resourceCompressionEncodingSchema,
   taskResourcesResponseSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
@@ -287,7 +288,7 @@ const downloadUrlResponseSchema = z
     // — nothing here changes the meaning of `url`/`expiresIn`.
     checksum: z.string().nullable(),
     size: z.number().int().nonnegative().nullable(),
-    encoding: z.enum(['gzip', 'none']).nullable(),
+    encoding: resourceCompressionEncodingSchema.nullable(),
   })
   .openapi('AgentResourceDownloadUrl')
 
