@@ -173,6 +173,7 @@ if (!IS_ISOLATED) {
     getTaskById: mock(async () => null),
     listTasks: mock(async () => ({ tasks: [], total: 0, limit: 50, offset: 0 })),
     getZapsForTask: mock(async () => ({ zaps: [], hasMore: false })),
+    getResourcesForTask: mock(async () => ({ resources: [] })),
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     buildCapabilityPredicate: mock(() => ({ sql: 'TRUE' })),

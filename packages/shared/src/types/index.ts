@@ -26,8 +26,12 @@ import type {
   agentListRowWireSchema,
   assignedTaskSchema,
   pausedReasonSchema,
+  resourceCompressionEncodingSchema,
   taskEventSchema,
   taskEventTypeSchema,
+  taskResourceEntrySchema,
+  taskResourcesResponseSchema,
+  taskResourceTypeSchema,
   benchmarkSubmissionSchema,
   attackStatusSchema,
   campaignActiveAgentSchema,
@@ -334,6 +338,12 @@ export type AssignedTask = z.infer<typeof assignedTaskSchema>
 export type PausedReason = z.infer<typeof pausedReasonSchema>
 export type TaskEventType = z.infer<typeof taskEventTypeSchema>
 export type TaskEvent = z.infer<typeof taskEventSchema>
+
+/** Task-to-resource resolution (issue #108 U6) wire types. */
+export type ResourceCompressionEncoding = z.infer<typeof resourceCompressionEncodingSchema>
+export type TaskResourceType = z.infer<typeof taskResourceTypeSchema>
+export type TaskResourceEntry = z.infer<typeof taskResourceEntrySchema>
+export type TaskResourcesResponse = z.infer<typeof taskResourcesResponseSchema>
 
 // ─── API Request Types ──────────────────────────────────────────────
 

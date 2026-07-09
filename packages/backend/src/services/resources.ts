@@ -28,7 +28,7 @@ import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
-import { compressBufferForStorage } from './resources/compression.js'
+import { type CompressionEncoding, compressBufferForStorage } from './resources/compression.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -1062,6 +1062,23 @@ export async function getResourcePresignedUrl(fileRef: {
 }
 
 /**
+ * Integrity metadata surfaced alongside an agent download URL (#108 U5).
+ * Hash lists carry none of these columns — out of scope for #108 — so
+ * every field is `null` for `resourceType === 'hash-lists'`. Word/rule/
+ * mask list rows carry real values once `file_checksum` is captured at
+ * upload finalization; a resource whose worker hasn't run yet (or was
+ * uploaded before #102/#108 shipped) reports `checksum: null` cleanly
+ * rather than surfacing a stale or fabricated value.
+ */
+export interface AgentDownloadUrlResult {
+  url: string
+  expiresIn: number
+  checksum: string | null
+  size: number | null
+  encoding: CompressionEncoding | null
+}
+
+/**
  * Generate a presigned download URL with extended expiry for large files.
  * Used by agents to download resources directly from S3.
  */
@@ -1069,7 +1086,8 @@ export async function getAgentDownloadUrl(
   resourceType: string,
   resourceId: number,
   projectId: number
-): Promise<{ url: string; expiresIn: number } | null> {
+): Promise<AgentDownloadUrlResult | null> {
+  const isHashList = resourceType === 'hash-lists'
   const tableMap: Record<string, ResourceTable | typeof hashLists> = {
     'hash-lists': hashLists,
     wordlists: wordLists,
@@ -1096,7 +1114,19 @@ export async function getAgentDownloadUrl(
     ...(fileRef.name ? { filename: fileRef.name } : {}),
   })
 
-  return { url, expiresIn }
+  // `table` is typed as a union including `hashLists`, which has none of
+  // these columns — narrow on `resourceType` (not the row) since hash
+  // lists are excluded from #108 scope entirely. The cast is safe: the
+  // `!isHashList` branch only runs when `table` resolved to one of the
+  // three resource tables above, which share this column shape exactly.
+  const resourceRow = row as typeof wordLists.$inferSelect
+  const checksum = isHashList ? null : (resourceRow.fileChecksum ?? null)
+  const size = isHashList ? null : (resourceRow.fileSize ?? null)
+  const encoding = isHashList
+    ? null
+    : ((resourceRow.compressionEncoding as CompressionEncoding | undefined) ?? 'none')
+
+  return { url, expiresIn, checksum, size, encoding }
 }
 
 // ─── Chunked Upload (S3 Multipart) ─────────────────────────────────

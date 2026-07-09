@@ -285,6 +285,7 @@ if (!IS_ISOLATED) {
     getTaskById: mock(),
     listTasks: mock(),
     getZapsForTask: mock(),
+    getResourcesForTask: mock(),
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     listTasksByAgent: mock(),

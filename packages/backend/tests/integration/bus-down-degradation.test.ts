@@ -107,6 +107,13 @@ if (!IS_ISOLATED) {
   }))
   mock.module('../../src/services/attacks/complexity.js', () => ({
     computeAttackKeyspace: mock(() => Promise.resolve(0n)),
+    // services/tasks.js now transitively imports services/resources.js
+    // (via ./tasks/task-resources.js, #108 U6), which statically imports
+    // this module's recomputeKeyspaceForResource. This suite only
+    // exercises updateTaskProgress, not any resource upload path, so a
+    // no-op stub is sufficient — but it must be present or the real
+    // `services/tasks.js` import below fails to link.
+    recomputeKeyspaceForResource: mock(() => Promise.resolve()),
   }))
   mock.module('../../src/services/campaigns.js', () => ({
     enqueuePreemptionEvaluation: mock(() => Promise.resolve()),

@@ -828,6 +828,50 @@ export const assignedTaskSchema = z.object({
   updatedAt: z.coerce.date(),
 })
 
+// ─── Task Resource Resolution (issue #108 U6) ───────────────────────
+//
+// Closes the gap where `assignedTaskSchema` (above) carries a task's
+// `attackId` but not the static resources (wordlist/rulelist/masklist)
+// that attack references. `GET /tasks/{taskId}/resources` resolves the
+// task -> attack -> resource ids and returns one entry per resource the
+// attack actually references, reusing `getAgentDownloadUrl` (#108 U5)
+// so the integrity metadata (`checksum`/`size`/`encoding`) and the
+// download URL come from one code path. Hash lists are out of #108
+// scope and are never included here — only wordlist/rulelist/masklist.
+
+/** Encoding of the object-store blob at rest. Mirrors `CompressionEncoding` in `services/resources/compression.ts` on the backend. */
+export const resourceCompressionEncodingSchema = z.enum(['gzip', 'none'])
+
+/** Discriminates which attack slot (`wordlistId`/`rulelistId`/`masklistId`) a `taskResourceEntrySchema` resolved from. */
+export const taskResourceTypeSchema = z.enum(['wordlist', 'rulelist', 'masklist'])
+
+/**
+ * One resolved static resource for a task's attack. `checksum`/`size`
+ * are `null` when the row hasn't captured them yet (e.g. an upload
+ * whose checksum-capture worker hasn't run); `encoding` defaults to
+ * `'none'` at the DB level so it is only `null` here if the resource
+ * genuinely has no encoding recorded.
+ */
+export const taskResourceEntrySchema = z.object({
+  type: taskResourceTypeSchema,
+  id: z.number().int().positive(),
+  checksum: z.string().nullable(),
+  size: z.number().int().nonnegative().nullable(),
+  encoding: resourceCompressionEncodingSchema.nullable(),
+  downloadUrl: z.url(),
+})
+
+/**
+ * Response body for `GET /tasks/{taskId}/resources`. Wrapped in a
+ * `resources` key (rather than a bare array) to match every other
+ * agent-surface response's envelope shape (e.g. `{ zaps, hasMore }`)
+ * and to leave room for additive top-level fields later without a
+ * breaking wire change.
+ */
+export const taskResourcesResponseSchema = z.object({
+  resources: z.array(taskResourceEntrySchema),
+})
+
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 //
 // `campaignStatusSchema`, `campaignTaskStatsSchema`,

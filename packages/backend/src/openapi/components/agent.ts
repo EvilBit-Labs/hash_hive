@@ -68,7 +68,7 @@ const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
   NotFound:
     "Target resource does not exist or is outside the agent's project scope. Common cases: task not assigned to this agent, resource type/id outside the agent's project membership.",
   ServerError:
-    'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`, `ENROLL_ERROR`) so agents can switch on `error.code` and treat known codes specifically. The dedicated `OPENAPI_SPEC_GENERATION_FAILED` code is emitted on `GET /openapi.json` only when production-mode spec generation fails at boot; treat it as an operator-side defect, not an agent retry case.',
+    'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `TASK_RESOURCES_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`, `ENROLL_ERROR`) so agents can switch on `error.code` and treat known codes specifically. The dedicated `OPENAPI_SPEC_GENERATION_FAILED` code is emitted on `GET /openapi.json` only when production-mode spec generation fails at boot; treat it as an operator-side defect, not an agent retry case.',
 }
 
 /**

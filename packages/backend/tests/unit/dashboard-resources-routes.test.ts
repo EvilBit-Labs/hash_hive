@@ -286,7 +286,8 @@ if (!IS_ISOLATED) {
     // factory or the import fails at load time for every test file in
     // this run.
     latchResourcePermanent: mock(async () => undefined),
-    // Real getAgentDownloadUrl returns `{url, expiresIn} | null`. No
+    // Real getAgentDownloadUrl returns `{url, expiresIn, checksum, size,
+    // encoding} | null` (#108 U5 added the integrity-metadata fields). No
     // dashboard route consumes this service from this test file's
     // surface, but `routes/agent/index.ts` imports the function at
     // module-load time. Bun's `mock.module` MERGES - non-mocked
@@ -299,7 +300,13 @@ if (!IS_ISOLATED) {
     // fixture pattern.
     getAgentDownloadUrl: mock(
       async () =>
-        ({ url: 'https://example/test', expiresIn: 600 }) satisfies NonNullable<
+        ({
+          url: 'https://example/test',
+          expiresIn: 600,
+          checksum: null,
+          size: null,
+          encoding: null,
+        }) satisfies NonNullable<
           Awaited<ReturnType<typeof import('../../src/services/resources.js').getAgentDownloadUrl>>
         >
     ),

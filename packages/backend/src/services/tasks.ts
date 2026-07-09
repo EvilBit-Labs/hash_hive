@@ -1053,4 +1053,5 @@ export {
   projectAgentTaskRows,
 } from './tasks/agent-projection.js'
 export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
+export { getResourcesForTask } from './tasks/task-resources.js'
 export { getZapsForTask } from './tasks/zaps.js'
