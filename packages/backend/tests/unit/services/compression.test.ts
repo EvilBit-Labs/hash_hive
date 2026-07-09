@@ -3,8 +3,9 @@
  *
  * Pure buffer-in/buffer-out logic — no DB, no storage — so this is a plain
  * unit test rather than a real-DB integration test (see
- * `tests/db/resource-upload-compression.db.test.ts` for the end-to-end
- * upload -> storage -> round-trip coverage).
+ * `tests/unit/services/resources-upload.test.ts` for the end-to-end
+ * upload -> compression -> persisted-row coverage, mocking the storage
+ * boundary since CI's real-DB lane has no object store to hit).
  */
 import { describe, expect, test } from 'bun:test'
 import { gunzipSync } from 'node:zlib'

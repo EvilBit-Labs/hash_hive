@@ -1,25 +1,32 @@
 /**
- * Real-DB (+ real object storage) tests for the chunked-upload compression
- * worker (issue #108 U4).
+ * Real-DB tests for the chunked-upload compression worker (issue #108 U4).
  *
  * Unlike the direct-upload path (U2/U3, proven in
- * `resource-upload-compression.db.test.ts`), a chunked upload streams parts
- * straight to S3 without ever buffering the file server-side -- there is no
- * in-memory buffer to gzip or hash inline. `compressChunkedResourceObject`
+ * `tests/unit/services/resources-upload.test.ts`), a chunked upload streams
+ * parts straight to S3 without ever buffering the file server-side -- there
+ * is no in-memory buffer to gzip or hash inline. `compressChunkedResourceObject`
  * is the background pass that does both, in ONE streaming download of the
- * object that has already landed in storage. These tests simulate "a
- * chunked upload has just completed" by PUTting a raw object directly
- * (`uploadFile`) and inserting a resource row pointing at it with
- * `file_checksum: null` -- exactly the state `completeChunkedUpload` leaves
- * behind for a normal (non-restore) completion after issue #108 U4 removed
- * its own inline best-effort checksum capture.
+ * object that has already landed in storage.
+ *
+ * CI's `test:db` job provisions Postgres only -- no S3/SeaweedFS/MinIO --
+ * so, per repo convention (see `blob-reclamation.db.test.ts`), storage is
+ * never hit for real here. `compressChunkedResourceObject` accepts an
+ * injectable `CompressionStorageDeps` boundary specifically for this; these
+ * tests inject a small in-memory `Map`-backed fake object store instead of
+ * mocking a module (module mocks leak process-wide across `bun:test`
+ * files -- see GOTCHAS.md). The fake still exercises the service's real
+ * streaming/hashing/multipart logic end to end: raw checksum over the
+ * streamed bytes, gzip-if-smaller, keep-raw-if-not, delete-of-the-discarded
+ * original, idempotency, and the mid-stream non-final-part failure path --
+ * only the S3 wire calls themselves are replaced.
  *
  * Runs under `just test-db` (preload: tests/preload-db.ts). cleanupSeed() in
  * afterAll keeps runs idempotent and order-independent.
  *
  * NOTE: do NOT call client.end() here — harness.test.ts owns the shared
  * drizzle client lifecycle. NOTE: do NOT self-skip — test-db lane always has
- * Postgres AND SeaweedFS available.
+ * Postgres available (storage is faked, see above, so it is never a
+ * dependency of this file).
  */
 
 import { projects, wordLists } from '@hashhive/shared'
@@ -28,12 +35,8 @@ import { eq } from 'drizzle-orm'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 
-import {
-  abortMultipartUpload,
-  downloadFile,
-  uploadFile,
-  uploadPart,
-} from '../../src/config/storage.js'
+import type { CompressionStorageDeps } from '../../src/services/resources/resource-compression.js'
+
 import { db } from '../../src/db/index.js'
 import { compressChunkedResourceObject } from '../../src/services/resources/resource-compression.js'
 
@@ -43,17 +46,137 @@ function sha256Hex(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
 }
 
+// ─── In-memory fake object store ────────────────────────────────────────
+//
+// Stands in for S3/SeaweedFS: a `Map<key, Buffer>` for landed objects, plus
+// a `Map<uploadId, ...>` tracking in-flight multipart uploads. Mirrors just
+// enough of the real `@aws-sdk/client-s3` response shape
+// (`response.Body.transformToWebStream()` /
+// `response.Body.transformToByteArray()`) for the service and this file's
+// own read-back helpers to consume identically to real storage.
+
+interface FakeMultipartUpload {
+  key: string
+  parts: Map<number, Buffer>
+}
+
+const fakeObjects = new Map<string, Buffer>()
+const fakeUploads = new Map<string, FakeMultipartUpload>()
+
+interface FakeBody {
+  transformToByteArray: () => Promise<Uint8Array>
+  transformToWebStream: () => ReadableStream<Uint8Array>
+}
+
+const FAKE_STREAM_CHUNK_BYTES = 64 * 1024
+
+function makeFakeBody(buffer: Buffer): FakeBody {
+  return {
+    transformToByteArray: () => Promise.resolve(new Uint8Array(buffer)),
+    transformToWebStream: () => {
+      let offset = 0
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset >= buffer.byteLength) {
+            controller.close()
+            return
+          }
+          const end = Math.min(offset + FAKE_STREAM_CHUNK_BYTES, buffer.byteLength)
+          controller.enqueue(new Uint8Array(buffer.subarray(offset, end)))
+          offset = end
+        },
+      })
+    },
+  }
+}
+
+function fakePutObject(key: string, body: Buffer): void {
+  fakeObjects.set(key, body)
+}
+
+async function fakeDownloadFile(key: string): Promise<{ Body: FakeBody }> {
+  const buffer = fakeObjects.get(key)
+  if (!buffer) {
+    throw new Error(`fake object store: NoSuchKey "${key}"`)
+  }
+  return { Body: makeFakeBody(buffer) }
+}
+
+async function fakeDeleteFile(key: string): Promise<void> {
+  fakeObjects.delete(key)
+}
+
+async function fakeCreateMultipartUpload(key: string): Promise<string> {
+  const uploadId = randomUUID()
+  fakeUploads.set(uploadId, { key, parts: new Map() })
+  return uploadId
+}
+
+async function fakeUploadPart(
+  _key: string,
+  uploadId: string,
+  partNumber: number,
+  body: Uint8Array
+): Promise<string> {
+  const upload = fakeUploads.get(uploadId)
+  if (!upload) {
+    throw new Error(`fake object store: no such multipart upload "${uploadId}"`)
+  }
+  upload.parts.set(partNumber, Buffer.from(body))
+  return `fake-etag-${partNumber}`
+}
+
+async function fakeCompleteMultipartUpload(
+  _key: string,
+  uploadId: string,
+  parts: ReadonlyArray<{ partNumber: number; etag: string }>
+): Promise<void> {
+  const upload = fakeUploads.get(uploadId)
+  if (!upload) {
+    throw new Error(`fake object store: no such multipart upload "${uploadId}"`)
+  }
+  const assembled = [...parts]
+    .sort((a, b) => a.partNumber - b.partNumber)
+    .map((p) => {
+      const partBuffer = upload.parts.get(p.partNumber)
+      if (!partBuffer) {
+        throw new Error(`fake object store: missing part ${p.partNumber} on complete`)
+      }
+      return partBuffer
+    })
+  fakeObjects.set(upload.key, Buffer.concat(assembled))
+  fakeUploads.delete(uploadId)
+}
+
+async function fakeAbortMultipartUpload(_key: string, uploadId: string): Promise<void> {
+  fakeUploads.delete(uploadId)
+}
+
+/**
+ * The full fake storage boundary, satisfying `CompressionStorageDeps`. Each
+ * test either passes this straight through (happy paths) or spreads it and
+ * overrides one function to inject a failure -- exactly mirroring how the
+ * real defaults are used in production, just backed by `Map`s instead of a
+ * network call.
+ */
+const defaultDeps = {
+  downloadFile: fakeDownloadFile,
+  deleteFile: fakeDeleteFile,
+  createMultipartUpload: fakeCreateMultipartUpload,
+  uploadPart: fakeUploadPart,
+  completeMultipartUpload: fakeCompleteMultipartUpload,
+  abortMultipartUpload: fakeAbortMultipartUpload,
+} as unknown as CompressionStorageDeps
+
 async function fetchStoredBytes(key: string): Promise<Buffer> {
-  const response = await downloadFile(key)
-  const body = response.Body
-  if (!body) throw new Error(`No object body for key ${key}`)
-  const bytes = await body.transformToByteArray()
+  const response = await fakeDownloadFile(key)
+  const bytes = await response.Body.transformToByteArray()
   return Buffer.from(bytes)
 }
 
 async function objectExists(key: string): Promise<boolean> {
   try {
-    await downloadFile(key)
+    await fakeDownloadFile(key)
     return true
   } catch {
     return false
@@ -64,17 +187,17 @@ let projectId: number
 
 /**
  * Simulates "a chunked upload for this resource has just completed": PUTs
- * the raw bytes directly (standing in for the multipart upload's landed
- * object) and inserts a resource row pointing at it with `file_checksum:
- * null` -- exactly the state `completeChunkedUpload` leaves for a normal
- * (non-restore) completion.
+ * the raw bytes into the fake object store (standing in for the multipart
+ * upload's landed object) and inserts a resource row pointing at it with
+ * `file_checksum: null` -- exactly the state `completeChunkedUpload` leaves
+ * for a normal (non-restore) completion.
  */
 async function insertCompletedChunkedWordList(content: Buffer): Promise<{
   id: number
   key: string
 }> {
   const key = `${projectId}/wordlists/${randomUUID()}`
-  await uploadFile(key, content, 'text/plain')
+  fakePutObject(key, content)
   const [row] = await db
     .insert(wordLists)
     .values({
@@ -85,11 +208,6 @@ async function insertCompletedChunkedWordList(content: Buffer): Promise<{
       fileSize: content.byteLength,
       compressionEncoding: 'none',
       fileRef: {
-        // No explicit `bucket` — omitted so both `uploadFile` above and the
-        // worker's `downloadFile` below resolve the same default
-        // (`env.S3_BUCKET`, `hashhive-test` under the test env). Hardcoding
-        // a literal bucket name here previously drifted from the test env's
-        // actual bucket and produced a spurious NoSuchKey.
         key,
         contentType: 'text/plain',
         size: content.byteLength,
@@ -126,7 +244,7 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     const content = Buffer.from('password123\nletmein\nqwerty\n'.repeat(500), 'utf8')
     const { id, key } = await insertCompletedChunkedWordList(content)
 
-    const result = await compressChunkedResourceObject('wordlist', id)
+    const result = await compressChunkedResourceObject('wordlist', id, defaultDeps)
 
     expect(result.status).toBe('compressed')
     expect(result.rawBytes).toBe(content.byteLength)
@@ -154,7 +272,7 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     const content = Buffer.from('x', 'utf8')
     const { id, key } = await insertCompletedChunkedWordList(content)
 
-    const result = await compressChunkedResourceObject('wordlist', id)
+    const result = await compressChunkedResourceObject('wordlist', id, defaultDeps)
 
     expect(result.status).toBe('kept-raw')
     expect(result.checksum).toBe(sha256Hex(content))
@@ -175,7 +293,7 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     const content = Buffer.from('idempotent-content\n'.repeat(200), 'utf8')
     const { id } = await insertCompletedChunkedWordList(content)
 
-    const first = await compressChunkedResourceObject('wordlist', id)
+    const first = await compressChunkedResourceObject('wordlist', id, defaultDeps)
     expect(first.status).toBe('compressed')
     const afterFirst = await readWordList(id)
 
@@ -203,10 +321,11 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     let abortCalled = false
     await expect(
       compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
         uploadPart: () => Promise.reject(new Error('simulated S3 failure')),
         abortMultipartUpload: async (compressedKey: string, uploadId: string, bucket?: string) => {
           abortCalled = true
-          await abortMultipartUpload(compressedKey, uploadId, bucket)
+          await defaultDeps.abortMultipartUpload(compressedKey, uploadId, bucket)
         },
       })
     ).rejects.toThrow('simulated S3 failure')
@@ -226,7 +345,7 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     expect(storedBytes).toEqual(content)
 
     // Retriable: a subsequent run without the injected failure succeeds.
-    const retry = await compressChunkedResourceObject('wordlist', id)
+    const retry = await compressChunkedResourceObject('wordlist', id, defaultDeps)
     expect(retry.status).toBe('compressed')
     const afterRetry = await readWordList(id)
     expect(afterRetry?.fileChecksum).toBe(sha256Hex(content))
@@ -247,6 +366,7 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     let firstPartAttempted = false
     await expect(
       compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
         uploadPart: async (
           compressedKey: string,
           uploadId: string,
@@ -259,17 +379,17 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
             // Give the writer loop time to fill gzip's internal buffer
             // and actually park on `once(gzip, 'drain')` before this
             // rejection lands -- without the fix under test, that parked
-            // writer promise (and the raw S3 download stream underneath
-            // it) would never settle, and this test would hang until
+            // writer promise (and the raw download stream underneath it)
+            // would never settle, and this test would hang until
             // bun:test's timeout fails it.
             await new Promise((resolve) => setTimeout(resolve, 50))
             throw new Error('simulated S3 failure on first (non-final) part')
           }
-          return uploadPart(compressedKey, uploadId, partNum, partBody, bucket)
+          return defaultDeps.uploadPart(compressedKey, uploadId, partNum, partBody, bucket)
         },
         abortMultipartUpload: async (compressedKey: string, uploadId: string, bucket?: string) => {
           abortCalled = true
-          await abortMultipartUpload(compressedKey, uploadId, bucket)
+          await defaultDeps.abortMultipartUpload(compressedKey, uploadId, bucket)
         },
       })
     ).rejects.toThrow('simulated S3 failure on first (non-final) part')
