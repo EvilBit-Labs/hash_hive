@@ -53,6 +53,7 @@ import {
   uploadPart as uploadPartDefault,
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
+import { deleteBlobIfUnreferenced } from './blob-lifecycle.js'
 import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
 export type CompressibleResourceType = 'wordlist' | 'rulelist' | 'masklist'
@@ -286,11 +287,20 @@ export async function compressChunkedResourceObject(
           updatedAt: new Date(),
         })
         .where(eq(table.id, resourceId))
-      await del(rawKey, bucket).catch((err: unknown) => {
-        logger.warn(
-          { err, resourceType, resourceId, key: rawKey },
-          'resource-compression: failed to delete original raw object after compression; continuing'
-        )
+      // #108 safety foundation: guarded delete of the discarded raw object,
+      // not a bare `del`. A no-op today (this row's raw key is unique to
+      // it), but this is a fourth blob-delete site alongside
+      // `blob-reclamation.ts`/`resources.ts` — the same guard applies
+      // wherever a committed word/rule/mask-list blob gets deleted. Keyed
+      // on `rawKey` itself; the row's own `fileRef.key` was already moved to
+      // `compressedKey` above, so this row no longer points at `rawKey` and
+      // the (table, resourceId) self-exclusion is moot here regardless.
+      await deleteBlobIfUnreferenced({
+        table,
+        resourceId,
+        key: rawKey,
+        ...(bucket ? { bucket } : {}),
+        deleteFn: del,
       })
       logger.info(
         { resourceType, resourceId, rawBytes, compressedBytes },

@@ -57,6 +57,7 @@ import { db } from '../../db/index.js'
 import { type AuditActor, recordAuditEvent } from '../../services/audit-log.js'
 import { attackFkColumnForTable } from '../../services/resources-archive.js'
 import { entityTypeForTable, type ResourceTable } from '../../services/resources.js'
+import { deleteBlobIfUnreferenced } from '../../services/resources/blob-lifecycle.js'
 import { attachWorkerMetrics } from './metrics.js'
 
 const DEFAULT_SYSTEM_ACTOR: AuditActor = { actorType: 'system', actorId: null }
@@ -336,19 +337,26 @@ async function reclaimOne(args: {
 
   const fileRef = row.fileRef as { key?: string; bucket?: string } | null
   if (fileRef?.key) {
-    try {
-      await deleteBlob(fileRef.key, fileRef.bucket)
-    } catch (err) {
-      // Best-effort (issue #106 U11 plan Approach): the DB stamp + audit
-      // row already committed above. Log and continue — do not abort the
-      // batch and do not attempt to un-stamp the row. The row stays marked
-      // reclaimed even if the underlying object-store delete needs a
-      // manual follow-up.
-      logger.warn(
-        { err, entityType, id: row.id, key: fileRef.key },
-        'blob-reclamation: deleteFile failed after intent-stamp; continuing sweep'
-      )
-    }
+    // #108 safety foundation: route the physical delete through the
+    // reference-aware guard rather than calling `deleteBlob` directly. A
+    // no-op today (every blob key is a unique UUID, so no other row can
+    // share it) — this is what makes it safe for a LATER content-addressing
+    // step to let multiple resources point at the same blob without a
+    // follow-up audit of this call site. The row is excluded from its own
+    // "other live reference" scan by (table, id); its `blobReclaimedAt` was
+    // already stamped by the transaction above, so it would be excluded by
+    // the liveness check too, but the id exclusion holds regardless of that
+    // ordering. Delete failures are logged and swallowed inside the guard
+    // itself — the DB stamp + audit row already committed above, and the
+    // row stays marked reclaimed even if the object-store delete needs a
+    // manual follow-up.
+    await deleteBlobIfUnreferenced({
+      table,
+      resourceId: row.id,
+      key: fileRef.key,
+      ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
+      deleteFn: deleteBlob,
+    })
   }
 
   return true

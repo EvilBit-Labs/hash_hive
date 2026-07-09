@@ -18,7 +18,6 @@ import {
   abortMultipartUpload,
   completeMultipartUpload,
   createMultipartUpload,
-  deleteFile,
   getPresignedUrl,
   listParts,
   uploadFile,
@@ -28,6 +27,7 @@ import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
+import { type BlobOwnerTable, deleteBlobIfUnreferenced } from './resources/blob-lifecycle.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { compressBufferForStorage } from './resources/compression.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
@@ -325,6 +325,10 @@ async function cascadeDeleteResource<
   referencedBy: string
   entityType: AuditEntityType
   actor: Actor
+  // Which table the row being deleted belongs to (#108 safety foundation) —
+  // threaded through to `deleteBlobIfUnreferenced` so it knows which other
+  // tables to scan for a still-live reference to the same blob.
+  table: BlobOwnerTable
   lookup: () => Promise<TRow | null>
   cascade?: (tx: DbTx) => Promise<void>
   // Performs the guarded DELETE (folding `isPermanent = false` into its
@@ -378,14 +382,19 @@ async function cascadeDeleteResource<
     key?: string
   } | null
   if (fileRef?.key) {
-    try {
-      await deleteFile(fileRef.key, fileRef.bucket)
-    } catch (err) {
-      logger.warn(
-        { resourceLabel: args.resourceLabel, resourceId: args.id, err },
-        'Failed to delete resource S3 object; continuing'
-      )
-    }
+    // #108 safety foundation: guarded delete, not a bare `deleteFile`. A
+    // no-op today (unique-per-resource keys), but the row this delete
+    // targets no longer exists (it was removed by `deleteOwner` above), so
+    // `deleteBlobIfUnreferenced`'s own (table, id) self-exclusion is moot
+    // here — it just needs `args.id` to be excluded from the scan, which it
+    // is regardless. Delete failures are logged and swallowed inside the
+    // guard itself.
+    await deleteBlobIfUnreferenced({
+      table: args.table,
+      resourceId: args.id,
+      key: fileRef.key,
+      ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
+    })
   }
   return { kind: 'deleted' }
 }
@@ -447,6 +456,7 @@ export async function deleteHashList(
     referencedBy: 'one or more campaigns or attacks',
     entityType: 'hash_list',
     actor,
+    table: hashLists,
     lookup: () => getHashListById(id, projectId),
     // Bounded-batch cascade: large hash lists (millions of items) get
     // chunked DELETEs instead of one unbounded statement, capping the
@@ -495,6 +505,7 @@ export async function deleteResource(
     referencedBy: 'one or more attacks',
     entityType: entityTypeForTable(table),
     actor,
+    table,
     lookup: () => getResourceById(table, id, projectId),
     deleteOwner: (runner) =>
       runner
@@ -1419,20 +1430,30 @@ export async function completeChunkedUpload(
         { err, resourceId, resourceType },
         'checksum verification failed for a reclaimed-shell restore; rejecting the re-upload'
       )
-      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
-        logger.warn(
-          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
-          'failed to clean up unverifiable chunked-upload object; continuing'
-        )
+      // #108 safety foundation: guarded delete keyed on `fileRef.key` — the
+      // content is unverifiable, so there's no checksum in play anyway; the
+      // guard only ever cares about the key. A no-op today (this key is a
+      // fresh UUID minted by `initiateChunkedUpload`'s restore path, never
+      // shared with any other row), but future-safe if dedup ever lets a
+      // restore land on a key another live resource also references.
+      await deleteBlobIfUnreferenced({
+        table: table as ResourceTable,
+        resourceId,
+        key: fileRef.key,
+        ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
       })
       throw new ChecksumMismatchError(resourceId, resourceType)
     }
     if (reclaimableRow.fileChecksum && reclaimableRow.fileChecksum !== computedChecksum) {
-      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
-        logger.warn(
-          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
-          'failed to clean up mismatched chunked-upload object; continuing'
-        )
+      // #108 safety foundation: guarded delete keyed on `fileRef.key`, same
+      // as above — the mismatched upload is rejected regardless of whose
+      // checksum it doesn't match; only key-sharing determines whether the
+      // object survives.
+      await deleteBlobIfUnreferenced({
+        table: table as ResourceTable,
+        resourceId,
+        key: fileRef.key,
+        ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
       })
       throw new ChecksumMismatchError(resourceId, resourceType)
     }

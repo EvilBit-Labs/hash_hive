@@ -49,6 +49,7 @@ async function insertWordList(overrides: {
   fileChecksum?: string | null
   hasBlobKey?: boolean
   isPermanent?: boolean
+  key?: string
 }): Promise<number> {
   const [row] = await db
     .insert(wordLists)
@@ -63,7 +64,10 @@ async function insertWordList(overrides: {
       fileRef:
         overrides.hasBlobKey === false
           ? {}
-          : { key: `${ctx.projectId}/wordlists/test-${Math.random()}.txt`, bucket: 'hashhive' },
+          : {
+              key: overrides.key ?? `${ctx.projectId}/wordlists/test-${Math.random()}.txt`,
+              bucket: 'hashhive',
+            },
     })
     .returning({ id: wordLists.id })
   return row!.id
@@ -91,6 +95,14 @@ async function readWordList(id: number) {
     .from(wordLists)
     .where(eq(wordLists.id, id))
   return row
+}
+
+async function readWordListKey(id: number): Promise<string | undefined> {
+  const [row] = await db
+    .select({ fileRef: wordLists.fileRef })
+    .from(wordLists)
+    .where(eq(wordLists.id, id))
+  return (row?.fileRef as { key?: string } | null)?.key
 }
 
 async function cleanupSeed(): Promise<void> {
@@ -312,6 +324,58 @@ describe('reclaimExpiredResourceBlobs (U11, R11)', () => {
         .from(auditLogs)
         .where(and(eq(auditLogs.entityType, 'word_list'), eq(auditLogs.entityId, okId)))
       expect(okAudit?.action).toBe('reclaimed')
+    })
+  })
+
+  describe('shared-key guard (#108 safety foundation)', () => {
+    it('reclaims (stamps) both rows sharing a key, but only physically deletes one blob', async () => {
+      // Two rows sharing a physical blob key, both otherwise eligible for
+      // reclamation. Whichever is processed first finds the other still
+      // live and skips its physical delete; whichever is processed second
+      // finds the first already stamped (dead) and proceeds. Order isn't
+      // guaranteed, so the assertions below are order-independent: both
+      // rows get stamped (reclamation always proceeds — the guard only
+      // affects the blob delete), and the shared key is only ever passed to
+      // `deleteBlob` once.
+      const sharedKey = `${ctx.projectId}/wordlists/reclaim-shared-${Math.random()}.txt`
+      const idA = await insertWordList({ archivedAt: OLD_ARCHIVED_AT, key: sharedKey })
+      const idB = await insertWordList({ archivedAt: OLD_ARCHIVED_AT, key: sharedKey })
+      const deleteBlob = mock(() => Promise.resolve())
+
+      const result = await reclaimExpiredResourceBlobs({ retention: '90 days', deleteBlob })
+
+      expect(result.reclaimed).toBeGreaterThanOrEqual(2)
+
+      const rowA = await readWordList(idA)
+      const rowB = await readWordList(idB)
+      // Both rows are still reclaimed (stamped) — the guard only ever
+      // skips the physical blob delete, never the row-level stamp.
+      expect(rowA?.blobReclaimedAt).not.toBeNull()
+      expect(rowB?.blobReclaimedAt).not.toBeNull()
+
+      const calledKeys = deleteBlob.mock.calls.map(([key]) => key)
+      // The shared key was physically deleted exactly once, not twice.
+      expect(calledKeys.filter((key) => key === sharedKey)).toHaveLength(1)
+    })
+
+    it('physically deletes both blobs once each has its own unique key', async () => {
+      const idA = await insertWordList({ archivedAt: OLD_ARCHIVED_AT })
+      const idB = await insertWordList({ archivedAt: OLD_ARCHIVED_AT })
+      const [keyA, keyB] = await Promise.all([readWordListKey(idA), readWordListKey(idB)])
+      const deleteBlob = mock(() => Promise.resolve())
+
+      const result = await reclaimExpiredResourceBlobs({ retention: '90 days', deleteBlob })
+
+      expect(result.reclaimed).toBeGreaterThanOrEqual(2)
+
+      const rowA = await readWordList(idA)
+      const rowB = await readWordList(idB)
+      expect(rowA?.blobReclaimedAt).not.toBeNull()
+      expect(rowB?.blobReclaimedAt).not.toBeNull()
+
+      const calledKeys = deleteBlob.mock.calls.map(([key]) => key)
+      expect(calledKeys).toContain(keyA)
+      expect(calledKeys).toContain(keyB)
     })
   })
 })

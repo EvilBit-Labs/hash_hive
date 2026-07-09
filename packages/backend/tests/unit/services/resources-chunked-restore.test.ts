@@ -103,10 +103,16 @@ if (IS_ISOLATED) {
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
-      select: () => ({
+      // `columns` distinguishes the primary row fetch (`db.select()`, no
+      // args) from `deleteBlobIfUnreferenced`'s cross-table "is this blob
+      // still referenced elsewhere" scan (`db.select({ id: ... })`, #108
+      // safety foundation) — this suite only fixtures `currentRow` as the
+      // resource under test, never as a second live resource sharing its
+      // key, so the guard's own query must see no rows.
+      select: (columns?: unknown) => ({
         from: () => ({
           where: () => ({
-            limit: () => Promise.resolve(currentRow ? [currentRow] : []),
+            limit: () => Promise.resolve(columns ? [] : currentRow ? [currentRow] : []),
           }),
         }),
       }),

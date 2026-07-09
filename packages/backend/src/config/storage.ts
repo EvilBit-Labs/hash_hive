@@ -1,11 +1,14 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListPartsCommand,
+  NotFound,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -78,6 +81,60 @@ export async function deleteFile(key: string, bucket?: string) {
       // credentials may also have access to.
       Bucket: assertAllowedBucket(bucket),
       Key: key,
+    })
+  )
+}
+
+/**
+ * Probes whether an object exists without downloading its body (issue #108
+ * safety foundation for content-addressed blob storage). A future dedup step
+ * needs this to check "does the content-addressed key already exist in the
+ * store" before deciding to skip a re-upload — not used by any caller yet.
+ *
+ * A missing object is a normal, expected outcome here (not an error): it
+ * resolves to `{ exists: false }` rather than throwing. Any other failure
+ * (auth, network, wrong bucket) rethrows so it surfaces like every other
+ * storage call.
+ */
+export async function headObject(
+  key: string,
+  bucket?: string
+): Promise<{ exists: boolean; size?: number }> {
+  try {
+    const response = await s3.send(
+      new HeadObjectCommand({
+        Bucket: assertAllowedBucket(bucket),
+        Key: key,
+      })
+    )
+    return response.ContentLength != null
+      ? { exists: true, size: response.ContentLength }
+      : { exists: true }
+  } catch (err) {
+    if (err instanceof NotFound || (err as { name?: string }).name === 'NotFound') {
+      return { exists: false }
+    }
+    throw err
+  }
+}
+
+/**
+ * Server-side copy of an object to a new key within the same bucket (issue
+ * #108 safety foundation). Intended for a LATER chunked-upload step that
+ * needs to relocate a just-verified upload to its content-addressed key
+ * without a client round-trip — not used by any caller yet.
+ */
+export async function copyObject(
+  sourceKey: string,
+  destKey: string,
+  bucket?: string
+): Promise<void> {
+  const resolvedBucket = assertAllowedBucket(bucket)
+  await s3.send(
+    new CopyObjectCommand({
+      Bucket: resolvedBucket,
+      CopySource: `${resolvedBucket}/${sourceKey}`,
+      Key: destKey,
     })
   )
 }
