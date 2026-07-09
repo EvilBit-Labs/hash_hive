@@ -22,7 +22,15 @@
  * Postgres available.
  */
 
-import { attacks, campaigns, hashLists, projects, wordLists } from '@hashhive/shared'
+import {
+  attacks,
+  campaigns,
+  hashLists,
+  maskLists,
+  projects,
+  ruleLists,
+  wordLists,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
@@ -256,6 +264,34 @@ describe('archived resource refs are rejected distinct from reclaimed refs (F5)'
     if (!result.valid) {
       expect(result.archived).toEqual([`hashList(${id})`])
     }
+  })
+})
+
+// ─── #108 U1: compression_encoding defaults to 'none' on all three list tables ──
+
+describe('compression_encoding column defaults to none (#108 U1)', () => {
+  it('defaults compression_encoding to none for a new word list', async () => {
+    const [row] = await db
+      .insert(wordLists)
+      .values({ projectId: ctx.projectId, name: 'compression-default-wordlist', fileRef: {} })
+      .returning({ compressionEncoding: wordLists.compressionEncoding })
+    expect(row?.compressionEncoding).toBe('none')
+  })
+
+  it('defaults compression_encoding to none for a new rule list', async () => {
+    const [row] = await db
+      .insert(ruleLists)
+      .values({ projectId: ctx.projectId, name: 'compression-default-rulelist', fileRef: {} })
+      .returning({ compressionEncoding: ruleLists.compressionEncoding })
+    expect(row?.compressionEncoding).toBe('none')
+  })
+
+  it('defaults compression_encoding to none for a new mask list', async () => {
+    const [row] = await db
+      .insert(maskLists)
+      .values({ projectId: ctx.projectId, name: 'compression-default-masklist', fileRef: {} })
+      .returning({ compressionEncoding: maskLists.compressionEncoding })
+    expect(row?.compressionEncoding).toBe('none')
   })
 })
 
