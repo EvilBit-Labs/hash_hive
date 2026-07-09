@@ -197,14 +197,49 @@ eviction defeats the bandwidth win the cache exists to deliver.
 ## Hash lists
 
 Hash lists are **not** covered by this protocol. They are small, differ on
-nearly every request (served filtered to uncracked-only), and are fetched
-separately. Their `download-url` response returns `null` for `checksum`,
-`size`, and `encoding`, and they are never included in
+nearly every request (served whole, filtered to uncracked-only), and are
+fetched separately, out of the static-resource cache-skip flow described
+above. Their `download-url` response returns `null` for `checksum`, `size`,
+and `encoding`, and they are never included in
 `GET /tasks/{taskId}/resources`. `GET /tasks/{taskId}/zaps` — the mid-run
 notification of newly-cracked hashes to an agent already holding a hash list —
-is a separate, unrelated surface. A lightweight hash-list transfer-integrity /
-freshness mechanism (an ETag derived from the hash list's last-crack time) is
-planned as a follow-up.
+is a separate, unrelated surface.
+
+### Hash-list freshness (ETag)
+
+A hash list's `download-url` response carries a weak `etag`, distinct from the
+raw-content `checksum` used for static resources above:
+
+```json
+{
+  "url": "https://<storage>/...<presigned>",
+  "expiresIn": 21600,
+  "checksum": null,
+  "size": null,
+  "encoding": null,
+  "etag": "W/\"hl-42-1735689600000\""
+}
+```
+
+`etag` is derived from the hash list's **last-crack time** — it changes only
+when a new hash in the list gets cracked, not on every request. An agent that
+already holds this hash list's uncracked-only set from a previous fetch sends
+that etag back as `If-None-Match`:
+
+```
+GET /api/v1/agent/resources/hash-lists/{id}/download-url
+If-None-Match: W/"hl-42-1735689600000"
+```
+
+- If the etag still matches (no new cracks since), the server returns
+  `304 Not Modified` with an empty body and no presigned URL — the agent's
+  cached uncracked set is still current and the download is skipped entirely.
+- If the etag has changed (or `If-None-Match` was omitted), the server returns
+  `200` with a fresh presigned URL and the current `etag` for the agent to
+  cache for its next fetch.
+
+`etag` is `null` for wordlists, rulelists, and masklists — those cache-skip by
+`checksum` instead, and `If-None-Match` has no effect for them.
 
 ## Conformance summary
 

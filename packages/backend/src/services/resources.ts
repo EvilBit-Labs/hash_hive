@@ -8,7 +8,7 @@ import {
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, isNull, max, type SQL, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -778,6 +778,34 @@ export async function getHashListStats(hashListId: number): Promise<{
   return { totalCount, crackedCount, crackRate }
 }
 
+/**
+ * Weak ETag for a hash list's freshness, derived from the most recent
+ * crack recorded against it (issue #108 follow-up: hash-list freshness
+ * ETag). An agent that already holds this hash list's uncracked-only set
+ * sends this value back as `If-None-Match` on a later download-url fetch;
+ * an unchanged etag means no new hashes were cracked since, and the agent
+ * can reuse its cached set instead of re-downloading.
+ *
+ * There is no denormalized "last crack time" column on `hash_lists` —
+ * sourcing it from `MAX(hash_items.cracked_at)` is cheap thanks to the
+ * composite `hash_items_hash_list_cracked_idx` (hash_list_id, cracked_at)
+ * index, and this deliberately does not touch the crack-write path
+ * (`propagateCrack`). A hash list with no cracks yet reports epoch `0` so
+ * the etag is stable (present, not absent) before the first crack.
+ *
+ * The value is a *weak* validator (`W/"..."`) because it identifies an
+ * equivalent uncracked set, not a byte-identical representation.
+ */
+export async function computeHashListEtag(hashListId: number): Promise<string> {
+  const [row] = await db
+    .select({ lastCrackedAt: max(hashItems.crackedAt) })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId))
+
+  const epochMillis = row?.lastCrackedAt ? new Date(row.lastCrackedAt).getTime() : 0
+  return `W/"hl-${hashListId}-${epochMillis}"`
+}
+
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────
 
 export type ResourceTable = typeof wordLists | typeof ruleLists | typeof maskLists
@@ -1064,12 +1092,18 @@ export async function getResourcePresignedUrl(fileRef: {
 
 /**
  * Integrity metadata surfaced alongside an agent download URL (#108 U5).
- * Hash lists carry none of these columns — out of scope for #108 — so
- * every field is `null` for `resourceType === 'hash-lists'`. Word/rule/
- * mask list rows carry real values once `file_checksum` is captured at
- * upload finalization; a resource whose worker hasn't run yet (or was
- * uploaded before #102/#108 shipped) reports `checksum: null` cleanly
- * rather than surfacing a stale or fabricated value.
+ * Hash lists carry none of the `checksum`/`size`/`encoding` columns — out
+ * of scope for #108 — so those three fields are `null` for
+ * `resourceType === 'hash-lists'`. Word/rule/mask list rows carry real
+ * values once `file_checksum` is captured at upload finalization; a
+ * resource whose worker hasn't run yet (or was uploaded before #102/#108
+ * shipped) reports `checksum: null` cleanly rather than surfacing a stale
+ * or fabricated value.
+ *
+ * `etag` is the inverse case (#108 follow-up: hash-list freshness ETag):
+ * it is `null` for word/rule/mask lists (they cache-skip by `checksum`
+ * instead) and a real weak validator — see `computeHashListEtag` — only
+ * for `resourceType === 'hash-lists'`.
  */
 export interface AgentDownloadUrlResult {
   url: string
@@ -1077,6 +1111,7 @@ export interface AgentDownloadUrlResult {
   checksum: string | null
   size: number | null
   encoding: ResourceCompressionEncoding | null
+  etag: string | null
 }
 
 /**
@@ -1126,8 +1161,9 @@ export async function getAgentDownloadUrl(
   const encoding = isHashList
     ? null
     : ((resourceRow.compressionEncoding as ResourceCompressionEncoding | undefined) ?? 'none')
+  const etag = isHashList ? await computeHashListEtag(resourceId) : null
 
-  return { url, expiresIn, checksum, size, encoding }
+  return { url, expiresIn, checksum, size, encoding, etag }
 }
 
 // ─── Chunked Upload (S3 Multipart) ─────────────────────────────────

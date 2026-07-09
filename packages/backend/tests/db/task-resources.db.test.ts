@@ -19,6 +19,7 @@ import {
   agents,
   attacks,
   campaigns,
+  hashItems,
   hashLists,
   hashTypes,
   maskLists,
@@ -31,7 +32,7 @@ import { eq } from 'drizzle-orm'
 
 import { env } from '../../src/config/env.js'
 import { db } from '../../src/db/index.js'
-import { getAgentDownloadUrl } from '../../src/services/resources.js'
+import { computeHashListEtag, getAgentDownloadUrl } from '../../src/services/resources.js'
 import { getResourcesForTask } from '../../src/services/tasks/task-resources.js'
 
 const SLUG = 'task-resources-test-proj'
@@ -272,5 +273,85 @@ describe('getAgentDownloadUrl — hash-list integrity metadata (#108 U5)', () =>
     expect(result?.size).toBeNull()
     expect(result?.encoding).toBeNull()
     expect(result?.url).toMatch(/^https?:\/\//)
+  })
+})
+
+// ─── computeHashListEtag / getAgentDownloadUrl etag (#108 follow-up) ──
+//
+// Only a live query against `hash_items.cracked_at` can prove the etag
+// actually reflects the current crack state — the contract tests for the
+// route pin only the wire shape via a mocked `getAgentDownloadUrl`. These
+// tests seed real hash items, crack one, and prove `computeHashListEtag`
+// (and the `etag` field `getAgentDownloadUrl` surfaces from it) changes
+// only when the last-crack time actually changes.
+
+describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () => {
+  it('reports a stable etag for a hash list with no cracked items', async () => {
+    const { projectId } = await seedProjectWithTask(SLUG)
+    const [hashList] = await db
+      .insert(hashLists)
+      .values({ projectId, name: 'etag-no-cracks', status: 'ready' })
+      .returning()
+
+    await db.insert(hashItems).values([
+      { hashListId: hashList!.id, hashValue: 'aaaa' },
+      { hashListId: hashList!.id, hashValue: 'bbbb' },
+    ])
+
+    const first = await computeHashListEtag(hashList!.id)
+    const second = await computeHashListEtag(hashList!.id)
+
+    expect(first).toBe(second)
+    expect(first).toBe(`W/"hl-${hashList!.id}-0"`)
+  })
+
+  it('changes the etag once a hash item is cracked', async () => {
+    const { projectId } = await seedProjectWithTask(SLUG)
+    const [hashList] = await db
+      .insert(hashLists)
+      .values({ projectId, name: 'etag-after-crack', status: 'ready' })
+      .returning()
+
+    const [item] = await db
+      .insert(hashItems)
+      .values({ hashListId: hashList!.id, hashValue: 'cccc' })
+      .returning()
+
+    const beforeCrack = await computeHashListEtag(hashList!.id)
+    expect(beforeCrack).toBe(`W/"hl-${hashList!.id}-0"`)
+
+    const crackedAt = new Date('2026-01-01T00:00:00.000Z')
+    await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item!.id))
+
+    const afterCrack = await computeHashListEtag(hashList!.id)
+
+    expect(afterCrack).not.toBe(beforeCrack)
+    expect(afterCrack).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}"`)
+  })
+
+  it('surfaces the same value on the etag field getAgentDownloadUrl returns for a hash list', async () => {
+    const { projectId } = await seedProjectWithTask(SLUG)
+    const [hashList] = await db
+      .insert(hashLists)
+      .values({
+        projectId,
+        name: 'etag-download-url',
+        status: 'ready',
+        fileRef: { bucket: env.S3_BUCKET, key: `${SLUG}/etag-hashlist.txt`, name: 'hl.txt' },
+      })
+      .returning()
+
+    const expected = await computeHashListEtag(hashList!.id)
+    const result = await getAgentDownloadUrl('hash-lists', hashList!.id, projectId)
+
+    expect(result?.etag).toBe(expected)
+  })
+
+  it('returns null etag for a non-hash-list resource', async () => {
+    const { projectId, wordlistId } = await seedProjectWithTask(SLUG)
+
+    const result = await getAgentDownloadUrl('wordlists', wordlistId, projectId)
+
+    expect(result?.etag).toBeNull()
   })
 })

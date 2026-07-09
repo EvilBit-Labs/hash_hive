@@ -289,6 +289,13 @@ const downloadUrlResponseSchema = z
     checksum: z.string().nullable(),
     size: z.number().int().nonnegative().nullable(),
     encoding: resourceCompressionEncodingSchema.nullable(),
+    // Hash-list freshness ETag (#108 follow-up), additive alongside the
+    // checksum/size/encoding trio above. `null` for word/rule/mask lists
+    // (they cache-skip by `checksum` instead); a weak validator derived
+    // from the hash list's last-crack time for `type: 'hash-lists'`. An
+    // agent echoes this back as `If-None-Match` on a later fetch and gets
+    // a bodyless 304 when its cached uncracked set is still current.
+    etag: z.string().nullable(),
   })
   .openapi('AgentResourceDownloadUrl')
 
@@ -733,13 +740,17 @@ const downloadUrlRoute = createRoute({
   tags: ['Resources'],
   summary: 'Presigned download URL for a resource bound to this agent project',
   description:
-    'Returns a short-lived presigned URL the agent uses to fetch a resource (hash list, wordlist, rule list, mask list) from object storage. The resource must belong to a project the agent is a member of; cross-project lookups return 404.',
+    'Returns a short-lived presigned URL the agent uses to fetch a resource (hash list, wordlist, rule list, mask list) from object storage. The resource must belong to a project the agent is a member of; cross-project lookups return 404. For hash lists, send `If-None-Match` with the etag from a prior response to get a bodyless 304 when the uncracked set has not changed since.',
   security: [{ AgentBearer: [] }],
   request: { params: resourceParamSchema },
   responses: {
     200: {
       description: 'Presigned download URL.',
       content: { 'application/json': { schema: downloadUrlResponseSchema } },
+    },
+    304: {
+      description:
+        'Hash list unchanged since If-None-Match: no new cracks since that etag was issued. Empty body.',
     },
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
@@ -760,6 +771,15 @@ agentRoutes.openapi(downloadUrlRoute, async (c) => {
         { error: { code: 'RESOURCE_NOT_FOUND', message: 'Resource not found or has no file' } },
         404
       )
+    }
+
+    // Hash-list freshness ETag (#108 follow-up). `result.etag` is only ever
+    // non-null for hash lists (see AgentDownloadUrlResult), so a wordlist/
+    // rulelist/masklist request can never satisfy this comparison and always
+    // falls through to the unchanged 200 response below.
+    const ifNoneMatch = c.req.header('if-none-match')
+    if (result.etag && ifNoneMatch === result.etag) {
+      return c.body(null, 304)
     }
 
     return c.json(result, 200)

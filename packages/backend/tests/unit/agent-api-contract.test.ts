@@ -298,6 +298,7 @@ const getAgentDownloadUrlFixture = {
   checksum: null,
   size: null,
   encoding: null,
+  etag: null,
 } satisfies NonNullable<Awaited<ReturnType<ResourcesService['getAgentDownloadUrl']>>>
 
 mock.module('../../src/services/resources.js', () => ({
@@ -1852,6 +1853,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
         checksum: 'deadbeef',
         size: 4096,
         encoding: 'gzip',
+        etag: null,
       })
     )
 
@@ -1869,6 +1871,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
       checksum: 'deadbeef',
       size: 4096,
       encoding: 'gzip',
+      etag: null,
     })
   })
 
@@ -1885,6 +1888,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
         checksum: null,
         size: null,
         encoding: null,
+        etag: 'W/"hl-1-0"',
       })
     )
 
@@ -1899,6 +1903,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
     expect(body['checksum']).toBeNull()
     expect(body['size']).toBeNull()
     expect(body['encoding']).toBeNull()
+    expect(body['etag']).toBe('W/"hl-1-0"')
   })
 
   it('returns null checksum/size for a wordlist resource whose checksum worker has not run yet', async () => {
@@ -1914,6 +1919,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
         checksum: null,
         size: null,
         encoding: 'none',
+        etag: null,
       })
     )
 
@@ -1928,5 +1934,142 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
     expect(res.status).not.toBe(500)
     expect(body['checksum']).toBeNull()
     expect(body['size']).toBeNull()
+  })
+})
+
+// ─── GET /resources/:type/:id/download-url — hash-list freshness ETag ──
+//
+// #108 follow-up: hash lists carry a weak ETag derived from the hash
+// list's last-crack time. An agent that already holds the uncracked set
+// echoes the etag back as `If-None-Match`; a match means nothing new was
+// cracked since, and the server returns a bodyless 304 instead of a fresh
+// presigned URL. Non-hash-list resource types never report a non-null
+// etag (pinned above), so `If-None-Match` can never match for them and
+// their 200 behavior is unaffected — proven by the last test below.
+
+describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshness ETag', () => {
+  it('returns 304 with no body when If-None-Match matches the current hash-list etag', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-1735689600000"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'W/"hl-1-1735689600000"',
+      },
+    })
+
+    expect(res.status).toBe(304)
+    const bodyText = await res.text()
+    expect(bodyText).toBe('')
+  })
+
+  it('returns 200 with the current etag when If-None-Match is stale (new cracks happened)', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-1735689700000"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'W/"hl-1-1735689600000"',
+      },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBe('W/"hl-1-1735689700000"')
+    expect(body['url']).toBe('https://example.test/hashlist')
+  })
+
+  it('returns 200 with the current etag when If-None-Match is absent', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-0"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBe('W/"hl-1-0"')
+  })
+
+  it('never returns 304 for a non-hash-list resource, even with a matching If-None-Match header', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/wordlist',
+        expiresIn: 21_600,
+        checksum: 'deadbeef',
+        size: 4096,
+        encoding: 'gzip',
+        etag: null,
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    // A client that (incorrectly) echoes back a null-ish etag string must
+    // still get a real 200 — `result.etag` being null short-circuits the
+    // 304 branch before the header comparison can matter.
+    const res = await app.request(`${AGENT_BASE}/resources/wordlists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'null',
+      },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBeNull()
   })
 })
