@@ -37,6 +37,7 @@ import {
   countsAsWordlistLine,
   splitTextLines,
 } from './resources/line-count.js'
+import { enqueueResourceCompression } from './resources/resource-compression-trigger.js'
 
 // ─── Actor ────────────────────────────────────────────────────────────────────
 
@@ -1319,12 +1320,18 @@ export async function completeChunkedUpload(
   // a server-side buffer for files too large for the direct-upload path.
   //
   // Two distinct policies depending on whether this is a restore:
-  //   - NOT a reclaimed shell (the common case): best-effort capture only.
-  //     A failure here must not fail an otherwise-successful upload — the
-  //     resource is already durably `ready`. A resource with no captured
-  //     checksum simply never becomes a blob-reclamation candidate (U11's
-  //     candidate predicate requires `file_checksum IS NOT NULL`), which
-  //     is a safe degrade.
+  //   - NOT a reclaimed shell (the common case): checksum capture is NOT
+  //     computed here at all (issue #108 U4). It used to be a best-effort
+  //     re-download-and-hash of the object that had just finished
+  //     uploading — for the 100GB+ files chunked upload exists to support,
+  //     that redundant full pass is wasteful. The resource-compression
+  //     worker (enqueued below) is now the authoritative source: it hashes
+  //     the raw bytes in the SAME streaming pass it uses to (maybe) gzip
+  //     the object, and writes `file_checksum` directly. Until that worker
+  //     runs, the resource simply never becomes a blob-reclamation
+  //     candidate (U11's candidate predicate requires `file_checksum IS
+  //     NOT NULL`), which is a safe degrade — and `file_checksum IS NOT
+  //     NULL` doubles as this worker's own idempotency guard.
   //   - A reclaimed shell (restore-after-reclaim, R12): verification is
   //     load-bearing, not best-effort. Unlike the direct-upload path
   //     (`uploadResourceFile`), the checksum can only be computed AFTER
@@ -1363,16 +1370,9 @@ export async function completeChunkedUpload(
       throw new ChecksumMismatchError(resourceId, resourceType)
     }
     checksum = computedChecksum
-  } else if (!isHashList) {
-    try {
-      checksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
-    } catch (err) {
-      logger.warn(
-        { err, resourceId, resourceType },
-        'checksum capture after chunked upload failed; resource stays checksum-less until a future upload'
-      )
-    }
   }
+  // NOT a reclaimed shell: `checksum` stays null here (see the docblock
+  // above) — the resource-compression worker enqueued below captures it.
 
   // Update resource status to ready
   const updatedFileRef = {
@@ -1433,6 +1433,19 @@ export async function completeChunkedUpload(
   const lineCountType = lineCountTypeForResourceType(resourceType)
   if (lineCountType) {
     await enqueueLineCount(lineCountType, resourceId, projectId)
+
+    // The normal (non-restore) completion path never buffers the file
+    // server-side, so it also never had a chance to gzip it inline (#108
+    // U3's compress-then-upload flow needs an in-memory buffer, which is
+    // exactly what MAX_DIRECT_UPLOAD_BYTES bounds). Enqueue the background
+    // compression worker (best-effort, deduped) to gzip the object and
+    // capture the authoritative raw checksum in one streaming pass (#108
+    // U4). Skipped for a reclaimed-shell restore: that branch already
+    // verified and captured the checksum synchronously above, and
+    // recompressing a just-restored object is out of scope for this unit.
+    if (!isReclaimedShell) {
+      await enqueueResourceCompression(lineCountType, resourceId, projectId)
+    }
   }
 
   return { resourceId }

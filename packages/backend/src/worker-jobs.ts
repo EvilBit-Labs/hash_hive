@@ -12,6 +12,7 @@ import { createHealthMonitorWorker } from './queue/workers/health-monitor.js'
 import { createHeartbeatMonitorWorker } from './queue/workers/heartbeat-monitor.js'
 import { createLineCountWorker } from './queue/workers/line-count.js'
 import { createPreemptionWorker } from './queue/workers/preemption.js'
+import { createResourceCompressionWorker } from './queue/workers/resource-compression.js'
 
 const connection = createRedisClient('jobs-worker')
 
@@ -78,6 +79,9 @@ async function main() {
   const blobReclamationWorker = createBlobReclamationWorker(connection)
   logger.info('Blob reclamation worker started')
 
+  const resourceCompressionWorker = createResourceCompressionWorker(connection)
+  logger.info('Resource compression worker started')
+
   const workers = [
     hashListWorker,
     heartbeatWorker,
@@ -87,6 +91,7 @@ async function main() {
     auditRetentionWorker,
     hashImportWorker,
     blobReclamationWorker,
+    resourceCompressionWorker,
   ]
 
   async function shutdown(signal: string) {

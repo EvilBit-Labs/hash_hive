@@ -324,8 +324,7 @@ if (IS_ISOLATED) {
       expect(recordAuditEvent).not.toHaveBeenCalled()
     })
 
-    test('a normal (non-restore) completion still only captures the checksum best-effort', async () => {
-      const content = 'a brand new wordlist'
+    test('a normal (non-restore) completion no longer computes a checksum inline (issue #108 U4)', async () => {
       currentRow = {
         id: 2,
         projectId: 7,
@@ -333,13 +332,20 @@ if (IS_ISOLATED) {
         fileChecksum: null,
         fileRef: { key: 'k2', bucket: 'b', fileSize: 50 },
       }
-      downloadFileImpl = () => Promise.resolve(fakeS3Body(content))
 
       const result = await completeChunkedUpload('upload-2', parts, 2, 'wordlists', 7)
 
       expect(result.resourceId).toBe(2)
-      expect(lastUpdate).toMatchObject({ status: 'ready', fileChecksum: sha256Hex(content) })
+      expect(lastUpdate).toMatchObject({ status: 'ready' })
+      expect(lastUpdate).not.toHaveProperty('fileChecksum')
       expect(lastUpdate).not.toHaveProperty('blobReclaimedAt')
+      // The checksum used to be captured here via a second full download of
+      // the object that had just finished uploading -- for the 100GB+ files
+      // chunked upload exists to support, that redundant re-download is
+      // wasteful. The resource-compression worker (#108 U4) is now the sole
+      // authoritative source, so completion itself must not touch storage
+      // at all for this path.
+      expect(downloadFile).not.toHaveBeenCalled()
       // Not a restore — no audit event from this function (unchanged
       // pre-existing behavior; only the restore path is newly audited).
       expect(recordAuditEvent).not.toHaveBeenCalled()

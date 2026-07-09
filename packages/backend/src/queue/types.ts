@@ -55,6 +55,18 @@ export interface BlobReclamationJob {
 }
 
 /**
+ * Payload for the chunked-upload compression worker (issue #108 U4).
+ * `resourceType` mirrors `LineCountJob`'s discriminant -- word/rule/mask
+ * lists only (hash lists have no `compression_encoding`/`file_checksum`
+ * columns and never reach this queue).
+ */
+export interface ResourceCompressionJob {
+  resourceType: 'wordlist' | 'rulelist' | 'masklist'
+  resourceId: number
+  projectId: number
+}
+
+/**
  * Payload for the hash import propagation job (U7).
  *
  * CRITICAL (KTD3): recovered plaintexts must NEVER appear in this payload.
@@ -94,4 +106,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.AUDIT_RETENTION]: AuditRetentionJob
   [QUEUE_NAMES.HASH_IMPORT_PROPAGATION]: HashImportPropagationJob
   [QUEUE_NAMES.BLOB_RECLAMATION]: BlobReclamationJob
+  [QUEUE_NAMES.RESOURCE_COMPRESSION]: ResourceCompressionJob
 }
