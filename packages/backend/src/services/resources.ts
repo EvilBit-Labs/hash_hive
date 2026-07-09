@@ -1474,6 +1474,16 @@ export async function completeChunkedUpload(
     // U4). Skipped for a reclaimed-shell restore: that branch already
     // verified and captured the checksum synchronously above, and
     // recompressing a just-restored object is out of scope for this unit.
+    //
+    // Best-effort by design: `enqueueResourceCompression` swallows its own
+    // failures (missing queue manager, enqueue throw) and returns `false`
+    // rather than rejecting, so it can never fail this upload. If the
+    // enqueue never lands, the resource simply keeps serving raw and
+    // checksum-less indefinitely -- still fully servable to agents (see
+    // `docs/agent-resource-protocol.md`'s null-checksum handling), just
+    // without the compression bandwidth win, and it is not a candidate for
+    // blob reclamation while `file_checksum` stays null. Recovery is a
+    // fresh upload (which re-enqueues); no backfill/retry sweep exists.
     if (!isReclaimedShell) {
       await enqueueResourceCompression(lineCountType, resourceId, projectId)
     }

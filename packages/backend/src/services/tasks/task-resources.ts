@@ -23,6 +23,16 @@
  * Hash lists are entirely out of #108 scope (no checksum/size/encoding
  * columns) and are never included in the output — only wordlist/
  * rulelist/masklist, matching the attack schema's three resource slots.
+ *
+ * A slot the attack simply doesn't use (its FK column is NULL) is
+ * cleanly omitted — that's normal. A slot whose FK IS set but whose
+ * `getAgentDownloadUrl` still resolves to null (upload not finished,
+ * compression/checksum worker hasn't run, or the row was deleted out
+ * from under the attack) is a different, non-silent case: an agent
+ * cracking against an incomplete resource set is a correctness bug, so
+ * `getResourcesForTask` returns a typed `{ notReady: true }` outcome for
+ * the whole task instead of quietly returning a partial resource list
+ * (see the review fix for #108 this comment accompanies).
  */
 import {
   attacks,
@@ -33,6 +43,7 @@ import {
 } from '@hashhive/shared'
 import { and, eq } from 'drizzle-orm'
 
+import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { getAgentDownloadUrl } from '../resources.js'
 
@@ -53,11 +64,21 @@ const RESOURCE_SLOTS = [
   outputType: TaskResourceType
 }>
 
+export type GetResourcesForTaskResult =
+  | { resources: TaskResourceEntry[] }
+  | { error: string }
+  // A referenced (non-null FK) resource slot could not be resolved to a
+  // download — the task's resource set is incomplete right now. Distinct
+  // from a slot the attack simply doesn't use, which is never surfaced at
+  // all. Retriable: the caller (agent) should back off and re-poll rather
+  // than cracking against a partial set.
+  | { notReady: true }
+
 export async function getResourcesForTask(
   taskId: number,
   agentId: number,
   projectId: number
-): Promise<{ resources: TaskResourceEntry[] } | { error: string }> {
+): Promise<GetResourcesForTaskResult> {
   // Single join: tasks -> attacks (resource FKs) + tasks -> campaigns
   // (project scope + agent-assignment gate), mirroring getZapsForTask's
   // authz join exactly rather than substituting attacks.projectId —
@@ -99,18 +120,28 @@ export async function getResourcesForTask(
     populatedSlots.map(async ({ slot, resourceId }) => ({
       slot,
       resourceId,
-      // A resource id set on the attack but with no uploaded file yet
-      // (upload started, checksum/compression worker hasn't finished, or
-      // the row was deleted out from under the attack) has no meaningful
-      // download URL to hand back. Omit it rather than surfacing a
-      // null-downloadUrl entry an agent would try to fetch and fail on.
       download: await getAgentDownloadUrl(slot.downloadType, resourceId, projectId),
     }))
   )
 
   const resources: TaskResourceEntry[] = []
+  let hasUnresolvedReference = false
   for (const { slot, resourceId, download } of resolved) {
-    if (!download) continue
+    if (!download) {
+      // A resource id set on the attack but with no uploaded file yet
+      // (upload started, checksum/compression worker hasn't finished, or
+      // the row was deleted out from under the attack) has no meaningful
+      // download URL to hand back. Unlike a slot the attack never set,
+      // this must NOT be silently dropped -- an agent handed a partial
+      // resource set would crack against an incomplete job. Flag the
+      // whole response as not-ready instead.
+      hasUnresolvedReference = true
+      logger.warn(
+        { taskId, agentId, projectId, resourceType: slot.outputType, resourceId },
+        'getResourcesForTask: referenced resource has no resolvable download yet; reporting not-ready'
+      )
+      continue
+    }
 
     resources.push({
       type: slot.outputType,
@@ -120,6 +151,10 @@ export async function getResourcesForTask(
       encoding: download.encoding,
       downloadUrl: download.url,
     })
+  }
+
+  if (hasUnresolvedReference) {
+    return { notReady: true }
   }
 
   return { resources }

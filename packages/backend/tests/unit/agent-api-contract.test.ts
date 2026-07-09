@@ -204,7 +204,9 @@ const getZapsForTaskFixture = {
   zaps: [],
   hasMore: false,
 } satisfies Awaited<ReturnType<TasksZapsService['getZapsForTask']>>
-// getResourcesForTask real return is `{resources} | {error}` (#108 U6).
+// getResourcesForTask real return is `{resources} | {error} | {notReady}`
+// (#108 U6; `notReady` added by the referenced-but-unresolved-resource
+// review fix). Default fixture pins the empty-resources success shape.
 const getResourcesForTaskFixture = {
   resources: [],
 } satisfies Awaited<ReturnType<TasksResourcesService['getResourcesForTask']>>
@@ -1770,6 +1772,28 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
     const body = (await res.json()) as { resources: Array<{ type: string }> }
     expect(body.resources).toHaveLength(1)
     expect(body.resources.some((r) => r.type === 'rulelist')).toBe(false)
+  })
+
+  it('returns 409 TASK_RESOURCES_NOT_READY when a referenced resource has no resolvable download yet', async () => {
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.getResourcesForTask as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ notReady: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: Record<string, unknown> }
+    expect(body.error['code']).toBe('TASK_RESOURCES_NOT_READY')
+    expect(typeof body.error['message']).toBe('string')
+    expect(body.error['timestamp']).toBeUndefined()
+    expect(body.error['requestId']).toBeUndefined()
   })
 })
 

@@ -25,10 +25,15 @@
 import { projects, wordLists } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 
-import { abortMultipartUpload, downloadFile, uploadFile } from '../../src/config/storage.js'
+import {
+  abortMultipartUpload,
+  downloadFile,
+  uploadFile,
+  uploadPart,
+} from '../../src/config/storage.js'
 import { db } from '../../src/db/index.js'
 import { compressChunkedResourceObject } from '../../src/services/resources/resource-compression.js'
 
@@ -226,6 +231,63 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     const afterRetry = await readWordList(id)
     expect(afterRetry?.fileChecksum).toBe(sha256Hex(content))
   })
+
+  it('does not hang when a non-final multipart part upload fails while the writer is backpressured', async () => {
+    // Incompressible random bytes, comfortably over the 5MB non-final
+    // part threshold once gzipped (gzip cannot shrink random data, so
+    // compressed output tracks raw size) -- this reproduces the >5MB
+    // condition under which a REAL non-final `uploadPart` call happens
+    // (`flushPart(false)`), unlike the existing "simulated failure"
+    // test above, which only rejects the FINAL `flushPart(true)` call
+    // after the writer has already finished (content there is a few KB).
+    const content = randomBytes(6 * 1024 * 1024)
+    const { id, key } = await insertCompletedChunkedWordList(content)
+
+    let abortCalled = false
+    let firstPartAttempted = false
+    await expect(
+      compressChunkedResourceObject('wordlist', id, {
+        uploadPart: async (
+          compressedKey: string,
+          uploadId: string,
+          partNum: number,
+          partBody: Uint8Array,
+          bucket?: string
+        ) => {
+          if (partNum === 1) {
+            firstPartAttempted = true
+            // Give the writer loop time to fill gzip's internal buffer
+            // and actually park on `once(gzip, 'drain')` before this
+            // rejection lands -- without the fix under test, that parked
+            // writer promise (and the raw S3 download stream underneath
+            // it) would never settle, and this test would hang until
+            // bun:test's timeout fails it.
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            throw new Error('simulated S3 failure on first (non-final) part')
+          }
+          return uploadPart(compressedKey, uploadId, partNum, partBody, bucket)
+        },
+        abortMultipartUpload: async (compressedKey: string, uploadId: string, bucket?: string) => {
+          abortCalled = true
+          await abortMultipartUpload(compressedKey, uploadId, bucket)
+        },
+      })
+    ).rejects.toThrow('simulated S3 failure on first (non-final) part')
+
+    expect(firstPartAttempted).toBe(true)
+    expect(abortCalled).toBe(true)
+
+    // Same retriable-raw guarantee as the other failure-path test: the
+    // row is untouched and the original object is still readable.
+    const row = await readWordList(id)
+    expect(row?.compressionEncoding).toBe('none')
+    expect(row?.fileChecksum).toBeNull()
+    const fileRef = row?.fileRef as { key?: string } | null
+    expect(fileRef?.key).toBe(key)
+
+    const storedBytes = await fetchStoredBytes(key)
+    expect(storedBytes).toEqual(content)
+  }, 20000)
 
   it('throws when the resource does not exist', async () => {
     await expect(compressChunkedResourceObject('wordlist', -1)).rejects.toThrow(/not found/i)

@@ -158,6 +158,21 @@ export async function compressChunkedResourceObject(
     const hash = createHash('sha256')
     const gzip = createGzip()
 
+    // Bidirectional teardown signal for the two loops below (writer/reading)
+    // sharing this one Transform. Set up ONCE, right after `createGzip()`
+    // and before any await, so: (a) it is never missed by a 'close' that
+    // fires before a listener would otherwise attach, and (b) `events.once`
+    // registers its own 'error' listener as a side effect, which prevents an
+    // unhandled-'error' process crash if `reading`'s catch below calls
+    // `gzip.destroy(err)` at a moment the writer isn't parked on `drain`.
+    // The eager `.catch(() => {})` is required because this promise almost
+    // always settles (gzip always closes, even on the happy path, once both
+    // loops finish) with nothing else consuming it by then.
+    const gzipTornDown: Promise<never> = once(gzip, 'close').then(() => {
+      throw new Error('resource-compression: gzip stream closed before this wait resolved')
+    })
+    gzipTornDown.catch(() => {})
+
     let rawBytes = 0
     let compressedBytes = 0
     let partNumber = 0
@@ -196,8 +211,18 @@ export async function compressChunkedResourceObject(
           rawBytes += chunk.length
           hash.update(chunk)
           if (!gzip.write(chunk)) {
-            // oxlint-disable-next-line no-await-in-loop -- backpressure: wait for gzip to drain before reading more
-            await once(gzip, 'drain')
+            // Race the normal backpressure signal against gzip tearing down.
+            // Without this, a non-final `uploadPart` rejection inside the
+            // concurrent `reading` loop below (which destroys gzip on
+            // error, see its catch block) would never wake this writer --
+            // 'drain' never fires once nothing is consuming gzip's output
+            // any more, leaking this loop's promise and the raw S3
+            // download stream it holds open. Resolving either way is
+            // enough: the `for (;;)` loop's next `gzip.write()` on an
+            // already-destroyed stream (or the throw below) drives this
+            // loop into its own `catch`/`finally`, which cancels `reader`.
+            // oxlint-disable-next-line no-await-in-loop -- backpressure: wait for gzip to drain (or tear down) before reading more
+            await Promise.race([once(gzip, 'drain'), gzipTornDown])
           }
         }
         gzip.end()
@@ -212,20 +237,37 @@ export async function compressChunkedResourceObject(
         gzip.destroy(err instanceof Error ? err : new Error(String(err)))
         throw err
       } finally {
-        await reader.cancel().catch(() => {})
+        await reader.cancel().catch((cancelErr: unknown) => {
+          logger.warn(
+            { err: cancelErr, resourceType, resourceId, key: rawKey },
+            'resource-compression: failed to cancel raw download reader during teardown; continuing'
+          )
+        })
       }
     })()
 
     const reading = (async (): Promise<void> => {
-      for await (const chunk of gzip) {
-        const buf = chunk as Buffer
-        compressedBytes += buf.length
-        pending.push(buf)
-        pendingLen += buf.length
-        // oxlint-disable-next-line no-await-in-loop -- must flush before consuming more of the async iterator
-        await flushPart(false)
+      try {
+        for await (const chunk of gzip) {
+          const buf = chunk as Buffer
+          compressedBytes += buf.length
+          pending.push(buf)
+          pendingLen += buf.length
+          // oxlint-disable-next-line no-await-in-loop -- must flush before consuming more of the async iterator
+          await flushPart(false)
+        }
+        await flushPart(true)
+      } catch (err) {
+        // A rejected (non-final) `uploadPart` call must still tear down the
+        // gzip Transform -- otherwise the concurrent `writer` loop above can
+        // be parked forever on `once(gzip, 'drain')` (see `gzipTornDown`),
+        // leaking the writer's promise and the raw download stream it
+        // holds. `destroy(err)`, not a plain return: it both wakes the
+        // writer via `gzipTornDown` and stops gzip from accepting further
+        // writes.
+        gzip.destroy(err instanceof Error ? err : new Error(String(err)))
+        throw err
       }
-      await flushPart(true)
     })()
 
     await Promise.all([writer, reading])

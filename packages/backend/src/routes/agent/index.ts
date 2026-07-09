@@ -76,7 +76,7 @@ import {
 } from '../../services/tasks.js'
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
 import { registerEnrollRoute } from './enroll.js'
-import { agentInternalError } from './helpers.js'
+import { agentInternalError, type AgentInternalErrorCode } from './helpers.js'
 
 const agentRoutes = new OpenAPIHono<AppEnv>(agentOpenApiHonoOptions)
 
@@ -586,7 +586,7 @@ const taskResourcesRoute = createRoute({
   summary:
     "Retrieve the static resources (wordlist/rulelist/masklist) referenced by a task's attack",
   description:
-    "Resolves the task's attack and returns one entry per wordlist/rulelist/masklist the attack actually references, each with integrity metadata (checksum/size/encoding) and a presigned download URL. Resource slots the attack does not use are omitted. The task must be assigned to the requesting agent and scoped to the agent's project; cross-project or unassigned lookups return 404.",
+    "Resolves the task's attack and returns one entry per wordlist/rulelist/masklist the attack actually references, each with integrity metadata (checksum/size/encoding) and a presigned download URL. Resource slots the attack does not use are omitted. The task must be assigned to the requesting agent and scoped to the agent's project; cross-project or unassigned lookups return 404. A referenced resource that has not finished uploading (or hasn't been checksum/compression-processed) yet returns a retriable 409 rather than a partial or silently incomplete resource list.",
   security: [{ AgentBearer: [] }],
   request: { params: taskIdParamSchema },
   responses: {
@@ -597,6 +597,7 @@ const taskResourcesRoute = createRoute({
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
     404: sharedAgentResponse(AGENT_RESPONSE_REFS.NotFound),
+    409: sharedAgentResponse(AGENT_RESPONSE_REFS.Conflict),
     500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
   },
 })
@@ -610,6 +611,24 @@ agentRoutes.openapi(taskResourcesRoute, async (c) => {
 
     if ('error' in result) {
       return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
+    }
+
+    if ('notReady' in result) {
+      logger.warn(
+        { agentId, projectId, taskId },
+        'Task resources not ready: a referenced resource has no resolvable download yet'
+      )
+      const code: AgentInternalErrorCode = 'TASK_RESOURCES_NOT_READY'
+      return c.json(
+        {
+          error: {
+            code,
+            message:
+              'One or more resources referenced by this task have not finished uploading or processing yet. Retry shortly.',
+          },
+        },
+        409
+      )
     }
 
     return c.json(result, 200)

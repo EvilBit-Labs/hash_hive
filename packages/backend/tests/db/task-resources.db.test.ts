@@ -219,25 +219,25 @@ describe('getResourcesForTask (#108 U6)', () => {
     expect('error' in result).toBe(true)
   })
 
-  it('omits a resource that is referenced but has no uploaded file yet (empty fileRef)', async () => {
+  it('reports not-ready (never a silent partial list) for a resource that is referenced but has no uploaded file yet (empty fileRef)', async () => {
     const { projectId, agentId, taskId, wordlistId } = await seedProjectWithTask(SLUG)
 
     // Simulate an attack referencing a wordlist row that was created but
     // never finished uploading (fileRef still `{}`) — distinct from "the
     // attack has no wordlistId at all", which is the null-ID omit case
-    // covered above. getAgentDownloadUrl returns null for this row
-    // (no bucket/key), so getResourcesForTask must omit it too, not
-    // surface a null-downloadUrl entry.
+    // covered above. getAgentDownloadUrl returns null for this row (no
+    // bucket/key). An agent cracking against a resource set missing this
+    // wordlist would be handed incomplete work, so getResourcesForTask
+    // must NOT silently omit it (nor return the masklist alone) -- the
+    // whole response is flagged not-ready instead (review fix for #108).
     await db.update(wordLists).set({ fileRef: {} }).where(eq(wordLists.id, wordlistId))
 
     const result = await getResourcesForTask(taskId, agentId, projectId)
 
-    if ('error' in result) {
-      throw new Error(`expected resources, got error: ${result.error}`)
-    }
-    expect(result.resources.some((r) => r.type === 'wordlist')).toBe(false)
-    // The masklist is unaffected and still comes back.
-    expect(result.resources.some((r) => r.type === 'masklist')).toBe(true)
+    expect('notReady' in result).toBe(true)
+    // The not-ready outcome never leaks a partial resources array (e.g.
+    // the still-resolvable masklist) alongside it.
+    expect('resources' in result).toBe(false)
   })
 })
 

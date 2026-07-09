@@ -42,6 +42,7 @@ const AGENT_RESPONSE_NAMES = [
   'AuthError',
   'ValidationError',
   'NotFound',
+  'Conflict',
   'ServerError',
 ] as const
 
@@ -67,6 +68,8 @@ const AGENT_RESPONSE_DESCRIPTIONS: Record<AgentResponseName, string> = {
     "The 400-class envelope for the agent surface. Two sources reach this response: (a) request body / query / path-param shapes failed Zod schema validation (envelope `code: 'VALIDATION_ERROR'`, emitted by `agentOpenApiHonoOptions.defaultHook`), and (b) semantic task-state errors on `POST /tasks/{taskId}/report` -- the service rejecting the report because the task is not assigned to this agent or was reassigned mid-update (envelope `code: 'TASK_ERROR'`, message is the service-supplied reason). Agents should switch on `error.code` to distinguish; both share this response component because both share the agent envelope shape (`{ error: { code, message } }`) and the 400 status.",
   NotFound:
     "Target resource does not exist or is outside the agent's project scope. Common cases: task not assigned to this agent, resource type/id outside the agent's project membership.",
+  Conflict:
+    "The target exists and is authorized, but is not in a state that can be served yet. Currently emitted only by `GET /tasks/{taskId}/resources` as `code: 'TASK_RESOURCES_NOT_READY'` when the task's attack references a wordlist/rulelist/masklist whose upload or checksum/compression pass has not finished. Retriable: back off and re-poll rather than treating it as a permanent failure.",
   ServerError:
     'Server-side processing failed. Each route returns its own coarse error code on the catch-all failure path (e.g. `HEARTBEAT_ERROR`, `BENCHMARK_ERROR`, `TASK_ASSIGN_ERROR`, `TASK_REPORT_ERROR`, `TASK_ZAP_ERROR`, `TASK_RESOURCES_ERROR`, `ERROR_INGEST_ERROR`, `RESOURCE_URL_ERROR`, `CRACKER_UPDATE_ERROR`, `ENROLL_ERROR`) so agents can switch on `error.code` and treat known codes specifically. The dedicated `OPENAPI_SPEC_GENERATION_FAILED` code is emitted on `GET /openapi.json` only when production-mode spec generation fails at boot; treat it as an operator-side defect, not an agent retry case.',
 }

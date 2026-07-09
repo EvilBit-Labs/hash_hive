@@ -84,6 +84,18 @@ and belong to the agent's project. A task that does not exist, is not assigned
 to this agent, or is outside its project returns a typed `404` in the agent
 error envelope — never a `500`. Do not retry a `404` as if it were transient.
 
+**Not-ready resources.** If the task's attack references a wordlist/rulelist/
+masklist that has not finished uploading, or whose checksum/compression pass
+has not run yet, the server does **not** silently omit it or return a partial
+resource list — an agent cracking against an incomplete set is a correctness
+bug, not a minor inconvenience. Instead it returns a typed `409` with
+`code: 'TASK_RESOURCES_NOT_READY'` in the agent error envelope. This is
+**retriable**: back off and re-poll `GET /tasks/{taskId}/resources` until it
+returns `200`. Contrast with the null-`checksum`/`size` case above (a resource
+that has landed but not yet been checksummed by the background worker) —
+that one still returns `200` with a `null` checksum; `409` is reserved for a
+resource with no download at all yet.
+
 ### Fetch a single resource's metadata
 
 ```
