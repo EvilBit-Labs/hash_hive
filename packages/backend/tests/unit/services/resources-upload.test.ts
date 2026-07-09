@@ -24,6 +24,7 @@
 import { attacks, maskLists, wordLists } from '@hashhive/shared'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { createHash } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 
 function sha256Hex(content: string): string {
   return createHash('sha256').update(Buffer.from(content, 'utf8')).digest('hex')
@@ -271,6 +272,41 @@ if (IS_ISOLATED) {
       // mismatch must never reach storage, and the row must stay untouched.
       expect(uploadFile).not.toHaveBeenCalled()
       expect(lastResourceUpdateValues).toBeNull()
+    })
+  })
+
+  describe('uploadResourceFile - direct-upload compression (issue #108 U3)', () => {
+    test('a compressible file is stored gzip-encoded, and the bytes uploaded gunzip to the exact original', async () => {
+      resourceRow = { id: 2, projectId: 7, blobReclaimedAt: null, fileChecksum: null }
+      // Long, highly repetitive content compresses well under gzip.
+      const content = 'alpha\nbravo\ncharlie\n'.repeat(200)
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      const [, uploadedBytes] = uploadFile.mock.calls[0] as [string, Buffer, string]
+      expect(gunzipSync(uploadedBytes).toString('utf8')).toBe(content)
+
+      expect(lastResourceUpdateValues?.['compressionEncoding']).toBe('gzip')
+      // fileSize/fileChecksum always describe the RAW file, never the
+      // compressed-at-rest bytes.
+      expect(lastResourceUpdateValues?.['fileSize']).toBe(Buffer.byteLength(content, 'utf8'))
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(sha256Hex(content))
+    })
+
+    test('a tiny/incompressible file is stored as-is with encoding none', async () => {
+      resourceRow = { id: 2, projectId: 7, blobReclaimedAt: null, fileChecksum: null }
+      const content = 'a'
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      const [, uploadedBytes] = uploadFile.mock.calls[0] as [string, Buffer, string]
+      expect(uploadedBytes.toString('utf8')).toBe(content)
+
+      expect(lastResourceUpdateValues?.['compressionEncoding']).toBe('none')
+      expect(lastResourceUpdateValues?.['fileSize']).toBe(Buffer.byteLength(content, 'utf8'))
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(sha256Hex(content))
     })
   })
 }

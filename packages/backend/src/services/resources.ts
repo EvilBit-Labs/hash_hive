@@ -28,6 +28,7 @@ import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
+import { compressBufferForStorage } from './resources/compression.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -917,17 +918,31 @@ export async function uploadResourceFile(
   const key = `${resource.projectId}/${prefix}/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
 
-  // Checksum computed from the in-memory buffer BEFORE the S3 write (issue
-  // #106 U12 / R12): a reclaimed-shell re-upload that fails to match is
-  // rejected here, before any bytes are written to storage or the row is
-  // touched — the resource stays exactly the shell it was.
+  // Checksum computed from the RAW in-memory buffer, before compression and
+  // before the S3 write (issue #106 U12 / R12, #108 U2): a reclaimed-shell
+  // re-upload that fails to match is rejected here, before any bytes are
+  // written to storage or the row is touched — the resource stays exactly
+  // the shell it was. Computing from the raw buffer (rather than the
+  // post-compression bytes) also means the checksum is stable across a
+  // future change to the compression algorithm/threshold — re-uploading the
+  // identical source file always reproduces the same checksum regardless of
+  // how it happens to get stored.
   const checksum = sha256HexFromBuffer(buffer)
   const isReclaimedShell = resource.blobReclaimedAt !== null
   if (isReclaimedShell && resource.fileChecksum && resource.fileChecksum !== checksum) {
     throw new ChecksumMismatchError(resourceId, resourceType)
   }
 
-  await uploadFile(key, buffer, file.type || 'application/octet-stream')
+  // Compress the raw buffer before storage (#108 U3): word/rule/mask lists
+  // only (hash lists never reach this function — see `ResourceTable`). Gzip
+  // specifically, and only when it actually shrinks the payload; otherwise
+  // store the raw bytes unchanged. `fileSize`/`fileChecksum` below always
+  // describe the RAW file — the agent-facing contract and the reclaimed-shell
+  // checksum comparison must never depend on which encoding a given upload
+  // happened to pick.
+  const { bytes: storedBytes, encoding: compressionEncoding } = compressBufferForStorage(buffer)
+
+  await uploadFile(key, storedBytes, file.type || 'application/octet-stream')
 
   // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
   // the common upload path never needs the async worker, using the same utils
@@ -960,6 +975,7 @@ export async function uploadResourceFile(
       uploadedAt: new Date().toISOString(),
     },
     fileSize: file.size,
+    compressionEncoding,
     ...(lineCount !== null ? { lineCount } : {}),
     ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
     status: 'ready' as const,
