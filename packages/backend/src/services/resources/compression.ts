@@ -14,13 +14,13 @@
  * in one call is cheap. The chunked-upload path (larger files, no in-memory
  * buffer) is a later unit's concern and will need a streaming variant.
  */
-import { gzipSync } from 'node:zlib'
+import type { ResourceCompressionEncoding } from '@hashhive/shared'
 
-export type CompressionEncoding = 'gzip' | 'none'
+import { gzipSync } from 'node:zlib'
 
 export interface CompressedBuffer {
   bytes: Buffer
-  encoding: CompressionEncoding
+  encoding: ResourceCompressionEncoding
 }
 
 /**

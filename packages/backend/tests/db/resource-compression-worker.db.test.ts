@@ -445,6 +445,57 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     expect(storedBytes).toEqual(content)
   }, 20000)
 
+  it('deletes the orphaned temp compressed object (never aborts) when relocation fails AFTER the multipart upload already completed (#108 review Fix 4)', async () => {
+    // Compressible content so the pass reaches completeMultipartUpload and
+    // enters the content-addressing relocation step -- unlike the other
+    // failure-path tests above, which all inject the failure during the
+    // writer/reading streaming loop, BEFORE completeMultipartUpload ever
+    // runs (so they exercise the abort branch, not this one).
+    const content = Buffer.from('password123\nletmein\nqwerty\n'.repeat(500), 'utf8')
+    const { id, key } = await insertCompletedChunkedWordList(content)
+    const compressedKey = `${key}.gz`
+
+    let abortCalled = false
+    await expect(
+      compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        // Fails the FIRST post-completion relocation call (headObject),
+        // after completeMultipartUpload has already succeeded.
+        headObject: () =>
+          Promise.reject(new Error('simulated headObject failure after MPU completion')),
+        abortMultipartUpload: async (ck: string, uploadId: string, bucket?: string) => {
+          abortCalled = true
+          await defaultDeps.abortMultipartUpload(ck, uploadId, bucket)
+        },
+      })
+    ).rejects.toThrow('simulated headObject failure after MPU completion')
+
+    // The multipart upload had already completed by the time headObject
+    // threw -- there is nothing open left to abort.
+    expect(abortCalled).toBe(false)
+
+    // The finished compressed object (created by completeMultipartUpload at
+    // the temp `${key}.gz` key) is not left behind as an orphan: the catch's
+    // cleanup deletes it via the guarded helper instead of a futile abort.
+    expect(await objectExists(compressedKey)).toBe(false)
+
+    // The row is untouched: still raw, still uncompressed, checksum still
+    // unset -- a future retry of the same job is safe.
+    const row = await readWordList(id)
+    expect(row?.compressionEncoding).toBe('none')
+    expect(row?.fileChecksum).toBeNull()
+    const fileRef = row?.fileRef as { key?: string } | null
+    expect(fileRef?.key).toBe(key)
+
+    // The original object is untouched and still readable.
+    const storedBytes = await fetchStoredBytes(key)
+    expect(storedBytes).toEqual(content)
+
+    // Retriable: a subsequent run without the injected failure succeeds.
+    const retry = await compressChunkedResourceObject('wordlist', id, defaultDeps)
+    expect(retry.status).toBe('compressed')
+  })
+
   it('throws when the resource does not exist', async () => {
     await expect(compressChunkedResourceObject('wordlist', -1)).rejects.toThrow(/not found/i)
   })

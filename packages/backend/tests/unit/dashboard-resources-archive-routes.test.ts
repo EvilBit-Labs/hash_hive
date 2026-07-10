@@ -154,6 +154,7 @@ if (!IS_ISOLATED) {
       checksum: null,
       size: null,
       encoding: null,
+      etag: null,
     })),
     escapeLike: (s: string) => s,
     initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),

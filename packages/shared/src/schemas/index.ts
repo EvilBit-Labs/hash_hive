@@ -839,7 +839,7 @@ export const assignedTaskSchema = z.object({
 // download URL come from one code path. Hash lists are out of #108
 // scope and are never included here — only wordlist/rulelist/masklist.
 
-/** Encoding of the object-store blob at rest. Mirrors `CompressionEncoding` in `services/resources/compression.ts` on the backend. */
+/** Encoding of the object-store blob at rest. Canonical definition — the backend's `services/resources/compression.ts` imports its `ResourceCompressionEncoding` type from here rather than declaring its own. */
 export const resourceCompressionEncodingSchema = z.enum(['gzip', 'none'])
 
 /** Discriminates which attack slot (`wordlistId`/`rulelistId`/`masklistId`) a `taskResourceEntrySchema` resolved from. */

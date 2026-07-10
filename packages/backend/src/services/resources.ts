@@ -28,7 +28,11 @@ import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
-import { type BlobOwnerTable, deleteBlobIfUnreferenced } from './resources/blob-lifecycle.js'
+import {
+  type BlobOwnerTable,
+  type DeleteBlobFn,
+  deleteBlobIfUnreferenced,
+} from './resources/blob-lifecycle.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { compressBufferForStorage } from './resources/compression.js'
 import { blobKeyForChecksum, findCompressionEncodingForKey } from './resources/content-address.js'
@@ -338,6 +342,14 @@ async function cascadeDeleteResource<
   // can detect a race where permanence latched between the pre-check and
   // this statement.
   deleteOwner: (runner: DbRunner) => Promise<number>
+  // Override for `deleteBlobIfUnreferenced`'s physical-delete boundary
+  // (#108 review Fix 5). Threaded through so real-DB tests can exercise
+  // this cascade -> `deleteBlobIfUnreferenced` wiring against an in-memory
+  // fake object store instead of hitting S3/SeaweedFS, mirroring
+  // `uploadResourceFile`'s `UploadResourceStorageDeps`. Production callers
+  // never pass this; defaults to `deleteBlobIfUnreferenced`'s own default
+  // (the real `deleteFile`).
+  deleteFn?: DeleteBlobFn
 }): Promise<DeleteResourceResult> {
   const row = await args.lookup()
   if (!row) return { kind: 'not_found' }
@@ -396,6 +408,7 @@ async function cascadeDeleteResource<
       resourceId: args.id,
       key: fileRef.key,
       ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
+      ...(args.deleteFn ? { deleteFn: args.deleteFn } : {}),
     })
   }
   return { kind: 'deleted' }
@@ -493,12 +506,18 @@ export function entityTypeForTable(table: ResourceTable): AuditEntityType {
   return 'mask_list'
 }
 
+/** Injectable storage boundary for `deleteResource`'s physical blob delete (#108 review Fix 5). See `cascadeDeleteResource`'s `deleteFn` for details. */
+export interface DeleteResourceStorageDeps {
+  deleteFile: DeleteBlobFn
+}
+
 export async function deleteResource(
   table: ResourceTable,
   id: number,
   projectId: number,
   resourceType: string,
-  actor: Actor = DEFAULT_SYSTEM_ACTOR
+  actor: Actor = DEFAULT_SYSTEM_ACTOR,
+  deps: Partial<DeleteResourceStorageDeps> = {}
 ): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
@@ -509,6 +528,7 @@ export async function deleteResource(
     actor,
     table,
     lookup: () => getResourceById(table, id, projectId),
+    ...(deps.deleteFile ? { deleteFn: deps.deleteFile } : {}),
     deleteOwner: (runner) =>
       runner
         .delete(table)

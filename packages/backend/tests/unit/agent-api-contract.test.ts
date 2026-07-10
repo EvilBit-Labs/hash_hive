@@ -254,9 +254,6 @@ mock.module('../../src/services/tasks.js', () => ({
   getTaskById: mock<TasksService['getTaskById']>(async () => null),
   listTasks: mock<TasksService['listTasks']>(async () => listTasksEmpty),
   getZapsForTask: mock<TasksZapsService['getZapsForTask']>(async () => getZapsForTaskFixture),
-  getResourcesForTask: mock<TasksResourcesService['getResourcesForTask']>(
-    async () => getResourcesForTaskFixture
-  ),
   // Re-export real impls so sibling tests see the genuine functions.
   AGENT_TASK_ACTIVE_STATUSES: realAgentTaskActiveStatuses,
   projectAgentTaskRows: realProjectAgentTaskRows,
@@ -269,6 +266,18 @@ mock.module('../../src/services/tasks.js', () => ({
 const getStopTaskIdsForAgentMock = mock<() => Promise<number[]>>(async () => [])
 mock.module('../../src/services/tasks/preemption.js', () => ({
   getStopTaskIdsForAgent: getStopTaskIdsForAgentMock,
+}))
+
+// getResourcesForTask (#108 review): the agent route imports this directly
+// from its submodule (not the `services/tasks.js` barrel) to avoid
+// transitively pulling `services/resources.js` (and its S3Client
+// construction) into every barrel consumer. Mock the submodule directly,
+// mirroring the preemption.js pattern above.
+const getResourcesForTaskMock = mock<TasksResourcesService['getResourcesForTask']>(
+  async () => getResourcesForTaskFixture
+)
+mock.module('../../src/services/tasks/task-resources.js', () => ({
+  getResourcesForTask: getResourcesForTaskMock,
 }))
 
 // Pull the real pure helpers in BEFORE mock.module runs for crackers.js
@@ -1073,12 +1082,7 @@ describe('Agent API: failure-path envelope shape', () => {
   })
 
   it('GET /tasks/:id/resources returns 404 TASK_NOT_FOUND when getResourcesForTask reports an error', async () => {
-    const tasksMod = await import('../../src/services/tasks.js')
-    ;(
-      tasksMod.getResourcesForTask as unknown as {
-        mockImplementationOnce: (fn: () => unknown) => void
-      }
-    ).mockImplementationOnce(() =>
+    getResourcesForTaskMock.mockImplementationOnce(() =>
       Promise.resolve({ error: 'Task not found or not assigned to this agent' })
     )
 
@@ -1094,12 +1098,7 @@ describe('Agent API: failure-path envelope shape', () => {
   })
 
   it('GET /tasks/:id/resources returns TASK_RESOURCES_ERROR when getResourcesForTask throws', async () => {
-    const tasksMod = await import('../../src/services/tasks.js')
-    ;(
-      tasksMod.getResourcesForTask as unknown as {
-        mockImplementationOnce: (fn: () => unknown) => void
-      }
-    ).mockImplementationOnce(() => Promise.reject(new Error('db down')))
+    getResourcesForTaskMock.mockImplementationOnce(() => Promise.reject(new Error('db down')))
 
     const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
@@ -1686,12 +1685,7 @@ describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
 
 describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
   it('returns { resources: [...] } with full integrity metadata per entry', async () => {
-    const tasksMod = await import('../../src/services/tasks.js')
-    ;(
-      tasksMod.getResourcesForTask as unknown as {
-        mockImplementationOnce: (fn: () => unknown) => void
-      }
-    ).mockImplementationOnce(() =>
+    getResourcesForTaskMock.mockImplementationOnce(() =>
       Promise.resolve({
         resources: [
           {
@@ -1743,12 +1737,7 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
   })
 
   it('omits a resource slot the attack does not reference (no rulelist)', async () => {
-    const tasksMod = await import('../../src/services/tasks.js')
-    ;(
-      tasksMod.getResourcesForTask as unknown as {
-        mockImplementationOnce: (fn: () => unknown) => void
-      }
-    ).mockImplementationOnce(() =>
+    getResourcesForTaskMock.mockImplementationOnce(() =>
       Promise.resolve({
         resources: [
           {
@@ -1776,12 +1765,7 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
   })
 
   it('returns 409 TASK_RESOURCES_NOT_READY when a referenced resource has no resolvable download yet', async () => {
-    const tasksMod = await import('../../src/services/tasks.js')
-    ;(
-      tasksMod.getResourcesForTask as unknown as {
-        mockImplementationOnce: (fn: () => unknown) => void
-      }
-    ).mockImplementationOnce(() => Promise.resolve({ notReady: true }))
+    getResourcesForTaskMock.mockImplementationOnce(() => Promise.resolve({ notReady: true }))
 
     const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {

@@ -56,7 +56,7 @@ export const CHECKABLE_TABLES = [wordLists, ruleLists, maskLists] as const
 /** Any table a resource's blob-delete call site may originate from. */
 export type BlobOwnerTable = ResourceTable | typeof hashLists
 
-type DeleteBlobFn = (key: string, bucket?: string) => Promise<unknown>
+export type DeleteBlobFn = (key: string, bucket?: string) => Promise<unknown>
 
 export type DeleteBlobIfUnreferencedResult =
   | { deleted: true }

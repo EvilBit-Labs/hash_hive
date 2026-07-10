@@ -99,12 +99,23 @@ interface ResourceFileRef {
  * `file_checksum` is already set is treated as already processed and
  * returns immediately without touching storage.
  *
- * On any failure partway through, the multipart upload (if one was
- * started) is aborted and the error is rethrown -- the resource row is
- * never touched until the pass fully succeeds, so a failure always leaves
- * the resource served from its original raw object, `compression_encoding`
- * unchanged, and retriable (BullMQ's default retry/backoff applies to the
- * enclosing job).
+ * On any failure partway through, the error is rethrown after best-effort
+ * teardown of whatever compressed-upload state exists, and the resource row
+ * is never touched until the pass fully succeeds -- so a failure always
+ * leaves the resource served from its original raw object,
+ * `compression_encoding` unchanged, and retriable (BullMQ's default
+ * retry/backoff applies to the enclosing job). Teardown has two distinct
+ * windows, tracked via the `mpuCompleted` flag:
+ *   - A failure BEFORE `completeMultipartUpload` (writer/reading streaming,
+ *     or `completeMultipartUpload` itself) leaves the multipart upload
+ *     still open, so it is aborted.
+ *   - A failure DURING the post-completion content-addressing relocation
+ *     (`headObject`/`copyObject`) happens after the multipart upload has
+ *     already completed -- aborting it at that point would fail (there is
+ *     nothing left to abort) and silently leave the finished compressed
+ *     object orphaned at its temp key. Instead, the orphaned temp object is
+ *     deleted via the same guarded `deleteBlobIfUnreferenced` used by the
+ *     happy path.
  */
 export async function compressChunkedResourceObject(
   resourceType: CompressibleResourceType,
@@ -155,6 +166,12 @@ export async function compressChunkedResourceObject(
   const compressedKey = `${rawKey}.gz`
 
   let uploadId: string | null = null
+  // Tracks whether `completeMultipartUpload` has already succeeded, so the
+  // outer catch below can tell the two failure windows apart: a still-open
+  // MPU needs `abortMultipartUpload`, while a completed MPU needs its
+  // orphaned temp compressed object deleted instead (see the module
+  // docblock's teardown section).
+  let mpuCompleted = false
 
   try {
     const response = await download(rawKey, bucket)
@@ -285,6 +302,7 @@ export async function compressChunkedResourceObject(
 
     if (uploadId !== null && compressedBytes < rawBytes) {
       await completeMPU(compressedKey, uploadId, parts, bucket)
+      mpuCompleted = true
 
       // Content-addressing (#108 dedup follow-up): relocate the
       // just-completed compressed object onto the GLOBAL content-addressed
@@ -431,12 +449,29 @@ export async function compressChunkedResourceObject(
     return { status: 'kept-raw', rawBytes, compressedBytes, checksum }
   } catch (err) {
     if (uploadId !== null) {
-      await abortMPU(compressedKey, uploadId, bucket).catch((abortErr: unknown) => {
-        logger.warn(
-          { err: abortErr, resourceType, resourceId, key: compressedKey },
-          'resource-compression: failed to abort multipart upload after error; continuing'
-        )
-      })
+      if (mpuCompleted) {
+        // The multipart upload already completed before this failure hit
+        // (during the post-completion content-addressing relocation) --
+        // there is nothing left to abort, and attempting to would just fail
+        // silently while leaving the finished compressed object orphaned at
+        // `compressedKey`. Delete it instead via the same guarded helper
+        // the happy path uses; no row references this temp key, so the
+        // guard is always a pass-through here.
+        await deleteBlobIfUnreferenced({
+          table,
+          resourceId,
+          key: compressedKey,
+          ...(bucket ? { bucket } : {}),
+          deleteFn: del,
+        })
+      } else {
+        await abortMPU(compressedKey, uploadId, bucket).catch((abortErr: unknown) => {
+          logger.warn(
+            { err: abortErr, resourceType, resourceId, key: compressedKey },
+            'resource-compression: failed to abort multipart upload after error; continuing'
+          )
+        })
+      }
     }
     logger.error(
       { err, resourceType, resourceId },

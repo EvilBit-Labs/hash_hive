@@ -285,11 +285,18 @@ if (!IS_ISOLATED) {
     getTaskById: mock(),
     listTasks: mock(),
     getZapsForTask: mock(),
-    getResourcesForTask: mock(),
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     listTasksByAgent: mock(),
     buildCapabilityPredicate: buildCapabilityPredicateMock,
+  }))
+
+  // getResourcesForTask is imported directly from its submodule by the agent
+  // route (#108 review — avoids the barrel transitively pulling in
+  // services/resources.js's S3Client construction), so it must be mocked
+  // here rather than in the tasks.js mock above.
+  mock.module('../../src/services/tasks/task-resources.js', () => ({
+    getResourcesForTask: mock(),
   }))
 
   mock.module('../../src/lib/auth.js', () => ({

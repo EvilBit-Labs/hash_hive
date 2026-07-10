@@ -69,12 +69,12 @@ import {
 import { getAgentDownloadUrl } from '../../services/resources.js'
 import {
   assignNextTask,
-  getResourcesForTask,
   getZapsForTask,
   handleTaskFailure,
   updateTaskProgress,
 } from '../../services/tasks.js'
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
+import { getResourcesForTask } from '../../services/tasks/task-resources.js'
 import { registerEnrollRoute } from './enroll.js'
 import { agentInternalError, type AgentInternalErrorCode } from './helpers.js'
 

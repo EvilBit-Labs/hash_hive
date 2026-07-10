@@ -173,7 +173,6 @@ if (!IS_ISOLATED) {
     getTaskById: mock(async () => null),
     listTasks: mock(async () => ({ tasks: [], total: 0, limit: 50, offset: 0 })),
     getZapsForTask: mock(async () => ({ zaps: [], hasMore: false })),
-    getResourcesForTask: mock(async () => ({ resources: [] })),
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     buildCapabilityPredicate: mock(() => ({ sql: 'TRUE' })),
@@ -182,6 +181,14 @@ if (!IS_ISOLATED) {
 
   mock.module('../../src/services/tasks/preemption.js', () => ({
     getStopTaskIdsForAgent: mock(async () => []),
+  }))
+
+  // getResourcesForTask is imported directly from its submodule by the agent
+  // route (#108 review — avoids the barrel transitively pulling in
+  // services/resources.js's S3Client construction), so it must be mocked
+  // here rather than in the tasks.js mock above.
+  mock.module('../../src/services/tasks/task-resources.js', () => ({
+    getResourcesForTask: mock(async () => ({ resources: [] })),
   }))
 
   mock.module('../../src/services/events.js', () => ({

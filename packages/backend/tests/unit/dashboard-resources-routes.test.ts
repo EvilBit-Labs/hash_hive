@@ -306,6 +306,7 @@ if (!IS_ISOLATED) {
           checksum: null,
           size: null,
           encoding: null,
+          etag: null,
         }) satisfies NonNullable<
           Awaited<ReturnType<typeof import('../../src/services/resources.js').getAgentDownloadUrl>>
         >

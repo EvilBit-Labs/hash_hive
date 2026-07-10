@@ -14,6 +14,18 @@
  * store instead of hitting S3/SeaweedFS — `just test-db` provisions
  * Postgres only, per repo convention (see `resource-compression-worker.db.test.ts`).
  *
+ * The trailing describe block below (#108 review Fix 5) closes a different
+ * gap: `deleteBlobIfUnreferenced`'s "skip a still-shared blob, delete the
+ * last reference" guard is already unit-tested directly
+ * (`blob-lifecycle.db.test.ts`), but the `deleteResource` -> `cascadeDeleteResource`
+ * -> `deleteBlobIfUnreferenced` WIRING (which `table` gets threaded through
+ * per resource kind) was only implicitly covered. `deleteResource` now
+ * accepts an injectable `{ deleteFile }` storage boundary
+ * (`DeleteResourceStorageDeps`), mirroring `UploadResourceStorageDeps`, so
+ * this suite can drive the full dedup -> delete -> survive/delete lifecycle
+ * through the public API against the SAME in-memory fake store `upload`
+ * writes to, without a production code path ever touching real storage.
+ *
  * Runs under `just test-db` (preload: tests/preload-db.ts). cleanupSeed() in
  * afterAll keeps runs idempotent and order-independent.
  *
@@ -29,7 +41,11 @@ import { eq } from 'drizzle-orm'
 import { createHash, randomUUID } from 'node:crypto'
 
 import { db } from '../../src/db/index.js'
-import { ChecksumMismatchError, uploadResourceFile } from '../../src/services/resources.js'
+import {
+  ChecksumMismatchError,
+  deleteResource,
+  uploadResourceFile,
+} from '../../src/services/resources.js'
 
 const TEST_SLUG = 'upload-resource-dedup-db-test-proj'
 
@@ -56,6 +72,10 @@ async function fakeUploadFile(key: string, body: Buffer): Promise<void> {
 async function fakeHeadObject(key: string): Promise<{ exists: boolean; size?: number }> {
   const buffer = fakeObjects.get(key)
   return buffer ? { exists: true, size: buffer.byteLength } : { exists: false }
+}
+
+async function fakeDeleteFile(key: string): Promise<void> {
+  fakeObjects.delete(key)
 }
 
 function makeFile(content: string, name = 'wordlist.txt'): File {
@@ -323,5 +343,70 @@ describe('uploadResourceFile content-addressed dedup (#108 follow-up)', () => {
     const shellRow = await readWordList(shellId)
     expect(shellRow?.blobReclaimedAt).not.toBeNull()
     expect(shellRow?.fileChecksum).toBe(sha256Hex(originalContent))
+  })
+})
+
+describe('dedup -> delete -> shared blob survives (#108 review Fix 5)', () => {
+  it('deleting the first of two deduped resources skips the shared blob; deleting the second removes it', async () => {
+    // Long, repetitive content so the upload actually compresses -- keeps
+    // this aligned with the other dedup tests' content shape.
+    const content = 'golf\nhotel\nindia\n'.repeat(200)
+    const checksum = sha256Hex(content)
+    const blobKey = blobKeyForChecksum(checksum)
+    const idA = await insertWordList({})
+    const idB = await insertWordList({})
+
+    // Upload identical content twice through the real dedup decision: A
+    // writes the blob, B dedups onto A's key without touching storage.
+    const uploadFileA = mock(fakeUploadFile)
+    await uploadResourceFile(wordLists, idA, projectId, 'wordlists', makeFile(content), undefined, {
+      uploadFile: uploadFileA,
+      headObject: fakeHeadObject,
+    })
+    const uploadFileB = mock(fakeUploadFile)
+    await uploadResourceFile(wordLists, idB, projectId, 'wordlists', makeFile(content), undefined, {
+      uploadFile: uploadFileB,
+      headObject: fakeHeadObject,
+    })
+    expect(uploadFileA).toHaveBeenCalledTimes(1)
+    expect(uploadFileB).not.toHaveBeenCalled()
+
+    const rowA = await readWordList(idA)
+    const rowB = await readWordList(idB)
+    expect((rowA?.fileRef as { key?: string } | null)?.key).toBe(blobKey)
+    expect((rowB?.fileRef as { key?: string } | null)?.key).toBe(blobKey)
+    expect(fakeObjects.has(blobKey)).toBe(true)
+
+    // Delete A (the first reference) via the PUBLIC deleteResource path --
+    // this routes through cascadeDeleteResource -> deleteBlobIfUnreferenced
+    // with `table: wordLists` threaded through. B still references the
+    // same key, so the physical blob must survive.
+    const deleteFileForA = mock(fakeDeleteFile)
+    const resultA = await deleteResource(wordLists, idA, projectId, 'wordlist', undefined, {
+      deleteFile: deleteFileForA,
+    })
+    expect(resultA.kind).toBe('deleted')
+    expect(await readWordList(idA)).toBeUndefined()
+
+    // The shared blob is NOT deleted -- B is still live and points at it.
+    // deleteBlobIfUnreferenced's internal guard skips the physical delete,
+    // so deleteFileForA is never actually invoked with this key.
+    expect(fakeObjects.has(blobKey)).toBe(true)
+    const survivor = await readWordList(idB)
+    expect((survivor?.fileRef as { key?: string } | null)?.key).toBe(blobKey)
+    // Still resolvable/downloadable: the fake object store still has bytes
+    // at the key B's row points at.
+    expect(fakeObjects.get(blobKey)).toBeDefined()
+
+    // Delete B (the last remaining reference). No other live resource
+    // shares the key any more, so this time the physical blob is actually
+    // removed.
+    const deleteFileForB = mock(fakeDeleteFile)
+    const resultB = await deleteResource(wordLists, idB, projectId, 'wordlist', undefined, {
+      deleteFile: deleteFileForB,
+    })
+    expect(resultB.kind).toBe('deleted')
+    expect(await readWordList(idB)).toBeUndefined()
+    expect(fakeObjects.has(blobKey)).toBe(false)
   })
 })
