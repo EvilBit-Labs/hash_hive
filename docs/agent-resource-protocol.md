@@ -69,9 +69,13 @@ Returns the static resources the task's attack references:
 
 - `type` — `wordlist`, `rulelist`, or `masklist`.
 - `id` — the resource id (stable server-side identifier; not the cache key).
-- `checksum` — SHA-256 hex of the raw file, or `null` if not yet captured.
-- `size` — raw (uncompressed) byte length, or `null` if not yet captured.
-- `encoding` — `gzip`, `none`, or `null` (see [Encoding](#encoding)).
+- `checksum` — SHA-256 hex of the raw file. Always non-null in a `200` from
+  this route — see [Not-ready resources](#resolve-a-tasks-resources) below
+  for what happens while it's still `null` server-side.
+- `size` — raw (uncompressed) byte length. Same non-null guarantee as
+  `checksum`.
+- `encoding` — `gzip` or `none` (see [Encoding](#encoding); `null` is a
+  hash-list-only value and hash lists are never returned by this route).
 - `downloadUrl` — a presigned URL for the stored object.
 
 Only the resources the attack actually references are included; a slot the
@@ -85,16 +89,24 @@ to this agent, or is outside its project returns a typed `404` in the agent
 error envelope — never a `500`. Do not retry a `404` as if it were transient.
 
 **Not-ready resources.** If the task's attack references a wordlist/rulelist/
-masklist that has not finished uploading, or whose checksum/compression pass
-has not run yet, the server does **not** silently omit it or return a partial
-resource list — an agent cracking against an incomplete set is a correctness
-bug, not a minor inconvenience. Instead it returns a typed `409` with
-`code: 'TASK_RESOURCES_NOT_READY'` in the agent error envelope. This is
-**retriable**: back off and re-poll `GET /tasks/{taskId}/resources` until it
-returns `200`. Contrast with the null-`checksum`/`size` case above (a resource
-that has landed but not yet been checksummed by the background worker) —
-that one still returns `200` with a `null` checksum; `409` is reserved for a
-resource with no download at all yet.
+masklist that has not finished uploading, **or** whose checksum/compression
+pass has not run yet, the server does **not** silently omit it, return a
+partial resource list, or hand back an unverifiable entry — an agent cracking
+against an incomplete or unverified set is a correctness bug, not a minor
+inconvenience. Instead it returns a typed `409` with
+`code: 'TASK_RESOURCES_NOT_READY'` in the agent error envelope, covering
+**both** cases:
+
+- the resource has no uploaded file at all yet, or
+- the resource has landed but the background checksum/compression worker
+  has not produced a checksum for it yet.
+
+This is **retriable**: back off and re-poll `GET /tasks/{taskId}/resources`
+until it returns `200`. The `null`-`checksum`/`size` mention in the
+[canonical identity](#the-canonical-identity-raw-file-checksum) section above
+describes `GET /resources/{type}/{id}/download-url` — a single-resource
+lookup that is not gated by this route's readiness check — not this route's
+`200` response, which never contains a null-`checksum` static-resource entry.
 
 ### Fetch a single resource's metadata
 
@@ -126,9 +138,14 @@ before it expires.
 - `gzip` — the downloaded bytes are gzip-compressed; gunzip them to recover the
   raw file, then verify.
 - `none` — the downloaded bytes are the raw file; use as-is, then verify.
-- `null` — no encoding recorded (hash lists, or a resource whose metadata is not
-  yet captured). Treat like `none` for the transfer, but see the `null`-checksum
-  caution above.
+- `null` — hash lists only; they carry no compression metadata at all (see
+  [Hash lists](#hash-lists)). A wordlist/rulelist/masklist always reports
+  `gzip` or `none`, never `null` — the column defaults to `'none'` at
+  creation and the background worker only ever rewrites it to `gzip` or
+  leaves it `none`, so there is no window where it's absent. Contrast with
+  `checksum`, which genuinely can be `null` mid-processing on the
+  single-resource `download-url` lookup (see the `null`-checksum caution
+  above).
 
 Compression uses gzip specifically so a Go agent can decompress with the
 standard library (`compress/gzip`) — no third-party codec dependency. The

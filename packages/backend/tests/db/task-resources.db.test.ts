@@ -33,7 +33,35 @@ import { eq } from 'drizzle-orm'
 import { env } from '../../src/config/env.js'
 import { db } from '../../src/db/index.js'
 import { computeHashListEtag, getAgentDownloadUrl } from '../../src/services/resources.js'
+import { _resourceCompressionDeps } from '../../src/services/resources/resource-compression-trigger.js'
 import { getResourcesForTask } from '../../src/services/tasks/task-resources.js'
+
+// Stub the resource-compression enqueue seam so the not-ready self-heal
+// (task-resources integrity gate-hole fix, #108) can be asserted without a
+// live Redis/QueueManager. This mutates a module-level singleton -- module
+// mocks/seam mutations leak process-wide across bun:test files in the same
+// invocation (see GOTCHAS.md) -- so the originals are captured up front and
+// restored in `afterAll` to guarantee this file cannot affect any other
+// `*.db.test.ts` file sharing the `bun test tests/db` process, regardless of
+// bun's (unordered) cross-file load sequencing.
+const originalGetQueueContext = _resourceCompressionDeps.getQueueContext
+const originalGetQueueConfig = _resourceCompressionDeps.getQueueConfig
+let compressionEnqueueCalls: unknown[][] = []
+_resourceCompressionDeps.getQueueContext = () =>
+  Promise.resolve({
+    getQueueManager: () => ({
+      enqueue: (...args: unknown[]) => {
+        compressionEnqueueCalls.push(args)
+        return Promise.resolve(true)
+      },
+    }),
+    // oxlint-disable-next-line no-explicit-any -- test stub for the dynamic-import seam
+  } as any)
+_resourceCompressionDeps.getQueueConfig = () =>
+  Promise.resolve({
+    QUEUE_NAMES: { RESOURCE_COMPRESSION: 'jobs-resource-compression' },
+    // oxlint-disable-next-line no-explicit-any -- test stub for the dynamic-import seam
+  } as any)
 
 const SLUG = 'task-resources-test-proj'
 const OTHER_SLUG = 'task-resources-other-proj'
@@ -55,7 +83,14 @@ async function cleanup(): Promise<void> {
 }
 
 beforeEach(cleanup)
+beforeEach(() => {
+  compressionEnqueueCalls = []
+})
 afterAll(cleanup)
+afterAll(() => {
+  _resourceCompressionDeps.getQueueContext = originalGetQueueContext
+  _resourceCompressionDeps.getQueueConfig = originalGetQueueConfig
+})
 
 /** Seeds one project with a hash type/list, a mode-`MODE` campaign, an
  * agent, and a `mode: 6` masklist-only attack (no rulelist), then a
@@ -103,6 +138,10 @@ async function seedProjectWithTask(slug: string): Promise<{
       compressionEncoding: 'gzip',
     })
     .returning()
+  // Fully checksummed by default (real checksum/size/encoding) so the
+  // baseline "happy path" tests below prove the normal 200 case. The
+  // landed-but-not-yet-checksummed (409) case is exercised by a dedicated
+  // test that flips `fileChecksum` back to null on this same row.
   const [masklist] = await db
     .insert(maskLists)
     .values({
@@ -110,8 +149,8 @@ async function seedProjectWithTask(slug: string): Promise<{
       name: `${slug}-masklist`,
       status: 'ready',
       fileRef: { bucket: env.S3_BUCKET, key: `${slug}/masklist.txt`, name: 'masklist.txt' },
-      fileChecksum: null, // worker hasn't run yet — must surface as null, not a 500.
-      fileSize: null,
+      fileChecksum: 'masklist-checksum-def456',
+      fileSize: 2048,
       compressionEncoding: 'none',
     })
     .returning()
@@ -175,19 +214,48 @@ describe('getResourcesForTask (#108 U6)', () => {
     })
     expect(wordlistEntry?.downloadUrl).toMatch(/^https?:\/\//)
 
-    // Not-yet-checksummed masklist: null checksum/size cleanly, not a 500.
     const masklistEntry = result.resources.find((r) => r.type === 'masklist')
     expect(masklistEntry).toMatchObject({
       type: 'masklist',
       id: masklistId,
-      checksum: null,
-      size: null,
+      checksum: 'masklist-checksum-def456',
+      size: 2048,
       encoding: 'none',
     })
     expect(masklistEntry?.downloadUrl).toMatch(/^https?:\/\//)
 
     // The attack never set rulelistId — no rulelist entry should appear.
     expect(result.resources.some((r) => r.type === 'rulelist')).toBe(false)
+  })
+
+  it('reports not-ready and self-heals by re-enqueuing compression for a resource that has landed but has no checksum yet (gate-hole fix)', async () => {
+    const { projectId, agentId, taskId, masklistId } = await seedProjectWithTask(SLUG)
+
+    // Simulate the real chunked-upload gap this fix closes: the file has
+    // landed (fileRef stays populated, status stays 'ready') but the
+    // background checksum/compression worker hasn't produced a checksum
+    // yet. Before the fix, getResourcesForTask handed this back as a 200
+    // with `checksum: null` -- an agent would crack against, and cache,
+    // content it could never verify. It must now be gated exactly like the
+    // no-upload-at-all case.
+    await db.update(maskLists).set({ fileChecksum: null }).where(eq(maskLists.id, masklistId))
+
+    const result = await getResourcesForTask(taskId, agentId, projectId)
+
+    expect('notReady' in result).toBe(true)
+    expect('resources' in result).toBe(false)
+
+    // Self-heal: the lazy re-enqueue must have fired for the masklist so a
+    // lost/failed original enqueue (or a crashed worker) recovers on the
+    // next agent poll instead of wedging this task behind a permanent 409.
+    expect(compressionEnqueueCalls).toHaveLength(1)
+    expect(compressionEnqueueCalls[0]?.[0]).toBe('jobs-resource-compression')
+    expect(compressionEnqueueCalls[0]?.[1]).toEqual({
+      resourceType: 'masklist',
+      resourceId: masklistId,
+      projectId,
+    })
+    expect(compressionEnqueueCalls[0]?.[2]).toEqual({ jobId: `compress:masklist:${masklistId}` })
   })
 
   it('returns a typed error for a task assigned to a different agent (not a throw)', async () => {
