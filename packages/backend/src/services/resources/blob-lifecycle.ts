@@ -83,24 +83,29 @@ export async function deleteBlobIfUnreferenced(
 ): Promise<DeleteBlobIfUnreferencedResult> {
   const { table, resourceId, key, bucket, deleteFn = deleteFile } = args
 
-  const isShared = await hasOtherLiveResourceWithKey(table, resourceId, key)
-
-  if (isShared) {
-    return { deleted: false, reason: 'shared' }
-  }
-
+  // The reference-scan SELECT and the physical delete are both inside this
+  // try/catch (#108 review Fix 2): callers like `cascadeDeleteResource`
+  // invoke this AFTER the owning row's DELETE has already committed, so a
+  // transient failure in EITHER query (pool exhaustion, connection reset)
+  // must not throw past this guard -- that would surface a client 500 for
+  // an operation that already succeeded, and skip blob cleanup with no log
+  // trail. Both failure modes share the same best-effort contract: log and
+  // report `{ deleted: false, reason: 'error' }` rather than propagating.
   try {
+    const isShared = await hasOtherLiveResourceWithKey(table, resourceId, key)
+    if (isShared) {
+      return { deleted: false, reason: 'shared' }
+    }
+
     await deleteFn(key, bucket)
     return { deleted: true }
   } catch (err) {
-    // Mirrors the best-effort delete semantics every call site already had
-    // before this guard existed: a physical-delete failure is logged and
-    // swallowed, never thrown back at the caller. The row-level operation
-    // (stamp/delete/restore-reject) that triggered this must not fail just
-    // because the object store is unreachable.
-    logger.warn(
+    // A resource marked reclaimed/deleted while its blob may still exist
+    // needs operator attention -- more so now that keys are shared across
+    // resources (#108 review Fix 3: bumped from warn to error).
+    logger.error(
       { err, table: tableLabel(table), resourceId, key },
-      'deleteBlobIfUnreferenced: physical delete failed; continuing'
+      'deleteBlobIfUnreferenced: reference check or physical delete failed; continuing'
     )
     return { deleted: false, reason: 'error' }
   }

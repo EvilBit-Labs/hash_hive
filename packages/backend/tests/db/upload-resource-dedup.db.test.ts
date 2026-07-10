@@ -241,6 +241,57 @@ describe('uploadResourceFile content-addressed dedup (#108 follow-up)', () => {
     expect(shellKey).toBe(blobKeyForChecksum(checksum))
   })
 
+  it('a dedup hit with no live referencing row recomputes the correct encoding instead of guessing none (#108 review Fix 1)', async () => {
+    // Long, highly repetitive content so it actually compresses -- proving
+    // the recomputed encoding is 'gzip', not a coincidental match with the
+    // old buggy 'none' default.
+    const content = 'delta\necho\nfoxtrot\n'.repeat(200)
+    const checksum = sha256Hex(content)
+
+    // Seed a row that lands this exact content, then mark it reclaimed so
+    // NO live row references the blob key any more -- while the physical
+    // blob is still present in storage (a prior reclaim-delete that failed
+    // to clear the object, or a race with a concurrent upload). This is
+    // exactly the state `findCompressionEncodingForKey` cannot resolve: it
+    // scans only live (non-reclaimed) rows and returns null.
+    const orphanId = await insertWordList({})
+    await uploadResourceFile(
+      wordLists,
+      orphanId,
+      projectId,
+      'wordlists',
+      makeFile(content),
+      undefined,
+      { uploadFile: mock(fakeUploadFile), headObject: fakeHeadObject }
+    )
+    await db
+      .update(wordLists)
+      .set({ blobReclaimedAt: new Date() })
+      .where(eq(wordLists.id, orphanId))
+
+    const newId = await insertWordList({})
+    const uploadFileFn = mock(fakeUploadFile)
+    const result = await uploadResourceFile(
+      wordLists,
+      newId,
+      projectId,
+      'wordlists',
+      makeFile(content),
+      undefined,
+      { uploadFile: uploadFileFn, headObject: fakeHeadObject }
+    )
+
+    // Still a dedup on the storage write -- the blob physically exists.
+    expect(uploadFileFn).not.toHaveBeenCalled()
+    expect(result.key).toBe(blobKeyForChecksum(checksum))
+
+    // The encoding is recomputed from the in-memory buffer, authoritatively
+    // correct for this content -- never the buggy 'none' fallback that used
+    // to fire whenever no live row could be found to adopt from.
+    const newRow = await readWordList(newId)
+    expect(newRow?.compressionEncoding).toBe('gzip')
+  })
+
   it('reclaimed-shell restore: a mismatched re-upload is rejected before any storage write', async () => {
     const originalContent = `original-shell-content-${randomUUID()}`
     const shellId = await insertWordList({

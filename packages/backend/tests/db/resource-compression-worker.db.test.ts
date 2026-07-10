@@ -476,14 +476,54 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
       const keyB = (rowB?.fileRef as { key?: string } | null)?.key
       expect(keyA).toBe(blobKeyForChecksum(sha256Hex(content)))
       expect(keyB).toBe(keyA)
-      // The second resource adopts the first's encoding rather than
-      // recomputing/trusting its own -- both describe the one shared blob.
+      // Both resources land on 'gzip' -- not because the second adopts the
+      // first's stored value, but because each worker run streamed the
+      // identical content itself and independently computed the same
+      // authoritative result (#108 review Fix 1: the worker never reads
+      // another row's `compressionEncoding` on a dedup hit).
       expect(rowB?.compressionEncoding).toBe(rowA?.compressionEncoding)
 
       // Both resources' temp objects (raw + compressed) are gone -- only
       // the one shared content-addressed blob remains.
       expect(await objectExists(first.key)).toBe(false)
       expect(await objectExists(second.key)).toBe(false)
+    })
+
+    it('records its own computed encoding on a dedup hit, never a stale/mismatched value from another row (#108 review Fix 1)', async () => {
+      const content = Buffer.from('own-encoding-content\n'.repeat(300), 'utf8')
+      const checksum = sha256Hex(content)
+      const blobKey = blobKeyForChecksum(checksum)
+
+      // Seed the content-addressed key as already physically present, plus
+      // a LIVE row that (incorrectly) claims 'none' for it -- simulating a
+      // stale or wrong stored value. Before the fix, the dedup branch would
+      // have read and adopted this row's `compressionEncoding` via
+      // `findCompressionEncodingForKey`; after the fix, the worker trusts
+      // only its own streaming measurement of THIS content.
+      fakePutObject(blobKey, Buffer.from('unrelated-placeholder-bytes'))
+      await db.insert(wordLists).values({
+        projectId,
+        name: `own-encoding-marker-${randomUUID()}`,
+        status: 'ready',
+        fileChecksum: checksum,
+        fileSize: content.byteLength,
+        compressionEncoding: 'none',
+        blobReclaimedAt: null,
+        fileRef: {
+          key: blobKey,
+          contentType: 'text/plain',
+          size: content.byteLength,
+          name: 'wordlist.txt',
+          uploadedAt: new Date().toISOString(),
+        },
+      })
+
+      const { id } = await insertCompletedChunkedWordList(content)
+      const result = await compressChunkedResourceObject('wordlist', id, defaultDeps)
+
+      expect(result.status).toBe('compressed')
+      const row = await readWordList(id)
+      expect(row?.compressionEncoding).toBe('gzip')
     })
 
     it('falls back to the temp compressed key (no dedup, no failure) when copyObject throws', async () => {

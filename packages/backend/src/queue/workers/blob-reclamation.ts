@@ -350,13 +350,24 @@ async function reclaimOne(args: {
     // itself — the DB stamp + audit row already committed above, and the
     // row stays marked reclaimed even if the object-store delete needs a
     // manual follow-up.
-    await deleteBlobIfUnreferenced({
+    const deleteResult = await deleteBlobIfUnreferenced({
       table,
       resourceId: row.id,
       key: fileRef.key,
       ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
       deleteFn: deleteBlob,
     })
+    if (!deleteResult.deleted && deleteResult.reason === 'error') {
+      // #108 review Fix 3: the guard already logged the underlying error;
+      // this adds a queryable trail keyed on the resource/key so an
+      // operator can find blobs that may need manual cleanup after a row
+      // was successfully marked reclaimed. No backfill sweep -- the log
+      // trail is the deliverable here.
+      logger.error(
+        { entityType, resourceId: row.id, key: fileRef.key },
+        'blob-reclamation: row was stamped reclaimed but its blob delete failed; needs manual cleanup'
+      )
+    }
   }
 
   return true

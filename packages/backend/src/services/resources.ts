@@ -1009,18 +1009,27 @@ export async function uploadResourceFile(
   // — not recomputed — because the physical bytes were written exactly
   // once, by whichever writer got there first, and the encoding recorded
   // here must always describe those actual bytes.
+  //
+  // If NO live row references the key (a prior reclaim-delete that failed
+  // to clear the physical blob, a reclaimed-shell restore mid-flight, or a
+  // concurrent upload racing ahead of the winner's row commit),
+  // `findCompressionEncodingForKey` returns null. Compression is
+  // deterministic on content, so the buffer already in memory here lets us
+  // recompute the correct encoding authoritatively instead of guessing
+  // `'none'` -- a wrong `'none'` would tell the agent to read gzip bytes
+  // raw and fail the checksum verify (#108 review).
   const blobKey = blobKeyForChecksum(checksum)
   let compressionEncoding: ResourceCompressionEncoding
   const existingBlob = await headObjectFn(blobKey)
   if (existingBlob.exists) {
-    const existingEncoding = await findCompressionEncodingForKey(blobKey)
-    if (existingEncoding === null) {
-      logger.warn(
+    const adopted = await findCompressionEncodingForKey(blobKey)
+    if (adopted === null) {
+      logger.error(
         { resourceType, resourceId, blobKey },
-        'uploadResourceFile: content-addressed blob exists in storage but no live row references it; defaulting encoding to none'
+        'uploadResourceFile: content-addressed blob exists in storage but no live row references it (unexpected -- signals a prior orphaned delete); recomputing encoding from the in-memory buffer'
       )
     }
-    compressionEncoding = existingEncoding ?? 'none'
+    compressionEncoding = adopted ?? compressBufferForStorage(buffer).encoding
   } else {
     // Compress the raw buffer before storage (#108 U3): word/rule/mask
     // lists only (hash lists never reach this function — see

@@ -56,7 +56,7 @@ import {
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { deleteBlobIfUnreferenced } from './blob-lifecycle.js'
-import { blobKeyForChecksum, findCompressionEncodingForKey } from './content-address.js'
+import { blobKeyForChecksum } from './content-address.js'
 import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
 export type CompressibleResourceType = 'wordlist' | 'rulelist' | 'masklist'
@@ -290,18 +290,21 @@ export async function compressChunkedResourceObject(
       // just-completed compressed object onto the GLOBAL content-addressed
       // key so identical raw content from any other upload dedups onto the
       // same physical blob. `headObj` tells us whether some other upload
-      // already got there first; if so we adopt ITS compression encoding
-      // (the physical bytes at the key were written exactly once, by
-      // whichever writer landed first) rather than trusting our own
-      // `'gzip'` result, and discard both of our own temp objects instead
-      // of keeping a second copy of the same content.
+      // already got there first; if so we discard both of our own temp
+      // objects instead of keeping a second copy of the same content. The
+      // encoding is NOT re-read from any other row or defaulted -- this
+      // worker just streamed the content itself and already knows
+      // `compressedBytes < rawBytes` is true (that's how it got into this
+      // branch), so `'gzip'` is this worker's own authoritative, directly
+      // computed result for this exact content, not a guess (#108 review:
+      // reading `findCompressionEncodingForKey` here could race a
+      // concurrent reclaim/delete of the referencing row and silently fall
+      // back to a wrong literal).
       let finalKey = compressedKey
-      let finalEncoding: ResourceCompressionEncoding = 'gzip'
+      const finalEncoding: ResourceCompressionEncoding = 'gzip'
       const existingBlob = await headObj(blobKey, bucket)
       if (existingBlob.exists) {
-        const existingEncoding = await findCompressionEncodingForKey(blobKey)
         finalKey = blobKey
-        finalEncoding = existingEncoding ?? 'gzip'
         await deleteBlobIfUnreferenced({
           table,
           resourceId,
@@ -375,14 +378,16 @@ export async function compressChunkedResourceObject(
     // Content-addressing for the kept-raw/incompressible case: the raw
     // object itself is what should end up at the content-addressed key —
     // same dedup-or-copy decision as the compressed branch above, just
-    // sourced from `rawKey` instead of a compressed temp object.
+    // sourced from `rawKey` instead of a compressed temp object. Same
+    // authoritative-encoding reasoning as above: this worker already
+    // measured `compressedBytes >= rawBytes` for this exact content (that's
+    // how it got into this branch), so `'none'` is this worker's own
+    // directly computed result, never adopted or defaulted from elsewhere.
     let finalKey = rawKey
-    let finalEncoding: ResourceCompressionEncoding = 'none'
+    const finalEncoding: ResourceCompressionEncoding = 'none'
     const existingRawBlob = await headObj(blobKey, bucket)
     if (existingRawBlob.exists) {
-      const existingEncoding = await findCompressionEncodingForKey(blobKey)
       finalKey = blobKey
-      finalEncoding = existingEncoding ?? 'none'
       await deleteBlobIfUnreferenced({
         table,
         resourceId,
