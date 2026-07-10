@@ -87,9 +87,10 @@ export async function deleteFile(key: string, bucket?: string) {
 
 /**
  * Probes whether an object exists without downloading its body (issue #108
- * safety foundation for content-addressed blob storage). A future dedup step
- * needs this to check "does the content-addressed key already exist in the
- * store" before deciding to skip a re-upload — not used by any caller yet.
+ * safety foundation for content-addressed blob storage). Used by the
+ * content-addressed dedup path (`uploadResourceFile` and
+ * `compressChunkedResourceObject`) to check "does `blobs/<checksum>` already
+ * exist in the store" before deciding to skip a re-upload.
  *
  * A missing object is a normal, expected outcome here (not an error): it
  * resolves to `{ exists: false }` rather than throwing. Any other failure
@@ -120,9 +121,12 @@ export async function headObject(
 
 /**
  * Server-side copy of an object to a new key within the same bucket (issue
- * #108 safety foundation). Intended for a LATER chunked-upload step that
- * needs to relocate a just-verified upload to its content-addressed key
- * without a client round-trip — not used by any caller yet.
+ * #108 safety foundation). Used by `compressChunkedResourceObject` to
+ * relocate a just-completed chunked-upload object onto its content-addressed
+ * `blobs/<checksum>` key without a client round-trip. Callers that invoke
+ * this as part of content-addressing must treat a thrown error as a safe,
+ * non-fatal "skip dedup for this object" signal — not every storage backend
+ * necessarily supports server-side copy.
  */
 export async function copyObject(
   sourceKey: string,

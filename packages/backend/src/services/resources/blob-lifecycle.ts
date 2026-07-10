@@ -46,8 +46,12 @@ import { logger } from '../../config/logger.js'
 import { deleteFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 
-/** The three tables eligible to share a blob once content-addressing lands. */
-const CHECKABLE_TABLES = [wordLists, ruleLists, maskLists] as const
+/**
+ * The three tables eligible to share a blob once content-addressing lands.
+ * Exported for reuse by `content-address.ts`, which needs the same table
+ * list to look up an existing blob's `compressionEncoding` by key.
+ */
+export const CHECKABLE_TABLES = [wordLists, ruleLists, maskLists] as const
 
 /** Any table a resource's blob-delete call site may originate from. */
 export type BlobOwnerTable = ResourceTable | typeof hashLists

@@ -19,8 +19,9 @@ import {
   completeMultipartUpload,
   createMultipartUpload,
   getPresignedUrl,
+  headObject as headObjectDefault,
   listParts,
-  uploadFile,
+  uploadFile as uploadFileDefault,
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
@@ -30,6 +31,7 @@ import { sumMasklistKeyspace } from './keyspace.js'
 import { type BlobOwnerTable, deleteBlobIfUnreferenced } from './resources/blob-lifecycle.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { compressBufferForStorage } from './resources/compression.js'
+import { blobKeyForChecksum, findCompressionEncodingForKey } from './resources/content-address.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -639,7 +641,7 @@ export async function uploadHashListFile(
   const ext = extname(file.name)
   const key = `${hl.projectId}/hash-lists/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
-  await uploadFile(key, buffer, file.type || 'application/octet-stream')
+  await uploadFileDefault(key, buffer, file.type || 'application/octet-stream')
 
   await db
     .update(hashLists)
@@ -937,13 +939,27 @@ function lineCountPredicateFor(
   return null
 }
 
+/**
+ * Storage boundary `uploadResourceFile` needs beyond the guarded blob
+ * delete it already threads through — injectable so real-DB tests can
+ * exercise the content-addressed dedup decision (`headObject`) and the
+ * conditional upload against a fake in-memory store instead of hitting S3.
+ * Defaults to the real `config/storage.js` functions; production callers
+ * never pass this.
+ */
+export interface UploadResourceStorageDeps {
+  uploadFile: typeof uploadFileDefault
+  headObject: typeof headObjectDefault
+}
+
 export async function uploadResourceFile(
   table: ResourceTable,
   resourceId: number,
   projectId: number,
   prefix: string,
   file: File,
-  actor: Actor = DEFAULT_SYSTEM_ACTOR
+  actor: Actor = DEFAULT_SYSTEM_ACTOR,
+  deps: Partial<UploadResourceStorageDeps> = {}
 ) {
   const resource = await getResourceById(table, resourceId, projectId)
   if (!resource) {
@@ -954,36 +970,69 @@ export async function uploadResourceFile(
     throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
+  const uploadFileFn = deps.uploadFile ?? uploadFileDefault
+  const headObjectFn = deps.headObject ?? headObjectDefault
+
   const resourceType = resourceTypeOf(table)
-  const ext = extname(file.name)
-  const key = `${resource.projectId}/${prefix}/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
 
   // Checksum computed from the RAW in-memory buffer, before compression and
-  // before the S3 write (issue #106 U12 / R12, #108 U2): a reclaimed-shell
-  // re-upload that fails to match is rejected here, before any bytes are
-  // written to storage or the row is touched — the resource stays exactly
-  // the shell it was. Computing from the raw buffer (rather than the
-  // post-compression bytes) also means the checksum is stable across a
-  // future change to the compression algorithm/threshold — re-uploading the
-  // identical source file always reproduces the same checksum regardless of
-  // how it happens to get stored.
+  // before any storage read/write (issue #106 U12 / R12, #108 U2 + the
+  // content-addressed dedup follow-up): a reclaimed-shell re-upload that
+  // fails to match is rejected here, before any bytes are written to
+  // storage or the row is touched — the resource stays exactly the shell it
+  // was. Computing from the raw buffer (rather than the post-compression
+  // bytes) also means the checksum is stable across a future change to the
+  // compression algorithm/threshold — re-uploading the identical source
+  // file always reproduces the same checksum regardless of how it happens
+  // to get stored.
   const checksum = sha256HexFromBuffer(buffer)
   const isReclaimedShell = resource.blobReclaimedAt !== null
   if (isReclaimedShell && resource.fileChecksum && resource.fileChecksum !== checksum) {
     throw new ChecksumMismatchError(resourceId, resourceType)
   }
 
-  // Compress the raw buffer before storage (#108 U3): word/rule/mask lists
-  // only (hash lists never reach this function — see `ResourceTable`). Gzip
-  // specifically, and only when it actually shrinks the payload; otherwise
-  // store the raw bytes unchanged. `fileSize`/`fileChecksum` below always
-  // describe the RAW file — the agent-facing contract and the reclaimed-shell
-  // checksum comparison must never depend on which encoding a given upload
-  // happened to pick.
-  const { bytes: storedBytes, encoding: compressionEncoding } = compressBufferForStorage(buffer)
-
-  await uploadFile(key, storedBytes, file.type || 'application/octet-stream')
+  // Content-addressed storage (#108 dedup follow-up): the blob lives at a
+  // GLOBAL key derived purely from the raw checksum — `blobs/<checksum>`,
+  // no extension (the download filename always comes from `fileRef.name`,
+  // never the storage key). Identical raw content uploaded by ANY resource
+  // in ANY project therefore dedups onto the exact same physical object.
+  // This is safe because access is gated entirely by presigned-URL signing
+  // (the route always verifies project ownership before a URL is ever
+  // signed) — a physically-shared blob never leaks across projects just
+  // because the object-store key itself carries no project scoping.
+  //
+  // `headObject` tells us whether some earlier upload (any project, any
+  // resource) already stored this exact content. If so, this upload is a
+  // pure dedup: no bytes are written to storage, and the compression
+  // encoding is adopted from whichever live row already points at the key
+  // — not recomputed — because the physical bytes were written exactly
+  // once, by whichever writer got there first, and the encoding recorded
+  // here must always describe those actual bytes.
+  const blobKey = blobKeyForChecksum(checksum)
+  let compressionEncoding: ResourceCompressionEncoding
+  const existingBlob = await headObjectFn(blobKey)
+  if (existingBlob.exists) {
+    const existingEncoding = await findCompressionEncodingForKey(blobKey)
+    if (existingEncoding === null) {
+      logger.warn(
+        { resourceType, resourceId, blobKey },
+        'uploadResourceFile: content-addressed blob exists in storage but no live row references it; defaulting encoding to none'
+      )
+    }
+    compressionEncoding = existingEncoding ?? 'none'
+  } else {
+    // Compress the raw buffer before storage (#108 U3): word/rule/mask
+    // lists only (hash lists never reach this function — see
+    // `ResourceTable`). Gzip specifically, and only when it actually
+    // shrinks the payload; otherwise store the raw bytes unchanged.
+    // `fileSize`/`fileChecksum` below always describe the RAW file — the
+    // agent-facing contract and the reclaimed-shell checksum comparison
+    // must never depend on which encoding a given upload happened to pick.
+    const compressed = compressBufferForStorage(buffer)
+    compressionEncoding = compressed.encoding
+    await uploadFileFn(blobKey, compressed.bytes, file.type || 'application/octet-stream')
+  }
 
   // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
   // the common upload path never needs the async worker, using the same utils
@@ -1009,7 +1058,7 @@ export async function uploadResourceFile(
   const updateValues = {
     fileRef: {
       bucket: env.S3_BUCKET,
-      key,
+      key: blobKey,
       contentType: file.type || 'application/octet-stream',
       size: file.size,
       name: file.name,
@@ -1085,7 +1134,7 @@ export async function uploadResourceFile(
     }
   }
 
-  return { key, size: file.size }
+  return { key: blobKey, size: file.size }
 }
 
 // ─── Presigned URLs ─────────────────────────────────────────────────

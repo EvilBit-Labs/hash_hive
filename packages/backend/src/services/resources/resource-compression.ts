@@ -47,13 +47,16 @@ import { logger } from '../../config/logger.js'
 import {
   abortMultipartUpload as abortMultipartUploadDefault,
   completeMultipartUpload as completeMultipartUploadDefault,
+  copyObject as copyObjectDefault,
   createMultipartUpload as createMultipartUploadDefault,
   deleteFile as deleteFileDefault,
   downloadFile as downloadFileDefault,
+  headObject as headObjectDefault,
   uploadPart as uploadPartDefault,
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { deleteBlobIfUnreferenced } from './blob-lifecycle.js'
+import { blobKeyForChecksum, findCompressionEncodingForKey } from './content-address.js'
 import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
 export type CompressibleResourceType = 'wordlist' | 'rulelist' | 'masklist'
@@ -78,6 +81,8 @@ export interface CompressionStorageDeps {
   uploadPart: typeof uploadPartDefault
   completeMultipartUpload: typeof completeMultipartUploadDefault
   abortMultipartUpload: typeof abortMultipartUploadDefault
+  headObject: typeof headObjectDefault
+  copyObject: typeof copyObjectDefault
 }
 
 interface ResourceFileRef {
@@ -113,6 +118,8 @@ export async function compressChunkedResourceObject(
   const uploadPartFn = deps.uploadPart ?? uploadPartDefault
   const completeMPU = deps.completeMultipartUpload ?? completeMultipartUploadDefault
   const abortMPU = deps.abortMultipartUpload ?? abortMultipartUploadDefault
+  const headObj = deps.headObject ?? headObjectDefault
+  const copyObj = deps.copyObject ?? copyObjectDefault
 
   const [row] = await db
     .select({ fileRef: table.fileRef, fileChecksum: table.fileChecksum })
@@ -274,27 +281,63 @@ export async function compressChunkedResourceObject(
     await Promise.all([writer, reading])
 
     const checksum = hash.digest('hex')
+    const blobKey = blobKeyForChecksum(checksum)
 
     if (uploadId !== null && compressedBytes < rawBytes) {
       await completeMPU(compressedKey, uploadId, parts, bucket)
-      await db
-        .update(table)
-        .set({
-          fileRef: { ...fileRef, key: compressedKey },
-          compressionEncoding: 'gzip' satisfies ResourceCompressionEncoding,
-          fileChecksum: checksum,
-          fileSize: rawBytes,
-          updatedAt: new Date(),
+
+      // Content-addressing (#108 dedup follow-up): relocate the
+      // just-completed compressed object onto the GLOBAL content-addressed
+      // key so identical raw content from any other upload dedups onto the
+      // same physical blob. `headObj` tells us whether some other upload
+      // already got there first; if so we adopt ITS compression encoding
+      // (the physical bytes at the key were written exactly once, by
+      // whichever writer landed first) rather than trusting our own
+      // `'gzip'` result, and discard both of our own temp objects instead
+      // of keeping a second copy of the same content.
+      let finalKey = compressedKey
+      let finalEncoding: ResourceCompressionEncoding = 'gzip'
+      const existingBlob = await headObj(blobKey, bucket)
+      if (existingBlob.exists) {
+        const existingEncoding = await findCompressionEncodingForKey(blobKey)
+        finalKey = blobKey
+        finalEncoding = existingEncoding ?? 'gzip'
+        await deleteBlobIfUnreferenced({
+          table,
+          resourceId,
+          key: compressedKey,
+          ...(bucket ? { bucket } : {}),
+          deleteFn: del,
         })
-        .where(eq(table.id, resourceId))
+      } else {
+        try {
+          await copyObj(compressedKey, blobKey, bucket)
+          finalKey = blobKey
+          await deleteBlobIfUnreferenced({
+            table,
+            resourceId,
+            key: compressedKey,
+            ...(bucket ? { bucket } : {}),
+            deleteFn: del,
+          })
+        } catch (copyErr) {
+          // Safe fallback (e.g. a storage backend without server-side copy
+          // support): keep serving this object from its temp compressed
+          // key. Still fully correct — just not deduped against any future
+          // identical upload. Never fails the job over this.
+          logger.warn(
+            { err: copyErr, resourceType, resourceId, compressedKey, blobKey },
+            'resource-compression: copyObject to content-addressed key failed; keeping temp compressed key (no dedup for this object)'
+          )
+        }
+      }
       // #108 safety foundation: guarded delete of the discarded raw object,
-      // not a bare `del`. A no-op today (this row's raw key is unique to
-      // it), but this is a fourth blob-delete site alongside
+      // not a bare `del` — its content now lives at `finalKey` either way
+      // (relocated to `blobKey`, or still `compressedKey` on the copy
+      // fallback above). A no-op today (this row's raw key is unique to
+      // it), but this is a blob-delete site alongside
       // `blob-reclamation.ts`/`resources.ts` — the same guard applies
-      // wherever a committed word/rule/mask-list blob gets deleted. Keyed
-      // on `rawKey` itself; the row's own `fileRef.key` was already moved to
-      // `compressedKey` above, so this row no longer points at `rawKey` and
-      // the (table, resourceId) self-exclusion is moot here regardless.
+      // wherever a committed word/rule/mask-list blob gets deleted.
       await deleteBlobIfUnreferenced({
         table,
         resourceId,
@@ -302,6 +345,17 @@ export async function compressChunkedResourceObject(
         ...(bucket ? { bucket } : {}),
         deleteFn: del,
       })
+
+      await db
+        .update(table)
+        .set({
+          fileRef: { ...fileRef, key: finalKey },
+          compressionEncoding: finalEncoding,
+          fileChecksum: checksum,
+          fileSize: rawBytes,
+          updatedAt: new Date(),
+        })
+        .where(eq(table.id, resourceId))
       logger.info(
         { resourceType, resourceId, rawBytes, compressedBytes },
         'resource-compression: compressed'
@@ -317,10 +371,49 @@ export async function compressChunkedResourceObject(
         )
       })
     }
+
+    // Content-addressing for the kept-raw/incompressible case: the raw
+    // object itself is what should end up at the content-addressed key —
+    // same dedup-or-copy decision as the compressed branch above, just
+    // sourced from `rawKey` instead of a compressed temp object.
+    let finalKey = rawKey
+    let finalEncoding: ResourceCompressionEncoding = 'none'
+    const existingRawBlob = await headObj(blobKey, bucket)
+    if (existingRawBlob.exists) {
+      const existingEncoding = await findCompressionEncodingForKey(blobKey)
+      finalKey = blobKey
+      finalEncoding = existingEncoding ?? 'none'
+      await deleteBlobIfUnreferenced({
+        table,
+        resourceId,
+        key: rawKey,
+        ...(bucket ? { bucket } : {}),
+        deleteFn: del,
+      })
+    } else {
+      try {
+        await copyObj(rawKey, blobKey, bucket)
+        finalKey = blobKey
+        await deleteBlobIfUnreferenced({
+          table,
+          resourceId,
+          key: rawKey,
+          ...(bucket ? { bucket } : {}),
+          deleteFn: del,
+        })
+      } catch (copyErr) {
+        logger.warn(
+          { err: copyErr, resourceType, resourceId, rawKey, blobKey },
+          'resource-compression: copyObject to content-addressed key failed; keeping temp raw key (no dedup for this object)'
+        )
+      }
+    }
+
     await db
       .update(table)
       .set({
-        compressionEncoding: 'none' satisfies ResourceCompressionEncoding,
+        fileRef: { ...fileRef, key: finalKey },
+        compressionEncoding: finalEncoding,
         fileChecksum: checksum,
         fileSize: rawBytes,
         updatedAt: new Date(),

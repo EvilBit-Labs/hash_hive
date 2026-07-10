@@ -54,6 +54,9 @@ if (IS_ISOLATED) {
     // services/resources.ts now transitively imports services/resources/line-count.ts
     // (shared line counting), which streams from storage via downloadFile.
     downloadFile: mock(),
+    // uploadResourceFile's content-addressed dedup check (issue #108); this
+    // suite doesn't exercise that path, but the named import must resolve.
+    headObject: mock(),
   }))
 
   // ─── Mock DB with per-test controllable behavior ─────────────────────

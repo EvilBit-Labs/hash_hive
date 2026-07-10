@@ -152,6 +152,9 @@ if (!IS_ISOLATED) {
     uploadFile: mock(async () => undefined),
     uploadPart: mock(async () => 'etag'),
     downloadFile: mock(),
+    // No existing content-addressed blob (issue #108 dedup) — every
+    // upload in this suite exercises the normal compress+upload path.
+    headObject: mock(async () => ({ exists: false })),
   }))
 
   mock.module('../../../src/config/env.js', () => ({

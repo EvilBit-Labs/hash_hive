@@ -29,6 +29,7 @@
 import { maskLists, projects, ruleLists, wordLists } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test'
 import { eq } from 'drizzle-orm'
+import { createHash } from 'node:crypto'
 
 import { db } from '../../src/db/index.js'
 import { deleteBlobIfUnreferenced } from '../../src/services/resources/blob-lifecycle.js'
@@ -200,6 +201,55 @@ describe('deleteBlobIfUnreferenced (#108 safety foundation)', () => {
 
     expect(result).toEqual({ deleted: false, reason: 'shared' })
     expect(deleteFn).not.toHaveBeenCalled()
+  })
+
+  it('two resources sharing a content-addressed blob (#108 dedup): deleting one skips the physical delete, deleting the second then removes it', async () => {
+    // The exact scenario content-addressed dedup introduces: two live
+    // resources both point their `fileRef.key` at the SAME
+    // `blobs/<checksum>` key because they uploaded identical raw content.
+    // Deleting/reclaiming one must never destroy the blob the other still
+    // needs; only once the second (and last) referencing row is gone does
+    // the physical delete actually happen.
+    const sharedBlobKey = `blobs/${createHash('sha256').update(`shared-content-${Math.random()}`).digest('hex')}`
+    const a = await insertWordList({ key: sharedBlobKey })
+    const b = await insertWordList({ key: sharedBlobKey })
+    const deleteFn = mock(() => Promise.resolve())
+
+    // Reclaim/delete `a` first: its OWN row is stamped dead before the
+    // guarded blob delete runs, mirroring real call sites (`reclaimOne`
+    // stamps `blob_reclaimed_at` inside its own transaction before calling
+    // this guard; `cascadeDeleteResource` deletes the owning row before
+    // calling it).
+    await db.update(wordLists).set({ blobReclaimedAt: new Date() }).where(eq(wordLists.id, a.id))
+
+    const firstResult = await deleteBlobIfUnreferenced({
+      table: wordLists,
+      resourceId: a.id,
+      key: sharedBlobKey,
+      deleteFn,
+    })
+
+    // b is still live and shares the key -- the physical delete is skipped.
+    expect(firstResult).toEqual({ deleted: false, reason: 'shared' })
+    expect(deleteFn).not.toHaveBeenCalled()
+    expect(await readKey(wordLists, b.id)).toBe(sharedBlobKey)
+
+    // Now reclaim/delete `b` too -- `a` is already dead, so no other live
+    // resource references the shared key any more.
+    await db.update(wordLists).set({ blobReclaimedAt: new Date() }).where(eq(wordLists.id, b.id))
+
+    const secondResult = await deleteBlobIfUnreferenced({
+      table: wordLists,
+      resourceId: b.id,
+      key: sharedBlobKey,
+      deleteFn,
+    })
+
+    // No other live resource references the key any more -- the blob is
+    // finally, physically deleted exactly once.
+    expect(secondResult).toEqual({ deleted: true })
+    expect(deleteFn).toHaveBeenCalledTimes(1)
+    expect(deleteFn).toHaveBeenCalledWith(sharedBlobKey, undefined)
   })
 
   it('logs and swallows a deleteFn failure, returning reason "error"', async () => {

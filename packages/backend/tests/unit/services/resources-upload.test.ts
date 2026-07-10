@@ -62,6 +62,10 @@ if (IS_ISOLATED) {
 
   // Only what services/resources.ts (and its transitive line-count.ts) import.
   const uploadFile = mock(() => Promise.resolve())
+  // Defaults to "no existing blob" so every test below exercises the
+  // normal compress+upload path unless a test overrides this to prove
+  // dedup (issue #108 content-addressed blob dedup).
+  const headObject = mock(() => Promise.resolve({ exists: false }))
   mock.module('../../../src/config/storage.js', () => ({
     abortMultipartUpload: mock(),
     completeMultipartUpload: mock(),
@@ -72,6 +76,7 @@ if (IS_ISOLATED) {
     uploadFile,
     uploadPart: mock(),
     downloadFile: mock(),
+    headObject,
   }))
 
   // Field-aware db mock:
@@ -184,6 +189,7 @@ if (IS_ISOLATED) {
     lastResourceUpdateValues = null
     warn.mockClear()
     uploadFile.mockClear()
+    headObject.mockClear()
   })
 
   describe('uploadResourceFile - masklist direct-upload sizing + fan-out (#231)', () => {

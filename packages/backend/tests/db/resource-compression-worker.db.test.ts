@@ -30,7 +30,7 @@
  */
 
 import { projects, wordLists } from '@hashhive/shared'
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
@@ -44,6 +44,10 @@ const TEST_SLUG = 'resource-compression-worker-db-test-proj'
 
 function sha256Hex(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
+}
+
+function blobKeyForChecksum(checksum: string): string {
+  return `blobs/${checksum}`
 }
 
 // ─── In-memory fake object store ────────────────────────────────────────
@@ -153,6 +157,28 @@ async function fakeAbortMultipartUpload(_key: string, uploadId: string): Promise
 }
 
 /**
+ * Fakes for the content-addressed dedup boundary (issue #108 follow-up):
+ * `headObject` answers "does `blobs/<checksum>` already exist" from the same
+ * `fakeObjects` Map every other fake reads/writes, and `copyObject` performs
+ * a server-side-style copy within that Map. Both must be injected here (not
+ * left to fall back to the real `config/storage.js` defaults) — this test
+ * file runs under `just test-db`, which provisions Postgres only, no
+ * SeaweedFS/S3.
+ */
+async function fakeHeadObject(key: string): Promise<{ exists: boolean; size?: number }> {
+  const buffer = fakeObjects.get(key)
+  return buffer ? { exists: true, size: buffer.byteLength } : { exists: false }
+}
+
+async function fakeCopyObject(sourceKey: string, destKey: string): Promise<void> {
+  const buffer = fakeObjects.get(sourceKey)
+  if (!buffer) {
+    throw new Error(`fake object store: NoSuchKey "${sourceKey}" (copyObject source)`)
+  }
+  fakeObjects.set(destKey, buffer)
+}
+
+/**
  * The full fake storage boundary, satisfying `CompressionStorageDeps`. Each
  * test either passes this straight through (happy paths) or spreads it and
  * overrides one function to inject a failure -- exactly mirroring how the
@@ -166,6 +192,8 @@ const defaultDeps = {
   uploadPart: fakeUploadPart,
   completeMultipartUpload: fakeCompleteMultipartUpload,
   abortMultipartUpload: fakeAbortMultipartUpload,
+  headObject: fakeHeadObject,
+  copyObject: fakeCopyObject,
 } as unknown as CompressionStorageDeps
 
 async function fetchStoredBytes(key: string): Promise<Buffer> {
@@ -255,16 +283,18 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     expect(row?.fileChecksum).toBe(sha256Hex(content))
     expect(row?.fileSize).toBe(content.byteLength)
 
+    // Content-addressed key (#108 dedup follow-up): the compressed temp
+    // object is relocated onto the GLOBAL `blobs/<checksum>` key.
     const fileRef = row?.fileRef as { key?: string } | null
-    expect(fileRef?.key).toBeTruthy()
+    expect(fileRef?.key).toBe(blobKeyForChecksum(sha256Hex(content)))
     expect(fileRef?.key).not.toBe(key)
 
     const storedBytes = await fetchStoredBytes(fileRef!.key!)
     expect(storedBytes.byteLength).toBeLessThan(content.byteLength)
     expect(gunzipSync(storedBytes)).toEqual(content)
 
-    // The original raw object is deleted once the compressed replacement
-    // is in place.
+    // The original raw object AND the temp compressed object are both
+    // deleted once the content-addressed replacement is in place.
     expect(await objectExists(key)).toBe(false)
   })
 
@@ -282,11 +312,17 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
     expect(row?.fileChecksum).toBe(sha256Hex(content))
     expect(row?.fileSize).toBe(content.byteLength)
 
+    // Content-addressed key (#108 dedup follow-up): the raw object itself
+    // is relocated onto the GLOBAL `blobs/<checksum>` key, not left at its
+    // temp per-upload key.
     const fileRef = row?.fileRef as { key?: string } | null
-    // The raw object's key is untouched -- nothing pointed away from it.
-    expect(fileRef?.key).toBe(key)
-    const storedBytes = await fetchStoredBytes(key)
+    expect(fileRef?.key).toBe(blobKeyForChecksum(sha256Hex(content)))
+    expect(fileRef?.key).not.toBe(key)
+    const storedBytes = await fetchStoredBytes(fileRef!.key!)
     expect(storedBytes).toEqual(content)
+
+    // The original temp raw object is deleted once relocated.
+    expect(await objectExists(key)).toBe(false)
   })
 
   it('is idempotent: a second run on an already-processed resource is a no-op', async () => {
@@ -411,5 +447,68 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
 
   it('throws when the resource does not exist', async () => {
     await expect(compressChunkedResourceObject('wordlist', -1)).rejects.toThrow(/not found/i)
+  })
+
+  describe('content-addressed dedup (#108 follow-up)', () => {
+    it('a second upload of identical raw content shares the blob and discards its own temp objects', async () => {
+      const content = Buffer.from('dedup-content\n'.repeat(300), 'utf8')
+      const first = await insertCompletedChunkedWordList(content)
+      const second = await insertCompletedChunkedWordList(content)
+
+      const firstResult = await compressChunkedResourceObject('wordlist', first.id, defaultDeps)
+      expect(firstResult.status).toBe('compressed')
+
+      // The second run must never attempt a server-side copy -- the guard
+      // detects the blob already exists (from the first run) and dedups
+      // instead of relocating anything.
+      const copyObjectSpy = mock(fakeCopyObject)
+      const secondResult = await compressChunkedResourceObject('wordlist', second.id, {
+        ...defaultDeps,
+        copyObject: copyObjectSpy,
+      })
+
+      expect(secondResult.status).toBe('compressed')
+      expect(copyObjectSpy).not.toHaveBeenCalled()
+
+      const rowA = await readWordList(first.id)
+      const rowB = await readWordList(second.id)
+      const keyA = (rowA?.fileRef as { key?: string } | null)?.key
+      const keyB = (rowB?.fileRef as { key?: string } | null)?.key
+      expect(keyA).toBe(blobKeyForChecksum(sha256Hex(content)))
+      expect(keyB).toBe(keyA)
+      // The second resource adopts the first's encoding rather than
+      // recomputing/trusting its own -- both describe the one shared blob.
+      expect(rowB?.compressionEncoding).toBe(rowA?.compressionEncoding)
+
+      // Both resources' temp objects (raw + compressed) are gone -- only
+      // the one shared content-addressed blob remains.
+      expect(await objectExists(first.key)).toBe(false)
+      expect(await objectExists(second.key)).toBe(false)
+    })
+
+    it('falls back to the temp compressed key (no dedup, no failure) when copyObject throws', async () => {
+      const content = Buffer.from('copy-fallback-content\n'.repeat(300), 'utf8')
+      const { id, key } = await insertCompletedChunkedWordList(content)
+
+      const result = await compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        copyObject: () => Promise.reject(new Error('backend does not support server-side copy')),
+      })
+
+      expect(result.status).toBe('compressed')
+      const row = await readWordList(id)
+      const fileRef = row?.fileRef as { key?: string } | null
+      // Falls back to the temp compressed key -- not content-addressed, but
+      // still fully correct and servable; the job itself does not fail.
+      expect(fileRef?.key).toBe(`${key}.gz`)
+      expect(fileRef?.key).not.toBe(blobKeyForChecksum(sha256Hex(content)))
+
+      const storedBytes = await fetchStoredBytes(fileRef!.key!)
+      expect(gunzipSync(storedBytes)).toEqual(content)
+
+      // The raw temp object is still deleted -- only the copy-to-`blobs/`
+      // step was skipped, not the rest of the finalize.
+      expect(await objectExists(key)).toBe(false)
+    })
   })
 })

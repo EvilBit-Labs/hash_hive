@@ -82,6 +82,10 @@ if (IS_ISOLATED) {
     uploadFile: mock(),
     uploadPart: mock(),
     downloadFile,
+    // uploadResourceFile's content-addressed dedup check (issue #108); this
+    // suite exercises the chunked-upload path only, but the named import
+    // must still resolve.
+    headObject: mock(),
   }))
 
   // ─── Mock db ─────────────────────────────────────────────────────────
