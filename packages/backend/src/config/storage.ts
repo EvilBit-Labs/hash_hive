@@ -96,6 +96,13 @@ export async function deleteFile(key: string, bucket?: string) {
  * resolves to `{ exists: false }` rather than throwing. Any other failure
  * (auth, network, wrong bucket) rethrows so it surfaces like every other
  * storage call.
+ *
+ * "Missing" is detected three ways because S3-compatible backends disagree
+ * on how they signal it: the official AWS SDK error class (`NotFound`),
+ * SeaweedFS/MinIO's `NoSuchKey` error name (no stable `NotFound` class), and
+ * — for backends that only surface a bare HTTP status with no distinguishing
+ * error name — a `404` on `$metadata.httpStatusCode`. Any other error
+ * (auth, network, wrong bucket, 5xx) still rethrows.
  */
 export async function headObject(
   key: string,
@@ -112,11 +119,19 @@ export async function headObject(
       ? { exists: true, size: response.ContentLength }
       : { exists: true }
   } catch (err) {
-    if (err instanceof NotFound || (err as { name?: string }).name === 'NotFound') {
+    if (isMissingObjectError(err)) {
       return { exists: false }
     }
     throw err
   }
+}
+
+function isMissingObjectError(err: unknown): boolean {
+  if (err instanceof NotFound) return true
+  const name = (err as { name?: string }).name
+  if (name === 'NotFound' || name === 'NoSuchKey') return true
+  const statusCode = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+  return statusCode === 404
 }
 
 /**
@@ -134,10 +149,18 @@ export async function copyObject(
   bucket?: string
 ): Promise<void> {
   const resolvedBucket = assertAllowedBucket(bucket)
+  // `CopySource` is a single header value combining bucket + key, so the key
+  // portion must be URL-encoded (spaces, `+`, `#`, and unicode characters
+  // would otherwise corrupt the header, backend-dependent). Encode each
+  // `/`-separated segment individually and rejoin with a literal `/` so the
+  // path structure survives; the bucket name and its separating `/` are not
+  // encoded. Current keys are hex-only (content-addressed checksums / UUIDs)
+  // so this is a no-op today -- it hardens the general-purpose helper.
+  const encodedSourceKey = sourceKey.split('/').map(encodeURIComponent).join('/')
   await s3.send(
     new CopyObjectCommand({
       Bucket: resolvedBucket,
-      CopySource: `${resolvedBucket}/${sourceKey}`,
+      CopySource: `${resolvedBucket}/${encodedSourceKey}`,
       Key: destKey,
     })
   )

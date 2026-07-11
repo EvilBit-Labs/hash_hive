@@ -55,8 +55,8 @@ import {
   uploadPart as uploadPartDefault,
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
-import { deleteBlobIfUnreferenced, withBlobKeyLock } from './blob-lifecycle.js'
-import { blobKeyForChecksum } from './content-address.js'
+import { type DbTx, deleteBlobIfUnreferenced, withBlobKeyLock } from './blob-lifecycle.js'
+import { blobKeyForChecksum, findCompressionEncodingForKey } from './content-address.js'
 import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
 export type CompressibleResourceType = 'wordlist' | 'rulelist' | 'masklist'
@@ -90,6 +90,93 @@ interface ResourceFileRef {
   bucket?: string
   contentType?: string
   [k: string]: unknown
+}
+
+interface ContentAddressResolution {
+  key: string
+  encoding: ResourceCompressionEncoding
+}
+
+/**
+ * Resolves the final storage key + authoritative `compressionEncoding` for a
+ * temp object (`tempKey`) this run just produced, given the blob's
+ * content-addressed key (`blobKey`). Mirrors the direct-upload path's
+ * adopt-or-overwrite decision (`resources.ts`'s `uploadResourceFile`, which
+ * calls `findCompressionEncodingForKey` the same way) rather than trusting
+ * this run's own computed encoding unconditionally on a dedup hit:
+ *
+ *  - No blob yet at `blobKey`: relocate `tempKey` onto `blobKey` via
+ *    server-side copy and record this run's own `computedEncoding` -- this
+ *    run is the sole writer of these bytes, so its computed value is
+ *    authoritative.
+ *  - Blob already exists AND a live (non-reclaimed) row already references
+ *    it: adopt THAT row's recorded encoding via `findCompressionEncodingForKey`
+ *    and discard `tempKey` without copying. The physical bytes at `blobKey`
+ *    were written exactly once, by whichever writer got there first -- this
+ *    run's own computed encoding describes `tempKey`'s bytes, not
+ *    necessarily `blobKey`'s, so it must never be recorded here.
+ *  - Blob already exists but NO live row references it (orphaned -- an
+ *    unexpected but possible state, e.g. a stale/failed prior delete, or
+ *    policy drift from whichever writer first landed it): neither side's
+ *    encoding can be trusted as a guess, so this OVERWRITES `blobKey` with
+ *    `tempKey`'s freshly-produced bytes via server-side copy and records
+ *    this run's own `computedEncoding` -- guaranteeing the stored bytes and
+ *    the recorded encoding agree. Logged at `error`: the same unexpected
+ *    state the direct-upload path logs.
+ *
+ * A `copyObject` failure in either copy case degrades safely: the caller
+ * keeps serving `tempKey` under this run's own `computedEncoding` (still
+ * fully correct, just not deduped/relocated onto the shared key).
+ */
+async function resolveContentAddressedKey(params: {
+  tx: DbTx
+  headObj: CompressionStorageDeps['headObject']
+  copyObj: CompressionStorageDeps['copyObject']
+  tempKey: string
+  blobKey: string
+  bucket: string | undefined
+  computedEncoding: ResourceCompressionEncoding
+  resourceType: CompressibleResourceType
+  resourceId: number
+}): Promise<ContentAddressResolution> {
+  const {
+    tx,
+    headObj,
+    copyObj,
+    tempKey,
+    blobKey,
+    bucket,
+    computedEncoding,
+    resourceType,
+    resourceId,
+  } = params
+  const existingBlob = await headObj(blobKey, bucket)
+
+  if (existingBlob.exists) {
+    const adopted = await findCompressionEncodingForKey(blobKey, tx)
+    if (adopted !== null) {
+      return { key: blobKey, encoding: adopted }
+    }
+    logger.error(
+      { resourceType, resourceId, tempKey, blobKey },
+      "resource-compression: content-addressed blob exists in storage but no live row references it (unexpected -- signals a prior orphaned delete); overwriting with this run's freshly-produced bytes so stored bytes and recorded encoding always agree"
+    )
+  }
+
+  try {
+    await copyObj(tempKey, blobKey, bucket)
+    return { key: blobKey, encoding: computedEncoding }
+  } catch (copyErr) {
+    // Safe fallback (e.g. a storage backend without server-side copy
+    // support): keep serving this object from its temp key. Still fully
+    // correct -- just not deduped against any future identical upload.
+    // Never fails the job over this.
+    logger.warn(
+      { err: copyErr, resourceType, resourceId, tempKey, blobKey },
+      'resource-compression: copyObject to content-addressed key failed; keeping temp key (no dedup for this object)'
+    )
+    return { key: tempKey, encoding: computedEncoding }
+  }
 }
 
 /**
@@ -307,61 +394,51 @@ export async function compressChunkedResourceObject(
       // Content-addressing (#108 dedup follow-up): relocate the
       // just-completed compressed object onto the GLOBAL content-addressed
       // key so identical raw content from any other upload dedups onto the
-      // same physical blob. `headObj` tells us whether some other upload
-      // already got there first; if so we discard both of our own temp
-      // objects instead of keeping a second copy of the same content. The
-      // encoding is NOT re-read from any other row or defaulted -- this
-      // worker just streamed the content itself and already knows
-      // `compressedBytes < rawBytes` is true (that's how it got into this
-      // branch), so `'gzip'` is this worker's own authoritative, directly
-      // computed result for this exact content, not a guess (#108 review:
-      // reading `findCompressionEncodingForKey` here could race a
-      // concurrent reclaim/delete of the referencing row and silently fall
-      // back to a wrong literal).
+      // same physical blob. `resolveContentAddressedKey` tells us whether
+      // some other upload already got there first; if so, the RECORDED
+      // encoding must describe `blobKey`'s actual bytes -- adopted from a
+      // live referencing row if one exists, or this run's own computed
+      // 'gzip' only if this run is the one that just wrote (or overwrote)
+      // those bytes (#108 review: the worker's computed encoding is only
+      // authoritative when it also WRITES the bytes; on a dedup adopt it
+      // must use the existing blob's encoding instead).
       //
-      // The headObj/copyObj dedup decision AND the row commit below run
-      // inside `withBlobKeyLock(blobKey, ...)` (#108 T12/T13): serialized
-      // via a transaction-scoped Postgres advisory lock against
-      // `deleteBlobIfUnreferenced`'s guarded-delete critical section for
-      // the SAME key, so a concurrent delete's reference-scan can never run
-      // between this dedup decision and this row's commit. The lock is
-      // taken only around this final decision+commit, AFTER the multi-GB
-      // streaming pass above has already landed the compressed bytes at
-      // the temp `compressedKey` -- never around the streaming itself.
-      const finalEncoding: ResourceCompressionEncoding = 'gzip'
+      // The headObj/copyObj/findCompressionEncodingForKey dedup decision AND
+      // the row commit below run inside `withBlobKeyLock(blobKey, ...)`
+      // (#108 T12/T13): serialized via a transaction-scoped Postgres
+      // advisory lock against `deleteBlobIfUnreferenced`'s guarded-delete
+      // critical section for the SAME key, so a concurrent delete's
+      // reference-scan can never run between this dedup decision and this
+      // row's commit. The lock is taken only around this final
+      // decision+commit, AFTER the multi-GB streaming pass above has
+      // already landed the compressed bytes at the temp `compressedKey` --
+      // never around the streaming itself.
+      const computedEncoding: ResourceCompressionEncoding = 'gzip'
       const finalKey = await withBlobKeyLock(blobKey, async (tx) => {
-        let key = compressedKey
-        const existingBlob = await headObj(blobKey, bucket)
-        if (existingBlob.exists) {
-          key = blobKey
-        } else {
-          try {
-            await copyObj(compressedKey, blobKey, bucket)
-            key = blobKey
-          } catch (copyErr) {
-            // Safe fallback (e.g. a storage backend without server-side copy
-            // support): keep serving this object from its temp compressed
-            // key. Still fully correct — just not deduped against any future
-            // identical upload. Never fails the job over this.
-            logger.warn(
-              { err: copyErr, resourceType, resourceId, compressedKey, blobKey },
-              'resource-compression: copyObject to content-addressed key failed; keeping temp compressed key (no dedup for this object)'
-            )
-          }
-        }
+        const resolution = await resolveContentAddressedKey({
+          tx,
+          headObj,
+          copyObj,
+          tempKey: compressedKey,
+          blobKey,
+          bucket,
+          computedEncoding,
+          resourceType,
+          resourceId,
+        })
 
         await tx
           .update(table)
           .set({
-            fileRef: { ...fileRef, key },
-            compressionEncoding: finalEncoding,
+            fileRef: { ...fileRef, key: resolution.key },
+            compressionEncoding: resolution.encoding,
             fileChecksum: checksum,
             fileSize: rawBytes,
             updatedAt: new Date(),
           })
           .where(eq(table.id, resourceId))
 
-        return key
+        return resolution.key
       })
 
       // Cleanup of superseded temp keys happens AFTER the lock/transaction
@@ -407,44 +484,42 @@ export async function compressChunkedResourceObject(
     // object itself is what should end up at the content-addressed key —
     // same dedup-or-copy decision as the compressed branch above, just
     // sourced from `rawKey` instead of a compressed temp object. Same
-    // authoritative-encoding reasoning as above: this worker already
-    // measured `compressedBytes >= rawBytes` for this exact content (that's
-    // how it got into this branch), so `'none'` is this worker's own
-    // directly computed result, never adopted or defaulted from elsewhere.
+    // authoritative-encoding reasoning as above: this worker's own computed
+    // 'none' is only authoritative when this run also WRITES those bytes
+    // (relocating or overwriting `blobKey`) -- a dedup adopt instead uses
+    // whatever encoding the existing blob's live referencing row already
+    // records.
     //
-    // Same lock discipline as the compressed branch above: the headObj/copyObj
-    // decision and the row commit are one atomic unit under
-    // `withBlobKeyLock(blobKey, ...)` (#108 T12/T13).
-    const finalEncoding: ResourceCompressionEncoding = 'none'
+    // Same lock discipline as the compressed branch above: the
+    // headObj/copyObj/findCompressionEncodingForKey decision and the row
+    // commit are one atomic unit under `withBlobKeyLock(blobKey, ...)`
+    // (#108 T12/T13).
+    const computedEncoding: ResourceCompressionEncoding = 'none'
     const finalKey = await withBlobKeyLock(blobKey, async (tx) => {
-      let key = rawKey
-      const existingRawBlob = await headObj(blobKey, bucket)
-      if (existingRawBlob.exists) {
-        key = blobKey
-      } else {
-        try {
-          await copyObj(rawKey, blobKey, bucket)
-          key = blobKey
-        } catch (copyErr) {
-          logger.warn(
-            { err: copyErr, resourceType, resourceId, rawKey, blobKey },
-            'resource-compression: copyObject to content-addressed key failed; keeping temp raw key (no dedup for this object)'
-          )
-        }
-      }
+      const resolution = await resolveContentAddressedKey({
+        tx,
+        headObj,
+        copyObj,
+        tempKey: rawKey,
+        blobKey,
+        bucket,
+        computedEncoding,
+        resourceType,
+        resourceId,
+      })
 
       await tx
         .update(table)
         .set({
-          fileRef: { ...fileRef, key },
-          compressionEncoding: finalEncoding,
+          fileRef: { ...fileRef, key: resolution.key },
+          compressionEncoding: resolution.encoding,
           fileChecksum: checksum,
           fileSize: rawBytes,
           updatedAt: new Date(),
         })
         .where(eq(table.id, resourceId))
 
-      return key
+      return resolution.key
     })
 
     // Same post-lock cleanup discipline as the compressed branch: only

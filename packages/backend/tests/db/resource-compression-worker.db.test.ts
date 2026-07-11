@@ -531,11 +531,12 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
       const keyB = (rowB?.fileRef as { key?: string } | null)?.key
       expect(keyA).toBe(blobKeyForChecksum(sha256Hex(content)))
       expect(keyB).toBe(keyA)
-      // Both resources land on 'gzip' -- not because the second adopts the
-      // first's stored value, but because each worker run streamed the
-      // identical content itself and independently computed the same
-      // authoritative result (#108 review Fix 1: the worker never reads
-      // another row's `compressionEncoding` on a dedup hit).
+      // Both resources land on 'gzip' because the second run ADOPTS the
+      // first's already-recorded live-row encoding (PR #282 review Fix 3/4:
+      // a dedup hit must describe the STORED blob's actual bytes, sourced
+      // from whichever live row already references it -- never this run's
+      // own computed value, which only describes the temp object THIS run
+      // produced, not necessarily the shared blob).
       expect(rowB?.compressionEncoding).toBe(rowA?.compressionEncoding)
 
       // Both resources' temp objects (raw + compressed) are gone -- only
@@ -544,21 +545,25 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
       expect(await objectExists(second.key)).toBe(false)
     })
 
-    it('records its own computed encoding on a dedup hit, never a stale/mismatched value from another row (#108 review Fix 1)', async () => {
+    it('adopts the existing live rows recorded encoding on a dedup hit, even when it differs from this runs own computed value (PR #282 review Fix 3/4)', async () => {
       const content = Buffer.from('own-encoding-content\n'.repeat(300), 'utf8')
       const checksum = sha256Hex(content)
       const blobKey = blobKeyForChecksum(checksum)
 
       // Seed the content-addressed key as already physically present, plus
-      // a LIVE row that (incorrectly) claims 'none' for it -- simulating a
-      // stale or wrong stored value. Before the fix, the dedup branch would
-      // have read and adopted this row's `compressionEncoding` via
-      // `findCompressionEncodingForKey`; after the fix, the worker trusts
-      // only its own streaming measurement of THIS content.
-      fakePutObject(blobKey, Buffer.from('unrelated-placeholder-bytes'))
+      // a LIVE row that references it and records 'none' -- simulating a
+      // case where whichever writer FIRST landed these bytes made a
+      // different compression decision (policy drift) than what this run
+      // would independently compute for identical content ('gzip': this
+      // content is comfortably compressible). The dedup branch must adopt
+      // the live row's 'none', not overwrite the blob or trust its own
+      // computed 'gzip' -- the recorded encoding must always describe the
+      // bytes actually stored at `blobKey`, and a live row already says
+      // what those bytes are.
+      fakePutObject(blobKey, Buffer.from('placeholder-bytes-matching-the-live-rows-encoding'))
       await db.insert(wordLists).values({
         projectId,
-        name: `own-encoding-marker-${randomUUID()}`,
+        name: `existing-encoding-marker-${randomUUID()}`,
         status: 'ready',
         fileChecksum: checksum,
         fileSize: content.byteLength,
@@ -573,12 +578,146 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
         },
       })
 
-      const { id } = await insertCompletedChunkedWordList(content)
-      const result = await compressChunkedResourceObject('wordlist', id, defaultDeps)
+      const { id, key } = await insertCompletedChunkedWordList(content)
+      const copyObjectSpy = mock(fakeCopyObject)
+      const result = await compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        copyObject: copyObjectSpy,
+      })
+
+      // `result.status` describes what THIS RUN did with its own temp
+      // object (gzip shrank it) -- independent of what gets recorded.
+      expect(result.status).toBe('compressed')
+      // No copy: a live row already references `blobKey`, so this run's
+      // temp compressed object is simply discarded, never used to overwrite.
+      expect(copyObjectSpy).not.toHaveBeenCalled()
+
+      const row = await readWordList(id)
+      // Adopted, not recomputed: the live row's 'none' wins over this run's
+      // own 'gzip'.
+      expect(row?.compressionEncoding).toBe('none')
+      const fileRef = row?.fileRef as { key?: string } | null
+      expect(fileRef?.key).toBe(blobKey)
+
+      // Both of this run's own temp objects (raw + compressed) are gone --
+      // only the pre-existing shared blob remains, untouched.
+      expect(await objectExists(key)).toBe(false)
+      expect(await objectExists(`${key}.gz`)).toBe(false)
+      const storedBytes = await fetchStoredBytes(blobKey)
+      expect(storedBytes.toString()).toBe('placeholder-bytes-matching-the-live-rows-encoding')
+    })
+
+    it('overwrites an orphaned content-addressed blob (no live referencing row) with its own freshly-produced bytes and records its own computed encoding (PR #282 review Fix 3/4)', async () => {
+      const content = Buffer.from('orphan-overwrite-content\n'.repeat(300), 'utf8')
+      const checksum = sha256Hex(content)
+      const blobKey = blobKeyForChecksum(checksum)
+
+      // Seed the content-addressed key as already physically present, but
+      // deliberately WITHOUT any live row referencing it -- an orphaned
+      // blob (e.g. a prior delete that removed the referencing row but
+      // failed to physically clean up, or a race with a concurrent
+      // reclaim). Neither side's encoding can be trusted as a guess here,
+      // so the worker must overwrite `blobKey` with its OWN bytes and
+      // record its OWN computed encoding, guaranteeing the two always
+      // agree.
+      fakePutObject(blobKey, Buffer.from('stale-orphaned-placeholder-bytes'))
+
+      const { id, key } = await insertCompletedChunkedWordList(content)
+      const compressedKey = `${key}.gz`
+      const copyObjectSpy = mock(fakeCopyObject)
+      const result = await compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        copyObject: copyObjectSpy,
+      })
 
       expect(result.status).toBe('compressed')
+      // Unlike the adopt case above, the copy DOES happen here -- this run
+      // overwrites the orphaned blob with its own temp compressed object.
+      expect(copyObjectSpy).toHaveBeenCalledWith(compressedKey, blobKey, undefined)
+
       const row = await readWordList(id)
       expect(row?.compressionEncoding).toBe('gzip')
+      const fileRef = row?.fileRef as { key?: string } | null
+      expect(fileRef?.key).toBe(blobKey)
+
+      // The recorded encoding matches the ACTUAL stored bytes, not a guess:
+      // `blobKey` now holds this run's real gzip bytes, having overwritten
+      // the stale placeholder.
+      const storedBytes = await fetchStoredBytes(blobKey)
+      expect(gunzipSync(storedBytes)).toEqual(content)
+      expect(await objectExists(key)).toBe(false)
+    })
+
+    it('kept-raw branch: adopts the existing live rows recorded encoding on a dedup hit (PR #282 review Fix 3/4)', async () => {
+      // Tiny/incompressible content so this run's OWN computation lands in
+      // the kept-raw branch (`computedEncoding: 'none'`) -- proving the
+      // shared dedup-resolution helper is wired into that branch too, not
+      // just the compressed one above.
+      const content = Buffer.from('kra1', 'utf8')
+      const checksum = sha256Hex(content)
+      const blobKey = blobKeyForChecksum(checksum)
+
+      fakePutObject(blobKey, Buffer.from('placeholder-bytes-matching-the-live-rows-encoding'))
+      await db.insert(wordLists).values({
+        projectId,
+        name: `kept-raw-existing-encoding-marker-${randomUUID()}`,
+        status: 'ready',
+        fileChecksum: checksum,
+        fileSize: content.byteLength,
+        compressionEncoding: 'gzip',
+        blobReclaimedAt: null,
+        fileRef: {
+          key: blobKey,
+          contentType: 'text/plain',
+          size: content.byteLength,
+          name: 'wordlist.txt',
+          uploadedAt: new Date().toISOString(),
+        },
+      })
+
+      const { id, key } = await insertCompletedChunkedWordList(content)
+      const copyObjectSpy = mock(fakeCopyObject)
+      const result = await compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        copyObject: copyObjectSpy,
+      })
+
+      expect(result.status).toBe('kept-raw')
+      expect(copyObjectSpy).not.toHaveBeenCalled()
+
+      const row = await readWordList(id)
+      // Adopted from the live row ('gzip'), not this run's own computed
+      // 'none'.
+      expect(row?.compressionEncoding).toBe('gzip')
+      const fileRef = row?.fileRef as { key?: string } | null
+      expect(fileRef?.key).toBe(blobKey)
+      expect(await objectExists(key)).toBe(false)
+    })
+
+    it('kept-raw branch: overwrites an orphaned blob with its own bytes and records its own computed encoding (PR #282 review Fix 3/4)', async () => {
+      const content = Buffer.from('kro1', 'utf8')
+      const checksum = sha256Hex(content)
+      const blobKey = blobKeyForChecksum(checksum)
+
+      fakePutObject(blobKey, Buffer.from('stale-orphaned-placeholder-bytes'))
+
+      const { id, key } = await insertCompletedChunkedWordList(content)
+      const copyObjectSpy = mock(fakeCopyObject)
+      const result = await compressChunkedResourceObject('wordlist', id, {
+        ...defaultDeps,
+        copyObject: copyObjectSpy,
+      })
+
+      expect(result.status).toBe('kept-raw')
+      expect(copyObjectSpy).toHaveBeenCalledWith(key, blobKey, undefined)
+
+      const row = await readWordList(id)
+      expect(row?.compressionEncoding).toBe('none')
+      const fileRef = row?.fileRef as { key?: string } | null
+      expect(fileRef?.key).toBe(blobKey)
+
+      const storedBytes = await fetchStoredBytes(blobKey)
+      expect(storedBytes).toEqual(content)
     })
 
     it('falls back to the temp compressed key (no dedup, no failure) when copyObject throws', async () => {

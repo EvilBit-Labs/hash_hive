@@ -14,24 +14,26 @@
  * carries no project scoping.
  *
  * `findCompressionEncodingForKey` answers "what encoding did the upload
- * that FIRST landed this content use?" — it is the FAST PATH for the direct
- * upload (`resources.ts`'s `uploadResourceFile`) when a live row ALREADY
- * references the key: adopt that row's real encoding instead of recomputing
- * it, since the physical bytes at a shared key were written exactly once
- * and every subsequent reader (including the agent download path, which
- * trusts `compressionEncoding` to know how to decode the bytes) must agree
- * on what encoding those bytes actually are.
+ * that FIRST landed this content use?" — it is the FAST PATH for a dedup hit
+ * when a live row ALREADY references the key: adopt that row's real encoding
+ * instead of recomputing or reusing this run's own value, since the physical
+ * bytes at a shared key were written exactly once and every subsequent
+ * reader (including the agent download path, which trusts
+ * `compressionEncoding` to know how to decode the bytes) must agree on what
+ * encoding those bytes actually are. Both dedup call sites use it the same
+ * way: the direct upload (`resources.ts`'s `uploadResourceFile`) and the
+ * chunked-upload worker (`resource-compression.ts`'s
+ * `compressChunkedResourceObject`, via its `resolveContentAddressedKey`
+ * helper).
  *
  * When this returns `null` (a dedup hit with NO live row referencing the
- * key — an unexpected but possible state, e.g. a prior orphaned delete), the
- * direct-upload path does NOT guess: it re-uploads the current deterministic
- * representation of the buffer already in memory, so the stored bytes and
- * the recorded encoding always agree (#108 review). The chunked-upload
- * worker (`resource-compression.ts`) never calls this function at all — it
- * always computes its OWN encoding directly from the bytes it just streamed
- * and hashed, and never adopts another row's recorded value (#108 review Fix
- * 1: reading another row's `compressionEncoding` here could race a
- * concurrent reclaim/delete of that very row).
+ * key — an unexpected but possible state, e.g. a prior orphaned delete or
+ * policy drift), neither call site guesses: they OVERWRITE the
+ * content-addressed key with this run's own freshly-produced bytes (the
+ * direct-upload path re-uploads the in-memory buffer; the chunked worker
+ * relocates its temp object via server-side copy) and record this run's own
+ * computed encoding, so the stored bytes and the recorded encoding always
+ * agree.
  */
 import type { ResourceCompressionEncoding } from '@hashhive/shared'
 
@@ -53,10 +55,11 @@ export function blobKeyForChecksum(checksum: string): string {
  * (though not impossible — e.g. a race with a concurrent reclaim) state.
  *
  * `tx` is REQUIRED, not defaulted to the module-level `db` (#108 T12/T13):
- * the only caller (`uploadResourceFile`'s dedup decision) always runs inside
- * `withBlobKeyLock`'s transaction, and this read must happen on that SAME
- * transaction/connection to see a consistent, lock-serialized view of the
- * key's live referrers.
+ * every caller's dedup decision (`uploadResourceFile`'s direct-upload path,
+ * and `compressChunkedResourceObject`'s `resolveContentAddressedKey` for the
+ * chunked-upload worker) always runs inside `withBlobKeyLock`'s transaction,
+ * and this read must happen on that SAME transaction/connection to see a
+ * consistent, lock-serialized view of the key's live referrers.
  */
 export async function findCompressionEncodingForKey(
   key: string,
