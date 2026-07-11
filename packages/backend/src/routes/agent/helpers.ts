@@ -35,7 +35,8 @@ import { logger } from '../../config/logger.js'
  * agent-visible `error.code` values lives in one place; the route
  * builds its `c.json(..., 409)` response inline (mirroring the
  * existing `TASK_NOT_FOUND`/`TASK_ERROR` inline codes) and logs at
- * `warn`, not `error`, since it's an expected, retriable state.
+ * `debug`, not `error`, since it's an expected, retriable state that
+ * agents poll through.
  */
 export type AgentInternalErrorCode =
   | 'HEARTBEAT_ERROR'

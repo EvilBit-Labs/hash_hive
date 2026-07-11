@@ -243,7 +243,7 @@ raw-content `checksum` used for static resources above:
   "checksum": null,
   "size": null,
   "encoding": null,
-  "etag": "W/\"hl-42-1735689600000\""
+  "etag": "W/\"hl-42-1735689600000-0\""
 }
 ```
 
