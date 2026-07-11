@@ -55,7 +55,7 @@ import {
   uploadPart as uploadPartDefault,
 } from '../../config/storage.js'
 import { db } from '../../db/index.js'
-import { deleteBlobIfUnreferenced } from './blob-lifecycle.js'
+import { deleteBlobIfUnreferenced, withBlobKeyLock } from './blob-lifecycle.js'
 import { blobKeyForChecksum } from './content-address.js'
 import { RESOURCE_TABLE_BY_TYPE } from './tables.js'
 
@@ -318,11 +318,59 @@ export async function compressChunkedResourceObject(
       // reading `findCompressionEncodingForKey` here could race a
       // concurrent reclaim/delete of the referencing row and silently fall
       // back to a wrong literal).
-      let finalKey = compressedKey
+      //
+      // The headObj/copyObj dedup decision AND the row commit below run
+      // inside `withBlobKeyLock(blobKey, ...)` (#108 T12/T13): serialized
+      // via a transaction-scoped Postgres advisory lock against
+      // `deleteBlobIfUnreferenced`'s guarded-delete critical section for
+      // the SAME key, so a concurrent delete's reference-scan can never run
+      // between this dedup decision and this row's commit. The lock is
+      // taken only around this final decision+commit, AFTER the multi-GB
+      // streaming pass above has already landed the compressed bytes at
+      // the temp `compressedKey` -- never around the streaming itself.
       const finalEncoding: ResourceCompressionEncoding = 'gzip'
-      const existingBlob = await headObj(blobKey, bucket)
-      if (existingBlob.exists) {
-        finalKey = blobKey
+      const finalKey = await withBlobKeyLock(blobKey, async (tx) => {
+        let key = compressedKey
+        const existingBlob = await headObj(blobKey, bucket)
+        if (existingBlob.exists) {
+          key = blobKey
+        } else {
+          try {
+            await copyObj(compressedKey, blobKey, bucket)
+            key = blobKey
+          } catch (copyErr) {
+            // Safe fallback (e.g. a storage backend without server-side copy
+            // support): keep serving this object from its temp compressed
+            // key. Still fully correct — just not deduped against any future
+            // identical upload. Never fails the job over this.
+            logger.warn(
+              { err: copyErr, resourceType, resourceId, compressedKey, blobKey },
+              'resource-compression: copyObject to content-addressed key failed; keeping temp compressed key (no dedup for this object)'
+            )
+          }
+        }
+
+        await tx
+          .update(table)
+          .set({
+            fileRef: { ...fileRef, key },
+            compressionEncoding: finalEncoding,
+            fileChecksum: checksum,
+            fileSize: rawBytes,
+            updatedAt: new Date(),
+          })
+          .where(eq(table.id, resourceId))
+
+        return key
+      })
+
+      // Cleanup of superseded temp keys happens AFTER the lock/transaction
+      // above has committed -- these are per-upload-unique keys, never
+      // themselves a dedup target, so their guarded deletes don't need to
+      // coordinate with the blobKey lock (#108 safety foundation: still
+      // guarded, not a bare `del`, since this is a blob-delete site
+      // alongside `blob-reclamation.ts`/`resources.ts`).
+      if (finalKey !== compressedKey) {
         await deleteBlobIfUnreferenced({
           table,
           resourceId,
@@ -330,35 +378,7 @@ export async function compressChunkedResourceObject(
           ...(bucket ? { bucket } : {}),
           deleteFn: del,
         })
-      } else {
-        try {
-          await copyObj(compressedKey, blobKey, bucket)
-          finalKey = blobKey
-          await deleteBlobIfUnreferenced({
-            table,
-            resourceId,
-            key: compressedKey,
-            ...(bucket ? { bucket } : {}),
-            deleteFn: del,
-          })
-        } catch (copyErr) {
-          // Safe fallback (e.g. a storage backend without server-side copy
-          // support): keep serving this object from its temp compressed
-          // key. Still fully correct — just not deduped against any future
-          // identical upload. Never fails the job over this.
-          logger.warn(
-            { err: copyErr, resourceType, resourceId, compressedKey, blobKey },
-            'resource-compression: copyObject to content-addressed key failed; keeping temp compressed key (no dedup for this object)'
-          )
-        }
       }
-      // #108 safety foundation: guarded delete of the discarded raw object,
-      // not a bare `del` — its content now lives at `finalKey` either way
-      // (relocated to `blobKey`, or still `compressedKey` on the copy
-      // fallback above). A no-op today (this row's raw key is unique to
-      // it), but this is a blob-delete site alongside
-      // `blob-reclamation.ts`/`resources.ts` — the same guard applies
-      // wherever a committed word/rule/mask-list blob gets deleted.
       await deleteBlobIfUnreferenced({
         table,
         resourceId,
@@ -367,16 +387,6 @@ export async function compressChunkedResourceObject(
         deleteFn: del,
       })
 
-      await db
-        .update(table)
-        .set({
-          fileRef: { ...fileRef, key: finalKey },
-          compressionEncoding: finalEncoding,
-          fileChecksum: checksum,
-          fileSize: rawBytes,
-          updatedAt: new Date(),
-        })
-        .where(eq(table.id, resourceId))
       logger.info(
         { resourceType, resourceId, rawBytes, compressedBytes },
         'resource-compression: compressed'
@@ -401,11 +411,47 @@ export async function compressChunkedResourceObject(
     // measured `compressedBytes >= rawBytes` for this exact content (that's
     // how it got into this branch), so `'none'` is this worker's own
     // directly computed result, never adopted or defaulted from elsewhere.
-    let finalKey = rawKey
+    //
+    // Same lock discipline as the compressed branch above: the headObj/copyObj
+    // decision and the row commit are one atomic unit under
+    // `withBlobKeyLock(blobKey, ...)` (#108 T12/T13).
     const finalEncoding: ResourceCompressionEncoding = 'none'
-    const existingRawBlob = await headObj(blobKey, bucket)
-    if (existingRawBlob.exists) {
-      finalKey = blobKey
+    const finalKey = await withBlobKeyLock(blobKey, async (tx) => {
+      let key = rawKey
+      const existingRawBlob = await headObj(blobKey, bucket)
+      if (existingRawBlob.exists) {
+        key = blobKey
+      } else {
+        try {
+          await copyObj(rawKey, blobKey, bucket)
+          key = blobKey
+        } catch (copyErr) {
+          logger.warn(
+            { err: copyErr, resourceType, resourceId, rawKey, blobKey },
+            'resource-compression: copyObject to content-addressed key failed; keeping temp raw key (no dedup for this object)'
+          )
+        }
+      }
+
+      await tx
+        .update(table)
+        .set({
+          fileRef: { ...fileRef, key },
+          compressionEncoding: finalEncoding,
+          fileChecksum: checksum,
+          fileSize: rawBytes,
+          updatedAt: new Date(),
+        })
+        .where(eq(table.id, resourceId))
+
+      return key
+    })
+
+    // Same post-lock cleanup discipline as the compressed branch: only
+    // delete the temp raw key if it was actually superseded (relocated onto
+    // `blobKey`) -- if the copy fell back, `rawKey` IS the live key and must
+    // never be deleted.
+    if (finalKey !== rawKey) {
       await deleteBlobIfUnreferenced({
         table,
         resourceId,
@@ -413,35 +459,8 @@ export async function compressChunkedResourceObject(
         ...(bucket ? { bucket } : {}),
         deleteFn: del,
       })
-    } else {
-      try {
-        await copyObj(rawKey, blobKey, bucket)
-        finalKey = blobKey
-        await deleteBlobIfUnreferenced({
-          table,
-          resourceId,
-          key: rawKey,
-          ...(bucket ? { bucket } : {}),
-          deleteFn: del,
-        })
-      } catch (copyErr) {
-        logger.warn(
-          { err: copyErr, resourceType, resourceId, rawKey, blobKey },
-          'resource-compression: copyObject to content-addressed key failed; keeping temp raw key (no dedup for this object)'
-        )
-      }
     }
 
-    await db
-      .update(table)
-      .set({
-        fileRef: { ...fileRef, key: finalKey },
-        compressionEncoding: finalEncoding,
-        fileChecksum: checksum,
-        fileSize: rawBytes,
-        updatedAt: new Date(),
-      })
-      .where(eq(table.id, resourceId))
     logger.info(
       { resourceType, resourceId, rawBytes, compressedBytes },
       'resource-compression: kept raw (compression did not shrink the object)'

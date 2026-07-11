@@ -138,8 +138,18 @@ if (IS_ISOLATED) {
           }),
         }),
       }),
+      // `deleteBlobIfUnreferenced`'s reference-scan + physical delete, and
+      // `withBlobKeyLock`'s `pg_advisory_xact_lock` call, now run inside
+      // `db.transaction(...)` (#108 T12/T13) — the tx below needs `select`
+      // (same "no other live resource" no-rows shape as the top-level
+      // `db.select` above) and `execute` (the advisory-lock statement,
+      // ignored under test) alongside the existing update tracking.
       transaction: async (
         fn: (tx: {
+          select: (columns?: unknown) => {
+            from: () => { where: () => { limit: () => Promise<unknown[]> } }
+          }
+          execute: (sql: unknown) => Promise<unknown>
           update: (table: unknown) => {
             set: (values: Record<string, unknown>) => {
               where: () => { returning: () => Promise<unknown[]> }
@@ -148,6 +158,14 @@ if (IS_ISOLATED) {
         }) => Promise<unknown>
       ) =>
         fn({
+          select: (columns?: unknown) => ({
+            from: () => ({
+              where: () => ({
+                limit: () => Promise.resolve(columns ? [] : currentRow ? [currentRow] : []),
+              }),
+            }),
+          }),
+          execute: async () => ({ rowCount: 0 }),
           update: () => ({
             set: (values: Record<string, unknown>) => ({
               where: () => ({

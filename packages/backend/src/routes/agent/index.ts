@@ -617,11 +617,20 @@ agentRoutes.openapi(taskResourcesRoute, async (c) => {
     const result = await getResourcesForTask(taskId, agentId, projectId)
 
     if ('error' in result) {
+      // Also covers the permanent-missing-resource case (PR #282 review): a
+      // referenced resource that doesn't exist in this task's project at
+      // all (deleted, cross-project, or misconfigured). Reusing this
+      // existing branch rather than a 409 means that case is never
+      // retriable-looking to the agent.
       return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
     }
 
     if ('notReady' in result) {
-      logger.warn(
+      // Expected, retriable, per-poll state -- debug, not warn (PR #282
+      // review). The permanent-missing case above stays at warn (real
+      // config problem); enqueue *failures* inside
+      // enqueueResourceCompression also stay at warn (actionable).
+      logger.debug(
         { agentId, projectId, taskId },
         'Task resources not ready: a referenced resource has no resolvable download yet'
       )
@@ -777,6 +786,12 @@ agentRoutes.openapi(downloadUrlRoute, async (c) => {
     // non-null for hash lists (see AgentDownloadUrlResult), so a wordlist/
     // rulelist/masklist request can never satisfy this comparison and always
     // falls through to the unchanged 200 response below.
+    //
+    // Exact-match contract (PR #282 review): this is a deliberate raw string
+    // `===` comparison, not a full RFC 7232 weak-comparison implementation.
+    // The agent always echoes the etag it was given back verbatim, so there
+    // is no comma-separated etag list, no `*` wildcard, and no need to strip
+    // a `W/` prefix before comparing — `result.etag` already carries it.
     const ifNoneMatch = c.req.header('if-none-match')
     if (result.etag && ifNoneMatch === result.etag) {
       return c.body(null, 304)

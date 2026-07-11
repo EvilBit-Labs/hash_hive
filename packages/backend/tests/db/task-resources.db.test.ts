@@ -11,6 +11,13 @@
  * the typed `{ error }` outcome (404 at the route layer), never a
  * cross-project read or an unhandled throw.
  *
+ * Also proves the PR #282 review distinction between a TRANSIENT
+ * unresolved reference (the row exists in-project but isn't finished
+ * uploading/processing — `{ notReady: true }`, 409, retriable, and
+ * self-heals via `enqueueResourceCompression`) and a PERMANENT one (the
+ * row does not exist in this project at all — the generic `{ error }`
+ * outcome, never a 409, never retriable).
+ *
  * Runs under `just test-db`. Do NOT call client.end() — harness.test.ts
  * owns the shared client.
  */
@@ -299,6 +306,11 @@ describe('getResourcesForTask (#108 U6)', () => {
     // wordlist would be handed incomplete work, so getResourcesForTask
     // must NOT silently omit it (nor return the masklist alone) -- the
     // whole response is flagged not-ready instead (review fix for #108).
+    //
+    // The row still EXISTS in this project (just with an empty fileRef),
+    // so this is the transient case (PR #282 review) -- distinct from the
+    // permanent-missing case covered below -- and the self-heal enqueue
+    // must fire here too, not only on the "landed but no checksum" branch.
     await db.update(wordLists).set({ fileRef: {} }).where(eq(wordLists.id, wordlistId))
 
     const result = await getResourcesForTask(taskId, agentId, projectId)
@@ -307,6 +319,41 @@ describe('getResourcesForTask (#108 U6)', () => {
     // The not-ready outcome never leaks a partial resources array (e.g.
     // the still-resolvable masklist) alongside it.
     expect('resources' in result).toBe(false)
+
+    expect(compressionEnqueueCalls).toHaveLength(1)
+    expect(compressionEnqueueCalls[0]?.[1]).toEqual({
+      resourceType: 'wordlist',
+      resourceId: wordlistId,
+      projectId,
+    })
+  })
+
+  it("returns a permanent typed error (never 409) when a referenced resource does not exist in the task's project (deleted / cross-project / misconfigured reference)", async () => {
+    const { projectId, agentId, taskId } = await seedProjectWithTask(SLUG)
+    const other = await seedProjectWithTask(OTHER_SLUG)
+
+    // Point this task's attack at a wordlist that belongs to a DIFFERENT
+    // project. The FK is still satisfied (the row genuinely exists
+    // somewhere), but the project-scoped existence check
+    // (`resourceRowExistsInProject`) must fail exactly like a hard-deleted
+    // or never-existed reference would -- this is the misconfigured-
+    // reference case the permanent branch exists for.
+    const [taskRow] = await db
+      .select({ attackId: tasks.attackId })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+    await db
+      .update(attacks)
+      .set({ wordlistId: other.wordlistId })
+      .where(eq(attacks.id, taskRow!.attackId))
+
+    const result = await getResourcesForTask(taskId, agentId, projectId)
+
+    expect('error' in result).toBe(true)
+    expect('notReady' in result).toBe(false)
+    // Never the retriable 409 path -- and no self-heal enqueue either,
+    // since retrying can never resolve a reference to a nonexistent row.
+    expect(compressionEnqueueCalls).toHaveLength(0)
   })
 })
 
@@ -352,6 +399,12 @@ describe('getAgentDownloadUrl — hash-list integrity metadata (#108 U5)', () =>
 // tests seed real hash items, crack one, and prove `computeHashListEtag`
 // (and the `etag` field `getAgentDownloadUrl` surfaces from it) changes
 // only when the last-crack time actually changes.
+//
+// The validator format is `W/"hl-<id>-<maxEpochMillis>-<crackedCount>"`
+// (PR #282 review added the trailing cracked-count segment): `MAX(cracked_at)`
+// alone is unchanged when two or more hashes crack within the same
+// millisecond, so the count component is what actually catches that case
+// (see the dedicated same-millisecond test below).
 
 describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () => {
   it('reports a stable etag for a hash list with no cracked items', async () => {
@@ -370,7 +423,7 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
     const second = await computeHashListEtag(hashList!.id)
 
     expect(first).toBe(second)
-    expect(first).toBe(`W/"hl-${hashList!.id}-0"`)
+    expect(first).toBe(`W/"hl-${hashList!.id}-0-0"`)
   })
 
   it('changes the etag once a hash item is cracked', async () => {
@@ -386,7 +439,7 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
       .returning()
 
     const beforeCrack = await computeHashListEtag(hashList!.id)
-    expect(beforeCrack).toBe(`W/"hl-${hashList!.id}-0"`)
+    expect(beforeCrack).toBe(`W/"hl-${hashList!.id}-0-0"`)
 
     const crackedAt = new Date('2026-01-01T00:00:00.000Z')
     await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item!.id))
@@ -394,7 +447,37 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
     const afterCrack = await computeHashListEtag(hashList!.id)
 
     expect(afterCrack).not.toBe(beforeCrack)
-    expect(afterCrack).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}"`)
+    expect(afterCrack).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-1"`)
+  })
+
+  it('changes the etag when a second hash cracks at the exact same millisecond as the first (crackedCount catches what MAX(cracked_at) alone cannot)', async () => {
+    const { projectId } = await seedProjectWithTask(SLUG)
+    const [hashList] = await db
+      .insert(hashLists)
+      .values({ projectId, name: 'etag-same-millisecond', status: 'ready' })
+      .returning()
+
+    const [item1, item2] = await db
+      .insert(hashItems)
+      .values([
+        { hashListId: hashList!.id, hashValue: 'dddd' },
+        { hashListId: hashList!.id, hashValue: 'eeee' },
+      ])
+      .returning()
+
+    const crackedAt = new Date('2026-01-01T00:00:00.000Z')
+    await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item1!.id))
+    const afterFirst = await computeHashListEtag(hashList!.id)
+    expect(afterFirst).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-1"`)
+
+    // Second crack lands at the EXACT same millisecond as the first --
+    // MAX(cracked_at) alone would report an unchanged etag here, letting an
+    // agent reuse a cached set that's actually missing the second crack.
+    await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item2!.id))
+    const afterSecond = await computeHashListEtag(hashList!.id)
+
+    expect(afterSecond).not.toBe(afterFirst)
+    expect(afterSecond).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-2"`)
   })
 
   it('surfaces the same value on the etag field getAgentDownloadUrl returns for a hash list', async () => {

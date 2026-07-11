@@ -38,6 +38,7 @@ import { gunzipSync } from 'node:zlib'
 import type { CompressionStorageDeps } from '../../src/services/resources/resource-compression.js'
 
 import { db } from '../../src/db/index.js'
+import { deleteBlobIfUnreferenced } from '../../src/services/resources/blob-lifecycle.js'
 import { compressChunkedResourceObject } from '../../src/services/resources/resource-compression.js'
 
 const TEST_SLUG = 'resource-compression-worker-db-test-proj'
@@ -600,6 +601,95 @@ describe('compressChunkedResourceObject (#108 U4)', () => {
       // The raw temp object is still deleted -- only the copy-to-`blobs/`
       // step was skipped, not the rest of the finalize.
       expect(await objectExists(key)).toBe(false)
+    })
+
+    it("a guarded delete racing this worker's dedup decision never leaves a live row pointing at a missing blob (#108 T12/T13)", async () => {
+      // Same race as the direct-upload path (see
+      // `upload-resource-dedup.db.test.ts`), but from the chunked worker's
+      // side: resource A already landed content C at the content-addressed
+      // key K and is now being deleted/reclaimed (its row already stamped
+      // dead). Concurrently, resource B's chunked upload of the SAME raw
+      // content C is running THIS worker, which reaches its own
+      // headObj(K)-through-row-commit dedup decision while the delete is
+      // mid-flight. `withBlobKeyLock` must serialize the two exactly as it
+      // does for the direct-upload path.
+      const content = Buffer.from('november\noscar\npapa\n'.repeat(300), 'utf8')
+      const checksum = sha256Hex(content)
+      const blobKey = blobKeyForChecksum(checksum)
+
+      const a = await insertCompletedChunkedWordList(content)
+      const firstResult = await compressChunkedResourceObject('wordlist', a.id, defaultDeps)
+      expect(firstResult.status).toBe('compressed')
+      expect(fakeObjects.has(blobKey)).toBe(true)
+      await db.update(wordLists).set({ blobReclaimedAt: new Date() }).where(eq(wordLists.id, a.id))
+
+      const events: string[] = []
+      let releaseDelete: () => void = () => {
+        throw new Error('releaseDelete invoked before being assigned')
+      }
+      const deleteGate = new Promise<void>((resolve) => {
+        releaseDelete = resolve
+      })
+      let signalDeleteEntered: () => void = () => {
+        throw new Error('signalDeleteEntered invoked before being assigned')
+      }
+      const deleteEntered = new Promise<void>((resolve) => {
+        signalDeleteEntered = resolve
+      })
+
+      const hookedDeleteFn = async (key: string, bucket?: string): Promise<void> => {
+        events.push('delete:enter')
+        signalDeleteEntered()
+        await deleteGate
+        await fakeDeleteFile(key, bucket)
+        events.push('delete:done')
+      }
+
+      const deletePromise = deleteBlobIfUnreferenced({
+        table: wordLists,
+        resourceId: a.id,
+        key: blobKey,
+        deleteFn: hookedDeleteFn,
+      })
+
+      await deleteEntered
+
+      const b = await insertCompletedChunkedWordList(content)
+      const headObjectSpy = mock(async (key: string, bucket?: string) => {
+        events.push('worker:headObject')
+        return fakeHeadObject(key, bucket)
+      })
+
+      const workerPromise = compressChunkedResourceObject('wordlist', b.id, {
+        ...defaultDeps,
+        headObject: headObjectSpy,
+      })
+
+      // Prove the worker's dedup decision is genuinely blocked on the same
+      // advisory lock the delete holds, not merely slow.
+      const stillBlocked = await Promise.race([
+        workerPromise.then(() => 'resolved'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('still-blocked'), 150)),
+      ])
+      expect(stillBlocked).toBe('still-blocked')
+      expect(headObjectSpy).not.toHaveBeenCalled()
+
+      releaseDelete()
+      const deleteResult = await deletePromise
+      expect(deleteResult).toEqual({ deleted: true })
+
+      const workerResult = await workerPromise
+      expect(workerResult.status).toBe('compressed')
+
+      expect(events).toEqual(['delete:enter', 'delete:done', 'worker:headObject'])
+
+      // The invariant holds: B is now the sole live reference to `blobKey`,
+      // and the blob genuinely exists again.
+      expect(fakeObjects.has(blobKey)).toBe(true)
+      const rowB = await readWordList(b.id)
+      const fileRefB = rowB?.fileRef as { key?: string } | null
+      expect(fileRefB?.key).toBe(blobKey)
+      expect(rowB?.fileChecksum).toBe(checksum)
     })
   })
 })

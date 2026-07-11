@@ -12,6 +12,28 @@ import { gunzipSync } from 'node:zlib'
 
 import { compressBufferForStorage } from '../../../src/services/resources/compression.js'
 
+const XORSHIFT_SEED = 0x9e3779b9
+
+/**
+ * Deterministic high-entropy byte stream (xorshift32, fixed seed) for
+ * exercising the gzip-fallback path. Unlike `Math.random()`, this always
+ * produces the exact same bytes, so the resulting `encoding: 'none'`
+ * assertion below can't flake on a rare compressible draw.
+ */
+function deterministicIncompressibleBuffer(length: number): Buffer {
+  let state = XORSHIFT_SEED
+  const bytes = new Uint8Array(length)
+  for (let i = 0; i < length; i++) {
+    state ^= state << 13
+    state >>>= 0
+    state ^= state >>> 17
+    state ^= state << 5
+    state >>>= 0
+    bytes[i] = state & 0xff
+  }
+  return Buffer.from(bytes)
+}
+
 describe('compressBufferForStorage', () => {
   test('compressible text is stored as gzip, strictly smaller than the input', () => {
     // Long, highly repetitive text compresses well under gzip.
@@ -35,15 +57,17 @@ describe('compressBufferForStorage', () => {
     expect(gunzipSync(bytes)).toEqual(original)
   })
 
-  test('incompressible (random) content falls back to none and the original buffer', () => {
-    // crypto-random bytes have no exploitable redundancy; gzip cannot shrink
-    // them and typically grows them slightly (header/trailer overhead).
-    const random = Buffer.from(Array.from({ length: 2048 }, () => Math.floor(Math.random() * 256)))
+  test('incompressible (deterministic high-entropy) content falls back to none and the original buffer', () => {
+    // A fixed xorshift32 stream has no exploitable redundancy, so gzip cannot
+    // shrink it and typically grows it slightly (header/trailer overhead).
+    // Deterministic (seeded, not Math.random()) so the test can't flake on a
+    // rare compressible draw or a change to gzip's default settings.
+    const incompressible = deterministicIncompressibleBuffer(2048)
 
-    const result = compressBufferForStorage(random)
+    const result = compressBufferForStorage(incompressible)
 
     expect(result.encoding).toBe('none')
-    expect(result.bytes).toBe(random)
+    expect(result.bytes).toBe(incompressible)
   })
 
   test('a tiny input whose gzip overhead exceeds its size falls back to none', () => {

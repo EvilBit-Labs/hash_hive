@@ -1684,7 +1684,12 @@ describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
 // (here: no rulelist) never appears in the array.
 
 describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
-  it('returns { resources: [...] } with full integrity metadata per entry', async () => {
+  it('returns { resources: [...] } with full, non-null integrity metadata per entry', async () => {
+    // A 200 from this route is only ever reachable once every referenced
+    // slot has a complete download (PR #282 review tightened
+    // `taskResourceEntrySchema`'s checksum/size/encoding to non-nullable);
+    // the "worker hasn't run yet" case is exercised separately below as a
+    // 409, never as a 200 with nulls.
     getResourcesForTaskMock.mockImplementationOnce(() =>
       Promise.resolve({
         resources: [
@@ -1699,8 +1704,8 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
           {
             type: 'masklist',
             id: 9,
-            checksum: null,
-            size: null,
+            checksum: 'def456',
+            size: 2048,
             encoding: 'none',
             downloadUrl: 'https://example.test/masklist',
           },
@@ -1726,14 +1731,19 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
       encoding: 'gzip',
       downloadUrl: 'https://example.test/wordlist',
     })
-    // A resource with no checksum yet (worker hasn't run) reports null
-    // cleanly rather than a 500 or a fabricated value.
+    // Every entry in a 200 carries non-null checksum/size — never the
+    // "worker hasn't run yet" null shape (that's a 409, see below).
     expect(body.resources[1]).toMatchObject({
       type: 'masklist',
       id: 9,
-      checksum: null,
-      size: null,
+      checksum: 'def456',
+      size: 2048,
     })
+    for (const entry of body.resources) {
+      expect(entry['checksum']).not.toBeNull()
+      expect(entry['size']).not.toBeNull()
+      expect(entry['encoding']).not.toBeNull()
+    }
   })
 
   it('omits a resource slot the attack does not reference (no rulelist)', async () => {
@@ -1779,6 +1789,31 @@ describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
     expect(typeof body.error['message']).toBe('string')
     expect(body.error['timestamp']).toBeUndefined()
     expect(body.error['requestId']).toBeUndefined()
+  })
+
+  // PR #282 review: a referenced resource id that does not exist in the
+  // task's project at all (deleted / cross-project / misconfigured) is a
+  // PERMANENT condition — `getResourcesForTask` returns the generic
+  // `{ error }` outcome for this, never `{ notReady: true }`, so the route
+  // must never surface it as a 409 an agent would fruitlessly retry forever.
+  it('returns 404 (not 409) when a referenced resource does not exist in the project (permanent, not transient)', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        error: "Referenced wordlist resource 5 does not exist in this task's project",
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(409)
+    const body = (await res.json()) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('TASK_NOT_FOUND')
+    expect(body.error.message).toContain('does not exist in this task')
   })
 })
 
@@ -1872,7 +1907,12 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
         checksum: null,
         size: null,
         encoding: null,
-        etag: 'W/"hl-1-0"',
+        // Format is `W/"hl-<id>-<maxEpochMillis>-<crackedCount>"` (PR #282
+        // review added the trailing cracked-count segment); a synthetic
+        // fixture here since this test only proves the route forwards
+        // `getAgentDownloadUrl`'s etag verbatim, not the real
+        // `computeHashListEtag` format.
+        etag: 'W/"hl-1-0-0"',
       })
     )
 
@@ -1887,7 +1927,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — integrity metadat
     expect(body['checksum']).toBeNull()
     expect(body['size']).toBeNull()
     expect(body['encoding']).toBeNull()
-    expect(body['etag']).toBe('W/"hl-1-0"')
+    expect(body['etag']).toBe('W/"hl-1-0-0"')
   })
 
   it('returns null checksum/size for a wordlist resource whose checksum worker has not run yet', async () => {
@@ -1945,7 +1985,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
         checksum: null,
         size: null,
         encoding: null,
-        etag: 'W/"hl-1-1735689600000"',
+        etag: 'W/"hl-1-1735689600000-3"',
       })
     )
 
@@ -1954,7 +1994,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
       method: 'GET',
       headers: {
         authorization: `Bearer ${token}`,
-        'if-none-match': 'W/"hl-1-1735689600000"',
+        'if-none-match': 'W/"hl-1-1735689600000-3"',
       },
     })
 
@@ -1976,7 +2016,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
         checksum: null,
         size: null,
         encoding: null,
-        etag: 'W/"hl-1-1735689700000"',
+        etag: 'W/"hl-1-1735689700000-4"',
       })
     )
 
@@ -1985,13 +2025,13 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
       method: 'GET',
       headers: {
         authorization: `Bearer ${token}`,
-        'if-none-match': 'W/"hl-1-1735689600000"',
+        'if-none-match': 'W/"hl-1-1735689600000-3"',
       },
     })
 
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
-    expect(body['etag']).toBe('W/"hl-1-1735689700000"')
+    expect(body['etag']).toBe('W/"hl-1-1735689700000-4"')
     expect(body['url']).toBe('https://example.test/hashlist')
   })
 
@@ -2008,7 +2048,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
         checksum: null,
         size: null,
         encoding: null,
-        etag: 'W/"hl-1-0"',
+        etag: 'W/"hl-1-0-0"',
       })
     )
 
@@ -2020,7 +2060,7 @@ describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshne
 
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
-    expect(body['etag']).toBe('W/"hl-1-0"')
+    expect(body['etag']).toBe('W/"hl-1-0-0"')
   })
 
   it('never returns 304 for a non-hash-list resource, even with a matching If-None-Match header', async () => {

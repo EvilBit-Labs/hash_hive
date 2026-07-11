@@ -36,6 +36,36 @@
  * hash list's key will simply never match anything in `CHECKABLE_TABLES`,
  * which is the correct, safe no-op for a resource type outside the dedup
  * pool.
+ *
+ * ── Delete/adopt race (#108 T12/T13) ─────────────────────────────────
+ *
+ * Content-addressing means TWO independent operations can now race on the
+ * SAME physical key `K = blobs/<checksum>`: this module's guarded delete
+ * (scan for other live referrers, then physically delete `K`) and a
+ * concurrent upload's dedup decision (does `K` already exist? adopt/re-use
+ * it; if not, write it) followed by that upload's own row commit pointing
+ * at `K`. Interleaved without coordination, the delete's scan can run
+ * before the adopting upload's row has committed (finding zero live
+ * referrers, since the adopter isn't live yet) and physically remove `K` --
+ * and the adopting row then commits pointing at a blob that no longer
+ * exists. Silent data loss, invisible until the next download.
+ *
+ * `withBlobKeyLock` closes this by serializing every critical section that
+ * touches a given key `K` behind a transaction-scoped Postgres advisory
+ * lock keyed on `K` (`pg_advisory_xact_lock`, auto-released on commit or
+ * rollback -- never needs an explicit unlock, even on throw). Every call
+ * site that (a) decides whether to physically delete `K`, or (b) decides
+ * whether to adopt vs. write `K` and then commits a row pointing at it,
+ * MUST run that entire decision-through-commit sequence inside
+ * `withBlobKeyLock(K, ...)`. With both sides locked on the same key, the two
+ * critical sections can never interleave: whichever acquires the lock first
+ * runs to completion (visible to everyone) before the other's decision
+ * logic (e.g. `headObject`) even executes, so the loser always observes the
+ * winner's already-committed reality instead of racing it.
+ *
+ * Single lock key per blob -- no cross-key lock ordering, so no deadlock
+ * risk. See `services/tasks/preemption.ts`'s `PREEMPTION_LOCK_NAMESPACE` for
+ * the sibling per-issue advisory-lock-namespace convention this mirrors.
  */
 import { hashLists, maskLists, ruleLists, wordLists } from '@hashhive/shared'
 import { and, isNull, ne, sql } from 'drizzle-orm'
@@ -45,6 +75,37 @@ import type { ResourceTable } from '../resources.js'
 import { logger } from '../../config/logger.js'
 import { deleteFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
+
+/**
+ * First key of the two-int `pg_advisory_xact_lock(key1, key2)` call. Pinned
+ * to the issue number so this lock namespace never collides with any other
+ * advisory-lock site (e.g. `tasks/preemption.ts`'s `PREEMPTION_LOCK_NAMESPACE`
+ * uses `97`); the second key is `hashtext(blobKey)` -- Postgres advisory
+ * locks take integers, not arbitrary text, so the blob key (a string) is
+ * folded into an int4 via `hashtext`.
+ */
+const BLOB_KEY_LOCK_NAMESPACE = 108
+
+/** Drizzle transaction handle inferred from `db.transaction`. */
+export type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Run `fn` inside a Postgres transaction holding a transaction-scoped
+ * advisory lock keyed on `key`. See the module docblock's "Delete/adopt
+ * race" section for why every critical section touching a shared blob key
+ * MUST go through this helper. The lock is released automatically when the
+ * transaction commits OR rolls back (an exception thrown from `fn`
+ * propagates out of `db.transaction`, which rolls back and releases the
+ * lock -- there is no separate unlock path to forget).
+ */
+export async function withBlobKeyLock<T>(key: string, fn: (tx: DbTx) => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${BLOB_KEY_LOCK_NAMESPACE}, hashtext(${key}))`
+    )
+    return fn(tx)
+  })
+}
 
 /**
  * The three tables eligible to share a blob once content-addressing lands.
@@ -77,6 +138,12 @@ export interface DeleteBlobIfUnreferencedArgs {
 /**
  * Delete a resource's object-store blob, but only if no OTHER live resource
  * still shares it. See the module docblock for the full guard design.
+ *
+ * The reference-scan and the physical delete both run inside
+ * `withBlobKeyLock(key, ...)` (#108 T12/T13): serialized against any
+ * concurrent upload dedup decision for the SAME key, so a concurrent
+ * adopter can never commit a live row pointing at `key` in the window
+ * between this scan and this delete.
  */
 export async function deleteBlobIfUnreferenced(
   args: DeleteBlobIfUnreferencedArgs
@@ -91,14 +158,19 @@ export async function deleteBlobIfUnreferenced(
   // an operation that already succeeded, and skip blob cleanup with no log
   // trail. Both failure modes share the same best-effort contract: log and
   // report `{ deleted: false, reason: 'error' }` rather than propagating.
+  // The try/catch wraps the WHOLE locked transaction, not just its body --
+  // a thrown error rolls the transaction back (releasing the lock) before
+  // this catch ever runs.
   try {
-    const isShared = await hasOtherLiveResourceWithKey(table, resourceId, key)
-    if (isShared) {
-      return { deleted: false, reason: 'shared' }
-    }
+    return await withBlobKeyLock(key, async (tx) => {
+      const isShared = await hasOtherLiveResourceWithKey(tx, table, resourceId, key)
+      if (isShared) {
+        return { deleted: false, reason: 'shared' }
+      }
 
-    await deleteFn(key, bucket)
-    return { deleted: true }
+      await deleteFn(key, bucket)
+      return { deleted: true }
+    })
   } catch (err) {
     // A resource marked reclaimed/deleted while its blob may still exist
     // needs operator attention -- more so now that keys are shared across
@@ -112,6 +184,7 @@ export async function deleteBlobIfUnreferenced(
 }
 
 async function hasOtherLiveResourceWithKey(
+  tx: DbTx,
   table: BlobOwnerTable,
   resourceId: number,
   key: string
@@ -119,7 +192,7 @@ async function hasOtherLiveResourceWithKey(
   for (const candidateTable of CHECKABLE_TABLES) {
     const isSelfTable = (candidateTable as BlobOwnerTable) === table
     // oxlint-disable-next-line no-await-in-loop -- three small point lookups against distinct tables; not a hot path
-    const [row] = await db
+    const [row] = await tx
       .select({ id: candidateTable.id })
       .from(candidateTable)
       .where(

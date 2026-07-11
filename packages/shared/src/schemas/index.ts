@@ -846,18 +846,25 @@ export const resourceCompressionEncodingSchema = z.enum(['gzip', 'none'])
 export const taskResourceTypeSchema = z.enum(['wordlist', 'rulelist', 'masklist'])
 
 /**
- * One resolved static resource for a task's attack. `checksum`/`size`
- * are `null` when the row hasn't captured them yet (e.g. an upload
- * whose checksum-capture worker hasn't run); `encoding` defaults to
- * `'none'` at the DB level so it is only `null` here if the resource
- * genuinely has no encoding recorded.
+ * One resolved static resource for a task's attack. A `200` from `GET
+ * /tasks/{taskId}/resources` only ever contains entries whose
+ * `checksum`/`size`/`encoding` are fully populated — `getResourcesForTask`
+ * (PR #282 review) gates any referenced resource that hasn't finished
+ * uploading or hasn't been checksum/compression-processed yet behind a
+ * `409 TASK_RESOURCES_NOT_READY` instead of surfacing it here with nulls, so
+ * these three fields are never `null` in a `200` response. Contrast with
+ * `GET /resources/{type}/{id}/download-url` (the single-resource lookup,
+ * `downloadUrlResponseSchema` in `routes/agent/index.ts`), which is NOT
+ * gated by this readiness check and legitimately reports `null` for hash
+ * lists (no such columns) and for a resource whose checksum worker hasn't
+ * run yet — that schema is intentionally unchanged and stays nullable.
  */
 export const taskResourceEntrySchema = z.object({
   type: taskResourceTypeSchema,
   id: z.number().int().positive(),
-  checksum: z.string().nullable(),
-  size: z.number().int().nonnegative().nullable(),
-  encoding: resourceCompressionEncodingSchema.nullable(),
+  checksum: z.string(),
+  size: z.number().int().nonnegative(),
+  encoding: resourceCompressionEncodingSchema,
   downloadUrl: z.url(),
 })
 

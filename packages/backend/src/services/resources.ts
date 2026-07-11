@@ -32,6 +32,7 @@ import {
   type BlobOwnerTable,
   type DeleteBlobFn,
   deleteBlobIfUnreferenced,
+  withBlobKeyLock,
 } from './resources/blob-lifecycle.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
 import { compressBufferForStorage } from './resources/compression.js'
@@ -826,17 +827,32 @@ export async function getHashListStats(hashListId: number): Promise<{
  * (`propagateCrack`). A hash list with no cracks yet reports epoch `0` so
  * the etag is stable (present, not absent) before the first crack.
  *
+ * The validator also folds in `COUNT(cracked_at)` (PR #282 review): two or
+ * more hashes cracking within the same millisecond would otherwise leave
+ * `MAX(cracked_at)` unchanged, so an agent polling right in that window
+ * could reuse a stale cached set that's actually missing the later crack(s).
+ * Adding the count as a second component makes the validator change on
+ * every additional crack even when the timestamp collides.
+ *
  * The value is a *weak* validator (`W/"..."`) because it identifies an
- * equivalent uncracked set, not a byte-identical representation.
+ * equivalent uncracked set, not a byte-identical representation. The
+ * consuming route compares it via exact string equality against the raw
+ * `If-None-Match` header (see the route handler) — this is intentionally
+ * NOT a full RFC 7232 weak-comparison implementation (no comma-list or `*`
+ * support), since the agent always echoes the etag verbatim.
  */
 export async function computeHashListEtag(hashListId: number): Promise<string> {
   const [row] = await db
-    .select({ lastCrackedAt: max(hashItems.crackedAt) })
+    .select({
+      lastCrackedAt: max(hashItems.crackedAt),
+      crackedCount: count(hashItems.crackedAt),
+    })
     .from(hashItems)
     .where(eq(hashItems.hashListId, hashListId))
 
   const epochMillis = row?.lastCrackedAt ? new Date(row.lastCrackedAt).getTime() : 0
-  return `W/"hl-${hashListId}-${epochMillis}"`
+  const crackedCount = Number(row?.crackedCount ?? 0)
+  return `W/"hl-${hashListId}-${epochMillis}-${crackedCount}"`
 }
 
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────
@@ -1012,6 +1028,29 @@ export async function uploadResourceFile(
     throw new ChecksumMismatchError(resourceId, resourceType)
   }
 
+  // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
+  // the common upload path never needs the async worker, using the same utils
+  // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
+  // sized by line count; a masklist by its summed mask keyspace (#231). Pure
+  // computation over the already-buffered bytes -- no shared storage state,
+  // so it happens before the blob-key lock below, keeping that lock's scope
+  // as tight as correctness allows.
+  const text = buffer.toString('utf8')
+  let lineCount: number | null = null
+  let masklistKeyspace: string | null = null
+  if (resourceType === 'masklist') {
+    masklistKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
+    if (masklistKeyspace === null) {
+      logger.warn(
+        { resourceType, resourceId },
+        'masklist keyspace uncomputable (custom charsets / unknown tokens); dependent attacks fall back to single-task'
+      )
+    }
+  } else {
+    const predicate = lineCountPredicateFor(resourceType)
+    lineCount = predicate ? countLinesInText(text, predicate) : null
+  }
+
   // Content-addressed storage (#108 dedup follow-up): the blob lives at a
   // GLOBAL key derived purely from the raw checksum — `blobs/<checksum>`,
   // no extension (the download filename always comes from `fileRef.name`,
@@ -1033,89 +1072,85 @@ export async function uploadResourceFile(
   // If NO live row references the key (a prior reclaim-delete that failed
   // to clear the physical blob, a reclaimed-shell restore mid-flight, or a
   // concurrent upload racing ahead of the winner's row commit),
-  // `findCompressionEncodingForKey` returns null. Compression is
-  // deterministic on content, so the buffer already in memory here lets us
-  // recompute the correct encoding authoritatively instead of guessing
-  // `'none'` -- a wrong `'none'` would tell the agent to read gzip bytes
-  // raw and fail the checksum verify (#108 review).
+  // `findCompressionEncodingForKey` returns null. Rather than merely
+  // recomputing a LABEL for bytes we never touch (#108 review), this
+  // RE-UPLOADS the current deterministic representation of the buffer
+  // already in memory -- the stored bytes and the recorded encoding must
+  // always agree, and the existing object at this key could have been
+  // written under a different (future) compression policy.
+  //
+  // The whole decision-through-commit sequence below runs inside
+  // `withBlobKeyLock(blobKey, ...)` (#108 T12/T13): serialized via a
+  // transaction-scoped Postgres advisory lock against
+  // `deleteBlobIfUnreferenced`'s guarded-delete critical section for the
+  // SAME key, so a concurrent delete's reference-scan can never run between
+  // this dedup decision and this row's commit -- the two critical sections
+  // can never interleave. `MAX_DIRECT_UPLOAD_BYTES` bounds the direct-upload
+  // path to 10 MB, so holding the lock across the (fast, bounded)
+  // `headObject`/compress/`uploadFile` calls here is an acceptable trade
+  // for correctness (unlike the 100 GB+ chunked-upload worker, which
+  // streams to a temp key BEFORE ever taking this lock).
   const blobKey = blobKeyForChecksum(checksum)
-  let compressionEncoding: ResourceCompressionEncoding
-  const existingBlob = await headObjectFn(blobKey)
-  if (existingBlob.exists) {
-    const adopted = await findCompressionEncodingForKey(blobKey)
-    if (adopted === null) {
-      logger.error(
-        { resourceType, resourceId, blobKey },
-        'uploadResourceFile: content-addressed blob exists in storage but no live row references it (unexpected -- signals a prior orphaned delete); recomputing encoding from the in-memory buffer'
-      )
-    }
-    compressionEncoding = adopted ?? compressBufferForStorage(buffer).encoding
-  } else {
-    // Compress the raw buffer before storage (#108 U3): word/rule/mask
-    // lists only (hash lists never reach this function — see
-    // `ResourceTable`). Gzip specifically, and only when it actually
-    // shrinks the payload; otherwise store the raw bytes unchanged.
-    // `fileSize`/`fileChecksum` below always describe the RAW file — the
-    // agent-facing contract and the reclaimed-shell checksum comparison
-    // must never depend on which encoding a given upload happened to pick.
-    const compressed = compressBufferForStorage(buffer)
-    compressionEncoding = compressed.encoding
-    await uploadFileFn(blobKey, compressed.bytes, file.type || 'application/octet-stream')
-  }
-
-  // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
-  // the common upload path never needs the async worker, using the same utils
-  // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
-  // sized by line count; a masklist by its summed mask keyspace (#231).
-  const text = buffer.toString('utf8')
-  let lineCount: number | null = null
-  let masklistKeyspace: string | null = null
-  if (resourceType === 'masklist') {
-    masklistKeyspace = sumMasklistKeyspace(splitTextLines(text), MAX_LINE_LENGTH)
-    if (masklistKeyspace === null) {
-      logger.warn(
-        { resourceType, resourceId },
-        'masklist keyspace uncomputable (custom charsets / unknown tokens); dependent attacks fall back to single-task'
-      )
-    }
-  } else {
-    const predicate = lineCountPredicateFor(resourceType)
-    lineCount = predicate ? countLinesInText(text, predicate) : null
-  }
-
   const entityType = entityTypeForTable(table)
-  const updateValues = {
-    fileRef: {
-      bucket: env.S3_BUCKET,
-      key: blobKey,
-      contentType: file.type || 'application/octet-stream',
-      size: file.size,
-      name: file.name,
-      uploadedAt: new Date().toISOString(),
-    },
-    fileSize: file.size,
-    compressionEncoding,
-    ...(lineCount !== null ? { lineCount } : {}),
-    ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
-    status: 'ready' as const,
-    // Capture the checksum on every finalize (issue #106 U12) — including a
-    // brand-new resource's first upload — so a future archive + reclaim of
-    // THIS resource has something to verify a re-upload against. A matching
-    // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
-    // resource usable again (R12); isReclaimedShell is false for a normal
-    // (non-shell) upload, so this key is simply omitted there.
-    fileChecksum: checksum,
-    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
-    updatedAt: new Date(),
-  }
 
-  // Wrap DB write + audit record in a transaction so a failed audit rolls
-  // back the metadata write (R4). The S3 upload above already succeeded and
-  // is not transactional (S3 is not Postgres); on rollback the uploaded
-  // object becomes an orphan. This is an acceptable trade-off — audit failure
-  // is a configuration error, not a normal code path. The non-transactional
-  // keyspace fan-out runs after commit so it is unaffected by the rollback.
-  await db.transaction(async (tx) => {
+  await withBlobKeyLock(blobKey, async (tx) => {
+    let compressionEncoding: ResourceCompressionEncoding
+    const existingBlob = await headObjectFn(blobKey)
+    const adopted = existingBlob.exists ? await findCompressionEncodingForKey(blobKey, tx) : null
+    if (adopted !== null) {
+      compressionEncoding = adopted
+    } else {
+      if (existingBlob.exists) {
+        logger.error(
+          { resourceType, resourceId, blobKey },
+          'uploadResourceFile: content-addressed blob exists in storage but no live row references it (unexpected -- signals a prior orphaned delete); re-uploading current deterministic representation so stored bytes and recorded encoding always agree'
+        )
+      }
+      // Compress the raw buffer before storage (#108 U3): word/rule/mask
+      // lists only (hash lists never reach this function — see
+      // `ResourceTable`). Gzip specifically, and only when it actually
+      // shrinks the payload; otherwise store the raw bytes unchanged.
+      // `fileSize`/`fileChecksum` below always describe the RAW file — the
+      // agent-facing contract and the reclaimed-shell checksum comparison
+      // must never depend on which encoding a given upload happened to pick.
+      const compressed = compressBufferForStorage(buffer)
+      compressionEncoding = compressed.encoding
+      await uploadFileFn(blobKey, compressed.bytes, file.type || 'application/octet-stream')
+    }
+
+    const updateValues = {
+      fileRef: {
+        bucket: env.S3_BUCKET,
+        key: blobKey,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        name: file.name,
+        uploadedAt: new Date().toISOString(),
+      },
+      fileSize: file.size,
+      compressionEncoding,
+      ...(lineCount !== null ? { lineCount } : {}),
+      ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
+      status: 'ready' as const,
+      // Capture the checksum on every finalize (issue #106 U12) — including a
+      // brand-new resource's first upload — so a future archive + reclaim of
+      // THIS resource has something to verify a re-upload against. A matching
+      // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
+      // resource usable again (R12); isReclaimedShell is false for a normal
+      // (non-shell) upload, so this key is simply omitted there.
+      fileChecksum: checksum,
+      ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
+      updatedAt: new Date(),
+    }
+
+    // The row write + audit record commit as part of the SAME
+    // advisory-locked transaction (R4: a failed audit rolls back the
+    // metadata write too) -- this is what makes the dedup decision and the
+    // row commit one atomic, lock-serialized unit. The S3 upload above
+    // already succeeded and is not transactional (S3 is not Postgres); on
+    // rollback the uploaded object becomes an orphan. This is an acceptable
+    // trade-off — audit failure is a configuration error, not a normal code
+    // path.
     const [updated] = await tx
       .update(table)
       .set(updateValues)

@@ -132,10 +132,19 @@ if (IS_ISOLATED) {
           }
         },
       }),
-      // uploadResourceFile wraps its DB write + recordAuditEvent in a transaction.
-      // The tx exposes the same update tracking logic plus insert for the recorder.
+      // uploadResourceFile's dedup decision + row commit now run inside
+      // `withBlobKeyLock`'s `db.transaction(...)` (#108 T12/T13), so the tx
+      // also needs `execute` (the `pg_advisory_xact_lock` call) and `select`
+      // (`findCompressionEncodingForKey`'s adopt-encoding lookup on a dedup
+      // hit — unused here since every test's `headObject` mock defaults to
+      // `{ exists: false }`, but wired for shape-completeness) alongside the
+      // same update-tracking logic plus insert for the recorder.
       transaction: async (
         fn: (tx: {
+          select: (fields?: Record<string, unknown>) => {
+            from: () => { where: () => { limit: () => Promise<unknown[]> } }
+          }
+          execute: (sql: unknown) => Promise<unknown>
           update: (table: unknown) => {
             set: (values: Record<string, unknown>) => {
               where: (cond: unknown) => { returning: () => Promise<unknown[]> }
@@ -145,6 +154,12 @@ if (IS_ISOLATED) {
         }) => Promise<unknown>
       ) =>
         fn({
+          select: () => ({
+            from: () => ({
+              where: () => ({ limit: () => Promise.resolve([]) }),
+            }),
+          }),
+          execute: async () => ({ rowCount: 0 }),
           update: (table: unknown) => ({
             set: (values: Record<string, unknown>) => {
               if (table === maskLists && 'keyspace' in values) {

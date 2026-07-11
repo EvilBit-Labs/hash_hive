@@ -25,36 +25,47 @@
  * rulelist/masklist, matching the attack schema's three resource slots.
  *
  * A slot the attack simply doesn't use (its FK column is NULL) is
- * cleanly omitted — that's normal. A slot whose FK IS set is a
- * different, non-silent case whenever it isn't fully usable yet — an
- * agent cracking against an incomplete or unverified resource set is a
- * correctness bug, so `getResourcesForTask` returns a typed
- * `{ notReady: true }` outcome for the whole task instead of quietly
- * returning a partial or unverified resource list. Two situations
- * trigger this:
- *   - `getAgentDownloadUrl` resolves to null (no fileRef at all — upload
- *     never finished, or the row was deleted out from under the
- *     attack).
- *   - `getAgentDownloadUrl` resolves a real download, but its `checksum`
- *     is null (the file has landed but the background checksum/
- *     compression worker hasn't run yet). This branch also re-enqueues
- *     that worker (best-effort, idempotent) so a lost or failed original
- *     enqueue self-heals on the next agent poll instead of wedging the
- *     task behind a 409 forever (see the review fix for #108 this
- *     comment accompanies).
+ * cleanly omitted — that's normal. A slot whose FK IS set but fails to
+ * resolve to a *complete* download (no download at all, OR a download
+ * with a null `checksum`, OR a download with a null `size`) is a
+ * different, non-silent case: an agent cracking against an incomplete
+ * or unverified resource set is a correctness bug. `getResourcesForTask`
+ * never hands back a partial or unverified resource list for these —
+ * but it does distinguish (PR #282 review) WHY the slot failed to
+ * resolve, because the two causes need different caller behavior:
+ *
+ *   - **Transient (retriable).** The resource row still exists in the
+ *     task's project — the upload hasn't finished, or it's landed but
+ *     the background checksum/compression worker hasn't run yet. This
+ *     is a typed `{ notReady: true }` outcome (409 at the route layer)
+ *     and also re-enqueues the compression worker (best-effort,
+ *     idempotent) so a lost or failed original enqueue self-heals on
+ *     the next agent poll instead of wedging the task behind a 409
+ *     forever.
+ *   - **Permanent (not retriable).** The resource row does NOT exist in
+ *     the task's project at all — hard-deleted, pointed at a different
+ *     project, or otherwise misconfigured. Looping an agent through 409
+ *     forever here would never resolve, so this instead returns the
+ *     generic `{ error: string }` outcome (a typed 4xx at the route
+ *     layer, never a 409) and logs at `warn` — a task referencing a
+ *     resource that doesn't exist in its own project is a real
+ *     configuration problem worth surfacing loudly.
  */
 import {
   attacks,
   campaigns,
+  maskLists,
+  ruleLists,
   tasks,
   type TaskResourceEntry,
   type TaskResourceType,
+  wordLists,
 } from '@hashhive/shared'
 import { and, eq } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
-import { getAgentDownloadUrl } from '../resources.js'
+import { getAgentDownloadUrl, type ResourceTable } from '../resources.js'
 import { enqueueResourceCompression } from '../resources/resource-compression-trigger.js'
 
 /**
@@ -74,15 +85,57 @@ const RESOURCE_SLOTS = [
   outputType: TaskResourceType
 }>
 
+/** `downloadType` -> the underlying resource table, used only for the
+ * project-scoped existence probe (`resourceRowExistsInProject` below) that
+ * distinguishes a transient not-ready state from a permanent missing-row
+ * state. */
+const RESOURCE_TABLE_BY_DOWNLOAD_TYPE: Record<
+  (typeof RESOURCE_SLOTS)[number]['downloadType'],
+  ResourceTable
+> = {
+  wordlists: wordLists,
+  rulelists: ruleLists,
+  masklists: maskLists,
+}
+
+/**
+ * Lightweight existence probe (`SELECT 1 ... LIMIT 1`) used only after
+ * `getAgentDownloadUrl` has already failed to produce a complete download
+ * for a referenced slot — distinguishes "the row exists in this project but
+ * isn't finished processing yet" (transient, retry) from "the row does not
+ * exist in this project at all" (permanent, deleted/cross-project/
+ * misconfigured — retrying can never fix this).
+ */
+async function resourceRowExistsInProject(
+  downloadType: (typeof RESOURCE_SLOTS)[number]['downloadType'],
+  resourceId: number,
+  projectId: number
+): Promise<boolean> {
+  const table = RESOURCE_TABLE_BY_DOWNLOAD_TYPE[downloadType]
+  const [row] = await db
+    .select({ id: table.id })
+    .from(table)
+    .where(and(eq(table.id, resourceId), eq(table.projectId, projectId)))
+    .limit(1)
+  return row !== undefined
+}
+
 export type GetResourcesForTaskResult =
   | { resources: TaskResourceEntry[] }
+  // Also doubles (PR #282 review) as the permanent outcome for a
+  // referenced resource slot that does not exist in the task's project at
+  // all (deleted / cross-project / misconfigured reference) — see the
+  // module doc comment above. Never a 409; the route maps this to a
+  // typed 4xx exactly like the "task not found" case already handled here.
   | { error: string }
-  // A referenced (non-null FK) resource slot could not be resolved to a
-  // download, OR resolved but is not yet checksummed — the task's resource
-  // set is incomplete or unverified right now. Distinct from a slot the
-  // attack simply doesn't use, which is never surfaced at all. Retriable:
-  // the caller (agent) should back off and re-poll rather than cracking
-  // against a partial or unverified set.
+  // A referenced (non-null FK) resource slot resolved to an incomplete
+  // download (missing entirely, or missing checksum/size) AND the
+  // underlying row still exists in this project — the task's resource set
+  // is incomplete or unverified right now, but retrying may resolve it.
+  // Distinct from a slot the attack simply doesn't use, which is never
+  // surfaced at all, and distinct from the permanent `{ error }` case
+  // above. Retriable: the caller (agent) should back off and re-poll
+  // rather than cracking against a partial or unverified set.
   | { notReady: true }
 
 export async function getResourcesForTask(
@@ -138,54 +191,77 @@ export async function getResourcesForTask(
   const resources: TaskResourceEntry[] = []
   let hasUnresolvedReference = false
   for (const { slot, resourceId, download } of resolved) {
-    if (!download) {
-      // A resource id set on the attack but with no uploaded file at all
-      // yet (upload never finished, or the row was deleted out from under
-      // the attack) has no meaningful download URL to hand back. Unlike a
-      // slot the attack never set, this must NOT be silently dropped -- an
-      // agent handed a partial resource set would crack against an
-      // incomplete job. Flag the whole response as not-ready instead.
-      hasUnresolvedReference = true
-      logger.warn(
-        { taskId, agentId, projectId, resourceType: slot.outputType, resourceId },
-        'getResourcesForTask: referenced resource has no resolvable download yet; reporting not-ready'
-      )
+    // A "200 entry always carries complete integrity metadata" contract
+    // (PR #282 review) — gate on ALL THREE of no-download / null checksum /
+    // null size, not just checksum, so a resource missing only its size
+    // (which the schema now also requires non-null) is caught here too.
+    // Written as direct non-null checks (rather than a derived boolean) so
+    // TypeScript narrows `download.checksum`/`download.size` to non-null
+    // inside this branch, matching the now-non-nullable `TaskResourceEntry`.
+    if (download && download.checksum !== null && download.size !== null) {
+      resources.push({
+        type: slot.outputType,
+        id: resourceId,
+        checksum: download.checksum,
+        size: download.size,
+        // `encoding` is typed nullable on `AgentDownloadUrlResult` because
+        // it's `null` for hash lists (out of scope here — this loop only
+        // ever calls `getAgentDownloadUrl` with wordlists/rulelists/
+        // masklists), where the column defaults to `'none'` and is never
+        // actually null. The `?? 'none'` fallback matches that same default
+        // and is defensive only, not a real runtime path.
+        encoding: download.encoding ?? 'none',
+        downloadUrl: download.url,
+      })
       continue
     }
 
-    if (download.checksum === null) {
-      // The file has landed (getAgentDownloadUrl only returns non-null once
-      // fileRef.bucket/key are set) but the background checksum/compression
-      // worker hasn't run yet. Handing this back as a normal 200 entry would
-      // let an agent crack against — and cache — content it can never
-      // verify, defeating the whole point of #108's integrity guarantee.
-      // Same not-ready outcome as the no-download case above.
-      hasUnresolvedReference = true
+    // The slot failed to resolve to a complete download. Distinguish WHY
+    // (PR #282 review) before deciding how to respond: a resource row that
+    // still exists in this project just hasn't finished uploading or being
+    // checksum/compression-processed yet (transient, retriable); a resource
+    // row that does not exist in this project at all is permanently
+    // unresolvable (deleted, cross-project, or a bad reference) and must
+    // never loop the caller through 409 forever.
+    const existsInProject = await resourceRowExistsInProject(
+      slot.downloadType,
+      resourceId,
+      projectId
+    )
+
+    if (!existsInProject) {
       logger.warn(
         { taskId, agentId, projectId, resourceType: slot.outputType, resourceId },
-        'getResourcesForTask: referenced resource has landed but has no checksum yet; reporting not-ready and re-enqueuing compression'
+        "getResourcesForTask: referenced resource does not exist in this task's project (deleted, cross-project, or misconfigured reference); returning a permanent error"
       )
-      // Self-heal (best-effort): re-enqueue the compression/checksum worker
-      // so a lost or failed original enqueue -- or a worker that crashed
-      // mid-run -- recovers on the next agent poll instead of wedging this
-      // task behind a permanent 409. `enqueueResourceCompression` is
-      // idempotent (deduped jobId) and the worker itself no-ops once
-      // `file_checksum` is set, so this can never race or duplicate a
-      // legitimate in-flight compression pass. It also never throws --
-      // failures are logged and swallowed internally -- so it's safe to
-      // await unguarded here.
-      await enqueueResourceCompression(slot.outputType, resourceId, projectId)
-      continue
+      return {
+        error: `Referenced ${slot.outputType} resource ${resourceId} does not exist in this task's project`,
+      }
     }
 
-    resources.push({
-      type: slot.outputType,
-      id: resourceId,
-      checksum: download.checksum,
-      size: download.size,
-      encoding: download.encoding,
-      downloadUrl: download.url,
-    })
+    // Transient: the row exists, it just isn't finished processing yet.
+    // This is an EXPECTED state agents poll through routinely, so it's
+    // logged at `debug` (PR #282 review), not `warn` — a per-poll `warn`
+    // here would be noise, unlike the permanent-missing case above (which
+    // is a real configuration problem worth surfacing loudly) or an
+    // enqueue *failure* (still `warn`, see `enqueueResourceCompression`).
+    hasUnresolvedReference = true
+    logger.debug(
+      { taskId, agentId, projectId, resourceType: slot.outputType, resourceId },
+      'getResourcesForTask: referenced resource is not fully processed yet (no download, or missing checksum/size); reporting not-ready and re-enqueuing compression'
+    )
+    // Self-heal (best-effort): re-enqueue the compression/checksum worker
+    // so a lost or failed original enqueue -- or a worker that crashed
+    // mid-run -- recovers on the next agent poll instead of wedging this
+    // task behind a permanent 409. `enqueueResourceCompression` is
+    // idempotent (deduped jobId) and the worker itself no-ops once
+    // `file_checksum` is set (and gracefully no-ops when `fileRef` isn't
+    // set yet either), so this can never race or duplicate a legitimate
+    // in-flight compression pass. It also never throws -- failures are
+    // logged and swallowed internally -- so it's safe to await unguarded
+    // here regardless of which of the three incomplete-download causes
+    // triggered this branch.
+    await enqueueResourceCompression(slot.outputType, resourceId, projectId)
   }
 
   if (hasUnresolvedReference) {

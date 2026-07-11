@@ -45,7 +45,7 @@ identity.
 
 ### Resolve a task's resources
 
-```
+```http
 GET /api/v1/agent/tasks/{taskId}/resources
 Authorization: Bearer <agent token>
 ```
@@ -90,27 +90,36 @@ error envelope — never a `500`. Do not retry a `404` as if it were transient.
 
 **Not-ready resources.** If the task's attack references a wordlist/rulelist/
 masklist that has not finished uploading, **or** whose checksum/compression
-pass has not run yet, the server does **not** silently omit it, return a
-partial resource list, or hand back an unverifiable entry — an agent cracking
-against an incomplete or unverified set is a correctness bug, not a minor
-inconvenience. Instead it returns a typed `409` with
-`code: 'TASK_RESOURCES_NOT_READY'` in the agent error envelope, covering
-**both** cases:
+pass has not run yet (so its `checksum` or `size` is still unset), the server
+does **not** silently omit it, return a partial resource list, or hand back an
+unverifiable entry — an agent cracking against an incomplete or unverified set
+is a correctness bug, not a minor inconvenience. Instead it returns a typed
+`409` with `code: 'TASK_RESOURCES_NOT_READY'` in the agent error envelope,
+covering **all** of these causes:
 
 - the resource has no uploaded file at all yet, or
 - the resource has landed but the background checksum/compression worker
-  has not produced a checksum for it yet.
+  has not produced a checksum or size for it yet.
 
 This is **retriable**: back off and re-poll `GET /tasks/{taskId}/resources`
 until it returns `200`. The `null`-`checksum`/`size` mention in the
 [canonical identity](#the-canonical-identity-raw-file-checksum) section above
 describes `GET /resources/{type}/{id}/download-url` — a single-resource
 lookup that is not gated by this route's readiness check — not this route's
-`200` response, which never contains a null-`checksum` static-resource entry.
+`200` response, which never contains a null-`checksum`/`size`/`encoding`
+static-resource entry.
+
+**Permanently missing resources.** A referenced resource id that does not
+exist *at all* in the task's project — hard-deleted, pointing at a different
+project, or otherwise misconfigured — is a **different, non-retriable**
+condition from the not-ready case above. The server returns a typed `404` (the
+same shape as the task-not-found case, never a `409`) rather than looping the
+agent through repeated retries that can never succeed. Treat this the same way
+as any other `404`: do not retry it as if it were transient.
 
 ### Fetch a single resource's metadata
 
-```
+```http
 GET /api/v1/agent/resources/{type}/{id}/download-url
 ```
 
@@ -238,14 +247,19 @@ raw-content `checksum` used for static resources above:
 }
 ```
 
-`etag` is derived from the hash list's **last-crack time** — it changes only
-when a new hash in the list gets cracked, not on every request. An agent that
-already holds this hash list's uncracked-only set from a previous fetch sends
-that etag back as `If-None-Match`:
+`etag` is derived from the hash list's **last-crack time and cracked count**
+— it changes whenever a new hash in the list gets cracked, not on every
+request. The cracked count is folded in alongside the last-crack timestamp
+(PR #282 review) so that two or more hashes cracking within the same
+millisecond still change the etag — the timestamp alone would otherwise stay
+put for a request landing in that window, letting an agent reuse a cached set
+that's actually missing the later crack(s). An agent that already holds this
+hash list's uncracked-only set from a previous fetch sends that etag back as
+`If-None-Match`:
 
-```
+```http
 GET /api/v1/agent/resources/hash-lists/{id}/download-url
-If-None-Match: W/"hl-42-1735689600000"
+If-None-Match: W/"hl-42-1735689600000-7"
 ```
 
 - If the etag still matches (no new cracks since), the server returns
@@ -254,6 +268,11 @@ If-None-Match: W/"hl-42-1735689600000"
 - If the etag has changed (or `If-None-Match` was omitted), the server returns
   `200` with a fresh presigned URL and the current `etag` for the agent to
   cache for its next fetch.
+
+`If-None-Match` comparison is **exact-match**: the server compares the header
+value to the current etag with plain string equality. Always echo the etag
+byte-for-byte, including the `W/"..."` wrapper — there is no comma-separated
+etag list support, no `*` wildcard, and no RFC 7232 weak-comparison fallback.
 
 `etag` is `null` for wordlists, rulelists, and masklists — those cache-skip by
 `checksum` instead, and `If-None-Match` has no effect for them.
