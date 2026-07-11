@@ -107,7 +107,7 @@ async function fakeDownloadFile(key: string): Promise<{ Body: FakeBody }> {
   return { Body: makeFakeBody(buffer) }
 }
 
-async function fakeDeleteFile(key: string): Promise<void> {
+async function fakeDeleteFile(key: string, _bucket?: string): Promise<void> {
   fakeObjects.delete(key)
 }
 
@@ -166,7 +166,10 @@ async function fakeAbortMultipartUpload(_key: string, uploadId: string): Promise
  * file runs under `just test-db`, which provisions Postgres only, no
  * SeaweedFS/S3.
  */
-async function fakeHeadObject(key: string): Promise<{ exists: boolean; size?: number }> {
+async function fakeHeadObject(
+  key: string,
+  _bucket?: string
+): Promise<{ exists: boolean; size?: number }> {
   const buffer = fakeObjects.get(key)
   return buffer ? { exists: true, size: buffer.byteLength } : { exists: false }
 }

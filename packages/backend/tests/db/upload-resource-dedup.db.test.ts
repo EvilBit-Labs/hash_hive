@@ -76,7 +76,7 @@ async function fakeHeadObject(key: string): Promise<{ exists: boolean; size?: nu
   return buffer ? { exists: true, size: buffer.byteLength } : { exists: false }
 }
 
-async function fakeDeleteFile(key: string): Promise<void> {
+async function fakeDeleteFile(key: string, _bucket?: string): Promise<void> {
   fakeObjects.delete(key)
 }
 
