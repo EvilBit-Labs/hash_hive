@@ -33,7 +33,11 @@ export function createResourceCompressionWorker(connection: Redis): Worker<Resou
   attachWorkerMetrics(worker, {
     queueName: QUEUE_NAMES.RESOURCE_COMPRESSION,
     failureMessage: 'resource-compression job failed',
-    extractContext: (job) => ({ resourceId: job?.data?.resourceId }),
+    extractContext: (job) => ({
+      resourceId: job?.data?.resourceId,
+      resourceType: job?.data?.resourceType,
+      projectId: job?.data?.projectId,
+    }),
   })
 
   return worker
