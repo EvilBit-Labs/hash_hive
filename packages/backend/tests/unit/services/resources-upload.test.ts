@@ -24,6 +24,7 @@
 import { attacks, maskLists, wordLists } from '@hashhive/shared'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { createHash } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 
 function sha256Hex(content: string): string {
   return createHash('sha256').update(Buffer.from(content, 'utf8')).digest('hex')
@@ -61,6 +62,10 @@ if (IS_ISOLATED) {
 
   // Only what services/resources.ts (and its transitive line-count.ts) import.
   const uploadFile = mock(() => Promise.resolve())
+  // Defaults to "no existing blob" so every test below exercises the
+  // normal compress+upload path unless a test overrides this to prove
+  // dedup (issue #108 content-addressed blob dedup).
+  const headObject = mock(() => Promise.resolve({ exists: false }))
   mock.module('../../../src/config/storage.js', () => ({
     abortMultipartUpload: mock(),
     completeMultipartUpload: mock(),
@@ -71,6 +76,7 @@ if (IS_ISOLATED) {
     uploadFile,
     uploadPart: mock(),
     downloadFile: mock(),
+    headObject,
   }))
 
   // Field-aware db mock:
@@ -126,10 +132,19 @@ if (IS_ISOLATED) {
           }
         },
       }),
-      // uploadResourceFile wraps its DB write + recordAuditEvent in a transaction.
-      // The tx exposes the same update tracking logic plus insert for the recorder.
+      // uploadResourceFile's dedup decision + row commit now run inside
+      // `withBlobKeyLock`'s `db.transaction(...)` (#108 T12/T13), so the tx
+      // also needs `execute` (the `pg_advisory_xact_lock` call) and `select`
+      // (`findCompressionEncodingForKey`'s adopt-encoding lookup on a dedup
+      // hit — unused here since every test's `headObject` mock defaults to
+      // `{ exists: false }`, but wired for shape-completeness) alongside the
+      // same update-tracking logic plus insert for the recorder.
       transaction: async (
         fn: (tx: {
+          select: (fields?: Record<string, unknown>) => {
+            from: () => { where: () => { limit: () => Promise<unknown[]> } }
+          }
+          execute: (sql: unknown) => Promise<unknown>
           update: (table: unknown) => {
             set: (values: Record<string, unknown>) => {
               where: (cond: unknown) => { returning: () => Promise<unknown[]> }
@@ -139,6 +154,12 @@ if (IS_ISOLATED) {
         }) => Promise<unknown>
       ) =>
         fn({
+          select: () => ({
+            from: () => ({
+              where: () => ({ limit: () => Promise.resolve([]) }),
+            }),
+          }),
+          execute: async () => ({ rowCount: 0 }),
           update: (table: unknown) => ({
             set: (values: Record<string, unknown>) => {
               if (table === maskLists && 'keyspace' in values) {
@@ -183,6 +204,7 @@ if (IS_ISOLATED) {
     lastResourceUpdateValues = null
     warn.mockClear()
     uploadFile.mockClear()
+    headObject.mockClear()
   })
 
   describe('uploadResourceFile - masklist direct-upload sizing + fan-out (#231)', () => {
@@ -271,6 +293,41 @@ if (IS_ISOLATED) {
       // mismatch must never reach storage, and the row must stay untouched.
       expect(uploadFile).not.toHaveBeenCalled()
       expect(lastResourceUpdateValues).toBeNull()
+    })
+  })
+
+  describe('uploadResourceFile - direct-upload compression (issue #108 U3)', () => {
+    test('a compressible file is stored gzip-encoded, and the bytes uploaded gunzip to the exact original', async () => {
+      resourceRow = { id: 2, projectId: 7, blobReclaimedAt: null, fileChecksum: null }
+      // Long, highly repetitive content compresses well under gzip.
+      const content = 'alpha\nbravo\ncharlie\n'.repeat(200)
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      const [, uploadedBytes] = uploadFile.mock.calls[0] as [string, Buffer, string]
+      expect(gunzipSync(uploadedBytes).toString('utf8')).toBe(content)
+
+      expect(lastResourceUpdateValues?.['compressionEncoding']).toBe('gzip')
+      // fileSize/fileChecksum always describe the RAW file, never the
+      // compressed-at-rest bytes.
+      expect(lastResourceUpdateValues?.['fileSize']).toBe(Buffer.byteLength(content, 'utf8'))
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(sha256Hex(content))
+    })
+
+    test('a tiny/incompressible file is stored as-is with encoding none', async () => {
+      resourceRow = { id: 2, projectId: 7, blobReclaimedAt: null, fileChecksum: null }
+      const content = 'a'
+
+      await uploadResourceFile(wordLists, 2, 7, 'wordlists', maskFile(content))
+
+      expect(uploadFile).toHaveBeenCalledTimes(1)
+      const [, uploadedBytes] = uploadFile.mock.calls[0] as [string, Buffer, string]
+      expect(uploadedBytes.toString('utf8')).toBe(content)
+
+      expect(lastResourceUpdateValues?.['compressionEncoding']).toBe('none')
+      expect(lastResourceUpdateValues?.['fileSize']).toBe(Buffer.byteLength(content, 'utf8'))
+      expect(lastResourceUpdateValues?.['fileChecksum']).toBe(sha256Hex(content))
     })
   })
 }

@@ -148,7 +148,24 @@ if (!IS_ISOLATED) {
     deleteResource: mock(async () => ({ kind: 'deleted' as const })),
     getResourcePresignedUrl: mock(async () => 'https://example/test'),
     latchResourcePermanent: mock(async () => undefined),
-    getAgentDownloadUrl: mock(async () => ({ url: 'https://example/test', expiresIn: 600 })),
+    // Real getAgentDownloadUrl returns `{url, expiresIn, checksum, size,
+    // encoding, etag} | null`. Pinned via `satisfies` per the
+    // mirror-service-not-schema convention's static-fixture pattern (see
+    // `dashboard-resources-routes.test.ts`), so a future service-shape
+    // change surfaces here at type-check instead of only at runtime.
+    getAgentDownloadUrl: mock(
+      async () =>
+        ({
+          url: 'https://example/test',
+          expiresIn: 600,
+          checksum: null,
+          size: null,
+          encoding: null,
+          etag: null,
+        }) satisfies NonNullable<
+          Awaited<ReturnType<typeof import('../../src/services/resources.js').getAgentDownloadUrl>>
+        >
+    ),
     escapeLike: (s: string) => s,
     initiateChunkedUpload: mock(async () => ({ uploadId: 'u', resourceId: 1 })),
     uploadChunkPart: mock(async () => ({ etag: 'e' })),

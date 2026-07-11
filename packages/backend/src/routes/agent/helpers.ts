@@ -26,12 +26,25 @@ import { logger } from '../../config/logger.js'
  * — it's emitted by `mountCachedSpec`'s failure envelope on the
  * `GET /openapi.json` path only, not by any route handler that uses
  * this helper.
+ *
+ * `TASK_RESOURCES_NOT_READY` is the one member of this union that is
+ * NOT a 500-tier code and is never passed to `agentInternalError` below
+ * (which hardcodes status 500 and logs at `error`). It documents the
+ * `GET /tasks/{taskId}/resources` 409 case here anyway, alongside every
+ * other coarse code this surface emits, so the full set of
+ * agent-visible `error.code` values lives in one place; the route
+ * builds its `c.json(..., 409)` response inline (mirroring the
+ * existing `TASK_NOT_FOUND`/`TASK_ERROR` inline codes) and logs at
+ * `debug`, not `error`, since it's an expected, retriable state that
+ * agents poll through.
  */
 export type AgentInternalErrorCode =
   | 'HEARTBEAT_ERROR'
   | 'TASK_ASSIGN_ERROR'
   | 'TASK_REPORT_ERROR'
   | 'TASK_ZAP_ERROR'
+  | 'TASK_RESOURCES_ERROR'
+  | 'TASK_RESOURCES_NOT_READY'
   | 'ERROR_INGEST_ERROR'
   | 'BENCHMARK_ERROR'
   | 'RESOURCE_URL_ERROR'

@@ -82,6 +82,10 @@ if (IS_ISOLATED) {
     uploadFile: mock(),
     uploadPart: mock(),
     downloadFile,
+    // uploadResourceFile's content-addressed dedup check (issue #108); this
+    // suite exercises the chunked-upload path only, but the named import
+    // must still resolve.
+    headObject: mock(),
   }))
 
   // ─── Mock db ─────────────────────────────────────────────────────────
@@ -103,10 +107,16 @@ if (IS_ISOLATED) {
 
   mock.module('../../../src/db/index.js', () => ({
     db: {
-      select: () => ({
+      // `columns` distinguishes the primary row fetch (`db.select()`, no
+      // args) from `deleteBlobIfUnreferenced`'s cross-table "is this blob
+      // still referenced elsewhere" scan (`db.select({ id: ... })`, #108
+      // safety foundation) — this suite only fixtures `currentRow` as the
+      // resource under test, never as a second live resource sharing its
+      // key, so the guard's own query must see no rows.
+      select: (columns?: unknown) => ({
         from: () => ({
           where: () => ({
-            limit: () => Promise.resolve(currentRow ? [currentRow] : []),
+            limit: () => Promise.resolve(columns ? [] : currentRow ? [currentRow] : []),
           }),
         }),
       }),
@@ -128,8 +138,18 @@ if (IS_ISOLATED) {
           }),
         }),
       }),
+      // `deleteBlobIfUnreferenced`'s reference-scan + physical delete, and
+      // `withBlobKeyLock`'s `pg_advisory_xact_lock` call, now run inside
+      // `db.transaction(...)` (#108 T12/T13) — the tx below needs `select`
+      // (same "no other live resource" no-rows shape as the top-level
+      // `db.select` above) and `execute` (the advisory-lock statement,
+      // ignored under test) alongside the existing update tracking.
       transaction: async (
         fn: (tx: {
+          select: (columns?: unknown) => {
+            from: () => { where: () => { limit: () => Promise<unknown[]> } }
+          }
+          execute: (sql: unknown) => Promise<unknown>
           update: (table: unknown) => {
             set: (values: Record<string, unknown>) => {
               where: () => { returning: () => Promise<unknown[]> }
@@ -138,6 +158,14 @@ if (IS_ISOLATED) {
         }) => Promise<unknown>
       ) =>
         fn({
+          select: (columns?: unknown) => ({
+            from: () => ({
+              where: () => ({
+                limit: () => Promise.resolve(columns ? [] : currentRow ? [currentRow] : []),
+              }),
+            }),
+          }),
+          execute: async () => ({ rowCount: 0 }),
           update: () => ({
             set: (values: Record<string, unknown>) => ({
               where: () => ({
@@ -324,8 +352,7 @@ if (IS_ISOLATED) {
       expect(recordAuditEvent).not.toHaveBeenCalled()
     })
 
-    test('a normal (non-restore) completion still only captures the checksum best-effort', async () => {
-      const content = 'a brand new wordlist'
+    test('a normal (non-restore) completion no longer computes a checksum inline (issue #108 U4)', async () => {
       currentRow = {
         id: 2,
         projectId: 7,
@@ -333,13 +360,20 @@ if (IS_ISOLATED) {
         fileChecksum: null,
         fileRef: { key: 'k2', bucket: 'b', fileSize: 50 },
       }
-      downloadFileImpl = () => Promise.resolve(fakeS3Body(content))
 
       const result = await completeChunkedUpload('upload-2', parts, 2, 'wordlists', 7)
 
       expect(result.resourceId).toBe(2)
-      expect(lastUpdate).toMatchObject({ status: 'ready', fileChecksum: sha256Hex(content) })
+      expect(lastUpdate).toMatchObject({ status: 'ready' })
+      expect(lastUpdate).not.toHaveProperty('fileChecksum')
       expect(lastUpdate).not.toHaveProperty('blobReclaimedAt')
+      // The checksum used to be captured here via a second full download of
+      // the object that had just finished uploading -- for the 100GB+ files
+      // chunked upload exists to support, that redundant re-download is
+      // wasteful. The resource-compression worker (#108 U4) is now the sole
+      // authoritative source, so completion itself must not touch storage
+      // at all for this path.
+      expect(downloadFile).not.toHaveBeenCalled()
       // Not a restore — no audit event from this function (unchanged
       // pre-existing behavior; only the restore path is newly audited).
       expect(recordAuditEvent).not.toHaveBeenCalled()

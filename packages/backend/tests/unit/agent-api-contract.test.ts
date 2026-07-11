@@ -165,6 +165,7 @@ import {
 type TasksService = typeof import('../../src/services/tasks.js')
 type TasksRetryService = typeof import('../../src/services/tasks/retry.js')
 type TasksZapsService = typeof import('../../src/services/tasks/zaps.js')
+type TasksResourcesService = typeof import('../../src/services/tasks/task-resources.js')
 
 // Extract the task-row shape that both updateTaskProgress and
 // handleTaskFailure return on the success branch. They share the
@@ -203,6 +204,12 @@ const getZapsForTaskFixture = {
   zaps: [],
   hasMore: false,
 } satisfies Awaited<ReturnType<TasksZapsService['getZapsForTask']>>
+// getResourcesForTask real return is `{resources} | {error} | {notReady}`
+// (#108 U6; `notReady` added by the referenced-but-unresolved-resource
+// review fix). Default fixture pins the empty-resources success shape.
+const getResourcesForTaskFixture = {
+  resources: [],
+} satisfies Awaited<ReturnType<TasksResourcesService['getResourcesForTask']>>
 
 // Sibling mocks pinned via `mock<typeof svc[fnName]>(...)` per the
 // contract-test mocks convention's dynamic-return pattern. Bun's
@@ -261,6 +268,18 @@ mock.module('../../src/services/tasks/preemption.js', () => ({
   getStopTaskIdsForAgent: getStopTaskIdsForAgentMock,
 }))
 
+// getResourcesForTask (#108 review): the agent route imports this directly
+// from its submodule (not the `services/tasks.js` barrel) to avoid
+// transitively pulling `services/resources.js` (and its S3Client
+// construction) into every barrel consumer. Mock the submodule directly,
+// mirroring the preemption.js pattern above.
+const getResourcesForTaskMock = mock<TasksResourcesService['getResourcesForTask']>(
+  async () => getResourcesForTaskFixture
+)
+mock.module('../../src/services/tasks/task-resources.js', () => ({
+  getResourcesForTask: getResourcesForTaskMock,
+}))
+
 // Pull the real pure helpers in BEFORE mock.module runs for crackers.js
 // so the mock factory can re-export them. Without this, sibling tests
 // (crackers-routes.test.ts and any compareCrackerVersions unit suite)
@@ -277,9 +296,23 @@ import {
 // have reachable rejection paths in the contract test. The real modules
 // touch the DB and object store; here we only validate the wire envelope
 // and exercise the route-level catch with mockImplementationOnce.
+// getAgentDownloadUrl real return adds checksum/size/encoding (#108 U5)
+// on top of the original url/expiresIn pair. Pin via `satisfies` per the
+// contract-test mocks convention so a future service-side shape change
+// surfaces here instead of only at the route boundary.
+type ResourcesService = typeof import('../../src/services/resources.js')
+const getAgentDownloadUrlFixture = {
+  url: 'https://example.test/object',
+  expiresIn: 600,
+  checksum: null,
+  size: null,
+  encoding: null,
+  etag: null,
+} satisfies NonNullable<Awaited<ReturnType<ResourcesService['getAgentDownloadUrl']>>>
+
 mock.module('../../src/services/resources.js', () => ({
-  getAgentDownloadUrl: mock(() =>
-    Promise.resolve({ url: 'https://example.test/object', expiresIn: 600 })
+  getAgentDownloadUrl: mock<ResourcesService['getAgentDownloadUrl']>(
+    async () => getAgentDownloadUrlFixture
   ),
 }))
 
@@ -1048,6 +1081,34 @@ describe('Agent API: failure-path envelope shape', () => {
     await expectAgentFailureEnvelope(res, 'TASK_ZAP_ERROR')
   })
 
+  it('GET /tasks/:id/resources returns 404 TASK_NOT_FOUND when getResourcesForTask reports an error', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({ error: 'Task not found or not assigned to this agent' })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('TASK_NOT_FOUND')
+  })
+
+  it('GET /tasks/:id/resources returns TASK_RESOURCES_ERROR when getResourcesForTask throws', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() => Promise.reject(new Error('db down')))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    await expectAgentFailureEnvelope(res, 'TASK_RESOURCES_ERROR')
+  })
+
   it('POST /errors returns ERROR_INGEST_ERROR when logAgentError throws', async () => {
     const agentsMod = await import('../../src/services/agents.js')
     ;(
@@ -1144,6 +1205,7 @@ describe('Agent API: GET /openapi.json (route-as-spec)', () => {
     expect(paths).toHaveProperty('/tasks/next')
     expect(paths).toHaveProperty('/tasks/{taskId}/report')
     expect(paths).toHaveProperty('/tasks/{taskId}/zaps')
+    expect(paths).toHaveProperty('/tasks/{taskId}/resources')
     expect(paths).toHaveProperty('/errors')
     expect(paths).toHaveProperty('/benchmark')
     expect(paths).toHaveProperty('/cracker/check-update')
@@ -1613,6 +1675,148 @@ describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
   })
 })
 
+// ─── GET /tasks/:id/resources — wire shape (#108 U6) ────────────────
+//
+// Pins the response envelope (`{ resources: [...] }`, not a bare array)
+// and the per-entry shape (`type`/`id`/`checksum`/`size`/`encoding`/
+// `downloadUrl`) against the real `getResourcesForTask` return type, and
+// separately pins that a resource type the attack doesn't reference
+// (here: no rulelist) never appears in the array.
+
+describe('Agent API: GET /tasks/:id/resources — wire shape', () => {
+  it('returns { resources: [...] } with full, non-null integrity metadata per entry', async () => {
+    // A 200 from this route is only ever reachable once every referenced
+    // slot has a complete download (PR #282 review tightened
+    // `taskResourceEntrySchema`'s checksum/size/encoding to non-nullable);
+    // the "worker hasn't run yet" case is exercised separately below as a
+    // 409, never as a 200 with nulls.
+    getResourcesForTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        resources: [
+          {
+            type: 'wordlist',
+            id: 5,
+            checksum: 'abc123',
+            size: 1024,
+            encoding: 'gzip',
+            downloadUrl: 'https://example.test/wordlist',
+          },
+          {
+            type: 'masklist',
+            id: 9,
+            checksum: 'def456',
+            size: 2048,
+            encoding: 'none',
+            downloadUrl: 'https://example.test/masklist',
+          },
+        ],
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { resources: Array<Record<string, unknown>> }
+    expect(Array.isArray(body.resources)).toBe(true)
+    expect(body.resources).toHaveLength(2)
+    expect(body.resources[0]).toMatchObject({
+      type: 'wordlist',
+      id: 5,
+      checksum: 'abc123',
+      size: 1024,
+      encoding: 'gzip',
+      downloadUrl: 'https://example.test/wordlist',
+    })
+    // Every entry in a 200 carries non-null checksum/size — never the
+    // "worker hasn't run yet" null shape (that's a 409, see below).
+    expect(body.resources[1]).toMatchObject({
+      type: 'masklist',
+      id: 9,
+      checksum: 'def456',
+      size: 2048,
+    })
+    for (const entry of body.resources) {
+      expect(entry['checksum']).not.toBeNull()
+      expect(entry['size']).not.toBeNull()
+      expect(entry['encoding']).not.toBeNull()
+    }
+  })
+
+  it('omits a resource slot the attack does not reference (no rulelist)', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        resources: [
+          {
+            type: 'wordlist',
+            id: 5,
+            checksum: 'abc123',
+            size: 1024,
+            encoding: 'none',
+            downloadUrl: 'https://example.test/wordlist',
+          },
+        ],
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { resources: Array<{ type: string }> }
+    expect(body.resources).toHaveLength(1)
+    expect(body.resources.some((r) => r.type === 'rulelist')).toBe(false)
+  })
+
+  it('returns 409 TASK_RESOURCES_NOT_READY when a referenced resource has no resolvable download yet', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() => Promise.resolve({ notReady: true }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: Record<string, unknown> }
+    expect(body.error['code']).toBe('TASK_RESOURCES_NOT_READY')
+    expect(typeof body.error['message']).toBe('string')
+    expect(body.error['timestamp']).toBeUndefined()
+    expect(body.error['requestId']).toBeUndefined()
+  })
+
+  // PR #282 review: a referenced resource id that does not exist in the
+  // task's project at all (deleted / cross-project / misconfigured) is a
+  // PERMANENT condition — `getResourcesForTask` returns the generic
+  // `{ error }` outcome for this, never `{ notReady: true }`, so the route
+  // must never surface it as a 409 an agent would fruitlessly retry forever.
+  it('returns 404 (not 409) when a referenced resource does not exist in the project (permanent, not transient)', async () => {
+    getResourcesForTaskMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        error: "Referenced wordlist resource 5 does not exist in this task's project",
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/resources`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(409)
+    const body = (await res.json()) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('TASK_NOT_FOUND')
+    expect(body.error.message).toContain('does not exist in this task')
+  })
+})
+
 // ─── GET /resources/:type/:id/download-url — param validation ───────
 //
 // `resourceParamSchema` was widened from `z.string()` to a closed
@@ -1643,5 +1847,253 @@ describe('Agent API: GET /resources/:type/:id/download-url — param validation'
     })
     expect(res.status).toBe(400)
     await expectAgentValidationError(res)
+  })
+})
+
+// ─── GET /resources/:type/:id/download-url — integrity metadata (#108 U5) ──
+//
+// Pins the additive `checksum`/`size`/`encoding` fields onto the
+// pre-existing `url`/`expiresIn` pair: word/rule/mask resources report
+// real values once captured; hash lists (no such columns) and
+// not-yet-checksummed word/rule/mask resources report `null` cleanly
+// rather than a 500 or a fabricated value.
+
+describe('Agent API: GET /resources/:type/:id/download-url — integrity metadata', () => {
+  it('returns checksum/size/encoding for a wordlist resource', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/wordlist',
+        expiresIn: 21_600,
+        checksum: 'deadbeef',
+        size: 4096,
+        encoding: 'gzip',
+        etag: null,
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/wordlists/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body).toMatchObject({
+      url: 'https://example.test/wordlist',
+      expiresIn: 21_600,
+      checksum: 'deadbeef',
+      size: 4096,
+      encoding: 'gzip',
+      etag: null,
+    })
+  })
+
+  it('returns null checksum/size/encoding for a hash-list resource (no such columns)', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        // Format is `W/"hl-<id>-<maxEpochMillis>-<crackedCount>"` (PR #282
+        // review added the trailing cracked-count segment); a synthetic
+        // fixture here since this test only proves the route forwards
+        // `getAgentDownloadUrl`'s etag verbatim, not the real
+        // `computeHashListEtag` format.
+        etag: 'W/"hl-1-0-0"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['checksum']).toBeNull()
+    expect(body['size']).toBeNull()
+    expect(body['encoding']).toBeNull()
+    expect(body['etag']).toBe('W/"hl-1-0-0"')
+  })
+
+  it('returns null checksum/size for a wordlist resource whose checksum worker has not run yet', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/wordlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: 'none',
+        etag: null,
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/wordlists/2/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(res.status).not.toBe(500)
+    expect(body['checksum']).toBeNull()
+    expect(body['size']).toBeNull()
+  })
+})
+
+// ─── GET /resources/:type/:id/download-url — hash-list freshness ETag ──
+//
+// #108 follow-up: hash lists carry a weak ETag derived from the hash
+// list's last-crack time. An agent that already holds the uncracked set
+// echoes the etag back as `If-None-Match`; a match means nothing new was
+// cracked since, and the server returns a bodyless 304 instead of a fresh
+// presigned URL. Non-hash-list resource types never report a non-null
+// etag (pinned above), so `If-None-Match` can never match for them and
+// their 200 behavior is unaffected — proven by the last test below.
+
+describe('Agent API: GET /resources/:type/:id/download-url — hash-list freshness ETag', () => {
+  it('returns 304 with no body when If-None-Match matches the current hash-list etag', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-1735689600000-3"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'W/"hl-1-1735689600000-3"',
+      },
+    })
+
+    expect(res.status).toBe(304)
+    const bodyText = await res.text()
+    expect(bodyText).toBe('')
+  })
+
+  it('returns 200 with the current etag when If-None-Match is stale (new cracks happened)', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-1735689700000-4"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'W/"hl-1-1735689600000-3"',
+      },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBe('W/"hl-1-1735689700000-4"')
+    expect(body['url']).toBe('https://example.test/hashlist')
+  })
+
+  it('returns 200 with the current etag when If-None-Match is absent', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/hashlist',
+        expiresIn: 21_600,
+        checksum: null,
+        size: null,
+        encoding: null,
+        etag: 'W/"hl-1-0-0"',
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/resources/hash-lists/1/download-url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBe('W/"hl-1-0-0"')
+  })
+
+  it('never returns 304 for a non-hash-list resource, even with a matching If-None-Match header', async () => {
+    const resourcesMod = await import('../../src/services/resources.js')
+    ;(
+      resourcesMod.getAgentDownloadUrl as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() =>
+      Promise.resolve({
+        url: 'https://example.test/wordlist',
+        expiresIn: 21_600,
+        checksum: 'deadbeef',
+        size: 4096,
+        encoding: 'gzip',
+        etag: null,
+      })
+    )
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    // A client that (incorrectly) echoes back a null-ish etag string must
+    // still get a real 200 — `result.etag` being null short-circuits the
+    // 304 branch before the header comparison can matter.
+    const res = await app.request(`${AGENT_BASE}/resources/wordlists/1/download-url`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'if-none-match': 'null',
+      },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['etag']).toBeNull()
   })
 })

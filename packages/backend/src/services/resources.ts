@@ -4,10 +4,11 @@ import {
   hashLists,
   hashTypes,
   maskLists,
+  type ResourceCompressionEncoding,
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, isNull, max, type SQL, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -17,17 +18,25 @@ import {
   abortMultipartUpload,
   completeMultipartUpload,
   createMultipartUpload,
-  deleteFile,
   getPresignedUrl,
+  headObject as headObjectDefault,
   listParts,
-  uploadFile,
+  uploadFile as uploadFileDefault,
   uploadPart,
 } from '../config/storage.js'
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { sumMasklistKeyspace } from './keyspace.js'
+import {
+  type BlobOwnerTable,
+  type DeleteBlobFn,
+  deleteBlobIfUnreferenced,
+  withBlobKeyLock,
+} from './resources/blob-lifecycle.js'
 import { sha256HexFromBuffer, sha256HexFromObject } from './resources/checksum.js'
+import { compressBufferForStorage } from './resources/compression.js'
+import { blobKeyForChecksum, findCompressionEncodingForKey } from './resources/content-address.js'
 import { enqueueLineCount, type LineCountResourceType } from './resources/line-count-trigger.js'
 import {
   MAX_LINE_LENGTH,
@@ -36,6 +45,7 @@ import {
   countsAsWordlistLine,
   splitTextLines,
 } from './resources/line-count.js'
+import { enqueueResourceCompression } from './resources/resource-compression-trigger.js'
 
 // ─── Actor ────────────────────────────────────────────────────────────────────
 
@@ -322,6 +332,10 @@ async function cascadeDeleteResource<
   referencedBy: string
   entityType: AuditEntityType
   actor: Actor
+  // Which table the row being deleted belongs to (#108 safety foundation) —
+  // threaded through to `deleteBlobIfUnreferenced` so it knows which other
+  // tables to scan for a still-live reference to the same blob.
+  table: BlobOwnerTable
   lookup: () => Promise<TRow | null>
   cascade?: (tx: DbTx) => Promise<void>
   // Performs the guarded DELETE (folding `isPermanent = false` into its
@@ -329,6 +343,14 @@ async function cascadeDeleteResource<
   // can detect a race where permanence latched between the pre-check and
   // this statement.
   deleteOwner: (runner: DbRunner) => Promise<number>
+  // Override for `deleteBlobIfUnreferenced`'s physical-delete boundary
+  // (#108 review Fix 5). Threaded through so real-DB tests can exercise
+  // this cascade -> `deleteBlobIfUnreferenced` wiring against an in-memory
+  // fake object store instead of hitting S3/SeaweedFS, mirroring
+  // `uploadResourceFile`'s `UploadResourceStorageDeps`. Production callers
+  // never pass this; defaults to `deleteBlobIfUnreferenced`'s own default
+  // (the real `deleteFile`).
+  deleteFn?: DeleteBlobFn
 }): Promise<DeleteResourceResult> {
   const row = await args.lookup()
   if (!row) return { kind: 'not_found' }
@@ -375,14 +397,20 @@ async function cascadeDeleteResource<
     key?: string
   } | null
   if (fileRef?.key) {
-    try {
-      await deleteFile(fileRef.key, fileRef.bucket)
-    } catch (err) {
-      logger.warn(
-        { resourceLabel: args.resourceLabel, resourceId: args.id, err },
-        'Failed to delete resource S3 object; continuing'
-      )
-    }
+    // #108 safety foundation: guarded delete, not a bare `deleteFile`. A
+    // no-op today (unique-per-resource keys), but the row this delete
+    // targets no longer exists (it was removed by `deleteOwner` above), so
+    // `deleteBlobIfUnreferenced`'s own (table, id) self-exclusion is moot
+    // here — it just needs `args.id` to be excluded from the scan, which it
+    // is regardless. Delete failures are logged and swallowed inside the
+    // guard itself.
+    await deleteBlobIfUnreferenced({
+      table: args.table,
+      resourceId: args.id,
+      key: fileRef.key,
+      ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
+      ...(args.deleteFn ? { deleteFn: args.deleteFn } : {}),
+    })
   }
   return { kind: 'deleted' }
 }
@@ -444,6 +472,7 @@ export async function deleteHashList(
     referencedBy: 'one or more campaigns or attacks',
     entityType: 'hash_list',
     actor,
+    table: hashLists,
     lookup: () => getHashListById(id, projectId),
     // Bounded-batch cascade: large hash lists (millions of items) get
     // chunked DELETEs instead of one unbounded statement, capping the
@@ -478,12 +507,18 @@ export function entityTypeForTable(table: ResourceTable): AuditEntityType {
   return 'mask_list'
 }
 
+/** Injectable storage boundary for `deleteResource`'s physical blob delete (#108 review Fix 5). See `cascadeDeleteResource`'s `deleteFn` for details. */
+export interface DeleteResourceStorageDeps {
+  deleteFile: DeleteBlobFn
+}
+
 export async function deleteResource(
   table: ResourceTable,
   id: number,
   projectId: number,
   resourceType: string,
-  actor: Actor = DEFAULT_SYSTEM_ACTOR
+  actor: Actor = DEFAULT_SYSTEM_ACTOR,
+  deps: Partial<DeleteResourceStorageDeps> = {}
 ): Promise<DeleteResourceResult> {
   return cascadeDeleteResource({
     id,
@@ -492,7 +527,9 @@ export async function deleteResource(
     referencedBy: 'one or more attacks',
     entityType: entityTypeForTable(table),
     actor,
+    table,
     lookup: () => getResourceById(table, id, projectId),
+    ...(deps.deleteFile ? { deleteFn: deps.deleteFile } : {}),
     deleteOwner: (runner) =>
       runner
         .delete(table)
@@ -625,7 +662,7 @@ export async function uploadHashListFile(
   const ext = extname(file.name)
   const key = `${hl.projectId}/hash-lists/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
-  await uploadFile(key, buffer, file.type || 'application/octet-stream')
+  await uploadFileDefault(key, buffer, file.type || 'application/octet-stream')
 
   await db
     .update(hashLists)
@@ -775,6 +812,49 @@ export async function getHashListStats(hashListId: number): Promise<{
   return { totalCount, crackedCount, crackRate }
 }
 
+/**
+ * Weak ETag for a hash list's freshness, derived from the most recent
+ * crack recorded against it (issue #108 follow-up: hash-list freshness
+ * ETag). An agent that already holds this hash list's uncracked-only set
+ * sends this value back as `If-None-Match` on a later download-url fetch;
+ * an unchanged etag means no new hashes were cracked since, and the agent
+ * can reuse its cached set instead of re-downloading.
+ *
+ * There is no denormalized "last crack time" column on `hash_lists` —
+ * sourcing it from `MAX(hash_items.cracked_at)` is cheap thanks to the
+ * composite `hash_items_hash_list_cracked_idx` (hash_list_id, cracked_at)
+ * index, and this deliberately does not touch the crack-write path
+ * (`propagateCrack`). A hash list with no cracks yet reports epoch `0` so
+ * the etag is stable (present, not absent) before the first crack.
+ *
+ * The validator also folds in `COUNT(cracked_at)` (PR #282 review): two or
+ * more hashes cracking within the same millisecond would otherwise leave
+ * `MAX(cracked_at)` unchanged, so an agent polling right in that window
+ * could reuse a stale cached set that's actually missing the later crack(s).
+ * Adding the count as a second component makes the validator change on
+ * every additional crack even when the timestamp collides.
+ *
+ * The value is a *weak* validator (`W/"..."`) because it identifies an
+ * equivalent uncracked set, not a byte-identical representation. The
+ * consuming route compares it via exact string equality against the raw
+ * `If-None-Match` header (see the route handler) — this is intentionally
+ * NOT a full RFC 7232 weak-comparison implementation (no comma-list or `*`
+ * support), since the agent always echoes the etag verbatim.
+ */
+export async function computeHashListEtag(hashListId: number): Promise<string> {
+  const [row] = await db
+    .select({
+      lastCrackedAt: max(hashItems.crackedAt),
+      crackedCount: count(hashItems.crackedAt),
+    })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId))
+
+  const epochMillis = row?.lastCrackedAt ? new Date(row.lastCrackedAt).getTime() : 0
+  const crackedCount = Number(row?.crackedCount ?? 0)
+  return `W/"hl-${hashListId}-${epochMillis}-${crackedCount}"`
+}
+
 // ─── Generic Resource Lists (wordlists, rulelists, masklists) ───────
 
 export type ResourceTable = typeof wordLists | typeof ruleLists | typeof maskLists
@@ -895,13 +975,27 @@ function lineCountPredicateFor(
   return null
 }
 
+/**
+ * Storage boundary `uploadResourceFile` needs beyond the guarded blob
+ * delete it already threads through — injectable so real-DB tests can
+ * exercise the content-addressed dedup decision (`headObject`) and the
+ * conditional upload against a fake in-memory store instead of hitting S3.
+ * Defaults to the real `config/storage.js` functions; production callers
+ * never pass this.
+ */
+export interface UploadResourceStorageDeps {
+  uploadFile: typeof uploadFileDefault
+  headObject: typeof headObjectDefault
+}
+
 export async function uploadResourceFile(
   table: ResourceTable,
   resourceId: number,
   projectId: number,
   prefix: string,
   file: File,
-  actor: Actor = DEFAULT_SYSTEM_ACTOR
+  actor: Actor = DEFAULT_SYSTEM_ACTOR,
+  deps: Partial<UploadResourceStorageDeps> = {}
 ) {
   const resource = await getResourceById(table, resourceId, projectId)
   if (!resource) {
@@ -912,27 +1006,35 @@ export async function uploadResourceFile(
     throw new UploadTooLargeError(file.size, MAX_DIRECT_UPLOAD_BYTES)
   }
 
+  const uploadFileFn = deps.uploadFile ?? uploadFileDefault
+  const headObjectFn = deps.headObject ?? headObjectDefault
+
   const resourceType = resourceTypeOf(table)
-  const ext = extname(file.name)
-  const key = `${resource.projectId}/${prefix}/${randomUUID()}${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
 
-  // Checksum computed from the in-memory buffer BEFORE the S3 write (issue
-  // #106 U12 / R12): a reclaimed-shell re-upload that fails to match is
-  // rejected here, before any bytes are written to storage or the row is
-  // touched — the resource stays exactly the shell it was.
+  // Checksum computed from the RAW in-memory buffer, before compression and
+  // before any storage read/write (issue #106 U12 / R12, #108 U2 + the
+  // content-addressed dedup follow-up): a reclaimed-shell re-upload that
+  // fails to match is rejected here, before any bytes are written to
+  // storage or the row is touched — the resource stays exactly the shell it
+  // was. Computing from the raw buffer (rather than the post-compression
+  // bytes) also means the checksum is stable across a future change to the
+  // compression algorithm/threshold — re-uploading the identical source
+  // file always reproduces the same checksum regardless of how it happens
+  // to get stored.
   const checksum = sha256HexFromBuffer(buffer)
   const isReclaimedShell = resource.blobReclaimedAt !== null
   if (isReclaimedShell && resource.fileChecksum && resource.fileChecksum !== checksum) {
     throw new ChecksumMismatchError(resourceId, resourceType)
   }
 
-  await uploadFile(key, buffer, file.type || 'application/octet-stream')
-
   // Size the resource from the in-memory buffer (≤ MAX_DIRECT_UPLOAD_BYTES) so
   // the common upload path never needs the async worker, using the same utils
   // the worker uses so direct and worker sizing agree. Wordlists/rulelists are
-  // sized by line count; a masklist by its summed mask keyspace (#231).
+  // sized by line count; a masklist by its summed mask keyspace (#231). Pure
+  // computation over the already-buffered bytes -- no shared storage state,
+  // so it happens before the blob-key lock below, keeping that lock's scope
+  // as tight as correctness allows.
   const text = buffer.toString('utf8')
   let lineCount: number | null = null
   let masklistKeyspace: string | null = null
@@ -949,38 +1051,106 @@ export async function uploadResourceFile(
     lineCount = predicate ? countLinesInText(text, predicate) : null
   }
 
+  // Content-addressed storage (#108 dedup follow-up): the blob lives at a
+  // GLOBAL key derived purely from the raw checksum — `blobs/<checksum>`,
+  // no extension (the download filename always comes from `fileRef.name`,
+  // never the storage key). Identical raw content uploaded by ANY resource
+  // in ANY project therefore dedups onto the exact same physical object.
+  // This is safe because access is gated entirely by presigned-URL signing
+  // (the route always verifies project ownership before a URL is ever
+  // signed) — a physically-shared blob never leaks across projects just
+  // because the object-store key itself carries no project scoping.
+  //
+  // `headObject` tells us whether some earlier upload (any project, any
+  // resource) already stored this exact content. If so, this upload is a
+  // pure dedup: no bytes are written to storage, and the compression
+  // encoding is adopted from whichever live row already points at the key
+  // — not recomputed — because the physical bytes were written exactly
+  // once, by whichever writer got there first, and the encoding recorded
+  // here must always describe those actual bytes.
+  //
+  // If NO live row references the key (a prior reclaim-delete that failed
+  // to clear the physical blob, a reclaimed-shell restore mid-flight, or a
+  // concurrent upload racing ahead of the winner's row commit),
+  // `findCompressionEncodingForKey` returns null. Rather than merely
+  // recomputing a LABEL for bytes we never touch (#108 review), this
+  // RE-UPLOADS the current deterministic representation of the buffer
+  // already in memory -- the stored bytes and the recorded encoding must
+  // always agree, and the existing object at this key could have been
+  // written under a different (future) compression policy.
+  //
+  // The whole decision-through-commit sequence below runs inside
+  // `withBlobKeyLock(blobKey, ...)` (#108 T12/T13): serialized via a
+  // transaction-scoped Postgres advisory lock against
+  // `deleteBlobIfUnreferenced`'s guarded-delete critical section for the
+  // SAME key, so a concurrent delete's reference-scan can never run between
+  // this dedup decision and this row's commit -- the two critical sections
+  // can never interleave. `MAX_DIRECT_UPLOAD_BYTES` bounds the direct-upload
+  // path to 10 MB, so holding the lock across the (fast, bounded)
+  // `headObject`/compress/`uploadFile` calls here is an acceptable trade
+  // for correctness (unlike the 100 GB+ chunked-upload worker, which
+  // streams to a temp key BEFORE ever taking this lock).
+  const blobKey = blobKeyForChecksum(checksum)
   const entityType = entityTypeForTable(table)
-  const updateValues = {
-    fileRef: {
-      bucket: env.S3_BUCKET,
-      key,
-      contentType: file.type || 'application/octet-stream',
-      size: file.size,
-      name: file.name,
-      uploadedAt: new Date().toISOString(),
-    },
-    fileSize: file.size,
-    ...(lineCount !== null ? { lineCount } : {}),
-    ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
-    status: 'ready' as const,
-    // Capture the checksum on every finalize (issue #106 U12) — including a
-    // brand-new resource's first upload — so a future archive + reclaim of
-    // THIS resource has something to verify a re-upload against. A matching
-    // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
-    // resource usable again (R12); isReclaimedShell is false for a normal
-    // (non-shell) upload, so this key is simply omitted there.
-    fileChecksum: checksum,
-    ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
-    updatedAt: new Date(),
-  }
 
-  // Wrap DB write + audit record in a transaction so a failed audit rolls
-  // back the metadata write (R4). The S3 upload above already succeeded and
-  // is not transactional (S3 is not Postgres); on rollback the uploaded
-  // object becomes an orphan. This is an acceptable trade-off — audit failure
-  // is a configuration error, not a normal code path. The non-transactional
-  // keyspace fan-out runs after commit so it is unaffected by the rollback.
-  await db.transaction(async (tx) => {
+  await withBlobKeyLock(blobKey, async (tx) => {
+    let compressionEncoding: ResourceCompressionEncoding
+    const existingBlob = await headObjectFn(blobKey)
+    const adopted = existingBlob.exists ? await findCompressionEncodingForKey(blobKey, tx) : null
+    if (adopted !== null) {
+      compressionEncoding = adopted
+    } else {
+      if (existingBlob.exists) {
+        logger.error(
+          { resourceType, resourceId, blobKey },
+          'uploadResourceFile: content-addressed blob exists in storage but no live row references it (unexpected -- signals a prior orphaned delete); re-uploading current deterministic representation so stored bytes and recorded encoding always agree'
+        )
+      }
+      // Compress the raw buffer before storage (#108 U3): word/rule/mask
+      // lists only (hash lists never reach this function — see
+      // `ResourceTable`). Gzip specifically, and only when it actually
+      // shrinks the payload; otherwise store the raw bytes unchanged.
+      // `fileSize`/`fileChecksum` below always describe the RAW file — the
+      // agent-facing contract and the reclaimed-shell checksum comparison
+      // must never depend on which encoding a given upload happened to pick.
+      const compressed = compressBufferForStorage(buffer)
+      compressionEncoding = compressed.encoding
+      await uploadFileFn(blobKey, compressed.bytes, file.type || 'application/octet-stream')
+    }
+
+    const updateValues = {
+      fileRef: {
+        bucket: env.S3_BUCKET,
+        key: blobKey,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        name: file.name,
+        uploadedAt: new Date().toISOString(),
+      },
+      fileSize: file.size,
+      compressionEncoding,
+      ...(lineCount !== null ? { lineCount } : {}),
+      ...(resourceType === 'masklist' ? { keyspace: masklistKeyspace } : {}),
+      status: 'ready' as const,
+      // Capture the checksum on every finalize (issue #106 U12) — including a
+      // brand-new resource's first upload — so a future archive + reclaim of
+      // THIS resource has something to verify a re-upload against. A matching
+      // re-upload of a reclaimed shell clears blob_reclaimed_at, making the
+      // resource usable again (R12); isReclaimedShell is false for a normal
+      // (non-shell) upload, so this key is simply omitted there.
+      fileChecksum: checksum,
+      ...(isReclaimedShell ? { blobReclaimedAt: null } : {}),
+      updatedAt: new Date(),
+    }
+
+    // The row write + audit record commit as part of the SAME
+    // advisory-locked transaction (R4: a failed audit rolls back the
+    // metadata write too) -- this is what makes the dedup decision and the
+    // row commit one atomic, lock-serialized unit. The S3 upload above
+    // already succeeded and is not transactional (S3 is not Postgres); on
+    // rollback the uploaded object becomes an orphan. This is an acceptable
+    // trade-off — audit failure is a configuration error, not a normal code
+    // path.
     const [updated] = await tx
       .update(table)
       .set(updateValues)
@@ -1028,7 +1198,7 @@ export async function uploadResourceFile(
     }
   }
 
-  return { key, size: file.size }
+  return { key: blobKey, size: file.size }
 }
 
 // ─── Presigned URLs ─────────────────────────────────────────────────
@@ -1045,6 +1215,30 @@ export async function getResourcePresignedUrl(fileRef: {
 }
 
 /**
+ * Integrity metadata surfaced alongside an agent download URL (#108 U5).
+ * Hash lists carry none of the `checksum`/`size`/`encoding` columns — out
+ * of scope for #108 — so those three fields are `null` for
+ * `resourceType === 'hash-lists'`. Word/rule/mask list rows carry real
+ * values once `file_checksum` is captured at upload finalization; a
+ * resource whose worker hasn't run yet (or was uploaded before #102/#108
+ * shipped) reports `checksum: null` cleanly rather than surfacing a stale
+ * or fabricated value.
+ *
+ * `etag` is the inverse case (#108 follow-up: hash-list freshness ETag):
+ * it is `null` for word/rule/mask lists (they cache-skip by `checksum`
+ * instead) and a real weak validator — see `computeHashListEtag` — only
+ * for `resourceType === 'hash-lists'`.
+ */
+export interface AgentDownloadUrlResult {
+  url: string
+  expiresIn: number
+  checksum: string | null
+  size: number | null
+  encoding: ResourceCompressionEncoding | null
+  etag: string | null
+}
+
+/**
  * Generate a presigned download URL with extended expiry for large files.
  * Used by agents to download resources directly from S3.
  */
@@ -1052,7 +1246,8 @@ export async function getAgentDownloadUrl(
   resourceType: string,
   resourceId: number,
   projectId: number
-): Promise<{ url: string; expiresIn: number } | null> {
+): Promise<AgentDownloadUrlResult | null> {
+  const isHashList = resourceType === 'hash-lists'
   const tableMap: Record<string, ResourceTable | typeof hashLists> = {
     'hash-lists': hashLists,
     wordlists: wordLists,
@@ -1079,7 +1274,20 @@ export async function getAgentDownloadUrl(
     ...(fileRef.name ? { filename: fileRef.name } : {}),
   })
 
-  return { url, expiresIn }
+  // `table` is typed as a union including `hashLists`, which has none of
+  // these columns — narrow on `resourceType` (not the row) since hash
+  // lists are excluded from #108 scope entirely. The cast is safe: the
+  // `!isHashList` branch only runs when `table` resolved to one of the
+  // three resource tables above, which share this column shape exactly.
+  const resourceRow = row as typeof wordLists.$inferSelect
+  const checksum = isHashList ? null : (resourceRow.fileChecksum ?? null)
+  const size = isHashList ? null : (resourceRow.fileSize ?? null)
+  const encoding = isHashList
+    ? null
+    : ((resourceRow.compressionEncoding as ResourceCompressionEncoding | undefined) ?? 'none')
+  const etag = isHashList ? await computeHashListEtag(resourceId) : null
+
+  return { url, expiresIn, checksum, size, encoding, etag }
 }
 
 // ─── Chunked Upload (S3 Multipart) ─────────────────────────────────
@@ -1303,12 +1511,18 @@ export async function completeChunkedUpload(
   // a server-side buffer for files too large for the direct-upload path.
   //
   // Two distinct policies depending on whether this is a restore:
-  //   - NOT a reclaimed shell (the common case): best-effort capture only.
-  //     A failure here must not fail an otherwise-successful upload — the
-  //     resource is already durably `ready`. A resource with no captured
-  //     checksum simply never becomes a blob-reclamation candidate (U11's
-  //     candidate predicate requires `file_checksum IS NOT NULL`), which
-  //     is a safe degrade.
+  //   - NOT a reclaimed shell (the common case): checksum capture is NOT
+  //     computed here at all (issue #108 U4). It used to be a best-effort
+  //     re-download-and-hash of the object that had just finished
+  //     uploading — for the 100GB+ files chunked upload exists to support,
+  //     that redundant full pass is wasteful. The resource-compression
+  //     worker (enqueued below) is now the authoritative source: it hashes
+  //     the raw bytes in the SAME streaming pass it uses to (maybe) gzip
+  //     the object, and writes `file_checksum` directly. Until that worker
+  //     runs, the resource simply never becomes a blob-reclamation
+  //     candidate (U11's candidate predicate requires `file_checksum IS
+  //     NOT NULL`), which is a safe degrade — and `file_checksum IS NOT
+  //     NULL` doubles as this worker's own idempotency guard.
   //   - A reclaimed shell (restore-after-reclaim, R12): verification is
   //     load-bearing, not best-effort. Unlike the direct-upload path
   //     (`uploadResourceFile`), the checksum can only be computed AFTER
@@ -1329,34 +1543,37 @@ export async function completeChunkedUpload(
         { err, resourceId, resourceType },
         'checksum verification failed for a reclaimed-shell restore; rejecting the re-upload'
       )
-      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
-        logger.warn(
-          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
-          'failed to clean up unverifiable chunked-upload object; continuing'
-        )
+      // #108 safety foundation: guarded delete keyed on `fileRef.key` — the
+      // content is unverifiable, so there's no checksum in play anyway; the
+      // guard only ever cares about the key. A no-op today (this key is a
+      // fresh UUID minted by `initiateChunkedUpload`'s restore path, never
+      // shared with any other row), but future-safe if dedup ever lets a
+      // restore land on a key another live resource also references.
+      await deleteBlobIfUnreferenced({
+        table: table as ResourceTable,
+        resourceId,
+        key: fileRef.key,
+        ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
       })
       throw new ChecksumMismatchError(resourceId, resourceType)
     }
     if (reclaimableRow.fileChecksum && reclaimableRow.fileChecksum !== computedChecksum) {
-      await deleteFile(fileRef.key, fileRef.bucket).catch((deleteErr: unknown) => {
-        logger.warn(
-          { err: deleteErr, resourceId, resourceType, key: fileRef.key },
-          'failed to clean up mismatched chunked-upload object; continuing'
-        )
+      // #108 safety foundation: guarded delete keyed on `fileRef.key`, same
+      // as above — the mismatched upload is rejected regardless of whose
+      // checksum it doesn't match; only key-sharing determines whether the
+      // object survives.
+      await deleteBlobIfUnreferenced({
+        table: table as ResourceTable,
+        resourceId,
+        key: fileRef.key,
+        ...(fileRef.bucket ? { bucket: fileRef.bucket } : {}),
       })
       throw new ChecksumMismatchError(resourceId, resourceType)
     }
     checksum = computedChecksum
-  } else if (!isHashList) {
-    try {
-      checksum = await sha256HexFromObject(fileRef.key, fileRef.bucket ?? env.S3_BUCKET)
-    } catch (err) {
-      logger.warn(
-        { err, resourceId, resourceType },
-        'checksum capture after chunked upload failed; resource stays checksum-less until a future upload'
-      )
-    }
   }
+  // NOT a reclaimed shell: `checksum` stays null here (see the docblock
+  // above) — the resource-compression worker enqueued below captures it.
 
   // Update resource status to ready
   const updatedFileRef = {
@@ -1417,6 +1634,29 @@ export async function completeChunkedUpload(
   const lineCountType = lineCountTypeForResourceType(resourceType)
   if (lineCountType) {
     await enqueueLineCount(lineCountType, resourceId, projectId)
+
+    // The normal (non-restore) completion path never buffers the file
+    // server-side, so it also never had a chance to gzip it inline (#108
+    // U3's compress-then-upload flow needs an in-memory buffer, which is
+    // exactly what MAX_DIRECT_UPLOAD_BYTES bounds). Enqueue the background
+    // compression worker (best-effort, deduped) to gzip the object and
+    // capture the authoritative raw checksum in one streaming pass (#108
+    // U4). Skipped for a reclaimed-shell restore: that branch already
+    // verified and captured the checksum synchronously above, and
+    // recompressing a just-restored object is out of scope for this unit.
+    //
+    // Best-effort by design: `enqueueResourceCompression` swallows its own
+    // failures (missing queue manager, enqueue throw) and returns `false`
+    // rather than rejecting, so it can never fail this upload. If the
+    // enqueue never lands, the resource simply keeps serving raw and
+    // checksum-less indefinitely -- still fully servable to agents (see
+    // `docs/agent-resource-protocol.md`'s null-checksum handling), just
+    // without the compression bandwidth win, and it is not a candidate for
+    // blob reclamation while `file_checksum` stays null. Recovery is a
+    // fresh upload (which re-enqueues); no backfill/retry sweep exists.
+    if (!isReclaimedShell) {
+      await enqueueResourceCompression(lineCountType, resourceId, projectId)
+    }
   }
 
   return { resourceId }

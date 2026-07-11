@@ -36,6 +36,15 @@ export const QUEUE_NAMES = {
   // archived past BLOB_RECLAMATION_RETENTION, closing the restore-vs-sweep
   // race with an atomic intent-stamp before any deleteFile call.
   BLOB_RECLAMATION: 'jobs-blob-reclamation',
+  // Chunked-upload compression (issue #108 U4). Event-driven: enqueued at
+  // the end of a normal (non-restore) chunked-upload completion for a
+  // word/rule/mask list, deduped per resource via a deterministic jobId.
+  // Streams the just-completed object exactly once to compress it (when
+  // that actually shrinks it) and capture the authoritative raw-file
+  // checksum -- chunked uploads never buffer the whole file server-side, so
+  // this background pass is the only place either can happen for files too
+  // large for the direct-upload path's inline compression (U3).
+  RESOURCE_COMPRESSION: 'jobs-resource-compression',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

@@ -1,11 +1,14 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListPartsCommand,
+  NotFound,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -78,6 +81,87 @@ export async function deleteFile(key: string, bucket?: string) {
       // credentials may also have access to.
       Bucket: assertAllowedBucket(bucket),
       Key: key,
+    })
+  )
+}
+
+/**
+ * Probes whether an object exists without downloading its body (issue #108
+ * safety foundation for content-addressed blob storage). Used by the
+ * content-addressed dedup path (`uploadResourceFile` and
+ * `compressChunkedResourceObject`) to check "does `blobs/<checksum>` already
+ * exist in the store" before deciding to skip a re-upload.
+ *
+ * A missing object is a normal, expected outcome here (not an error): it
+ * resolves to `{ exists: false }` rather than throwing. Any other failure
+ * (auth, network, wrong bucket) rethrows so it surfaces like every other
+ * storage call.
+ *
+ * "Missing" is detected three ways because S3-compatible backends disagree
+ * on how they signal it: the official AWS SDK error class (`NotFound`),
+ * SeaweedFS/MinIO's `NoSuchKey` error name (no stable `NotFound` class), and
+ * — for backends that only surface a bare HTTP status with no distinguishing
+ * error name — a `404` on `$metadata.httpStatusCode`. Any other error
+ * (auth, network, wrong bucket, 5xx) still rethrows.
+ */
+export async function headObject(
+  key: string,
+  bucket?: string
+): Promise<{ exists: boolean; size?: number }> {
+  try {
+    const response = await s3.send(
+      new HeadObjectCommand({
+        Bucket: assertAllowedBucket(bucket),
+        Key: key,
+      })
+    )
+    return response.ContentLength != null
+      ? { exists: true, size: response.ContentLength }
+      : { exists: true }
+  } catch (err) {
+    if (isMissingObjectError(err)) {
+      return { exists: false }
+    }
+    throw err
+  }
+}
+
+function isMissingObjectError(err: unknown): boolean {
+  if (err instanceof NotFound) return true
+  const name = (err as { name?: string }).name
+  if (name === 'NotFound' || name === 'NoSuchKey') return true
+  const statusCode = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+  return statusCode === 404
+}
+
+/**
+ * Server-side copy of an object to a new key within the same bucket (issue
+ * #108 safety foundation). Used by `compressChunkedResourceObject` to
+ * relocate a just-completed chunked-upload object onto its content-addressed
+ * `blobs/<checksum>` key without a client round-trip. Callers that invoke
+ * this as part of content-addressing must treat a thrown error as a safe,
+ * non-fatal "skip dedup for this object" signal — not every storage backend
+ * necessarily supports server-side copy.
+ */
+export async function copyObject(
+  sourceKey: string,
+  destKey: string,
+  bucket?: string
+): Promise<void> {
+  const resolvedBucket = assertAllowedBucket(bucket)
+  // `CopySource` is a single header value combining bucket + key, so the key
+  // portion must be URL-encoded (spaces, `+`, `#`, and unicode characters
+  // would otherwise corrupt the header, backend-dependent). Encode each
+  // `/`-separated segment individually and rejoin with a literal `/` so the
+  // path structure survives; the bucket name and its separating `/` are not
+  // encoded. Current keys are hex-only (content-addressed checksums / UUIDs)
+  // so this is a no-op today -- it hardens the general-purpose helper.
+  const encodedSourceKey = sourceKey.split('/').map(encodeURIComponent).join('/')
+  await s3.send(
+    new CopyObjectCommand({
+      Bucket: resolvedBucket,
+      CopySource: `${resolvedBucket}/${encodedSourceKey}`,
+      Key: destKey,
     })
   )
 }

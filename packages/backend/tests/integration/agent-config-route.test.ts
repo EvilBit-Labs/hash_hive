@@ -183,6 +183,14 @@ if (!IS_ISOLATED) {
     getStopTaskIdsForAgent: mock(async () => []),
   }))
 
+  // getResourcesForTask is imported directly from its submodule by the agent
+  // route (#108 review — avoids the barrel transitively pulling in
+  // services/resources.js's S3Client construction), so it must be mocked
+  // here rather than in the tasks.js mock above.
+  mock.module('../../src/services/tasks/task-resources.js', () => ({
+    getResourcesForTask: mock(async () => ({ resources: [] })),
+  }))
+
   mock.module('../../src/services/events.js', () => ({
     emitCrackResult: mock(),
     emitTaskUpdate: mock(),

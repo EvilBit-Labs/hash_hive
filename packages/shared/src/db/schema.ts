@@ -513,6 +513,9 @@ export const wordLists = pgTable(
     // SHA-256 of the uploaded file, captured at finalization and retained through
     // archive/reclaim so a reclaimed resource can be restored by re-upload.
     fileChecksum: varchar('file_checksum', { length: 255 }),
+    // How the object-store blob is encoded at rest (e.g. 'none', 'gzip'). Drives
+    // whether a consumer must decompress before use. See #108.
+    compressionEncoding: varchar('compression_encoding', { length: 32 }).notNull().default('none'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -544,6 +547,9 @@ export const ruleLists = pgTable(
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     blobReclaimedAt: timestamp('blob_reclaimed_at', { withTimezone: true }),
     fileChecksum: varchar('file_checksum', { length: 255 }),
+    // How the object-store blob is encoded at rest (e.g. 'none', 'gzip'). Drives
+    // whether a consumer must decompress before use. See #108.
+    compressionEncoding: varchar('compression_encoding', { length: 32 }).notNull().default('none'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -579,6 +585,9 @@ export const maskLists = pgTable(
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     blobReclaimedAt: timestamp('blob_reclaimed_at', { withTimezone: true }),
     fileChecksum: varchar('file_checksum', { length: 255 }),
+    // How the object-store blob is encoded at rest (e.g. 'none', 'gzip'). Drives
+    // whether a consumer must decompress before use. See #108.
+    compressionEncoding: varchar('compression_encoding', { length: 32 }).notNull().default('none'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

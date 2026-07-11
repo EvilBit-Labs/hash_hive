@@ -828,6 +828,57 @@ export const assignedTaskSchema = z.object({
   updatedAt: z.coerce.date(),
 })
 
+// ─── Task Resource Resolution (issue #108 U6) ───────────────────────
+//
+// Closes the gap where `assignedTaskSchema` (above) carries a task's
+// `attackId` but not the static resources (wordlist/rulelist/masklist)
+// that attack references. `GET /tasks/{taskId}/resources` resolves the
+// task -> attack -> resource ids and returns one entry per resource the
+// attack actually references, reusing `getAgentDownloadUrl` (#108 U5)
+// so the integrity metadata (`checksum`/`size`/`encoding`) and the
+// download URL come from one code path. Hash lists are out of #108
+// scope and are never included here — only wordlist/rulelist/masklist.
+
+/** Encoding of the object-store blob at rest. Canonical definition — the backend's `services/resources/compression.ts` imports its `ResourceCompressionEncoding` type from here rather than declaring its own. */
+export const resourceCompressionEncodingSchema = z.enum(['gzip', 'none'])
+
+/** Discriminates which attack slot (`wordlistId`/`rulelistId`/`masklistId`) a `taskResourceEntrySchema` resolved from. */
+export const taskResourceTypeSchema = z.enum(['wordlist', 'rulelist', 'masklist'])
+
+/**
+ * One resolved static resource for a task's attack. A `200` from `GET
+ * /tasks/{taskId}/resources` only ever contains entries whose
+ * `checksum`/`size`/`encoding` are fully populated — `getResourcesForTask`
+ * (PR #282 review) gates any referenced resource that hasn't finished
+ * uploading or hasn't been checksum/compression-processed yet behind a
+ * `409 TASK_RESOURCES_NOT_READY` instead of surfacing it here with nulls, so
+ * these three fields are never `null` in a `200` response. Contrast with
+ * `GET /resources/{type}/{id}/download-url` (the single-resource lookup,
+ * `downloadUrlResponseSchema` in `routes/agent/index.ts`), which is NOT
+ * gated by this readiness check and legitimately reports `null` for hash
+ * lists (no such columns) and for a resource whose checksum worker hasn't
+ * run yet — that schema is intentionally unchanged and stays nullable.
+ */
+export const taskResourceEntrySchema = z.object({
+  type: taskResourceTypeSchema,
+  id: z.number().int().positive(),
+  checksum: z.string(),
+  size: z.number().int().nonnegative(),
+  encoding: resourceCompressionEncodingSchema,
+  downloadUrl: z.url(),
+})
+
+/**
+ * Response body for `GET /tasks/{taskId}/resources`. Wrapped in a
+ * `resources` key (rather than a bare array) to match every other
+ * agent-surface response's envelope shape (e.g. `{ zaps, hasMore }`)
+ * and to leave room for additive top-level fields later without a
+ * breaking wire change.
+ */
+export const taskResourcesResponseSchema = z.object({
+  resources: z.array(taskResourceEntrySchema),
+})
+
 // ─── Campaign Dashboard Surface ─────────────────────────────────────
 //
 // `campaignStatusSchema`, `campaignTaskStatsSchema`,

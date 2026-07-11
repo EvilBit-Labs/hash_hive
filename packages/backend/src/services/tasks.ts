@@ -1054,3 +1054,23 @@ export {
 } from './tasks/agent-projection.js'
 export { handleTaskFailure, MAX_RETRIES, reassignStaleTasks } from './tasks/retry.js'
 export { getZapsForTask } from './tasks/zaps.js'
+
+// `getResourcesForTask` (./tasks/task-resources.js) is DELIBERATELY NOT
+// re-exported here (#108 review). It imports `getAgentDownloadUrl` from
+// `services/resources.js`, which constructs an S3Client at import time —
+// re-exporting it through this barrel would add a SECOND, needless path by
+// which every consumer of `services/tasks.js` (heartbeat-monitor,
+// task-generator, dashboard/tasks, control/tasks, etc.) transitively
+// constructs an S3Client just by importing task assignment/progress
+// helpers. Its sole consumer (the agent route's `GET
+// /tasks/{taskId}/resources` handler) imports it directly from
+// `./tasks/task-resources.js` instead, mirroring `getStopTaskIdsForAgent`.
+//
+// NOTE: this does not make `services/tasks.js` free of the S3Client
+// construction. `./campaigns.js` (imported directly above, and again via
+// `./tasks/retry.js`) already imports `latchResourcePermanent` from
+// `./resources.js` -- a pre-existing coupling (predates this branch) that
+// still pulls `config/storage.js`'s `S3Client` into this module's import
+// graph. This export omission only prevents ADDING a second, redundant
+// path to the same destination; fully severing tasks.ts from resources.ts
+// would require decoupling campaigns.ts too, which is out of scope here.

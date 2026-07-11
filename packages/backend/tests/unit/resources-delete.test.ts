@@ -54,6 +54,9 @@ if (IS_ISOLATED) {
     // services/resources.ts now transitively imports services/resources/line-count.ts
     // (shared line counting), which streams from storage via downloadFile.
     downloadFile: mock(),
+    // uploadResourceFile's content-addressed dedup check (issue #108); this
+    // suite doesn't exercise that path, but the named import must resolve.
+    headObject: mock(),
   }))
 
   // ─── Mock DB with per-test controllable behavior ─────────────────────
@@ -92,31 +95,43 @@ if (IS_ISOLATED) {
     campaigns: Symbol('campaigns'),
   }))
 
+  // Shared `select` factory: both the top-level `db.select` AND the
+  // transaction-scoped `tx.select` route through this, since
+  // `deleteBlobIfUnreferenced`'s "other live reference" scan (#108 T12/T13)
+  // now runs on the `tx` handle inside `withBlobKeyLock`'s
+  // `db.transaction(...)`, not on the top-level `db` — the tx object below
+  // must expose the same `select` shape as `db` itself.
+  const mockSelectImpl = () => ({
+    from: (table: unknown) => ({
+      where: () => ({
+        limit: () => {
+          const key = typeof table === 'symbol' ? (table.description ?? '') : 'unknown'
+          return Promise.resolve(selectByTable.get(key) ?? [])
+        },
+      }),
+    }),
+  })
+
   mock.module('../../src/db/index.js', () => ({
     db: {
-      select: () => ({
-        from: (table: unknown) => ({
-          where: () => ({
-            limit: () => {
-              const key = typeof table === 'symbol' ? (table.description ?? '') : 'unknown'
-              return Promise.resolve(selectByTable.get(key) ?? [])
-            },
-          }),
-        }),
-      }),
+      select: mockSelectImpl,
       delete: mockDelete,
       // Production code uses tx.execute for the batched hash_items DELETE
-      // (PG LIMIT-on-DELETE isn't in Drizzle's typed API). Return
+      // (PG LIMIT-on-DELETE isn't in Drizzle's typed API), AND for
+      // `withBlobKeyLock`'s `pg_advisory_xact_lock` call (#108 T12/T13) —
+      // both ignore the passed SQL under test and just resolve. Return
       // rowCount=0 so the chunked loop terminates immediately under test.
       // insert is required by recordAuditEvent called inside the transaction.
       transaction: async (
         fn: (tx: {
+          select: typeof mockSelectImpl
           delete: typeof mockDelete
           execute: (sql: unknown) => Promise<{ rowCount: number }>
           insert: () => { values: () => { returning: () => Promise<{ id: number }[]> } }
         }) => Promise<unknown>
       ) =>
         fn({
+          select: mockSelectImpl,
           delete: mockDelete,
           execute: async () => ({ rowCount: 0 }),
           insert: () => ({ values: () => ({ returning: () => Promise.resolve([{ id: 1 }]) }) }),

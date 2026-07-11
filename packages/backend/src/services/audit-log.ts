@@ -215,6 +215,9 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'archivedAt',
     'blobReclaimedAt',
     'fileChecksum',
+    // How the blob is encoded at rest (#108) — audited alongside
+    // fileChecksum since both describe the stored blob's integrity/shape.
+    'compressionEncoding',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -230,6 +233,7 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'archivedAt',
     'blobReclaimedAt',
     'fileChecksum',
+    'compressionEncoding',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),
@@ -246,6 +250,7 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'archivedAt',
     'blobReclaimedAt',
     'fileChecksum',
+    'compressionEncoding',
     // fileRef excluded
     // createdAt / updatedAt excluded
   ]),

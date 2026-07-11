@@ -39,6 +39,8 @@ import {
   effectiveAgentConfigSchema,
   HEARTBEAT_ERROR_CONTEXT_MAX_CHARS,
   HEARTBEAT_ERROR_MESSAGE_MAX,
+  resourceCompressionEncodingSchema,
+  taskResourcesResponseSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -72,8 +74,9 @@ import {
   updateTaskProgress,
 } from '../../services/tasks.js'
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
+import { getResourcesForTask } from '../../services/tasks/task-resources.js'
 import { registerEnrollRoute } from './enroll.js'
-import { agentInternalError } from './helpers.js'
+import { agentInternalError, type AgentInternalErrorCode } from './helpers.js'
 
 const agentRoutes = new OpenAPIHono<AppEnv>(agentOpenApiHonoOptions)
 
@@ -275,6 +278,24 @@ const downloadUrlResponseSchema = z
     // service-layer bug; the schema simply locks the contract.
     url: z.url(),
     expiresIn: z.number().int().positive(),
+    // Integrity metadata (#108 U5), additive on top of the original
+    // `url`/`expiresIn` pair. Hash lists carry none of these columns
+    // (out of scope for #108) so `getAgentDownloadUrl` reports all
+    // three as `null` for that resource type; word/rule/mask lists
+    // report `null` only when the underlying column hasn't been
+    // populated yet (e.g. an upload whose checksum worker hasn't run).
+    // Agents that don't understand these fields can keep ignoring them
+    // — nothing here changes the meaning of `url`/`expiresIn`.
+    checksum: z.string().nullable(),
+    size: z.number().int().nonnegative().nullable(),
+    encoding: resourceCompressionEncodingSchema.nullable(),
+    // Hash-list freshness ETag (#108 follow-up), additive alongside the
+    // checksum/size/encoding trio above. `null` for word/rule/mask lists
+    // (they cache-skip by `checksum` instead); a weak validator derived
+    // from the hash list's last-crack time for `type: 'hash-lists'`. An
+    // agent echoes this back as `If-None-Match` on a later fetch and gets
+    // a bodyless 304 when its cached uncracked set is still current.
+    etag: z.string().nullable(),
   })
   .openapi('AgentResourceDownloadUrl')
 
@@ -552,6 +573,93 @@ agentRoutes.openapi(zapsRoute, async (c) => {
   }
 })
 
+// ─── GET /tasks/{taskId}/resources — static resources for a task ────
+//
+// Closes the gap where the assigned-task payload (`GET /tasks/next`)
+// carries `attackId` but no resource ids: an agent has no way to
+// discover which wordlist/rulelist/masklist ids belong to its task
+// without this route. Reuses `getAgentDownloadUrl` (#108 U5) via
+// `getResourcesForTask` so this route and `GET
+// /resources/{type}/{id}/download-url` can never disagree about a
+// given resource's integrity metadata or download URL. Hash lists are
+// never included — out of #108 scope.
+
+const taskResourcesResponseSchemaOA = taskResourcesResponseSchema.openapi('TaskResourcesResponse')
+
+const taskResourcesRoute = createRoute({
+  method: 'get',
+  path: '/tasks/{taskId}/resources',
+  tags: ['Tasks'],
+  summary:
+    "Retrieve the static resources (wordlist/rulelist/masklist) referenced by a task's attack",
+  description:
+    "Resolves the task's attack and returns one entry per wordlist/rulelist/masklist the attack actually references, each with integrity metadata (checksum/size/encoding) and a presigned download URL. Resource slots the attack does not use are omitted. The task must be assigned to the requesting agent and scoped to the agent's project; cross-project or unassigned lookups return 404. A referenced resource that has not finished uploading (or hasn't been checksum/compression-processed) yet returns a retriable 409 rather than a partial or silently incomplete resource list.",
+  security: [{ AgentBearer: [] }],
+  request: { params: taskIdParamSchema },
+  responses: {
+    200: {
+      description: "The task's referenced static resources.",
+      content: { 'application/json': { schema: taskResourcesResponseSchemaOA } },
+    },
+    400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
+    401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
+    404: sharedAgentResponse(AGENT_RESPONSE_REFS.NotFound),
+    409: sharedAgentResponse(AGENT_RESPONSE_REFS.Conflict),
+    500: sharedAgentResponse(AGENT_RESPONSE_REFS.ServerError),
+  },
+})
+
+agentRoutes.openapi(taskResourcesRoute, async (c) => {
+  const { agentId, projectId } = c.get('agent')
+  const { taskId } = c.req.valid('param')
+
+  try {
+    const result = await getResourcesForTask(taskId, agentId, projectId)
+
+    if ('error' in result) {
+      // Also covers the permanent-missing-resource case (PR #282 review): a
+      // referenced resource that doesn't exist in this task's project at
+      // all (deleted, cross-project, or misconfigured). Reusing this
+      // existing branch rather than a 409 means that case is never
+      // retriable-looking to the agent.
+      return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
+    }
+
+    if ('notReady' in result) {
+      // Expected, retriable, per-poll state -- debug, not warn (PR #282
+      // review). The permanent-missing case above stays at warn (real
+      // config problem); enqueue *failures* inside
+      // enqueueResourceCompression also stay at warn (actionable).
+      logger.debug(
+        { agentId, projectId, taskId },
+        'Task resources not ready: a referenced resource has no resolvable download yet'
+      )
+      const code: AgentInternalErrorCode = 'TASK_RESOURCES_NOT_READY'
+      return c.json(
+        {
+          error: {
+            code,
+            message:
+              'One or more resources referenced by this task have not finished uploading or processing yet. Retry shortly.',
+          },
+        },
+        409
+      )
+    }
+
+    return c.json(result, 200)
+  } catch (err: unknown) {
+    return agentInternalError(
+      c,
+      err,
+      'TASK_RESOURCES_ERROR',
+      'Failed to resolve task resources',
+      { agentId, taskId },
+      'Task resource resolution failed'
+    )
+  }
+})
+
 // ─── POST /errors — log an agent error ──────────────────────────────
 //
 // Same size caps as agentHeartbeatErrorSchema (in @hashhive/shared) so the
@@ -641,13 +749,17 @@ const downloadUrlRoute = createRoute({
   tags: ['Resources'],
   summary: 'Presigned download URL for a resource bound to this agent project',
   description:
-    'Returns a short-lived presigned URL the agent uses to fetch a resource (hash list, wordlist, rule list, mask list) from object storage. The resource must belong to a project the agent is a member of; cross-project lookups return 404.',
+    'Returns a short-lived presigned URL the agent uses to fetch a resource (hash list, wordlist, rule list, mask list) from object storage. The resource must belong to a project the agent is a member of; cross-project lookups return 404. For hash lists, send `If-None-Match` with the etag from a prior response to get a bodyless 304 when the uncracked set has not changed since.',
   security: [{ AgentBearer: [] }],
   request: { params: resourceParamSchema },
   responses: {
     200: {
       description: 'Presigned download URL.',
       content: { 'application/json': { schema: downloadUrlResponseSchema } },
+    },
+    304: {
+      description:
+        'Hash list unchanged since If-None-Match: no new cracks since that etag was issued. Empty body.',
     },
     400: sharedAgentResponse(AGENT_RESPONSE_REFS.ValidationError),
     401: sharedAgentResponse(AGENT_RESPONSE_REFS.AuthError),
@@ -668,6 +780,21 @@ agentRoutes.openapi(downloadUrlRoute, async (c) => {
         { error: { code: 'RESOURCE_NOT_FOUND', message: 'Resource not found or has no file' } },
         404
       )
+    }
+
+    // Hash-list freshness ETag (#108 follow-up). `result.etag` is only ever
+    // non-null for hash lists (see AgentDownloadUrlResult), so a wordlist/
+    // rulelist/masklist request can never satisfy this comparison and always
+    // falls through to the unchanged 200 response below.
+    //
+    // Exact-match contract (PR #282 review): this is a deliberate raw string
+    // `===` comparison, not a full RFC 7232 weak-comparison implementation.
+    // The agent always echoes the etag it was given back verbatim, so there
+    // is no comma-separated etag list, no `*` wildcard, and no need to strip
+    // a `W/` prefix before comparing — `result.etag` already carries it.
+    const ifNoneMatch = c.req.header('if-none-match')
+    if (result.etag && ifNoneMatch === result.etag) {
+      return c.body(null, 304)
     }
 
     return c.json(result, 200)
