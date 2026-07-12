@@ -260,6 +260,13 @@
       "when": 1783572634542,
       "tag": "0036_public_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783860633618,
+      "tag": "0037_legal_nekra",
+      "breakpoints": true
     }
   ]
 }

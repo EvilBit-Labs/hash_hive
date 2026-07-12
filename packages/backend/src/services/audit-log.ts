@@ -280,6 +280,26 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
   // only operator-meaningful column. `updatedAt` is system-managed (excluded
   // globally) and "who" is captured by the audit event's actor.
   fleet_config: new Set(['id', 'config']),
+
+  // Global user account (AD/LDAP auth, U4). Used only by the ldap.* audit
+  // actions (ldap.provisioned / ldap.role_synced / ldap.collision) --
+  // entityId is users.id and projectId is null on these rows (they are
+  // global, not project-scoped, events).
+  user: new Set([
+    'id',
+    'email',
+    'name',
+    'status',
+    'emailVerified',
+    'roles',
+    'lastProjectId',
+    // EXCLUDED (see EXPLICITLY_EXCLUDED_COLUMNS):
+    //   passwordHash, apiKeyHash — credential columns (R6/R23 never log)
+    //   apiKeyLastUsedAt, lastLoginAt — high-frequency telemetry, not
+    //     meaningful diff content
+    //   image — low audit value
+    //   createdAt / updatedAt — system-managed, excluded globally
+  ]),
 }
 
 // ─── Executor type ───────────────────────────────────────────────────────────
@@ -837,6 +857,7 @@ export const AUDITED_TABLE_COLUMNS: Record<AuditEntityType, ReadonlySet<string>>
   mask_list: new Set(Object.keys(maskLists)),
   agent: new Set(Object.keys(agents)),
   fleet_config: new Set(Object.keys(fleetAgentConfig)),
+  user: new Set(Object.keys(users)),
 }
 
 /**
@@ -870,4 +891,12 @@ export const EXPLICITLY_EXCLUDED_COLUMNS: ReadonlySet<string> = new Set([
   // Drizzle internal RLS marker present on every table object's key enumeration
   // (not a real column; Object.keys(table) surfaces it alongside column props)
   'enableRLS',
+  // User credential/secret columns (AD/LDAP auth, U4 — R6/R23 never log)
+  'passwordHash',
+  'apiKeyHash',
+  // User operational/telemetry columns (AD/LDAP auth, U4) — high-frequency
+  // or low audit value, not meaningful diff content
+  'apiKeyLastUsedAt',
+  'lastLoginAt',
+  'image',
 ])
