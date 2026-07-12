@@ -48,8 +48,8 @@ packages/frontend/playwright-report/
 # AI/LLM agent configuration -- these are local workflow files,
 # not project source. Contributors should not commit agent-specific
 # configs; use CONTRIBUTING.md for project standards.
-CLAUDE.md
-.claude/
+.claude/skills/
+.claude/worktree/
 .cursor/
 .codex/
 .kiro/hooks/
