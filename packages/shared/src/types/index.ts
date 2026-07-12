@@ -106,6 +106,7 @@ import type {
   insertUserSchema,
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
+  ldapSignInBodySchema,
   loginRequestSchema,
   meResponseSchema,
   requiredCapabilitiesSchema,
@@ -348,6 +349,8 @@ export type TaskResourcesResponse = z.infer<typeof taskResourcesResponseSchema>
 // ─── API Request Types ──────────────────────────────────────────────
 
 export type LoginRequest = z.infer<typeof loginRequestSchema>
+/** Request body for `POST /api/auth/sign-in/ldap` (U5). See `ldapSignInBodySchema`. */
+export type LdapSignInBody = z.infer<typeof ldapSignInBodySchema>
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
 export type ChangeCampaignPriorityRequest = z.infer<typeof changeCampaignPriorityRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>

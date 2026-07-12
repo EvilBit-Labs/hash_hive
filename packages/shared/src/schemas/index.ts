@@ -131,6 +131,19 @@ export const loginRequestSchema = z.object({
 })
 
 /**
+ * Request body for `POST /api/auth/sign-in/ldap` -- the AD/LDAP directory
+ * sign-in endpoint added by the BetterAuth `ldap` server plugin (U5,
+ * docs/plans/2026-07-12-001-feat-adldap-authentication-support-plan.md).
+ * Distinct from `loginRequestSchema`: the directory identifier is a
+ * *username*, not an email -- the directory is the identity source and the
+ * HashHive email may be synthesized (R10) when the directory exposes none.
+ */
+export const ldapSignInBodySchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+})
+
+/**
  * Inline-attack payload accepted by the transactional `POST /campaigns`
  * path. Distinct from `createAttackRequestSchema` in one important
  * way: `dependencyIndices` here are **0-based indices into the same
