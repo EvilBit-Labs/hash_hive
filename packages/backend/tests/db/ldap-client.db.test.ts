@@ -161,6 +161,45 @@ describe('authenticateDirectory', () => {
     expect(slower / faster).toBeLessThan(8)
   })
 
+  it("under the 'search' group strategy, a wrong password against a real user is not measurably slower than an unknown username (group resolution deferred past verification, R22)", async () => {
+    // The memberOf strategy (previous test) reads group membership straight
+    // off the already-fetched user entry -- no extra network call either
+    // way, so it could never have caught the timing side channel this test
+    // targets. The 'search' strategy issues a SEPARATE client.search() call
+    // to resolve group membership. Before group resolution was deferred
+    // until after the verification bind, that extra search ran on the
+    // known-user branch (whether the password was right or wrong) but never
+    // on the unknown-username branch -- so a wrong password against a real
+    // user cost one more LDAP round trip, and was measurably slower, than
+    // an unknown username. Both should now cost exactly the same: one
+    // findUserEntry search plus one failed verification bind, no group
+    // search on either denied path.
+    const config = buildConfig({ groupStrategy: 'search', groupBase: LDAP_TEST_GROUP_BASE })
+
+    const wrongPasswordStart = performance.now()
+    const wrongPasswordResult = await authenticateDirectory(
+      LDAP_TEST_OPERATOR_USER.username,
+      'definitely-the-wrong-password',
+      config
+    )
+    const wrongPasswordElapsed = performance.now() - wrongPasswordStart
+
+    const unknownUserStart = performance.now()
+    const unknownUserResult = await authenticateDirectory(
+      LDAP_TEST_UNKNOWN_USERNAME,
+      'definitely-the-wrong-password',
+      config
+    )
+    const unknownUserElapsed = performance.now() - unknownUserStart
+
+    expect(wrongPasswordResult).toEqual({ ok: false, reason: 'invalid_credentials' })
+    expect(unknownUserResult).toEqual({ ok: false, reason: 'invalid_credentials' })
+
+    const slower = Math.max(wrongPasswordElapsed, unknownUserElapsed)
+    const faster = Math.max(Math.min(wrongPasswordElapsed, unknownUserElapsed), 1)
+    expect(slower / faster).toBeLessThan(8)
+  })
+
   it('rejects an empty/whitespace password before any LDAP call (P0 -- RFC 4513 unauthenticated bind)', async () => {
     // Points at a closed port: if this path made any LDAP call at all, it
     // would fail to connect and surface as 'unavailable', not
