@@ -320,7 +320,29 @@ async function bootAndSeed(): Promise<LdapTestDirectory> {
       LDAP_CONFIG_PASSWORD: LDAP_TEST_ADMIN_PASSWORD,
       LDAP_TLS: 'false',
     })
-    .withWaitStrategy(Wait.forListeningPorts().withStartupTimeout(120_000))
+    // `osixia/openldap`'s entrypoint runs a *transient* `slapd -h "ldap:///
+    // ldapi:///"` during its own first-start bootstrap (loading schemas and
+    // the default bootstrap ldif into cn=config) before stopping it and
+    // starting the real, long-running `slapd` process. That transient
+    // instance also listens on the container's port 389, so
+    // `Wait.forListeningPorts()` alone can report the container "ready"
+    // while still inside that bootstrap window -- `seedFixtures` then races
+    // the entrypoint's own concurrent LDIF loading against the memberof
+    // overlay, an mdb-backed single-writer database, which is what produced
+    // the observed "memberOf never settled" failures (reproduced locally
+    // by connecting the moment the port opened, before the entrypoint's
+    // own bootstrap sequence had finished). The final process logs a
+    // distinctive
+    // `slapd starting` line exactly once, only when the entrypoint's
+    // bootstrap sequence has fully completed and it hands off to the
+    // supervised foreground process -- waiting on both that log line and
+    // the port removes the race deterministically.
+    .withWaitStrategy(
+      Wait.forAll([
+        Wait.forListeningPorts(),
+        Wait.forLogMessage(/slapd starting/),
+      ]).withStartupTimeout(120_000)
+    )
     .start()
 
   const url = `ldap://${container.getHost()}:${container.getMappedPort(389)}`
@@ -349,14 +371,21 @@ const BOOT_ATTEMPTS = 6
  * why seeding happens this way instead of via bootstrap LDIF files).
  * Callers are responsible for calling `stop()` in their own `afterAll`.
  *
- * The `memberof` overlay's backpatch of a member's `memberOf` attribute
- * (see `waitForMemberOf`) has been observed to occasionally never fire for
- * an entire container's lifetime -- not merely lag -- on an otherwise
- * correctly-configured container in this environment; more patience
- * within a single container does not help (see the plan's U2 evidence
- * notes for the investigation). Retrying with an entirely fresh container
- * converges reliably in practice, so a seeding failure here retries the
- * whole boot+seed up to `BOOT_ATTEMPTS` times before giving up for real.
+ * Root cause of the historical "memberOf never settles" flake/CI failure:
+ * `osixia/openldap`'s entrypoint runs a *transient* `slapd` process during
+ * its own first-start bootstrap (to load schemas and the default bootstrap
+ * ldif into `cn=config`) before stopping it and handing off to the real,
+ * long-running `slapd`. That transient instance also listens on port 389,
+ * so a wait strategy based on port-listening alone can report the
+ * container "ready" while still inside that bootstrap window --
+ * `seedFixtures` then races the entrypoint's own concurrent LDIF loading
+ * on the same mdb-backed, single-writer database, and the group's
+ * `uniqueMember` add can land in a state the overlay never backpatches.
+ * `bootAndSeed`'s wait strategy now also waits for the final process's
+ * distinctive `slapd starting` log line, which removes that race (see
+ * that function's doc). `waitForMemberOf`'s bounded poll and this
+ * function's whole-container retry stay in place as defense in depth
+ * against ordinary host-contention lag, not as the primary fix.
  */
 export async function startLdapTestDirectory(): Promise<LdapTestDirectory> {
   let lastError: unknown
