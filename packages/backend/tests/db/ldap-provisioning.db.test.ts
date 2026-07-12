@@ -388,6 +388,49 @@ describe('resolveDirectoryUser — email collision fail-closed (R11)', () => {
   })
 })
 
+describe('resolveDirectoryUser — repeated collision denial (dedup pending requests)', () => {
+  it('reuses the existing pending link request instead of inserting a duplicate on a repeat collision login', async () => {
+    await cleanupSeed()
+    const existingUserId = await seedLocalUser('dup-collision-target', ['analyst'])
+    const email = `dup-collision-target@${EMAIL_DOMAIN}`
+    await seedCredentialAccount(existingUserId, email)
+    const username = 'dup-collision-directory-username'
+
+    const first = await resolveDirectoryUser({ username, email, role: 'admin' })
+    const second = await resolveDirectoryUser({ username, email, role: 'admin' })
+    const third = await resolveDirectoryUser({ username, email, role: 'operator' })
+
+    expect(first.ok).toBe(false)
+    expect(second.ok).toBe(false)
+    expect(third.ok).toBe(false)
+    if (first.ok || second.ok || third.ok) throw new Error('expected every login to collide')
+    expect(second.linkRequestId).toBe(first.linkRequestId)
+    expect(third.linkRequestId).toBe(first.linkRequestId)
+
+    const pending = await db
+      .select()
+      .from(ldapLinkRequests)
+      .where(eq(ldapLinkRequests.username, username))
+    expect(pending).toHaveLength(1)
+    expect(pending[0]!.status).toBe('pending')
+
+    // Only the first (original) collision emits an ldap.collision audit row.
+    const collisionAudits = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.entityType, 'user'),
+          eq(auditLogs.entityId, existingUserId),
+          eq(auditLogs.action, 'ldap.collision')
+        )
+      )
+    expect(collisionAudits).toHaveLength(1)
+
+    await cleanupSeed()
+  })
+})
+
 describe('resolveDirectoryUser — break-glass floor guard (U6a integration)', () => {
   it('rejects a re-sync that would demote the sole local admin', async () => {
     await cleanupSeed()

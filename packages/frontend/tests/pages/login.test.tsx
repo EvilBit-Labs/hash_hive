@@ -108,6 +108,51 @@ describe('LoginPage', () => {
     })
   })
 
+  it('surfaces a "failed to load projects" error instead of silently redirecting when sign-in succeeds but /dashboard/auth/me fails', async () => {
+    // Regression coverage: after a successful sign-in, fetchProjects()'s
+    // failure branch ALSO produces hasFetchedProjects:true +
+    // selectedProjectId:null -- the exact same state the
+    // "authenticated, no project auto-selected" redirect guard checks for.
+    // Without gating that guard on lastFetchFailed, the redirect wins the
+    // race and the user lands on /select-project with no error, exactly
+    // as though they simply have zero project memberships.
+    const consoleSpy = mock(() => {})
+    const originalConsoleError = console.error
+    console.error = consoleSpy as unknown as typeof console.error
+
+    try {
+      signInResult = { error: null }
+      fetchMock = mockFetch({
+        '/dashboard/auth/me': { status: 500, body: { error: { code: 'ERR', message: 'boom' } } },
+      })
+
+      renderWithRouter(
+        [
+          { path: '/login', element: <LoginPage /> },
+          { path: '/select-project', element: <div>Select Project Page</div> },
+          { path: '/', element: <div>Dashboard Home</div> },
+        ],
+        { initialRoute: '/login' }
+      )
+
+      fireEvent.change(screen.getByLabelText('Email'), {
+        target: { value: 'admin@hashhive.local' },
+      })
+      fireEvent.change(screen.getByLabelText('Password'), {
+        target: { value: 'password123' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Failed to load projects. Please try again.')).toBeDefined()
+      })
+      expect(screen.queryByText('Select Project Page')).toBeNull()
+      expect(screen.queryByText('Dashboard Home')).toBeNull()
+    } finally {
+      console.error = originalConsoleError
+    }
+  })
+
   it('redirects to /select-project when multiple projects', async () => {
     const meResponse = mockMeResponse({ projectCount: 2 })
     signInResult = { error: null }
@@ -315,6 +360,35 @@ describe('LoginPage', () => {
       expect(screen.getByRole('button', { name: 'Sign In' })).toBeDefined()
     })
 
+    it('renders only the local form and no error banner when /dashboard/auth/methods rejects (fail-closed, logged not silent)', async () => {
+      const consoleSpy = mock(() => {})
+      const originalConsoleError = console.error
+      console.error = consoleSpy as unknown as typeof console.error
+
+      try {
+        fetchMock = mockFetch({
+          '/dashboard/auth/methods': {
+            status: 500,
+            body: { error: { code: 'ERR', message: 'boom' } },
+          },
+        })
+        renderWithRouter([{ path: '/login', element: <LoginPage /> }], { initialRoute: '/login' })
+
+        await waitFor(() => {
+          expect(consoleSpy).toHaveBeenCalled()
+        })
+
+        expect(screen.queryByRole('button', { name: 'Sign in with Directory' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Sign In' })).toBeDefined()
+        expect(screen.getByLabelText('Email')).toBeDefined()
+        expect(screen.getByLabelText('Password')).toBeDefined()
+        // No error banner leaks the /dashboard/auth/methods failure to the user.
+        expect(screen.queryByRole('alert')).toBeNull()
+      } finally {
+        console.error = originalConsoleError
+      }
+    })
+
     it('renders the directory option when ldap:true and reveals fields on click', async () => {
       fetchMock = mockFetch(authMethodsRoute(true))
       renderWithRouter([{ path: '/login', element: <LoginPage /> }], { initialRoute: '/login' })
@@ -399,6 +473,12 @@ describe('LoginPage', () => {
         'LDAP_ACCOUNT_COLLISION',
         'This account needs an administrator to link it before you can sign in this way. Contact an admin.',
       ],
+      // Unmapped status (e.g. a 429 rate-limit, or an unexpected 5xx this
+      // table has no specific case for) falls to directoryErrorMessage's
+      // `default:` branch, which must return a safe generic message --
+      // never `err.message` verbatim (the whole point of this table's
+      // "never a raw status/message leak" assertion below).
+      [429, undefined, 'Directory sign-in failed. Please try again.'],
     ] as const
 
     it('every non-undefined code in the directory error table is a known shared LDAP sign-in error code', () => {

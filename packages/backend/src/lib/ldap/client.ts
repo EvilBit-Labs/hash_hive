@@ -6,7 +6,7 @@
  * point (R2, R3, R4). It:
  *
  *   1. Rejects an empty/whitespace password before making any LDAP call --
- *      RFC 4513 3.1.2 makes a bind with a DN and a zero-length password an
+ *      RFC 4513 5.1.2 makes a bind with a DN and a zero-length password an
  *      "unauthenticated bind", which many servers accept as SUCCESS
  *      regardless of whether the password is correct. Letting an empty
  *      password reach the verification bind would be a full auth bypass.
@@ -46,7 +46,6 @@
 import type * as tls from 'node:tls'
 
 import { Client, type ClientOptions, DN, type Entry, ResultCodeError } from 'ldapts'
-import { readFileSync } from 'node:fs'
 
 import type { LdapConfig } from '../../config/ldap.js'
 import type { DirectoryAttributes, DirectoryAuthResult } from './types.js'
@@ -129,20 +128,17 @@ function buildPlaceholderDn(username: string, config: LdapConfig): string {
 
 // ─── TLS ────────────────────────────────────────────────────────────────────
 
-/** Reads a configured CA certificate: either an inline PEM block or a filesystem path to one. */
-function resolveCaCert(caCert: string | undefined): string | undefined {
-  if (!caCert) {
-    return undefined
-  }
-  if (caCert.includes('BEGIN CERTIFICATE')) {
-    return caCert
-  }
-  return readFileSync(caCert, 'utf8')
-}
-
+/**
+ * `config.tlsCaCert` is already-resolved PEM content -- `config/ldap.ts`'s
+ * `getLdapConfig` reads it (inline PEM vs filesystem path) exactly once at
+ * config-build time via `resolveCaCert`, not here. This function used to
+ * do that resolution itself (including a `readFileSync`) on every call,
+ * which meant a synchronous disk read on every `createClient`/
+ * `maybeStartTls` invocation -- 2-3 per sign-in attempt, in the request
+ * hot path.
+ */
 function buildTlsConnectionOptions(config: LdapConfig): tls.ConnectionOptions {
-  const ca = resolveCaCert(config.tlsCaCert)
-  return ca ? { ca } : {}
+  return config.tlsCaCert ? { ca: config.tlsCaCert } : {}
 }
 
 function createClient(config: LdapConfig): Client {

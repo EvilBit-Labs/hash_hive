@@ -29,6 +29,13 @@
  * Usage:
  *   bun packages/backend/src/scripts/seed-admin.ts
  *   just db-seed
+ *
+ * `seedAdmin(options?)` is exported so `tests/db/seed-admin.db.test.ts` can
+ * exercise this break-glass guarantee directly against a scoped test
+ * identity (`options.email`/`options.password`), without mutating the real
+ * `SEED_ADMIN_EMAIL` account or shelling out to the CLI. The
+ * `import.meta.main` guard below keeps the process-exiting CLI entrypoint
+ * (`client.end()` + `process.exit`) out of that import path.
  */
 import { baAccounts, projects, projectUsers, users } from '@hashhive/shared'
 
@@ -40,8 +47,16 @@ const ADMIN_NAME = 'Admin'
 const PROJECT_NAME = 'Default Project'
 const PROJECT_SLUG = 'default'
 
-async function seed() {
-  const passwordHash = await Bun.password.hash(ADMIN_PASSWORD, { algorithm: 'bcrypt', cost: 12 })
+/** Overrides for `seedAdmin`, so tests can seed a scoped, disposable admin identity instead of the real `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` account. */
+export interface SeedAdminOptions {
+  email?: string
+  password?: string
+}
+
+export async function seedAdmin(options: SeedAdminOptions = {}): Promise<void> {
+  const email = options.email ?? ADMIN_EMAIL
+  const password = options.password ?? ADMIN_PASSWORD
+  const passwordHash = await Bun.password.hash(password, { algorithm: 'bcrypt', cost: 12 })
 
   await db.transaction(async (tx) => {
     // Find-or-create admin user (email has a unique constraint).
@@ -51,7 +66,7 @@ async function seed() {
     // it was manually downgraded.
     const [user] = await tx
       .insert(users)
-      .values({ email: ADMIN_EMAIL, passwordHash, name: ADMIN_NAME, roles: ['admin'] })
+      .values({ email, passwordHash, name: ADMIN_NAME, roles: ['admin'] })
       .onConflictDoUpdate({
         target: users.email,
         set: { name: ADMIN_NAME, passwordHash, roles: ['admin'] },
@@ -72,13 +87,13 @@ async function seed() {
       .values({
         id: crypto.randomUUID(),
         userId: user.id,
-        accountId: ADMIN_EMAIL,
+        accountId: email,
         providerId: 'credential',
         password: passwordHash,
       })
       .onConflictDoUpdate({
         target: [baAccounts.userId, baAccounts.providerId],
-        set: { accountId: ADMIN_EMAIL, password: passwordHash },
+        set: { accountId: email, password: passwordHash },
       })
 
     // Find-or-create default project (slug has a unique constraint)
@@ -113,14 +128,19 @@ async function seed() {
       })
 
     console.log('Seed complete:')
-    console.log(`  Email:   ${ADMIN_EMAIL}`)
+    console.log(`  Email:   ${email}`)
     console.log(`  Project: ${PROJECT_NAME}`)
   })
-
-  await client.end()
 }
 
-seed().catch((err) => {
-  console.error('Seed failed:', err)
-  process.exit(1)
-})
+if (import.meta.main) {
+  seedAdmin()
+    .then(async () => {
+      await client.end()
+    })
+    .catch(async (err) => {
+      console.error('Seed failed:', err)
+      await client.end()
+      process.exit(1)
+    })
+}

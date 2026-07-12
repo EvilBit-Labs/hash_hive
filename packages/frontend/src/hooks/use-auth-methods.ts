@@ -18,11 +18,23 @@ const QUERY_KEY = ['auth', 'methods'] as const
  * quietly falls back to "directory disabled" -- the login page renders
  * byte-for-byte as the local-only form (R20's disabled-state contract)
  * rather than surfacing a fetch error on the one page every operator
- * must be able to reach.
+ * must be able to reach. That silent fallback is intentional UX, but it
+ * must not be silent for an operator debugging "why is the directory
+ * button missing" -- the `queryFn` logs the error before rethrowing it
+ * (rethrow keeps the query's own error/fail-closed contract unchanged;
+ * only the logging is new).
  */
 export function useAuthMethods() {
   return useQuery<AuthMethods>({
     queryKey: QUERY_KEY,
-    queryFn: () => api.get<AuthMethods>('/dashboard/auth/methods'),
+    queryFn: async () => {
+      try {
+        return await api.get<AuthMethods>('/dashboard/auth/methods')
+      } catch (err) {
+        // oxlint-disable-next-line no-console -- observability for a failure that otherwise disappears into the fail-closed "directory disabled" fallback with zero signal
+        console.error('useAuthMethods: failed to load auth methods', err)
+        throw err
+      }
+    },
   })
 }

@@ -1,17 +1,21 @@
+import type { UserRole } from '@hashhive/shared'
+
+import { readFileSync } from 'node:fs'
+
 import type { Env } from './env.js'
 
 /**
- * Group-to-role map (KTD4): three discrete lists of directory group
- * identifiers (DN or CN, depending on `LDAP_GROUP_STRATEGY`), one per
- * HashHive global capability tier. An empty list for a role means "no
- * group is mapped to that role" — nobody can ever match it, which is the
- * fail-closed default (R5, R6).
+ * Group-to-role map (KTD4): one directory group-identifier list (DN or CN,
+ * depending on `LDAP_GROUP_STRATEGY`) per HashHive global capability tier.
+ * Keyed by `Record<UserRole, string[]>` rather than a hand-declared
+ * `{ admin; operator; analyst }` shape, so adding a role tier to
+ * `UserRole` (`@hashhive/shared`) forces this map (and every place that
+ * builds one, e.g. `buildGroupRoleMap`) to be updated too, instead of
+ * silently drifting out of sync with the role vocabulary. An empty list
+ * for a role means "no group is mapped to that role" — nobody can ever
+ * match it, which is the fail-closed default (R5, R6).
  */
-export interface LdapGroupRoleMap {
-  admin: string[]
-  operator: string[]
-  analyst: string[]
-}
+export type LdapGroupRoleMap = Record<UserRole, string[]>
 
 /**
  * Typed LDAP configuration surface, produced only when directory auth is
@@ -30,6 +34,14 @@ export interface LdapGroupRoleMap {
 export interface LdapConfig {
   url: string
   tls: 'ldaps' | 'starttls' | 'none'
+  /**
+   * The CA certificate's PEM content, already resolved by `resolveCaCert`
+   * at config-build time (below) -- never a raw `LDAP_TLS_CA_CERT` value
+   * that still needs a filesystem read. This keeps every per-login TLS
+   * connection (U2's `createClient` / `maybeStartTls`, called 2-3x per
+   * sign-in attempt) free of a synchronous disk read in the request hot
+   * path; the read happens exactly once, here, when the process starts.
+   */
   tlsCaCert: string | undefined
   allowInsecureTransport: boolean
   bindDn: string
@@ -55,6 +67,25 @@ export function parseGroupList(value: string): string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
+}
+
+/**
+ * Resolves a configured CA certificate to its PEM content: either an
+ * inline PEM block (returned verbatim) or a filesystem path (read once,
+ * here). Called exactly once per process, from `getLdapConfig` below, so
+ * `LdapConfig.tlsCaCert` always carries already-resolved content rather
+ * than a path a per-login TLS connection would otherwise re-read via
+ * `readFileSync` on every `createClient`/`maybeStartTls` call (U2's
+ * `client.ts`, 2-3 reads per sign-in attempt).
+ */
+export function resolveCaCert(caCert: string | undefined): string | undefined {
+  if (!caCert) {
+    return undefined
+  }
+  if (caCert.includes('BEGIN CERTIFICATE')) {
+    return caCert
+  }
+  return readFileSync(caCert, 'utf8')
 }
 
 type GroupRoleEnv = Pick<Env, 'LDAP_GROUP_ADMIN' | 'LDAP_GROUP_OPERATOR' | 'LDAP_GROUP_ANALYST'>
@@ -124,7 +155,7 @@ export function getLdapConfig(env: Env): LdapConfig | null {
   return {
     url: LDAP_URL,
     tls: env.LDAP_TLS,
-    tlsCaCert: env.LDAP_TLS_CA_CERT,
+    tlsCaCert: resolveCaCert(env.LDAP_TLS_CA_CERT),
     allowInsecureTransport: env.LDAP_ALLOW_INSECURE_TRANSPORT,
     bindDn: LDAP_BIND_DN,
     bindPassword: LDAP_BIND_PASSWORD,

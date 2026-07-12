@@ -255,12 +255,45 @@ async function linkExistingUser(
   return resyncRoles(tx, existingUser.id, input.role)
 }
 
-/** Branch 3: R11 collision -- write a pending reconciliation request, never mutate the existing user. */
+/**
+ * Branch 3: R11 collision -- write a pending reconciliation request, never
+ * mutate the existing user.
+ *
+ * Idempotent per (username, matchedUserId): a repeat collision login for a
+ * directory identity that already has an open `pending` request reuses
+ * that row (bumping `updatedAt`) instead of inserting a duplicate --
+ * without this, every repeated collision login (e.g. a user retrying their
+ * directory password, unaware their account is the one that needs admin
+ * reconciliation) would flood the U7 admin queue with one row per attempt.
+ * No fresh `ldap.collision` audit event is emitted for a reused row either
+ * -- the audit trail already has the original event; a duplicate row per
+ * retry would be audit-log noise, not new information for the admin.
+ */
 async function denyCollision(
   tx: Tx,
   input: ResolveDirectoryUserInput,
   matchedUserId: number
 ): Promise<number> {
+  const [existingPending] = await tx
+    .select({ id: ldapLinkRequests.id })
+    .from(ldapLinkRequests)
+    .where(
+      and(
+        eq(ldapLinkRequests.username, input.username),
+        eq(ldapLinkRequests.matchedUserId, matchedUserId),
+        eq(ldapLinkRequests.status, 'pending')
+      )
+    )
+    .limit(1)
+
+  if (existingPending) {
+    await tx
+      .update(ldapLinkRequests)
+      .set({ updatedAt: new Date() })
+      .where(eq(ldapLinkRequests.id, existingPending.id))
+    return existingPending.id
+  }
+
   const [linkRequest] = await tx
     .insert(ldapLinkRequests)
     .values({

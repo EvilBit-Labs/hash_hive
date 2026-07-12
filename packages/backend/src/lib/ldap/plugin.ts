@@ -149,15 +149,26 @@ export async function resolveLdapSignIn(
   const authResult = await deps.authenticateDirectory(input.username, input.password, config)
 
   if (!authResult.ok) {
-    if (authResult.reason === 'unavailable') {
-      // authenticateDirectory (U2) already logs the underlying error via
-      // pino at error level -- this is a higher-level "the sign-in attempt
-      // was denied for this reason" event, not a duplicate of that log.
-      logger.warn({ username: input.username }, 'ldap sign-in denied: directory unavailable')
-      return { kind: 'unavailable' }
+    switch (authResult.reason) {
+      case 'unavailable':
+        // authenticateDirectory (U2) already logs the underlying error via
+        // pino at error level -- this is a higher-level "the sign-in
+        // attempt was denied for this reason" event, not a duplicate of
+        // that log.
+        logger.warn({ username: input.username }, 'ldap sign-in denied: directory unavailable')
+        return { kind: 'unavailable' }
+      case 'invalid_credentials':
+        logger.warn({ username: input.username }, 'ldap sign-in denied: invalid credentials')
+        return { kind: 'invalid_credentials' }
+      default: {
+        // Exhaustiveness guard, mirroring outcomeToApiError below: a future
+        // DirectoryAuthFailureReason variant added without a matching case
+        // here fails at compile time (via the `never` assignment) instead
+        // of silently misclassifying the failure.
+        const unhandled: never = authResult.reason
+        throw new Error(`ldap plugin: unhandled directory auth failure reason ${String(unhandled)}`)
+      }
     }
-    logger.warn({ username: input.username }, 'ldap sign-in denied: invalid credentials')
-    return { kind: 'invalid_credentials' }
   }
 
   const role = deps.resolveRole(authResult.groups, config.groupRoleMap)

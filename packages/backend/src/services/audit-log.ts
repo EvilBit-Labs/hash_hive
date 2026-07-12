@@ -282,9 +282,10 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
   fleet_config: new Set(['id', 'config']),
 
   // Global user account (AD/LDAP auth, U4). Used only by the ldap.* audit
-  // actions (ldap.provisioned / ldap.role_synced / ldap.collision) --
-  // entityId is users.id and projectId is null on these rows (they are
-  // global, not project-scoped, events).
+  // actions (ldap.provisioned / ldap.role_synced / ldap.collision /
+  // ldap.link_approved / ldap.link_rejected) -- entityId is users.id and
+  // projectId is null on these rows (they are global, not project-scoped,
+  // events).
   user: new Set([
     'id',
     'email',
@@ -294,7 +295,7 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'roles',
     'lastProjectId',
     // EXCLUDED (see EXPLICITLY_EXCLUDED_COLUMNS):
-    //   passwordHash, apiKeyHash — credential columns (R6/R23 never log)
+    //   passwordHash, apiKeyHash — credential columns (R23 never log)
     //   apiKeyLastUsedAt, lastLoginAt — high-frequency telemetry, not
     //     meaningful diff content
     //   image — low audit value
@@ -891,7 +892,7 @@ export const EXPLICITLY_EXCLUDED_COLUMNS: ReadonlySet<string> = new Set([
   // Drizzle internal RLS marker present on every table object's key enumeration
   // (not a real column; Object.keys(table) surfaces it alongside column props)
   'enableRLS',
-  // User credential/secret columns (AD/LDAP auth, U4 — R6/R23 never log)
+  // User credential/secret columns (AD/LDAP auth, U4 — R23 never log)
   'passwordHash',
   'apiKeyHash',
   // User operational/telemetry columns (AD/LDAP auth, U4) — high-frequency

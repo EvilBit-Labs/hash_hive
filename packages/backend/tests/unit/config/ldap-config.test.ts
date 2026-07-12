@@ -2,21 +2,32 @@
  * Unit tests for LDAP configuration (U1 of the AD/LDAP authentication plan,
  * docs/plans/2026-07-12-001-feat-adldap-authentication-support-plan.md).
  *
- * Two things under test:
+ * Three things under test:
  *  - envSchema's LDAP_* fields and the superRefine that makes them
  *    conditionally required (fail-fast) only when LDAP_ENABLED is true,
  *    mirroring the existing AUDIT_LOG_RETENTION env-validation pattern in
  *    tests/unit/audit-retention-env.test.ts.
  *  - config/ldap.ts's pure group-list parser and typed `getLdapConfig`
  *    accessor, which is `null` when directory auth is disabled.
+ *  - `resolveCaCert`'s inline-PEM-vs-filesystem-path resolution, called
+ *    once by `getLdapConfig` so a per-login TLS connection (U2's
+ *    `client.ts`) never re-reads the CA cert off disk.
  *
  * No Docker required — uses envSchema.safeParse()/parse() directly without
  * executing any DB, Redis, or LDAP calls.
  */
 import { describe, expect, it } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { envSchema } from '../../../src/config/env.js'
-import { buildGroupRoleMap, getLdapConfig, parseGroupList } from '../../../src/config/ldap.js'
+import {
+  buildGroupRoleMap,
+  getLdapConfig,
+  parseGroupList,
+  resolveCaCert,
+} from '../../../src/config/ldap.js'
 
 // Minimum valid env so safeParse doesn't fail on unrelated required fields.
 const BASE_ENV = {
@@ -232,5 +243,55 @@ describe('getLdapConfig', () => {
       operator: ['cn=hh-operators'],
       analyst: ['cn=hh-analysts'],
     })
+  })
+
+  it('resolves LDAP_TLS_CA_CERT from a filesystem path into tlsCaCert (precedence: getLdapConfig calls resolveCaCert once)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ldap-config-test-'))
+    const certPath = join(dir, 'ca.pem')
+    const pem = '-----BEGIN CERTIFICATE-----\nfile-content\n-----END CERTIFICATE-----'
+    writeFileSync(certPath, pem, 'utf8')
+
+    try {
+      const parsed = envSchema.parse({ ...ENABLED_LDAP_ENV, LDAP_TLS_CA_CERT: certPath })
+      const config = getLdapConfig(parsed)
+
+      expect(config?.tlsCaCert).toBe(pem)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveCaCert', () => {
+  it('returns undefined when no CA cert is configured', () => {
+    expect(resolveCaCert(undefined)).toBeUndefined()
+  })
+
+  it('returns inline PEM content verbatim without touching the filesystem', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\ninline-content\n-----END CERTIFICATE-----'
+
+    expect(resolveCaCert(pem)).toBe(pem)
+  })
+
+  it('reads a filesystem path when the value is not inline PEM', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ldap-ca-cert-test-'))
+    const certPath = join(dir, 'ca.pem')
+    const pem = '-----BEGIN CERTIFICATE-----\nfile-content\n-----END CERTIFICATE-----'
+    writeFileSync(certPath, pem, 'utf8')
+
+    try {
+      expect(resolveCaCert(certPath)).toBe(pem)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers the inline-PEM detection over treating the value as a path (precedence)', () => {
+    // A value containing "BEGIN CERTIFICATE" is never treated as a
+    // filesystem path, even though it would not resolve to a real file.
+    const pem =
+      '-----BEGIN CERTIFICATE-----\nnot-a-real-file-path-but-has-the-marker\n-----END CERTIFICATE-----'
+
+    expect(resolveCaCert(pem)).toBe(pem)
   })
 })

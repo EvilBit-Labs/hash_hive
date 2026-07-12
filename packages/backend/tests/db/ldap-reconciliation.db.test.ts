@@ -26,8 +26,10 @@ import { and, eq, inArray, like } from 'drizzle-orm'
 import type { AuditActor } from '../../src/services/audit-log.js'
 
 import { db } from '../../src/db/index.js'
+import { resolveDirectoryUser } from '../../src/services/ldap-provisioning.js'
 import {
   LdapLinkRequestAlreadyResolvedError,
+  LdapLinkRequestNotFoundError,
   LdapLinkTargetAlreadyLinkedError,
   LdapLinkTargetNotFoundError,
   listPendingLinkRequests,
@@ -207,6 +209,21 @@ describe('resolveLinkRequest — link (R12)', () => {
 
     const [row] = await db.select().from(ldapLinkRequests).where(eq(ldapLinkRequests.id, requestId))
     expect(row!.status).toBe('pending') // unchanged -- rolled back atomically
+
+    await cleanupSeed()
+  })
+
+  it('rejects resolving a nonexistent requestId with a typed 404 error against a real DB (previously only covered by the mocked route test)', async () => {
+    await cleanupSeed()
+    const bogusRequestId = 999_999_999
+    const bogusTargetUserId = await seedLocalUser('link-nonexistent-request-target')
+
+    await expect(
+      resolveLinkRequest(
+        { requestId: bogusRequestId, action: 'link', targetUserId: bogusTargetUserId },
+        RESOLVING_ADMIN
+      )
+    ).rejects.toThrow(LdapLinkRequestNotFoundError)
 
     await cleanupSeed()
   })
@@ -416,6 +433,61 @@ describe('resolveLinkRequest — idempotency on an already-resolved request (R12
     await expect(
       resolveLinkRequest({ requestId, action: 'reject' }, RESOLVING_ADMIN)
     ).rejects.toThrow(LdapLinkRequestAlreadyResolvedError)
+
+    await cleanupSeed()
+  })
+})
+
+describe('resolveLinkRequest + resolveDirectoryUser — role applies on next login (U7 + U4 seam)', () => {
+  it('does not re-apply the resolved role when the admin links the account; the NEXT directory login does (via resolveDirectoryUser re-sync)', async () => {
+    await cleanupSeed()
+
+    // Seed a real R11 collision via resolveDirectoryUser itself (U4): the
+    // matched account already has a local password, so the directory
+    // login is denied and a pending ldap_link_requests row is written.
+    const matchedUserId = await seedLocalUser('seam-collision-matched', ['analyst'])
+    const email = `seam-collision-matched@${EMAIL_DOMAIN}`
+    await db.insert(baAccounts).values({
+      id: crypto.randomUUID(),
+      userId: matchedUserId,
+      accountId: email,
+      providerId: 'credential',
+      password: 'hashed-password-placeholder',
+    })
+    const username = 'seam-directory-username'
+
+    const collision = await resolveDirectoryUser({ username, email, role: 'operator' })
+    expect(collision.ok).toBe(false)
+    if (collision.ok) throw new Error('expected a collision denial')
+
+    // Admin (U7) links the pending request to a chosen account -- not
+    // necessarily the collision's matchedUserId.
+    const targetUserId = await seedLocalUser('seam-chosen-target', ['analyst'])
+
+    const linkResult = await resolveLinkRequest(
+      { requestId: collision.linkRequestId, action: 'link', targetUserId },
+      RESOLVING_ADMIN
+    )
+    expect(linkResult.status).toBe('linked')
+
+    // resolveLinkRequest deliberately does NOT re-apply the pending
+    // request's resolvedRole (per ldap-reconciliation.ts's module doc) --
+    // the target's roles are still whatever they were before linking.
+    const [targetAfterLink] = await db.select().from(users).where(eq(users.id, targetUserId))
+    expect(targetAfterLink!.roles).toEqual(['analyst'])
+
+    // The user's NEXT directory login (not the admin's linking action) is
+    // what applies the resolved role, through resolveDirectoryUser's
+    // re-sync branch (U4) -- this is the documented "role applies on next
+    // login" seam.
+    const nextLogin = await resolveDirectoryUser({ username, email, role: 'operator' })
+    expect(nextLogin.ok).toBe(true)
+    if (!nextLogin.ok) throw new Error('expected ok result')
+    expect(nextLogin.user.id).toBe(targetUserId)
+    expect(nextLogin.user.roles).toEqual(['operator'])
+
+    const [targetAfterNextLogin] = await db.select().from(users).where(eq(users.id, targetUserId))
+    expect(targetAfterNextLogin!.roles).toEqual(['operator'])
 
     await cleanupSeed()
   })

@@ -41,7 +41,12 @@ function directoryErrorMessage(err: LdapSignInError): string {
     case 409:
       return 'This account needs an administrator to link it before you can sign in this way. Contact an admin.'
     default:
-      return err.message ?? 'Directory sign-in failed. Please try again.'
+      // Never forward `err.message` here -- it is raw backend text for a
+      // status this table does not have a specific mapping for (e.g. a
+      // 429 rate-limit or an unexpected 5xx), and forwarding it would
+      // contradict this function's own doc contract that nothing here
+      // forwards a raw status or stack trace.
+      return 'Directory sign-in failed. Please try again.'
   }
 }
 
@@ -50,6 +55,7 @@ export function LoginPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const fetchProjects = useAuthStore((s) => s.fetchProjects)
   const hasFetchedProjects = useAuthStore((s) => s.hasFetchedProjects)
+  const lastFetchFailed = useAuthStore((s) => s.lastFetchFailed)
   const [error, setError] = useState<string | null>(null)
   const [directoryOpen, setDirectoryOpen] = useState(false)
   const selectProject = useSelectProject()
@@ -92,8 +98,15 @@ export function LoginPage() {
     return <Navigate to="/" replace />
   }
 
-  // Redirect to project selection when authenticated but no project auto-selected
-  if (session && hasFetchedProjects && !selectedProjectId) {
+  // Redirect to project selection when authenticated but no project
+  // auto-selected. Gated on `!lastFetchFailed`: a failed fetchProjects()
+  // call ALSO produces `hasFetchedProjects:true` + `selectedProjectId:null`
+  // (see the store's catch branch), so without this guard a failed /me
+  // call would redirect to /select-project before the onSubmit handlers'
+  // "Failed to load projects" error banner (below) ever has a chance to
+  // render -- the redirect would win the race every time, since it is an
+  // early return that short-circuits before the JSX.
+  if (session && hasFetchedProjects && !selectedProjectId && !lastFetchFailed) {
     return <Navigate to="/select-project" replace />
   }
 
@@ -141,12 +154,13 @@ export function LoginPage() {
 
     // Fetch project memberships -- syncSelectedProject auto-selects when the
     // server has pre-selected (single-project user, or BetterAuth restored
-    // a previous session.projectId). The store's catch swallows /me errors
-    // and clears state, but we still surface a user-visible message rather
-    // than leaving the form silently stuck.
-    try {
-      await fetchProjects()
-    } catch {
+    // a previous session.projectId). `fetchProjects` never rejects (its own
+    // catch swallows /me errors and clears state), so a try/catch here would
+    // never fire -- check the store's `lastFetchFailed` flag instead to
+    // still surface a user-visible message rather than silently falling
+    // through to the selector as though the user simply has no projects.
+    await fetchProjects()
+    if (useAuthStore.getState().lastFetchFailed) {
       setError('Failed to load projects. Please try again.')
       return
     }
@@ -171,9 +185,10 @@ export function LoginPage() {
     // produces automatically for /sign-in/email.
     authClient.$store.notify('$sessionSignal')
 
-    try {
-      await fetchProjects()
-    } catch {
+    // See onSubmit's matching comment -- fetchProjects never rejects, so
+    // the failure signal is the store's lastFetchFailed flag, not a catch.
+    await fetchProjects()
+    if (useAuthStore.getState().lastFetchFailed) {
       setError('Failed to load projects. Please try again.')
       return
     }
