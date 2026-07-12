@@ -106,6 +106,7 @@ import type {
   insertUserSchema,
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
+  authMethodsSchema,
   ldapLinkRequestListResponseSchema,
   ldapLinkRequestSchema,
   ldapSignInBodySchema,
@@ -355,6 +356,8 @@ export type TaskResourcesResponse = z.infer<typeof taskResourcesResponseSchema>
 export type LoginRequest = z.infer<typeof loginRequestSchema>
 /** Request body for `POST /api/auth/sign-in/ldap` (U5). See `ldapSignInBodySchema`. */
 export type LdapSignInBody = z.infer<typeof ldapSignInBodySchema>
+/** Response body for `GET /api/v1/dashboard/auth/methods` (U8, KTD8). See `authMethodsSchema`. */
+export type AuthMethods = z.infer<typeof authMethodsSchema>
 
 /** AD/LDAP admin reconciliation wire types (U7, R12). See `ldapLinkRequestSchema`. */
 export type LdapLinkRequest = z.infer<typeof ldapLinkRequestSchema>

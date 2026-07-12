@@ -145,6 +145,22 @@ export const ldapSignInBodySchema = z.object({
 })
 
 /**
+ * Response body for the anonymous `GET /api/v1/dashboard/auth/methods`
+ * discovery endpoint (U8, KTD8). The login page fetches this to decide
+ * whether to render the directory sign-in option (R20) -- `local` is
+ * always `true` (local email/password login is never disabled), `ldap`
+ * mirrors `env.LDAP_ENABLED`. Intentionally the ONLY LDAP configuration
+ * ever exposed anonymously: no URL, bind DN, group map, or other
+ * `LDAP_*` setting is ever included here.
+ */
+export const authMethodsSchema = z
+  .object({
+    local: z.boolean(),
+    ldap: z.boolean(),
+  })
+  .openapi('AuthMethods')
+
+/**
  * Inline-attack payload accepted by the transactional `POST /campaigns`
  * path. Distinct from `createAttackRequestSchema` in one important
  * way: `dependencyIndices` here are **0-based indices into the same
