@@ -46,6 +46,7 @@ import { type UserRole, baAccounts, ldapLinkRequests, users } from '@hashhive/sh
 import { desc, eq, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../db/unique-violation.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 
 /** Drizzle transaction handle — mirrors ldap-provisioning.ts's `Tx` alias. */
@@ -95,30 +96,6 @@ export class LdapLinkTargetAlreadyLinkedError extends Error {
     )
     this.name = 'LdapLinkTargetAlreadyLinkedError'
   }
-}
-
-/** Narrow, unvalidated shape shared by both a raw driver error and DrizzleQueryError. */
-interface MaybeCodedError {
-  code?: unknown
-  cause?: unknown
-}
-
-/**
- * Detect a Postgres unique-constraint violation (SQLSTATE 23505). Mirrors
- * `services/ldap-provisioning.ts`'s helper of the same name -- see that
- * module for why the `.cause` chain walk is necessary (`db.transaction` /
- * `tx.insert(...)` wrap the raw driver error in a `DrizzleQueryError`).
- */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err
-  for (let depth = 0; depth < 3 && current !== null && typeof current === 'object'; depth++) {
-    const candidate = current as MaybeCodedError
-    if (candidate.code === '23505') {
-      return true
-    }
-    current = candidate.cause
-  }
-  return false
 }
 
 // ─── Wire-shaped row types ────────────────────────────────────────────────

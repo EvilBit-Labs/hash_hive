@@ -53,6 +53,7 @@ import { type UserRole, baAccounts, ldapLinkRequests, users } from '@hashhive/sh
 import { and, eq, isNotNull } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../db/unique-violation.js'
 import { coerceRoles } from '../middleware/auth.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
 import { assertLocalAdminRemains } from './local-admin-guard.js'
@@ -95,34 +96,6 @@ export interface ResolvedDirectoryUser {
 export type ResolveDirectoryUserResult =
   | { ok: true; user: ResolvedDirectoryUser }
   | { ok: false; reason: 'collision'; linkRequestId: number }
-
-/** Narrow, unvalidated shape shared by both a raw driver error and DrizzleQueryError. */
-interface MaybeCodedError {
-  code?: unknown
-  cause?: unknown
-}
-
-/**
- * Detect a Postgres unique-constraint violation (SQLSTATE 23505). The
- * postgres-js driver throws the coded error directly, but `db.transaction`
- * / `tx.insert(...)` wrap it in a `DrizzleQueryError` whose `.code` is
- * undefined -- the real code lives on `.cause` (drizzle-orm's
- * `errors.ts`). Walks a short `.cause` chain so both the raw driver error
- * and the wrapped form are detected; using the typed code instead of
- * substring matching prevents false positives if the driver's error
- * message format changes.
- */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err
-  for (let depth = 0; depth < 3 && current !== null && typeof current === 'object'; depth++) {
-    const candidate = current as MaybeCodedError
-    if (candidate.code === '23505') {
-      return true
-    }
-    current = candidate.cause
-  }
-  return false
-}
 
 function toResolvedUser(user: UserRow): ResolvedDirectoryUser {
   // coerceRoles narrows the raw text[] column to the strict UserRole union

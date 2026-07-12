@@ -1,4 +1,4 @@
-import type { LdapSignInBody } from '@hashhive/shared'
+import type { LdapSignInBody, LdapSignInSuccess } from '@hashhive/shared'
 
 import { createAuthClient } from 'better-auth/react'
 
@@ -6,12 +6,6 @@ import { createAuthClient } from 'better-auth/react'
 export const authClient: ReturnType<typeof createAuthClient> = createAuthClient({
   baseURL: window.location.origin,
 })
-
-/** Successful response body from `POST /api/auth/sign-in/ldap` (see `ldapPlugin` in `packages/backend/src/lib/ldap/plugin.ts`). */
-export interface LdapSignInSuccess {
-  token: string
-  user: { id: number; email: string; name: string; roles: string[] }
-}
 
 /**
  * Typed error shape `authClient.$fetch` surfaces for a non-2xx

@@ -1399,6 +1399,22 @@ export const selectProjectRequestSchema = z
 export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
 
 /**
+ * Successful response body from `POST /api/auth/sign-in/ldap` (U5, R1).
+ * Mirrors the JSON the `ldapPlugin` endpoint returns; `roles` reuses the
+ * global-tier union so the frontend keeps the same type the backend
+ * produces (`ResolvedDirectoryUser.roles`).
+ */
+export const ldapSignInSuccessSchema = z.object({
+  token: z.string(),
+  user: z.object({
+    id: z.number().int().positive(),
+    email: z.email(),
+    name: z.string(),
+    roles: z.array(userRoleSchema),
+  }),
+})
+
+/**
  * Wire shape for a pending AD/LDAP directory-login collision (U7, R12) --
  * returned by the admin reconciliation surface,
  * `GET /api/v1/dashboard/ldap-link-requests`. Mirrors `ldapLinkRequests`

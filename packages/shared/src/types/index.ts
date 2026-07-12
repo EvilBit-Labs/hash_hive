@@ -110,6 +110,7 @@ import type {
   ldapLinkRequestListResponseSchema,
   ldapLinkRequestSchema,
   ldapSignInBodySchema,
+  ldapSignInSuccessSchema,
   loginRequestSchema,
   meResponseSchema,
   requiredCapabilitiesSchema,
@@ -356,6 +357,9 @@ export type TaskResourcesResponse = z.infer<typeof taskResourcesResponseSchema>
 export type LoginRequest = z.infer<typeof loginRequestSchema>
 /** Request body for `POST /api/auth/sign-in/ldap` (U5). See `ldapSignInBodySchema`. */
 export type LdapSignInBody = z.infer<typeof ldapSignInBodySchema>
+
+/** Successful response body for `POST /api/auth/sign-in/ldap` (U5). See `ldapSignInSuccessSchema`. */
+export type LdapSignInSuccess = z.infer<typeof ldapSignInSuccessSchema>
 /** Response body for `GET /api/v1/dashboard/auth/methods` (U8, KTD8). See `authMethodsSchema`. */
 export type AuthMethods = z.infer<typeof authMethodsSchema>
 
