@@ -19,6 +19,15 @@ interface ProjectMembership {
 interface AuthState {
   projects: ProjectMembership[]
   hasFetchedProjects: boolean
+  /**
+   * True when the most recent `fetchProjects()` call hit the catch branch
+   * below (network failure, unexpected non-2xx other than 401). `fetchProjects`
+   * itself never rejects -- callers that need to distinguish "loaded
+   * successfully with zero projects" from "the /me call failed" read this
+   * flag after awaiting `fetchProjects()` rather than wrapping the call in
+   * a try/catch that would never fire.
+   */
+  lastFetchFailed: boolean
   fetchProjects: () => Promise<void>
   clearAuth: () => void
 }
@@ -61,6 +70,7 @@ function syncSelectedProject(
 export const useAuthStore = create<AuthState>((set) => ({
   projects: [],
   hasFetchedProjects: false,
+  lastFetchFailed: false,
 
   fetchProjects: async () => {
     try {
@@ -71,7 +81,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         roles: p.roles,
       }))
       syncSelectedProject(projects, data.selectedProjectId)
-      set({ projects, hasFetchedProjects: true })
+      set({ projects, hasFetchedProjects: true, lastFetchFailed: false })
     } catch (err) {
       // /me failure typically means session expired (lib/api.ts already
       // redirects to /login on 401 before we get here), but log other
@@ -80,16 +90,19 @@ export const useAuthStore = create<AuthState>((set) => ({
       // available" so consumers fall through to the selector / login
       // flow rather than spinning forever. Clearing the UI selection
       // too prevents guarded routes from rendering against a stale
-      // projectId after the auth state collapsed.
+      // projectId after the auth state collapsed. `lastFetchFailed: true`
+      // lets a caller (e.g. the login page, right after sign-in) surface a
+      // user-visible message instead of silently landing on the selector
+      // as though the user simply has zero project memberships.
       // eslint-disable-next-line no-console
       console.error('useAuthStore.fetchProjects failed:', err)
       useUiStore.getState().setSelectedProject(null)
-      set({ projects: [], hasFetchedProjects: true })
+      set({ projects: [], hasFetchedProjects: true, lastFetchFailed: true })
     }
   },
 
   clearAuth: () => {
     useUiStore.getState().setSelectedProject(null)
-    set({ projects: [], hasFetchedProjects: false })
+    set({ projects: [], hasFetchedProjects: false, lastFetchFailed: false })
   },
 }))

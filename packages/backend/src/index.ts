@@ -102,6 +102,7 @@ app.use('/api/v1/dashboard/tasks/*', requireSameOrigin())
 app.use('/api/v1/dashboard/stats/*', requireSameOrigin())
 app.use('/api/v1/dashboard/results/*', requireSameOrigin())
 app.use('/api/v1/dashboard/crackers/*', requireSameOrigin())
+app.use('/api/v1/dashboard/ldap-link-requests/*', requireSameOrigin())
 app.use('/api/v1/dashboard/events/*', requireSameOriginForWS())
 
 app.route('/api/v1/dashboard', dashboardSurface)

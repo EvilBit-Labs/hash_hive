@@ -30,7 +30,13 @@ type ResourceStatusLiteral = 'pending' | 'uploading' | 'uploaded' | 'processing'
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).notNull().unique(),
-  passwordHash: varchar('password_hash', { length: 255 }).notNull(),
+  // Nullable (AD/LDAP auth, U4 / KTD3): a directory-only user has no local
+  // password at all. The `ba_accounts` credential row (`providerId:
+  // 'credential'`, `password` set) — not this column — is authoritative
+  // for "has a local password" (R11, KTD3, local-admin-guard.ts). This
+  // column is redundant with `ba_accounts.password` for local users and is
+  // not consulted by the collision or break-glass checks.
+  passwordHash: varchar('password_hash', { length: 255 }),
   name: varchar('name', { length: 255 }).notNull(),
   status: varchar('status', { length: 20 }).notNull().default('active'),
   emailVerified: boolean('email_verified').notNull().default(true),
@@ -137,6 +143,12 @@ export const baAccounts = pgTable(
   (table) => [
     index('ba_accounts_user_id_idx').on(table.userId),
     uniqueIndex('ba_accounts_user_id_provider_id_idx').on(table.userId, table.providerId),
+    // AD/LDAP auth (U4, R9): guarantees a directory username can never
+    // split into two HashHive accounts, even under a concurrent first
+    // login (the loser's insert fails with a unique violation that
+    // services/ldap-provisioning.ts catches and retries as a re-sync of
+    // the winner's account).
+    uniqueIndex('ba_accounts_provider_id_account_id_idx').on(table.providerId, table.accountId),
   ]
 )
 
@@ -151,6 +163,70 @@ export const baVerifications = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('ba_verifications_identifier_idx').on(table.identifier)]
+)
+
+// ─── LDAP Link Requests (AD/LDAP Auth, U4) ─────────────────────────
+//
+// A durable record of an R11 email collision: a directory login whose
+// derived email matched an existing HashHive account that already has a
+// local password (a `credential` `ba_accounts` row). Per R11 the login is
+// denied and the existing account is never mutated; instead a pending row
+// is written here so a HashHive admin can link or reject it from the U7
+// reconciliation surface (R12). `status` starts `pending` and becomes
+// `linked` or `rejected` once resolved.
+
+export const LDAP_LINK_REQUEST_STATUS_VALUES = ['pending', 'linked', 'rejected'] as const
+
+// Mirrors the global capability tier (`users.roles` / `userRoleSchema` in
+// ../schemas/index.ts). Declared locally (not imported) to avoid a
+// schema<->schemas circular import -- same pattern as AUDIT_ACTOR_TYPE_VALUES
+// et al. above. Keep in sync with the CHECK below and with `userRoleSchema`.
+export const LDAP_LINK_REQUEST_RESOLVED_ROLE_VALUES = ['admin', 'operator', 'analyst'] as const
+
+export const ldapLinkRequests = pgTable(
+  'ldap_link_requests',
+  {
+    id: serial('id').primaryKey(),
+    // Stable directory account identifier -- becomes ba_accounts.accountId
+    // if an admin later links this request (R9).
+    username: varchar('username', { length: 255 }).notNull(),
+    // Email derived from the directory entry at collision time (R10),
+    // stored verbatim so an admin reviewing the request does not need to
+    // re-query the directory to see what triggered the match.
+    derivedEmail: varchar('derived_email', { length: 255 }).notNull(),
+    // The global role the directory groups resolved to at collision time
+    // (R6). Applied to the matched user if an admin later chooses to link.
+    // .$type<> is type-only branding — no DDL change; selects infer the
+    // union (mirrors AUDIT_ACTION_VALUES's use on auditLogs.action below).
+    resolvedRole: varchar('resolved_role', { length: 20 })
+      .notNull()
+      .$type<(typeof LDAP_LINK_REQUEST_RESOLVED_ROLE_VALUES)[number]>(),
+    // The existing local HashHive account whose email collided.
+    matchedUserId: integer('matched_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // .$type<> is type-only branding — no DDL change; selects infer the union.
+    status: varchar('status', { length: 20 })
+      .notNull()
+      .default('pending')
+      .$type<(typeof LDAP_LINK_REQUEST_STATUS_VALUES)[number]>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // U7's pending-request list: "show only open requests".
+    index('ldap_link_requests_status_idx').on(table.status),
+    // U4 re-checks and U7's lookup both key off the directory username.
+    index('ldap_link_requests_username_idx').on(table.username),
+    check(
+      'ldap_link_requests_status_chk',
+      sql`${table.status} IN ('pending', 'linked', 'rejected')`
+    ),
+    check(
+      'ldap_link_requests_resolved_role_chk',
+      sql`${table.resolvedRole} IN ('admin', 'operator', 'analyst')`
+    ),
+  ]
 )
 
 // ─── Agents & Telemetry ─────────────────────────────────────────────
@@ -1021,6 +1097,10 @@ export const AUDIT_ENTITY_TYPE_VALUES = [
   'mask_list',
   'agent',
   'fleet_config',
+  // AD/LDAP auth (U4): global user-account events (JIT provisioning, role
+  // re-sync, collision denial) are not project-scoped, so they need their
+  // own entity type distinct from `project`'s membership-change synthesis.
+  'user',
 ] as const
 export const AUDIT_ACTION_VALUES = [
   'created',
@@ -1032,6 +1112,19 @@ export const AUDIT_ACTION_VALUES = [
   'restored',
   'retired',
   'reclaimed',
+  // AD/LDAP auth (U4, R23). Namespaced (not the generic 'created'/'updated')
+  // so directory-auth events are distinguishable in the audit trail from
+  // ordinary CRUD. All five fit the existing varchar(20) `action` column
+  // (16, 16, 14, 19, 19 chars) -- the column is intentionally NOT widened.
+  'ldap.provisioned',
+  'ldap.role_synced',
+  'ldap.collision',
+  // AD/LDAP admin reconciliation (U7, R12/R23): an admin resolves a
+  // pending `ldap_link_requests` row by linking it to a local account or
+  // rejecting it. Distinct from 'ldap.collision' (the automated denial
+  // that created the pending row) -- these are the admin's decision.
+  'ldap.link_approved',
+  'ldap.link_rejected',
 ] as const
 
 export const auditLogs = pgTable(
@@ -1086,12 +1179,12 @@ export const auditLogs = pgTable(
     // Sync with: AUDIT_ENTITY_TYPE_VALUES / auditEntityTypeSchema in ../schemas/index.ts
     check(
       'audit_logs_entity_type_chk',
-      sql`${table.entityType} IN ('project', 'campaign', 'attack', 'hash_list', 'word_list', 'rule_list', 'mask_list', 'agent', 'fleet_config')`
+      sql`${table.entityType} IN ('project', 'campaign', 'attack', 'hash_list', 'word_list', 'rule_list', 'mask_list', 'agent', 'fleet_config', 'user')`
     ),
     // Sync with: AUDIT_ACTION_VALUES / auditActionSchema in ../schemas/index.ts
     check(
       'audit_logs_action_chk',
-      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued', 'archived', 'restored', 'retired', 'reclaimed')`
+      sql`${table.action} IN ('created', 'updated', 'deleted', 'status_changed', 'token_issued', 'archived', 'restored', 'retired', 'reclaimed', 'ldap.provisioned', 'ldap.role_synced', 'ldap.collision', 'ldap.link_approved', 'ldap.link_rejected')`
     ),
   ]
 )

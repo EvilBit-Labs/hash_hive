@@ -1,7 +1,9 @@
+import { authMethodsSchema } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
 import type { AppEnv } from '../../types.js'
 
+import { env } from '../../config/env.js'
 import { logger } from '../../config/logger.js'
 import { dashboardError } from '../../lib/dashboard-errors.js'
 import { requireSession } from '../../middleware/auth.js'
@@ -19,7 +21,12 @@ import {
 
 const authRouter = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
-authRouter.use('*', requireSession)
+// This router also serves the anonymous /methods discovery endpoint (U8,
+// KTD8) below, so a blanket `use('*', requireSession)` would incorrectly
+// gate it. Apply requireSession per-path instead, mirroring the same
+// pattern in `routes/dashboard/agent-config.ts`.
+authRouter.use('/me', requireSession)
+authRouter.use('/me/api-key', requireSession)
 
 // The /me/api-key responses set `Cache-Control: no-store` and `Pragma:
 // no-cache` at runtime (see the per-handler `c.header(...)` calls
@@ -87,6 +94,34 @@ const issueApiKeyResponseSchema = z
     metadata: apiKeyMetadataPresentSchema,
   })
   .openapi('IssueApiKeyResponse')
+
+// ─── GET /methods — anonymous auth-method discovery (U8, KTD8) ──────
+//
+// No `security` entry and NOT covered by the per-path `requireSession`
+// wiring above -- this must stay anonymously fetchable, mirroring how
+// the dashboard `/openapi.json` spec endpoint is exposed. The login
+// page polls this to decide whether to render the directory sign-in
+// option (R20). Never leaks any LDAP configuration beyond the on/off
+// flag: no URL, bind DN, search base, or group map.
+
+const getAuthMethodsRoute = createRoute({
+  method: 'get',
+  path: '/methods',
+  tags: ['Auth'],
+  summary: 'Discover which sign-in methods are enabled (anonymous)',
+  description:
+    'Anonymous endpoint the login page polls to decide whether to render the directory (AD/LDAP) sign-in option (R20). `local` is always true; `ldap` mirrors `env.LDAP_ENABLED`. Carries no other directory configuration (KTD8).',
+  responses: {
+    200: {
+      description: 'Enabled authentication methods.',
+      content: { 'application/json': { schema: authMethodsSchema } },
+    },
+  },
+})
+
+authRouter.openapi(getAuthMethodsRoute, (c) => {
+  return c.json({ local: true, ldap: env.LDAP_ENABLED }, 200)
+})
 
 // ─── GET /me — authenticated user profile + projects ────────────────
 

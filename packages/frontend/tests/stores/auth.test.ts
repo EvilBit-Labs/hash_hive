@@ -71,6 +71,37 @@ describe('useAuthStore.fetchProjects', () => {
       console.error = originalConsoleError
     }
   })
+
+  it('sets lastFetchFailed:true on failure, then false again after a subsequent success', async () => {
+    // Consumers (e.g. login.tsx) that need to distinguish "the /me call
+    // failed" from "the user simply has zero projects" read this flag
+    // after awaiting fetchProjects() -- fetchProjects itself never
+    // rejects, so a try/catch around the call would never observe the
+    // failure.
+    const consoleSpy = mock(() => {})
+    const originalConsoleError = console.error
+    console.error = consoleSpy as unknown as typeof console.error
+
+    try {
+      fetchMock = mockFetch({
+        [ME_ROUTE]: { status: 500, body: { error: { code: 'ERR', message: 'boom' } } },
+      })
+      await useAuthStore.getState().fetchProjects()
+      expect(useAuthStore.getState().lastFetchFailed).toBe(true)
+
+      restoreFetch(fetchMock)
+      fetchMock = mockFetch({
+        [ME_ROUTE]: {
+          status: 200,
+          body: mockMeResponse({ projectCount: 1, selectedProjectId: 1 }),
+        },
+      })
+      await useAuthStore.getState().fetchProjects()
+      expect(useAuthStore.getState().lastFetchFailed).toBe(false)
+    } finally {
+      console.error = originalConsoleError
+    }
+  })
 })
 
 describe('useAuthStore.clearAuth', () => {

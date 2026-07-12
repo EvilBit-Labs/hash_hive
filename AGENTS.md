@@ -101,7 +101,7 @@ Recipes that wrap individual concerns (`just test-frontend`, `just type-check`, 
 
 ## Security
 
-Authentication supports Email/Password, Passkeys/WebAuthn, SAML SSO, generic OIDC, and LDAP/Active Directory, over OAuth 2.0 / OpenID Connect with API keys and Bearer tokens. Data handling covers encryption at rest and in transit (TLS), data-retention policies, audit logging, and RBAC. Secrets come from environment variables.
+Authentication supports Email/Password and directory sign-in via LDAP/Active Directory (group-gated, fail-closed, off by default), plus per-user Control API keys (`cst_*`) and pre-shared agent Bearer tokens. Data handling covers encryption at rest and in transit (TLS), data-retention policies, audit logging, and RBAC. Secrets come from environment variables.
 
 Security tooling: Dependabot, Renovate, Snyk, CodeQL, Trivy, Grype, Checkov, OSSF Scorecard.
 

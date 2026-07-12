@@ -23,6 +23,7 @@ import {
   hashItems,
   hashLists,
   hashTypes,
+  LDAP_LINK_REQUEST_STATUS_VALUES,
   maskLists,
   operatingSystems,
   projects,
@@ -129,6 +130,35 @@ export const loginRequestSchema = z.object({
   email: z.email(),
   password: z.string().min(8),
 })
+
+/**
+ * Request body for `POST /api/auth/sign-in/ldap` -- the AD/LDAP directory
+ * sign-in endpoint added by the BetterAuth `ldap` server plugin (U5,
+ * docs/plans/2026-07-12-001-feat-adldap-authentication-support-plan.md).
+ * Distinct from `loginRequestSchema`: the directory identifier is a
+ * *username*, not an email -- the directory is the identity source and the
+ * HashHive email may be synthesized (R10) when the directory exposes none.
+ */
+export const ldapSignInBodySchema = z.object({
+  username: z.string().min(1).max(256),
+  password: z.string().min(1).max(1024),
+})
+
+/**
+ * Response body for the anonymous `GET /api/v1/dashboard/auth/methods`
+ * discovery endpoint (U8, KTD8). The login page fetches this to decide
+ * whether to render the directory sign-in option (R20) -- `local` is
+ * always `true` (local email/password login is never disabled), `ldap`
+ * mirrors `env.LDAP_ENABLED`. Intentionally the ONLY LDAP configuration
+ * ever exposed anonymously: no URL, bind DN, group map, or other
+ * `LDAP_*` setting is ever included here.
+ */
+export const authMethodsSchema = z
+  .object({
+    local: z.boolean(),
+    ldap: z.boolean(),
+  })
+  .openapi('AuthMethods')
 
 /**
  * Inline-attack payload accepted by the transactional `POST /campaigns`
@@ -1367,6 +1397,76 @@ export const selectProjectRequestSchema = z
  * - `analyst`  create + view; no destructive ops
  */
 export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
+
+/**
+ * Successful response body from `POST /api/auth/sign-in/ldap` (U5, R1).
+ * Mirrors the JSON the `ldapPlugin` endpoint returns; `roles` reuses the
+ * global-tier union so the frontend keeps the same type the backend
+ * produces (`ResolvedDirectoryUser.roles`).
+ */
+export const ldapSignInSuccessSchema = z.object({
+  token: z.string(),
+  user: z.object({
+    id: z.number().int().positive(),
+    email: z.email(),
+    name: z.string(),
+    roles: z.array(userRoleSchema),
+  }),
+})
+
+/**
+ * Wire shape for a pending AD/LDAP directory-login collision (U7, R12) --
+ * returned by the admin reconciliation surface,
+ * `GET /api/v1/dashboard/ldap-link-requests`. Mirrors `ldapLinkRequests`
+ * (`packages/shared/src/db/schema.ts`) with `resolvedRole` narrowed to the
+ * actual global role union and timestamps rendered as ISO strings.
+ */
+export const ldapLinkRequestSchema = z
+  .object({
+    id: z.number().int().positive(),
+    username: z.string(),
+    derivedEmail: z.email(),
+    resolvedRole: userRoleSchema,
+    matchedUserId: z.number().int().positive(),
+    status: z.enum(LDAP_LINK_REQUEST_STATUS_VALUES),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .openapi('LdapLinkRequest')
+
+/**
+ * Response body for `GET /api/v1/dashboard/ldap-link-requests` -- the
+ * paginated list of OPEN (`pending`) reconciliation requests (U7).
+ */
+export const ldapLinkRequestListResponseSchema = z
+  .object({
+    data: z.array(ldapLinkRequestSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .openapi('LdapLinkRequestListResponse')
+
+/**
+ * Request body for `POST /api/v1/dashboard/ldap-link-requests/{id}/resolve`
+ * (U7). A discriminated union (not a `.refine()`-checked flat object) so
+ * `targetUserId` is required for `action: 'link'` and absent for `action:
+ * 'reject'` at the TYPE level -- callers narrow on `body.action` and get a
+ * non-optional `targetUserId` back with no unchecked cast required.
+ */
+export const resolveLdapLinkRequestBodySchema = z
+  .discriminatedUnion('action', [
+    z.object({ action: z.literal('link'), targetUserId: z.number().int().positive() }),
+    z.object({ action: z.literal('reject') }),
+  ])
+  .openapi('ResolveLdapLinkRequestBody')
+
+/** Response body for a successful reconciliation resolve (U7). */
+export const resolveLdapLinkRequestResponseSchema = z
+  .object({
+    linkRequest: ldapLinkRequestSchema,
+  })
+  .openapi('ResolveLdapLinkRequestResponse')
 
 /**
  * Wire-shape contract for the active session as exposed to the

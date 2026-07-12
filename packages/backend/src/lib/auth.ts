@@ -3,6 +3,7 @@ import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 
 import { env } from '../config/env.js'
+import { getLdapConfig } from '../config/ldap.js'
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import {
@@ -10,7 +11,14 @@ import {
   getUserLastProjectId,
   getUserWithProjects,
 } from '../services/auth.js'
+import { ldapPlugin } from './ldap/plugin.js'
 import { getTrustedOrigins } from './trusted-origins.js'
+
+// AD/LDAP directory sign-in (U5, #124). `getLdapConfig` returns null when
+// LDAP_ENABLED is false (the default) so the plugins array below is empty
+// and the /sign-in/ldap endpoint is never mounted -- existing deployments
+// are unaffected byte-for-byte until an operator opts in (R17).
+const ldapConfig = getLdapConfig(env)
 
 /**
  * Compute the initial `projectId` to attach to a new BetterAuth session
@@ -185,6 +193,10 @@ export const auth = betterAuth({
   account: {
     modelName: 'ba_accounts',
   },
+
+  // KTD2: registers POST /api/auth/sign-in/ldap only when LDAP_ENABLED.
+  // See lib/ldap/plugin.ts for the plugin implementation.
+  plugins: ldapConfig ? [ldapPlugin(ldapConfig)] : [],
 
   advanced: {
     database: {

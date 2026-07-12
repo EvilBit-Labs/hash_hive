@@ -51,6 +51,7 @@ import { createEventRoutes } from './events.js'
 import { hashListsRoutes } from './hash-lists.js'
 import { hashRoutes } from './hashes.js'
 import { healthRoutes } from './health.js'
+import { ldapLinkRequestRoutes } from './ldap-link-requests.js'
 import { projectRoutes } from './projects.js'
 import { resourceRoutes } from './resources.js'
 import { resultsRoutes } from './results.js'
@@ -105,6 +106,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/events', eventRoutes)
   surface.route('/crackers', crackerRoutes)
   surface.route('/health', healthRoutes)
+  surface.route('/ldap-link-requests', ldapLinkRequestRoutes)
 
   return surface
 }
