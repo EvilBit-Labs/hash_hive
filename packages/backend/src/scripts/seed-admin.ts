@@ -4,6 +4,24 @@
  * Idempotent — safe to re-run. Missing user, project, or membership
  * rows are reconciled inside a single transaction.
  *
+ * Break-glass guarantee (U6b, docs/plans/2026-07-12-001-feat-adldap-authentication-support-plan.md):
+ * this script writes a `ba_accounts` credential row (`providerId:
+ * 'credential'`, a non-null bcrypt password) for the seeded admin, not just
+ * `users.passwordHash`. Per KTD3, that `ba_accounts` credential row -- not
+ * `users.passwordHash` -- is the authoritative "has a local password" test
+ * `assertLocalAdminRemains` (`services/local-admin-guard.ts`) reads. Without
+ * it, a fresh deployment would seed an admin with `roles: ['admin']` that
+ * does NOT count toward the local-admin floor and, on some environments,
+ * cannot sign in via BetterAuth's `/sign-in/email` at all (BetterAuth
+ * authenticates against `ba_accounts`, never `users.passwordHash`
+ * directly) -- an empty break-glass floor from the very first seed. Kept
+ * idempotent and in the same transaction as the user upsert so a re-seed
+ * also refreshes the credential row's password, matching how `roles` and
+ * `passwordHash` are already reaffirmed below. `migrate-auth-accounts.ts`
+ * (chained immediately after this script in `db:seed`) still runs safely
+ * afterward for every OTHER user; its `onConflictDoNothing` means it is a
+ * no-op for this row once this script has already created it.
+ *
  * Override credentials via environment variables:
  *   SEED_ADMIN_EMAIL    (default: admin@hashhive.local)
  *   SEED_ADMIN_PASSWORD (default: changeme123)
@@ -12,7 +30,7 @@
  *   bun packages/backend/src/scripts/seed-admin.ts
  *   just db-seed
  */
-import { projects, projectUsers, users } from '@hashhive/shared'
+import { baAccounts, projects, projectUsers, users } from '@hashhive/shared'
 
 import { client, db } from '../db/index.js'
 
@@ -43,6 +61,25 @@ async function seed() {
     if (!user) {
       throw new Error('Failed to upsert admin user')
     }
+
+    // Guarantee the seeded admin is a genuine LOCAL admin per KTD3 (see
+    // module doc): upsert the `ba_accounts` credential row directly, rather
+    // than relying on `migrate-auth-accounts.ts` running afterward. Uses
+    // the same unique index (`userId`, `providerId`) that script upserts
+    // against, so re-running either script stays idempotent and consistent.
+    await tx
+      .insert(baAccounts)
+      .values({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        accountId: ADMIN_EMAIL,
+        providerId: 'credential',
+        password: passwordHash,
+      })
+      .onConflictDoUpdate({
+        target: [baAccounts.userId, baAccounts.providerId],
+        set: { accountId: ADMIN_EMAIL, password: passwordHash },
+      })
 
     // Find-or-create default project (slug has a unique constraint)
     const [project] = await tx
