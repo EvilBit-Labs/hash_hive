@@ -21,6 +21,8 @@
 
 const IS_ISOLATED = process.env['LDAP_LINK_REQUESTS_ROUTES_TEST_ISOLATED'] === '1'
 
+import type { LdapLinkRequest } from '@hashhive/shared'
+
 import { describe, expect, it, mock } from 'bun:test'
 
 if (!IS_ISOLATED) {
@@ -107,7 +109,7 @@ if (!IS_ISOLATED) {
   const nowIso = new Date('2026-01-01T00:00:00.000Z').toISOString()
 
   const makeLinkRequestView = (
-    overrides: Partial<ReconciliationService['LdapLinkRequestView']> = {}
+    overrides: Partial<LdapLinkRequest> = {}
   ): Awaited<ReturnType<ReconciliationService['listPendingLinkRequests']>>['data'][number] => ({
     id: 7,
     username: 'jdoe',

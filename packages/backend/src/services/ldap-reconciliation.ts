@@ -42,8 +42,10 @@
  * credentials -- nothing on this path ever touches a password.
  */
 
-import { type UserRole, baAccounts, ldapLinkRequests, users } from '@hashhive/shared'
-import { desc, eq, sql } from 'drizzle-orm'
+import type { LdapLinkRequest, LdapLinkRequestListResponse } from '@hashhive/shared'
+
+import { baAccounts, ldapLinkRequests, users } from '@hashhive/shared'
+import { and, desc, eq, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { isUniqueViolation } from '../db/unique-violation.js'
@@ -99,22 +101,17 @@ export class LdapLinkTargetAlreadyLinkedError extends Error {
 }
 
 // ─── Wire-shaped row types ────────────────────────────────────────────────
+//
+// `LdapLinkRequest` / `LdapLinkRequestListResponse` are the shared
+// `z.infer` wire types (`packages/shared/src/schemas/index.ts`), not
+// locally-declared lookalikes -- keeps this service's return shapes and the
+// `ldapLinkRequestSchema` / `ldapLinkRequestListResponseSchema` OpenAPI
+// contract (`routes/dashboard/ldap-link-requests.ts`) from drifting apart.
 
 type LdapLinkRequestRow = typeof ldapLinkRequests.$inferSelect
 
-/** A pending or resolved `ldap_link_requests` row, dates rendered as ISO strings. */
-export interface LdapLinkRequestView {
-  id: number
-  username: string
-  derivedEmail: string
-  resolvedRole: UserRole
-  matchedUserId: number
-  status: 'pending' | 'linked' | 'rejected'
-  createdAt: string
-  updatedAt: string
-}
-
-function toView(row: LdapLinkRequestRow): LdapLinkRequestView {
+/** The single DB-row -> shared-wire-type mapper. */
+function toView(row: LdapLinkRequestRow): LdapLinkRequest {
   return {
     id: row.id,
     username: row.username,
@@ -138,13 +135,6 @@ export interface ListPendingLinkRequestsPagination {
   offset: number
 }
 
-export interface ListPendingLinkRequestsResult {
-  data: LdapLinkRequestView[]
-  total: number
-  limit: number
-  offset: number
-}
-
 /**
  * Returns a paginated page of OPEN (`status: 'pending'`) reconciliation
  * requests, newest first. Resolved rows (linked/rejected) never appear --
@@ -152,7 +142,7 @@ export interface ListPendingLinkRequestsResult {
  */
 export async function listPendingLinkRequests(
   pagination: ListPendingLinkRequestsPagination
-): Promise<ListPendingLinkRequestsResult> {
+): Promise<LdapLinkRequestListResponse> {
   const { limit, offset } = pagination
   const whereClause = eq(ldapLinkRequests.status, 'pending')
 
@@ -196,6 +186,19 @@ async function loadPendingRequest(tx: Tx, requestId: number): Promise<LdapLinkRe
   return existing
 }
 
+/**
+ * Closes `requestId` ONLY if it is still `pending` (FIX 3 / P2 code
+ * review) -- the `WHERE status = 'pending'` guard makes this a
+ * compare-and-swap against Postgres's row lock: if a concurrent
+ * resolution already closed the row between `loadPendingRequest`'s
+ * (unlocked) SELECT and this UPDATE, the UPDATE matches zero rows instead
+ * of silently overwriting the winner's `status` (previously possible --
+ * e.g. a losing `reject` overwriting an already-committed `link`, even
+ * though that link's `ba_accounts` row was already created). A zero-row
+ * result is re-read and surfaced as the same typed
+ * `LdapLinkRequestAlreadyResolvedError` `loadPendingRequest` throws for
+ * the non-racing case -- never a raw 500, never a silent no-op.
+ */
 async function closeRequest(
   tx: Tx,
   requestId: number,
@@ -204,13 +207,23 @@ async function closeRequest(
   const [updated] = await tx
     .update(ldapLinkRequests)
     .set({ status, updatedAt: new Date() })
-    .where(eq(ldapLinkRequests.id, requestId))
+    .where(and(eq(ldapLinkRequests.id, requestId), eq(ldapLinkRequests.status, 'pending')))
     .returning()
 
-  if (!updated) {
-    throw new Error(`ldap-reconciliation: failed to close link request ${requestId}`)
+  if (updated) {
+    return updated
   }
-  return updated
+
+  const [current] = await tx
+    .select({ status: ldapLinkRequests.status })
+    .from(ldapLinkRequests)
+    .where(eq(ldapLinkRequests.id, requestId))
+    .limit(1)
+
+  if (!current) {
+    throw new LdapLinkRequestNotFoundError(requestId)
+  }
+  throw new LdapLinkRequestAlreadyResolvedError(requestId, current.status)
 }
 
 async function resolveReject(tx: Tx, existing: LdapLinkRequestRow, actor: AuditActor) {
@@ -291,7 +304,7 @@ async function resolveLink(
 export async function resolveLinkRequest(
   input: ResolveLinkRequestInput,
   actor: AuditActor
-): Promise<LdapLinkRequestView> {
+): Promise<LdapLinkRequest> {
   return db.transaction(async (tx) => {
     const existing = await loadPendingRequest(tx, input.requestId)
 

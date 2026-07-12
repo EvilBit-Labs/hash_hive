@@ -140,8 +140,8 @@ export const loginRequestSchema = z.object({
  * HashHive email may be synthesized (R10) when the directory exposes none.
  */
 export const ldapSignInBodySchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
+  username: z.string().min(1).max(256),
+  password: z.string().min(1).max(1024),
 })
 
 /**

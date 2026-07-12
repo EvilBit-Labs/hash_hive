@@ -51,7 +51,7 @@
  * of `better-auth/cookies` (per the package's `exports` map).
  */
 
-import type { UserRole } from '@hashhive/shared'
+import type { LdapSignInErrorCode, UserRole } from '@hashhive/shared'
 import type { BetterAuthClientPlugin, BetterAuthPlugin } from 'better-auth'
 
 import { ldapSignInBodySchema } from '@hashhive/shared'
@@ -209,27 +209,27 @@ export function outcomeToApiError(
   switch (outcome.kind) {
     case 'unavailable':
       return new APIError('SERVICE_UNAVAILABLE', {
-        code: 'LDAP_DIRECTORY_UNAVAILABLE',
+        code: 'LDAP_DIRECTORY_UNAVAILABLE' satisfies LdapSignInErrorCode,
         message: 'Directory unavailable',
       })
     case 'invalid_credentials':
       return new APIError('UNAUTHORIZED', {
-        code: 'LDAP_INVALID_CREDENTIALS',
+        code: 'LDAP_INVALID_CREDENTIALS' satisfies LdapSignInErrorCode,
         message: 'Invalid directory username or password',
       })
     case 'no_mapped_group':
       return new APIError('FORBIDDEN', {
-        code: 'LDAP_NO_MAPPED_GROUP',
+        code: 'LDAP_NO_MAPPED_GROUP' satisfies LdapSignInErrorCode,
         message: 'Your directory account is not a member of a group mapped to HashHive access',
       })
     case 'role_sync_blocked':
       return new APIError('FORBIDDEN', {
-        code: 'LDAP_ROLE_SYNC_BLOCKED',
+        code: 'LDAP_ROLE_SYNC_BLOCKED' satisfies LdapSignInErrorCode,
         message: 'This role change would remove the last local administrator',
       })
     case 'collision':
       return new APIError('CONFLICT', {
-        code: 'LDAP_ACCOUNT_COLLISION',
+        code: 'LDAP_ACCOUNT_COLLISION' satisfies LdapSignInErrorCode,
         message:
           'This directory identity matches an existing HashHive account with a local password. Contact an admin to reconcile.',
         linkRequestId: outcome.linkRequestId,
@@ -275,7 +275,7 @@ export function ldapPlugin(config: LdapConfig): BetterAuthPlugin {
           const fullUser = await ctx.context.internalAdapter.findUserById(String(outcome.user.id))
           if (!fullUser) {
             throw new APIError('INTERNAL_SERVER_ERROR', {
-              code: 'LDAP_USER_NOT_FOUND_AFTER_PROVISIONING',
+              code: 'LDAP_USER_NOT_FOUND_AFTER_PROVISIONING' satisfies LdapSignInErrorCode,
               message: 'Directory user resolved but could not be loaded',
             })
           }
@@ -290,7 +290,7 @@ export function ldapPlugin(config: LdapConfig): BetterAuthPlugin {
           )
           if (!session) {
             throw new APIError('INTERNAL_SERVER_ERROR', {
-              code: 'FAILED_TO_CREATE_SESSION',
+              code: 'FAILED_TO_CREATE_SESSION' satisfies LdapSignInErrorCode,
               message: 'Failed to create session',
             })
           }

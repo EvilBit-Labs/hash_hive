@@ -323,6 +323,65 @@ describe('resolveLinkRequest — reject (R12)', () => {
   })
 })
 
+describe('resolveLinkRequest — concurrent resolution race (R12, FIX 3)', () => {
+  // FIX 3 (P2 code review): closeRequest's UPDATE previously had no
+  // `WHERE status = 'pending'` guard, so a losing concurrent resolution
+  // could silently overwrite an already-linked/rejected request's status
+  // -- e.g. a losing `reject` flipping a just-committed `link` back to
+  // `rejected`, even though the `link`'s `ba_accounts` row had already
+  // been created. Two REAL concurrent resolutions (one `link`, one
+  // `reject`) racing the same pending request must now resolve to exactly
+  // one success and one typed `LdapLinkRequestAlreadyResolvedError`, and
+  // the final DB status must match whichever one actually won -- never
+  // flipped by the loser.
+  it('when link and reject race the same pending request, exactly one wins and the final status matches the winner', async () => {
+    await cleanupSeed()
+    const matchedUserId = await seedLocalUser('race-collision-target')
+    const targetUserId = await seedLocalUser('race-chosen-target')
+    const requestId = await seedPendingRequest('race-directory-username', matchedUserId)
+
+    const results = await Promise.allSettled([
+      resolveLinkRequest({ requestId, action: 'link', targetUserId }, RESOLVING_ADMIN),
+      resolveLinkRequest({ requestId, action: 'reject' }, RESOLVING_ADMIN),
+    ])
+
+    const fulfilled = results.filter(
+      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof resolveLinkRequest>>> =>
+        r.status === 'fulfilled'
+    )
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+
+    expect(fulfilled.length).toBe(1)
+    expect(rejected.length).toBe(1)
+    expect(rejected[0]?.reason).toBeInstanceOf(LdapLinkRequestAlreadyResolvedError)
+
+    const winnerStatus = fulfilled[0]?.value.status
+    expect(['linked', 'rejected']).toContain(winnerStatus)
+
+    const [row] = await db.select().from(ldapLinkRequests).where(eq(ldapLinkRequests.id, requestId))
+    expect(row!.status).toBe(winnerStatus)
+
+    // If `link` won, its ba_accounts row was actually committed; if
+    // `reject` won, no ba_accounts row exists -- a `link` that lost the
+    // closeRequest compare-and-swap rolls its own insert back atomically
+    // with the rest of its transaction.
+    const accounts = await db
+      .select()
+      .from(baAccounts)
+      .where(
+        and(eq(baAccounts.providerId, 'ldap'), eq(baAccounts.accountId, 'race-directory-username'))
+      )
+    if (winnerStatus === 'linked') {
+      expect(accounts).toHaveLength(1)
+      expect(accounts[0]?.userId).toBe(targetUserId)
+    } else {
+      expect(accounts).toHaveLength(0)
+    }
+
+    await cleanupSeed()
+  })
+})
+
 describe('resolveLinkRequest — idempotency on an already-resolved request (R12)', () => {
   it('rejects re-resolving an already-linked request with a typed error, not a 500', async () => {
     await cleanupSeed()

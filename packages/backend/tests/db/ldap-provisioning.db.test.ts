@@ -275,6 +275,67 @@ describe('resolveDirectoryUser — linking an existing passwordless account', ()
   })
 })
 
+describe('resolveDirectoryUser — directory-identity hijack guard (R11 extended, FIX 4)', () => {
+  it('denies as a collision when a second directory identity derives the same email as an already-linked directory-only account, rather than auto-linking onto it', async () => {
+    await cleanupSeed()
+
+    // User A: JIT-provisioned via directory login (username A), no
+    // credential row -- directory-only, passwordless. seedLocalUser
+    // synthesizes the email from the label, so `email` below must match
+    // that synthesis exactly for B's login to derive the same email.
+    const email = `hijack-user-a@${EMAIL_DOMAIN}`
+    const userAId = await seedLocalUser('hijack-user-a', ['operator'])
+    await seedLdapAccount(userAId, 'hijack-username-a')
+
+    // User B logs in under a DIFFERENT directory username whose derived
+    // email happens to collide with A's. Before FIX 4, since A has no
+    // credential row, this would fall through to the auto-link branch and
+    // silently attach B's directory identity to A's account, re-syncing
+    // A's roles from B's resolved role -- an identity/privilege hijack
+    // between two distinct directory identities.
+    const result = await resolveDirectoryUser({
+      username: 'hijack-username-b',
+      email,
+      role: 'admin',
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a collision denial')
+    expect(result.reason).toBe('collision')
+    expect(typeof result.linkRequestId).toBe('number')
+
+    const pending = await db
+      .select()
+      .from(ldapLinkRequests)
+      .where(eq(ldapLinkRequests.username, 'hijack-username-b'))
+    expect(pending).toHaveLength(1)
+    expect(pending[0]!.matchedUserId).toBe(userAId)
+    expect(pending[0]!.status).toBe('pending')
+
+    // A's account is untouched: still operator, still linked only to its
+    // original directory username -- never re-synced to 'admin', never
+    // relinked to username B.
+    const [userARow] = await db.select().from(users).where(eq(users.id, userAId))
+    expect(userARow!.roles).toEqual(['operator'])
+
+    const ldapAccountsForA = await db
+      .select()
+      .from(baAccounts)
+      .where(and(eq(baAccounts.userId, userAId), eq(baAccounts.providerId, 'ldap')))
+    expect(ldapAccountsForA).toHaveLength(1)
+    expect(ldapAccountsForA[0]!.accountId).toBe('hijack-username-a')
+
+    // Username B was never linked to anything.
+    const ldapAccountsForB = await db
+      .select()
+      .from(baAccounts)
+      .where(and(eq(baAccounts.providerId, 'ldap'), eq(baAccounts.accountId, 'hijack-username-b')))
+    expect(ldapAccountsForB).toHaveLength(0)
+
+    await cleanupSeed()
+  })
+})
+
 describe('resolveDirectoryUser — email collision fail-closed (R11)', () => {
   it('Covers AE6. denies and writes exactly one pending link request without mutating the existing user', async () => {
     await cleanupSeed()

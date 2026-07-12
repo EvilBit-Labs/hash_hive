@@ -1,4 +1,4 @@
-import type { LdapSignInBody, LdapSignInSuccess } from '@hashhive/shared'
+import type { LdapSignInBody, LdapSignInErrorCode, LdapSignInSuccess } from '@hashhive/shared'
 
 import { createAuthClient } from 'better-auth/react'
 
@@ -16,7 +16,7 @@ export const authClient: ReturnType<typeof createAuthClient> = createAuthClient(
  */
 export interface LdapSignInError {
   status: number
-  code?: string
+  code?: LdapSignInErrorCode
   message?: string
   linkRequestId?: number
 }

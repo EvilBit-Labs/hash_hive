@@ -1,3 +1,4 @@
+import { LDAP_SIGNIN_ERROR_CODES } from '@hashhive/shared'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 
 interface DirectorySignInError {
@@ -371,12 +372,22 @@ describe('LoginPage', () => {
       expect(sessionSignalNotify).toHaveBeenCalledWith('$sessionSignal')
     })
 
-    it.each([
+    // Pins this table's `code` values against the shared catalogue
+    // (@hashhive/shared's LDAP_SIGNIN_ERROR_CODES) so a rename/removal on
+    // the backend side (plugin.ts's outcomeToApiError) fails this test
+    // instead of silently drifting apart from login.tsx's message mapping
+    // (FIX 7: shared LDAP sign-in error codes).
+    const directoryErrorCodeTable = [
       [401, undefined, 'Invalid directory username or password.'],
       [
         403,
         'LDAP_NO_MAPPED_GROUP',
         'Your directory account is not a member of a group mapped to HashHive access.',
+      ],
+      [
+        403,
+        'LDAP_ROLE_SYNC_BLOCKED',
+        'This directory sign-in was blocked to protect the last local administrator. Contact an admin.',
       ],
       [
         503,
@@ -388,7 +399,19 @@ describe('LoginPage', () => {
         'LDAP_ACCOUNT_COLLISION',
         'This account needs an administrator to link it before you can sign in this way. Contact an admin.',
       ],
-    ])(
+    ] as const
+
+    it('every non-undefined code in the directory error table is a known shared LDAP sign-in error code', () => {
+      const codesUnderTest = directoryErrorCodeTable
+        .map(([, code]) => code)
+        .filter((code): code is string => code !== undefined)
+
+      for (const code of codesUnderTest) {
+        expect(LDAP_SIGNIN_ERROR_CODES).toContain(code)
+      }
+    })
+
+    it.each(directoryErrorCodeTable)(
       'surfaces the distinct typed message for a %i directory sign-in failure',
       async (status, code, expectedMessage) => {
         fetchMock = mockFetch(authMethodsRoute(true))

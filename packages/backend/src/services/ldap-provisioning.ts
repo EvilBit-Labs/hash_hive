@@ -13,15 +13,24 @@
  *      return it (R7). The stable `accountId` guarantees the same directory
  *      user always resolves to the same HashHive account (R9), even across
  *      a later directory email change.
- *   2. No `ldap` account yet, but the derived email matches an existing
+ *   2. No `ldap` account yet, the derived email matches an existing
  *      HashHive user with NO local-password (`credential` `ba_accounts`)
- *      row -- link a new `ldap` account to that user and re-sync roles
- *      through the same guarded path as (1).
+ *      row, AND that user has no `ldap` `ba_accounts` row for a DIFFERENT
+ *      directory username either -- link a new `ldap` account to that user
+ *      and re-sync roles through the same guarded path as (1). This is the
+ *      intended passwordless-relink case (e.g. a directory user's email
+ *      attribute changed since JIT provisioning).
  *   3. No `ldap` account yet, and the derived email matches an existing
- *      user that DOES have a local-password row -- deny (R11): write a
+ *      user that EITHER has a local-password row OR already has an `ldap`
+ *      row linking a DIFFERENT directory username -- deny (R11): write a
  *      pending `ldap_link_requests` row for admin reconciliation (U7,
  *      R12) and return a typed collision outcome. The existing user is
- *      never mutated.
+ *      never mutated. The second condition closes an identity/privilege
+ *      hijack: without it, a second directory identity whose derived email
+ *      happens to collide with an already-linked directory-only account
+ *      would auto-link onto (and re-sync roles for) that unrelated
+ *      account, rather than the two distinct directory identities being
+ *      surfaced for admin reconciliation like every other email collision.
  *   4. No `ldap` account and no email match at all -- JIT-provision a new
  *      user (`roles: [role]`, `emailVerified: true`, `passwordHash: null`)
  *      plus its `ldap` account row (R8).
@@ -318,7 +327,23 @@ async function resolveOnce(input: ResolveDirectoryUserInput): Promise<ResolveDir
       )
       .limit(1)
 
-    if (credentialRow) {
+    // Directory-identity hijack guard (R11 extended, code review FIX 4):
+    // `existingLdapAccount` above only ruled out a `ldap` row for THIS
+    // `input.username`. The matched-by-email user may still already have
+    // an `ldap` row for a DIFFERENT directory username (a distinct
+    // directory identity) -- auto-linking a second, unrelated directory
+    // identity onto that account (and re-syncing its roles from the NEW
+    // login's resolved role) would be an identity/privilege hijack between
+    // two distinct directory identities, not the intended
+    // passwordless-relink case. Treat it exactly like the credential-row
+    // collision: deny and surface it for admin reconciliation.
+    const [conflictingLdapAccount] = await tx
+      .select({ id: baAccounts.id })
+      .from(baAccounts)
+      .where(and(eq(baAccounts.userId, existingUserByEmail.id), eq(baAccounts.providerId, 'ldap')))
+      .limit(1)
+
+    if (credentialRow || conflictingLdapAccount) {
       const linkRequestId = await denyCollision(tx, input, existingUserByEmail.id)
       return { ok: false, reason: 'collision', linkRequestId }
     }

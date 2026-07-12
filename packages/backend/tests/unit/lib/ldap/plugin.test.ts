@@ -300,6 +300,33 @@ if (!IS_ISOLATED) {
       const result = ldapSignInBodySchema.safeParse({ username: 'jdoe', password: 'secret' })
       expect(result.success).toBe(true)
     })
+
+    // Bounds an otherwise-unbounded body on the anonymous LDAP-connecting
+    // endpoint (FIX 5 / P2 code review): oversized username/password bodies
+    // are rejected with a 400 rather than reaching authenticateDirectory.
+    it('accepts a username/password at the max length boundary', () => {
+      const result = ldapSignInBodySchema.safeParse({
+        username: 'a'.repeat(256),
+        password: 'b'.repeat(1024),
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects a username over 256 characters', () => {
+      const result = ldapSignInBodySchema.safeParse({
+        username: 'a'.repeat(257),
+        password: 'secret',
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a password over 1024 characters', () => {
+      const result = ldapSignInBodySchema.safeParse({
+        username: 'jdoe',
+        password: 'b'.repeat(1025),
+      })
+      expect(result.success).toBe(false)
+    })
   })
 
   describe('auth singleton: ldap plugin is absent when LDAP_ENABLED=false (R17 regression)', () => {

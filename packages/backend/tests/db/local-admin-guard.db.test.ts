@@ -13,7 +13,7 @@
 
 import { baAccounts, users } from '@hashhive/shared'
 import { afterAll, describe, expect, it } from 'bun:test'
-import { like } from 'drizzle-orm'
+import { and, eq, isNotNull, like } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import {
@@ -178,6 +178,72 @@ describe('assertLocalAdminRemains', () => {
         await assertLocalAdminRemains(tx, { kind: 'demote', userId: realAdminId })
       })
     ).rejects.toThrow(LocalAdminFloorError)
+
+    await cleanupSeed()
+  })
+
+  // FIX 2 (P0/P1 code review): assertLocalAdminRemains previously read the
+  // local-admin set with an unlocked SELECT under READ COMMITTED, so two
+  // concurrent transactions could both observe "one other local admin
+  // remains", both pass the check, and both commit their demotion --
+  // leaving zero local admins despite the guard. A transaction-scoped
+  // `pg_advisory_xact_lock` on a single fixed key now serializes every
+  // call to `assertLocalAdminRemains`, so this must be impossible: with
+  // exactly two local-password admins, two REAL concurrent transactions
+  // that each demote a different one must resolve to exactly one success
+  // and one LocalAdminFloorError, and exactly one local admin must remain
+  // in the database afterward.
+  it('serializes concurrent assertLocalAdminRemains calls so exactly one local admin always remains (advisory lock)', async () => {
+    await cleanupSeed()
+    const emailA = `concurrent-a@${EMAIL_DOMAIN}`
+    const emailB = `concurrent-b@${EMAIL_DOMAIN}`
+    const userIdA = await seedUser('concurrent-a', ['admin'])
+    const userIdB = await seedUser('concurrent-b', ['admin'])
+    await seedCredentialAccount(userIdA, emailA)
+    await seedCredentialAccount(userIdB, emailB)
+
+    // Models the real caller shape (U4/U7): assert-then-mutate inside one
+    // transaction. Clearing the credential password is the guard's
+    // `clear_password` mutation kind, applied for real so the DB state
+    // after both transactions reflects what actually happened, not just
+    // what the guard predicted.
+    async function demoteByClearingPassword(userId: number): Promise<void> {
+      await db.transaction(async (tx) => {
+        await assertLocalAdminRemains(tx, { kind: 'clear_password', userId })
+        await tx
+          .update(baAccounts)
+          .set({ password: null })
+          .where(and(eq(baAccounts.userId, userId), eq(baAccounts.providerId, 'credential')))
+      })
+    }
+
+    const results = await Promise.allSettled([
+      demoteByClearingPassword(userIdA),
+      demoteByClearingPassword(userIdB),
+    ])
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+
+    // Exactly one of the two concurrent demotions succeeds -- the lock
+    // serializes them, so whichever transaction's advisory lock acquires
+    // first sees "2 local admins, demoting 1 leaves 1" and commits; the
+    // second re-reads AFTER the first commits, sees "1 local admin left,
+    // demoting it leaves 0", and is rejected.
+    expect(fulfilled.length).toBe(1)
+    expect(rejected.length).toBe(1)
+    expect(rejected[0]?.reason).toBeInstanceOf(LocalAdminFloorError)
+
+    // The invariant itself, not just the thrown error: exactly one local
+    // admin from this seed remains with a non-null credential password.
+    const remaining = await db
+      .select({ userId: baAccounts.userId })
+      .from(baAccounts)
+      .where(and(eq(baAccounts.providerId, 'credential'), isNotNull(baAccounts.password)))
+    const remainingInSeed = remaining.filter(
+      (row) => row.userId === userIdA || row.userId === userIdB
+    )
+    expect(remainingInSeed.length).toBe(1)
 
     await cleanupSeed()
   })
