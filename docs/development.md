@@ -130,6 +130,48 @@ Copy `packages/backend/.env.example` to `packages/backend/.env`. Key variables:
 
 Generate `BETTER_AUTH_SECRET` with: `openssl rand -base64 32`
 
+### Directory (LDAP / Active Directory) authentication
+
+Directory sign-in is **off by default** (`LDAP_ENABLED=false`), so existing
+deployments are unaffected until an operator opts in. When enabled, the required
+settings are validated at startup and the server fails fast with a clear message
+if any are missing or malformed. It is designed for air-gapped labs where the
+directory server (AD or OpenLDAP) sits on the same private network — no hosted
+identity provider is contacted. Local email/password login always keeps working
+alongside it as the break-glass path.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LDAP_ENABLED` | Master switch for directory sign-in. When `false`, all other `LDAP_*` vars are ignored. | `false` |
+| `LDAP_URL` | Directory server URL, e.g. `ldaps://dc.lab.local:636` or `ldap://dc.lab.local:389`. | -- |
+| `LDAP_TLS` | Transport: `ldaps`, `starttls`, or `none`. | -- |
+| `LDAP_ALLOW_INSECURE_TRANSPORT` | Must be `true` to permit `LDAP_TLS=none`. Plaintext exposes the bind password and every user password on the wire — only for isolated testing. | `false` |
+| `LDAP_TLS_CA_CERT` | Path or PEM of a CA certificate so a self-signed lab certificate validates. | -- (optional) |
+| `LDAP_BIND_DN` | DN of the read-only service account used to search for users and read group membership. | -- |
+| `LDAP_BIND_PASSWORD` | Password for the service account. | -- |
+| `LDAP_SEARCH_BASE` | Base DN under which user entries are searched. | -- |
+| `LDAP_USER_FILTER` | Search filter templated on the submitted username, e.g. `(sAMAccountName=%s)` (AD) or `(uid=%s)` (OpenLDAP). The username is escaped before substitution. | -- |
+| `LDAP_GROUP_STRATEGY` | How group membership is read: `memberOf` (read the attribute off the user entry — typical AD) or `search` (query the group base for entries whose `member` includes the user DN — typical OpenLDAP). | -- |
+| `LDAP_GROUP_BASE` | Base DN for the group search. Required when `LDAP_GROUP_STRATEGY=search`. | -- |
+| `LDAP_GROUP_ADMIN` | Comma-separated group identifiers (DN or CN per strategy) mapped to the global `admin` role. | -- |
+| `LDAP_GROUP_OPERATOR` | Group identifiers mapped to the global `operator` role. | -- |
+| `LDAP_GROUP_ANALYST` | Group identifiers mapped to the global `analyst` role. | -- |
+| `LDAP_EMAIL_ATTRIBUTE` | Directory attribute the HashHive email is derived from (e.g. `mail` or `userPrincipalName`). When absent on the entry, the email is synthesized as `username@LDAP_REALM`. | `mail` |
+| `LDAP_REALM` | Realm used to synthesize an email when the directory exposes no email attribute. | -- |
+
+Access is **group-gated and fails closed**: a user is admitted only if they
+belong to at least one mapped group; when they match several, the
+highest-privilege role wins (`admin` > `operator` > `analyst`). Roles are
+recomputed from live group membership on every directory login, so removing a
+user from a mapped group revokes the corresponding access on their next login.
+
+**`memberOf` vs `search`.** Prefer `memberOf` for Active Directory, which
+publishes the `memberOf` attribute on user entries directly. Use `search` for
+OpenLDAP and other directories that store membership only on the group entry
+(the plugin then queries `LDAP_GROUP_BASE` for groups whose `member` lists the
+user's DN). If group-based sign-in unexpectedly denies a valid user, the
+strategy is the first thing to check.
+
 ## Troubleshooting
 
 **Port conflicts:** `docker compose down`, change ports in `docker-compose.yml` and `.env`.
