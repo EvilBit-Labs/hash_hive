@@ -23,6 +23,7 @@ import {
   hashItems,
   hashLists,
   hashTypes,
+  LDAP_LINK_REQUEST_STATUS_VALUES,
   maskLists,
   operatingSystems,
   projects,
@@ -1380,6 +1381,60 @@ export const selectProjectRequestSchema = z
  * - `analyst`  create + view; no destructive ops
  */
 export const userRoleSchema = z.enum(['admin', 'operator', 'analyst'])
+
+/**
+ * Wire shape for a pending AD/LDAP directory-login collision (U7, R12) --
+ * returned by the admin reconciliation surface,
+ * `GET /api/v1/dashboard/ldap-link-requests`. Mirrors `ldapLinkRequests`
+ * (`packages/shared/src/db/schema.ts`) with `resolvedRole` narrowed to the
+ * actual global role union and timestamps rendered as ISO strings.
+ */
+export const ldapLinkRequestSchema = z
+  .object({
+    id: z.number().int().positive(),
+    username: z.string(),
+    derivedEmail: z.email(),
+    resolvedRole: userRoleSchema,
+    matchedUserId: z.number().int().positive(),
+    status: z.enum(LDAP_LINK_REQUEST_STATUS_VALUES),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .openapi('LdapLinkRequest')
+
+/**
+ * Response body for `GET /api/v1/dashboard/ldap-link-requests` -- the
+ * paginated list of OPEN (`pending`) reconciliation requests (U7).
+ */
+export const ldapLinkRequestListResponseSchema = z
+  .object({
+    data: z.array(ldapLinkRequestSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .openapi('LdapLinkRequestListResponse')
+
+/**
+ * Request body for `POST /api/v1/dashboard/ldap-link-requests/{id}/resolve`
+ * (U7). A discriminated union (not a `.refine()`-checked flat object) so
+ * `targetUserId` is required for `action: 'link'` and absent for `action:
+ * 'reject'` at the TYPE level -- callers narrow on `body.action` and get a
+ * non-optional `targetUserId` back with no unchecked cast required.
+ */
+export const resolveLdapLinkRequestBodySchema = z
+  .discriminatedUnion('action', [
+    z.object({ action: z.literal('link'), targetUserId: z.number().int().positive() }),
+    z.object({ action: z.literal('reject') }),
+  ])
+  .openapi('ResolveLdapLinkRequestBody')
+
+/** Response body for a successful reconciliation resolve (U7). */
+export const resolveLdapLinkRequestResponseSchema = z
+  .object({
+    linkRequest: ldapLinkRequestSchema,
+  })
+  .openapi('ResolveLdapLinkRequestResponse')
 
 /**
  * Wire-shape contract for the active session as exposed to the

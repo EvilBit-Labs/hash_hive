@@ -267,6 +267,13 @@
       "when": 1783860633618,
       "tag": "0037_legal_nekra",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783870602121,
+      "tag": "0038_loose_ikaris",
+      "breakpoints": true
     }
   ]
 }

@@ -106,10 +106,14 @@ import type {
   insertUserSchema,
   insertWordListSchema,
   instantiateAttackTemplateResponseSchema,
+  ldapLinkRequestListResponseSchema,
+  ldapLinkRequestSchema,
   ldapSignInBodySchema,
   loginRequestSchema,
   meResponseSchema,
   requiredCapabilitiesSchema,
+  resolveLdapLinkRequestBodySchema,
+  resolveLdapLinkRequestResponseSchema,
   resourceStatusSchema,
   resourceUpdateEventDataSchema,
   resourceWireSchema,
@@ -351,6 +355,12 @@ export type TaskResourcesResponse = z.infer<typeof taskResourcesResponseSchema>
 export type LoginRequest = z.infer<typeof loginRequestSchema>
 /** Request body for `POST /api/auth/sign-in/ldap` (U5). See `ldapSignInBodySchema`. */
 export type LdapSignInBody = z.infer<typeof ldapSignInBodySchema>
+
+/** AD/LDAP admin reconciliation wire types (U7, R12). See `ldapLinkRequestSchema`. */
+export type LdapLinkRequest = z.infer<typeof ldapLinkRequestSchema>
+export type LdapLinkRequestListResponse = z.infer<typeof ldapLinkRequestListResponseSchema>
+export type ResolveLdapLinkRequestBody = z.infer<typeof resolveLdapLinkRequestBodySchema>
+export type ResolveLdapLinkRequestResponse = z.infer<typeof resolveLdapLinkRequestResponseSchema>
 export type CreateCampaignRequest = z.infer<typeof createCampaignRequestSchema>
 export type ChangeCampaignPriorityRequest = z.infer<typeof changeCampaignPriorityRequestSchema>
 export type InlineAttackRequest = z.infer<typeof inlineAttackRequestSchema>

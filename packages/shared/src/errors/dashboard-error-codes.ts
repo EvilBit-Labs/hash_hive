@@ -98,6 +98,13 @@ export const DASHBOARD_ERROR_CODES = [
   'AGENT_CONFIG_UPDATE_FAILED',
   'FLEET_CONFIG_UPDATE_FAILED',
   'RAW_FLAG_INVALID',
+  // ─── AD/LDAP admin reconciliation (U7, R12) ────────────────────────
+  'LDAP_LINK_REQUEST_LIST_FAILED',
+  'LDAP_LINK_REQUEST_NOT_FOUND',
+  'LDAP_LINK_REQUEST_ALREADY_RESOLVED',
+  'LDAP_LINK_TARGET_NOT_FOUND',
+  'LDAP_LINK_TARGET_ALREADY_LINKED',
+  'LDAP_LINK_RESOLVE_FAILED',
   // Retirement is terminal (ADR-0019 / issue #106 R9, no restore path) --
   // the generic PATCH /agents/:id path refuses to update a retired agent
   // (issue #106 F4 code review).
