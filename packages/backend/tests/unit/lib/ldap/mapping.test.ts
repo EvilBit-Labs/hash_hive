@@ -125,4 +125,16 @@ describe('deriveEmail', () => {
 
     expect(email).toBe('jdoe@corp.example.com')
   })
+
+  it('code review FIX 4: lowercases a mixed-case directory email attribute so case-only differences from a stored HashHive email still collide (R11)', () => {
+    const email = deriveEmail({ mail: 'John.Doe@Corp.Example.COM' }, 'jdoe', 'lab.local', 'mail')
+
+    expect(email).toBe('john.doe@corp.example.com')
+  })
+
+  it('code review FIX 4: lowercases the synthesized username@realm fallback', () => {
+    const email = deriveEmail({}, 'JDoe', 'Lab.Local', 'mail')
+
+    expect(email).toBe('jdoe@lab.local')
+  })
 })

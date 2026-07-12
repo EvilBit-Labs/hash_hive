@@ -40,7 +40,7 @@
 
 import { auditLogs, baAccounts, baSessions, projects, projectUsers, users } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { and, eq, like } from 'drizzle-orm'
+import { and, eq, inArray, like } from 'drizzle-orm'
 import net from 'node:net'
 
 import type { LdapConfig } from '../../src/config/ldap.js'
@@ -181,11 +181,15 @@ async function cleanupSeed(): Promise<void> {
     .where(like(users.email, `%@${EMAIL_DOMAIN}`))
   const ids = seededUsers.map((u) => u.id)
 
+  // audit_logs.entity_id has no FK (polymorphic) so it does not cascade
+  // when the user row is deleted -- delete it explicitly, by the seeded
+  // user ids, BEFORE the users themselves. Must run before the `users`
+  // delete below: once those rows are gone there is no way to identify
+  // which audit_logs rows belonged to them.
   if (ids.length > 0) {
     await db
       .delete(auditLogs)
-      .where(and(eq(auditLogs.entityType, 'user'), like(users.email, `%@${EMAIL_DOMAIN}`)))
-      .catch(() => undefined) // best-effort; entityId has no FK to join through
+      .where(and(eq(auditLogs.entityType, 'user'), inArray(auditLogs.entityId, ids)))
   }
   await db.delete(users).where(like(users.email, `%@${EMAIL_DOMAIN}`))
   await db.delete(projects).where(eq(projects.slug, PROJECT_SLUG))

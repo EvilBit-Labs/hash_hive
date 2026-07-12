@@ -388,6 +388,47 @@ describe('resolveDirectoryUser — email collision fail-closed (R11)', () => {
   })
 })
 
+describe('resolveDirectoryUser — case-insensitive email collision (code review FIX 4)', () => {
+  it('detects a collision when the directory-derived email differs from the stored email only in case', async () => {
+    await cleanupSeed()
+    // Stored email is mixed-case, e.g. a local account created before
+    // directory-derived emails were lowercased, or simply typed in mixed
+    // case at signup. `users.email` has no case-insensitive collation or
+    // citext type, so this only collides if resolveOnce's lookup itself
+    // lower-cases both sides.
+    const existingUserId = await seedLocalUser('John.Doe', ['analyst'])
+    const storedEmail = `John.Doe@${EMAIL_DOMAIN}`
+    await seedCredentialAccount(existingUserId, storedEmail)
+
+    // deriveEmail (mapping.ts) now lowercases its own output, so a real
+    // directory login would submit exactly this lowercase form even
+    // though the stored account is mixed-case.
+    const derivedEmail = storedEmail.toLowerCase()
+    const username = 'case-collision-directory-username'
+
+    const result = await resolveDirectoryUser({ username, email: derivedEmail, role: 'admin' })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a collision denial')
+    expect(result.reason).toBe('collision')
+
+    const pending = await db
+      .select()
+      .from(ldapLinkRequests)
+      .where(eq(ldapLinkRequests.username, username))
+    expect(pending).toHaveLength(1)
+    expect(pending[0]!.matchedUserId).toBe(existingUserId)
+    expect(pending[0]!.derivedEmail).toBe(derivedEmail)
+
+    // The existing (mixed-case) account is never mutated.
+    const [row] = await db.select().from(users).where(eq(users.id, existingUserId))
+    expect(row!.email).toBe(storedEmail)
+    expect(row!.roles).toEqual(['analyst'])
+
+    await cleanupSeed()
+  })
+})
+
 describe('resolveDirectoryUser — repeated collision denial (dedup pending requests)', () => {
   it('reuses the existing pending link request instead of inserting a duplicate on a repeat collision login', async () => {
     await cleanupSeed()
@@ -413,6 +454,14 @@ describe('resolveDirectoryUser — repeated collision denial (dedup pending requ
       .where(eq(ldapLinkRequests.username, username))
     expect(pending).toHaveLength(1)
     expect(pending[0]!.status).toBe('pending')
+    // The dedup path (denyCollision) only reuses the row and bumps
+    // updatedAt -- it never rewrites resolvedRole. The third login above
+    // resolved to 'operator', but the pending row keeps the FIRST
+    // collision's role snapshot ('admin', code review FIX 13): the
+    // reconciling admin should see what the directory resolved on the
+    // original attempt that created the request, not a value silently
+    // overwritten by a later retry with a different resolved role.
+    expect(pending[0]!.resolvedRole).toBe('admin')
 
     // Only the first (original) collision emits an ldap.collision audit row.
     const collisionAudits = await db

@@ -254,9 +254,7 @@ export function LoginPage() {
           <Collapsible open={directoryOpen} onOpenChange={handleDirectoryToggle}>
             <div className="flex items-center gap-3" aria-hidden="true">
               <div className="h-px flex-1 bg-surface-1" />
-              <span className="text-[0.65rem] tracking-wide text-muted-foreground uppercase">
-                or
-              </span>
+              <span className="text-xs tracking-wide text-muted-foreground uppercase">or</span>
               <div className="h-px flex-1 bg-surface-1" />
             </div>
 

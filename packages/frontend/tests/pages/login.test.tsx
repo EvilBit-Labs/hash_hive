@@ -53,7 +53,14 @@ import { useAuthStore } from '../../src/stores/auth'
 import { useUiStore } from '../../src/stores/ui'
 import { mockMeResponse } from '../fixtures/api-responses'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
-import { cleanupAll, fireEvent, renderWithRouter, screen, waitFor } from '../test-utils'
+import {
+  cleanupAll,
+  createTestQueryClient,
+  fireEvent,
+  renderWithRouter,
+  screen,
+  waitFor,
+} from '../test-utils'
 
 let fetchMock: ReturnType<typeof mockFetch>
 
@@ -350,12 +357,21 @@ describe('LoginPage', () => {
   describe('directory (AD/LDAP) sign-in (U8, R20, R21)', () => {
     it('renders only the local form when ldap:false (byte-for-byte unchanged, R20)', async () => {
       fetchMock = mockFetch(authMethodsRoute(false))
-      renderWithRouter([{ path: '/login', element: <LoginPage /> }], { initialRoute: '/login' })
-
-      // Give the auth-methods query a tick to resolve before asserting absence.
-      await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalled()
+      const qc = createTestQueryClient()
+      renderWithRouter([{ path: '/login', element: <LoginPage /> }], {
+        initialRoute: '/login',
+        queryClient: qc,
       })
+
+      // Wait for the auth-methods query to actually settle with data (not
+      // just for the fetch call to have been issued) so the component has
+      // re-rendered with the resolved ldap:false value before we assert the
+      // directory option is absent -- otherwise this could pass on a race
+      // where the assertion runs before the query resolves.
+      await waitFor(() => {
+        expect(qc.getQueryData(['auth', 'methods'])).toEqual({ local: true, ldap: false })
+      })
+
       expect(screen.queryByRole('button', { name: 'Sign in with Directory' })).toBeNull()
       expect(screen.getByRole('button', { name: 'Sign In' })).toBeDefined()
     })

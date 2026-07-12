@@ -59,7 +59,7 @@
  */
 
 import { type UserRole, baAccounts, ldapLinkRequests, users } from '@hashhive/shared'
-import { and, eq, isNotNull } from 'drizzle-orm'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { isUniqueViolation } from '../db/unique-violation.js'
@@ -337,10 +337,18 @@ async function resolveOnce(input: ResolveDirectoryUserInput): Promise<ResolveDir
       return { ok: true, user }
     }
 
+    // Case-insensitive match (code review FIX 4): `users.email` has no
+    // case-insensitive collation or citext type, and `input.email` is a
+    // directory-derived value. `deriveEmail` (mapping.ts) now lowercases
+    // its own output, but the STORED side may still be mixed-case (e.g.
+    // an older local-password account created before that change, or any
+    // email a user typed in mixed case at signup) -- lower-casing both
+    // sides here keeps the R11 collision lookup correct regardless of
+    // which side has the differing case.
     const [existingUserByEmail] = await tx
       .select()
       .from(users)
-      .where(eq(users.email, input.email))
+      .where(sql`lower(${users.email}) = lower(${input.email})`)
       .limit(1)
 
     if (!existingUserByEmail) {

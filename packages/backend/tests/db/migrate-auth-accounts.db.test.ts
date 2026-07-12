@@ -10,7 +10,7 @@
  * the post-migration count check) could silently ship a broken migration.
  *
  * `migrateAuthAccounts()` was refactored to THROW
- * `MigrateAuthAccountsCountMismatchError` instead of calling
+ * `MigrateAuthAccountsMissingCredentialError` instead of calling
  * `process.exit(2)` directly specifically so it is safe to call from a
  * test process -- see the script's module doc.
  *
@@ -32,7 +32,10 @@ import { afterAll, describe, expect, it } from 'bun:test'
 import { and, eq, like } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { migrateAuthAccounts } from '../../src/scripts/migrate-auth-accounts.js'
+import {
+  MigrateAuthAccountsMissingCredentialError,
+  migrateAuthAccounts,
+} from '../../src/scripts/migrate-auth-accounts.js'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -76,6 +79,7 @@ describe('migrateAuthAccounts', () => {
 
     const result = await migrateAuthAccounts()
     expect(result.migrated).toBeGreaterThanOrEqual(1)
+    expect(result.skippedDirectoryOnly).toBeGreaterThanOrEqual(1)
     expect(result.accountCount).toBe(result.userCount)
 
     const [localAccount] = await db
@@ -115,6 +119,8 @@ describe('migrateAuthAccounts', () => {
 
     await migrateAuthAccounts()
     const second = await migrateAuthAccounts()
+    expect(second.migrated).toBe(0)
+    expect(second.skippedExisting).toBeGreaterThanOrEqual(1)
     expect(second.accountCount).toBe(second.userCount)
 
     const accounts = await db
@@ -122,6 +128,82 @@ describe('migrateAuthAccounts', () => {
       .from(baAccounts)
       .where(and(eq(baAccounts.userId, localUser!.id), eq(baAccounts.providerId, 'credential')))
     expect(accounts).toHaveLength(1)
+
+    await cleanupSeed()
+  })
+
+  it('Covers FIX 6. catches a specific local-password user missing a credential row even when the aggregate counts coincidentally match', async () => {
+    await cleanupSeed()
+
+    const [userA] = await db
+      .insert(users)
+      .values({
+        email: `coincidental-a@${EMAIL_DOMAIN}`,
+        passwordHash: 'bcrypt-hash-placeholder-a',
+        name: 'Migrate Test - Coincidental A',
+        roles: ['analyst'],
+      })
+      .returning({ id: users.id })
+
+    const [userB] = await db
+      .insert(users)
+      .values({
+        email: `coincidental-b@${EMAIL_DOMAIN}`,
+        passwordHash: 'bcrypt-hash-placeholder-b',
+        name: 'Migrate Test - Coincidental B',
+        roles: ['analyst'],
+      })
+      .returning({ id: users.id })
+
+    const [userD] = await db
+      .insert(users)
+      .values({
+        email: `coincidental-d@${EMAIL_DOMAIN}`,
+        passwordHash: null,
+        name: 'Migrate Test - Coincidental D (directory-only)',
+        roles: ['analyst'],
+      })
+      .returning({ id: users.id })
+
+    // Pre-seed a `credential` row for B with a NULL password. The unique
+    // index on (userId, providerId) makes migrateAuthAccounts's
+    // onConflictDoNothing insert for B a no-op -- B ends up with a
+    // non-null passwordHash but no credential row whose password is
+    // actually set.
+    await db.insert(baAccounts).values({
+      id: crypto.randomUUID(),
+      userId: userB!.id,
+      accountId: `coincidental-b@${EMAIL_DOMAIN}`,
+      providerId: 'credential',
+      password: null,
+    })
+
+    // Pre-seed a stale/bogus `credential` row (password NOT NULL) for the
+    // directory-only user D. This inflates the aggregate credential-account
+    // count by exactly one -- offsetting B's missing row, so the OLD
+    // aggregate-count comparison (accountCount === userCount) would
+    // coincidentally still have passed despite B's real problem. The
+    // per-user anti-join check must catch it regardless.
+    await db.insert(baAccounts).values({
+      id: crypto.randomUUID(),
+      userId: userD!.id,
+      accountId: `coincidental-d@${EMAIL_DOMAIN}`,
+      providerId: 'credential',
+      password: 'stale-bogus-password',
+    })
+
+    let caught: unknown
+    try {
+      await migrateAuthAccounts()
+    } catch (err) {
+      caught = err
+    }
+
+    expect(caught).toBeInstanceOf(MigrateAuthAccountsMissingCredentialError)
+    const error = caught as MigrateAuthAccountsMissingCredentialError
+    expect(error.missingUserIds).toContain(userB!.id)
+    expect(error.missingUserIds).not.toContain(userA!.id)
+    expect(error.missingUserIds).not.toContain(userD!.id)
 
     await cleanupSeed()
   })

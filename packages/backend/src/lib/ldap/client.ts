@@ -16,19 +16,23 @@
  *   3. Searches `LDAP_SEARCH_BASE` with `LDAP_USER_FILTER` templated on the
  *      submitted username (the `%s` token), with the username safely
  *      RFC 4515-escaped so it cannot inject filter syntax.
- *   4. Reads group membership per `LDAP_GROUP_STRATEGY`: `memberOf` reads
- *      the attribute off the user entry (typical AD); `search` queries
- *      `LDAP_GROUP_BASE` for entries whose `member` attribute lists the
- *      user's DN (typical OpenLDAP).
- *   5. Opens a second connection and binds as the found DN with the
+ *   4. Opens a second connection and binds as the found DN with the
  *      submitted password to verify it (the "then-bind" half).
+ *   5. Only after that verification bind succeeds, reads group membership
+ *      per `LDAP_GROUP_STRATEGY`: `memberOf` reads the attribute off the
+ *      user entry (typical AD); `search` queries `LDAP_GROUP_BASE` for
+ *      entries whose `member` attribute lists the user's DN (typical
+ *      OpenLDAP).
  *
- * When the search finds no matching entry, step 5 still runs -- against a
+ * When the search finds no matching entry, step 4 still runs -- against a
  * syntactically valid but virtually certain-to-be-absent placeholder DN
  * under the search base -- so an unknown username takes the same code path
- * (and a comparable wall-clock time) as a wrong password against a real
- * entry. Both cases return the identical `{ ok: false, reason:
- * 'invalid_credentials' }` outcome (R22, no user-enumeration side channel).
+ * (one search plus one failed bind) as a wrong password against a real
+ * entry (also one search plus one failed bind), and group resolution never
+ * runs on either denied path. Deferring group resolution until after a
+ * successful verification bind keeps both denial paths symmetric (R22, no
+ * user-enumeration side channel via response timing) and avoids a wasted
+ * group-membership search on every failed login.
  *
  * Error mapping: any `ResultCodeError` (a real LDAP protocol response --
  * invalid credentials, no such object, etc.) from the *verification* bind
@@ -316,12 +320,16 @@ export async function authenticateDirectory(
       return { ok: false, reason: 'invalid_credentials' }
     }
 
-    const groups = await resolveGroups(serviceClient, entry, config)
     const verifyResult = await verifyPassword(config, entry.dn, password)
 
     if (verifyResult === 'invalid') {
       return { ok: false, reason: 'invalid_credentials' }
     }
+
+    // Group resolution only runs after a successful verification bind (R22
+    // -- see module doc): resolving it earlier would make the known-user
+    // wrong-password path measurably slower than the unknown-username path.
+    const groups = await resolveGroups(serviceClient, entry, config)
 
     return { ok: true, dn: entry.dn, attributes: normalizeAttributes(entry), groups }
   } catch (err) {

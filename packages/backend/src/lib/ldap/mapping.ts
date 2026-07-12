@@ -58,6 +58,16 @@ export function resolveRole(
  * `userPrincipalName` rather than `mail` point `LDAP_EMAIL_ATTRIBUTE`
  * there -- this function never hardcodes a `mail`/`userPrincipalName`
  * pair.
+ *
+ * Lowercases the result (code review FIX 4): `users.email` has no
+ * case-insensitive collation or citext type, so a directory email that
+ * differs from a stored HashHive email only in case (e.g.
+ * `John.Doe@Company.com` vs `john.doe@company.com`) would otherwise miss
+ * the R11 collision lookup in `ldap-provisioning.ts`'s `resolveOnce` and
+ * could provision a duplicate account. Lowercasing here keeps every
+ * directory-derived email on one canonical form; `resolveOnce` also
+ * lower-cases the stored side of the comparison so an existing
+ * mixed-case local email still collides correctly.
  */
 export function deriveEmail(
   attributes: Readonly<Record<string, string>>,
@@ -69,8 +79,8 @@ export function deriveEmail(
   const trimmedEmail = rawEmail?.trim()
 
   if (trimmedEmail) {
-    return trimmedEmail
+    return trimmedEmail.toLowerCase()
   }
 
-  return `${username}@${realm}`
+  return `${username}@${realm}`.toLowerCase()
 }

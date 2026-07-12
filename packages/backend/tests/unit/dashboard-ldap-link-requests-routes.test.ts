@@ -26,13 +26,18 @@ import type { LdapLinkRequest } from '@hashhive/shared'
 import { describe, expect, it, mock } from 'bun:test'
 
 if (!IS_ISOLATED) {
-  describe.skip('dashboard-ldap-link-requests-routes (skipped - runs in isolated phase)', () => {
+  // A plain describe (NOT describe.skip) so this canary test actually
+  // executes and would catch a CI phase-gating regression -- mirrors
+  // telemetry.test.ts / audit-log.test.ts. describe.skip would prevent
+  // this stub itself from running, defeating the point of the canary
+  // (code review FIX 2).
+  describe('dashboard-ldap-link-requests-routes (skipped - runs in isolated phase)', () => {
     it('signals isolation phase is required', () => {
       // oxlint-disable-next-line no-console -- surface phase-gating drift in CI logs
       console.warn(
         '[dashboard-ldap-link-requests-routes] skipped - set LDAP_LINK_REQUESTS_ROUTES_TEST_ISOLATED=1 to run.'
       )
-      expect(process.env['LDAP_LINK_REQUEST_ROUTES_TEST_ISOLATED']).toBeUndefined()
+      expect(process.env['LDAP_LINK_REQUESTS_ROUTES_TEST_ISOLATED']).toBeUndefined()
     })
   })
 } else {

@@ -37,7 +37,7 @@
 import { baAccounts, users } from '@hashhive/shared'
 import { and, eq, isNotNull, sql } from 'drizzle-orm'
 
-import type { db } from '../db/index.js'
+import { db } from '../db/index.js'
 
 /** Drizzle transaction handle — the callback argument type of `db.transaction`. */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
