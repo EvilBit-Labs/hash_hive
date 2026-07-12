@@ -11,7 +11,7 @@
  */
 
 import { baAccounts, users } from '@hashhive/shared'
-import { sql } from 'drizzle-orm'
+import { isNotNull, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 
@@ -34,6 +34,16 @@ async function migrateAuthAccounts() {
     await tx.update(users).set({ emailVerified: true })
 
     for (const user of allUsers) {
+      // Directory-only users (JIT-provisioned via LDAP) have a null
+      // passwordHash and no local password -- they must NOT get a
+      // `credential` row (a null-password one is inert but noise, and would
+      // throw off the account/user count check below). Their local-password
+      // absence is exactly what the break-glass floor guard relies on.
+      if (user.passwordHash === null) {
+        skipped++
+        continue
+      }
+
       const result = await tx
         .insert(baAccounts)
         .values({
@@ -60,18 +70,29 @@ async function migrateAuthAccounts() {
 
   console.log(`Migration complete: ${migrated} migrated, ${skipped} skipped (already existed)`)
 
-  // Verify counts match
-  const [accountCount] = await db.select({ count: sql<number>`count(*)::int` }).from(baAccounts)
-  const [userCount] = await db.select({ count: sql<number>`count(*)::int` }).from(users)
+  // Verify every LOCAL-password user got a credential account. Directory-only
+  // users (null passwordHash) are excluded on both sides -- they authenticate
+  // via their `ldap` account, not a `credential` one.
+  const [accountCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(baAccounts)
+    .where(sql`${baAccounts.providerId} = 'credential' and ${baAccounts.password} is not null`)
+  const [userCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(users)
+    .where(isNotNull(users.passwordHash))
 
   if (accountCount?.count !== userCount?.count) {
     console.error(
-      `FATAL: Account count (${accountCount?.count}) does not match user count (${userCount?.count}). ` +
+      `FATAL: Credential-account count (${accountCount?.count}) does not match ` +
+        `local-password user count (${userCount?.count}). ` +
         'Some users may not be able to authenticate. Investigate before deploying.'
     )
     process.exit(2)
   }
-  console.log(`Verified: ${accountCount?.count} accounts match ${userCount?.count} users`)
+  console.log(
+    `Verified: ${accountCount?.count} credential accounts match ${userCount?.count} local-password users`
+  )
 }
 
 migrateAuthAccounts().catch((err) => {
