@@ -1,0 +1,10 @@
+version: '1'
+blueprints:
+  - id: bp_cmrha3vih000j01mrji4vhihr
+    source: private
+    file: AGENTS.md
+    name: hashhive
+    pulledAt: 2026-07-12T04:20:10.813Z
+    checksum: e4395b6c04b09bd9
+    editable: true
+    canPull: true
