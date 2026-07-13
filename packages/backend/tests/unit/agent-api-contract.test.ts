@@ -1773,6 +1773,38 @@ describe('Agent API: GET /tasks/:id/zaps — malformed cursor', () => {
   })
 })
 
+describe('Agent API: GET /tasks/:id/zaps — limit validation', () => {
+  const badLimits: ReadonlyArray<{ name: string; value: string }> = [
+    { name: 'zero (below min)', value: '0' },
+    { name: 'above the 10000 ceiling', value: '10001' },
+    { name: 'non-numeric', value: 'abc' },
+  ]
+
+  for (const { name, value } of badLimits) {
+    it(`rejects limit=${value} (${name}) with 400 VALIDATION_ERROR`, async () => {
+      const token = agentToken(TEST_AGENT_TOKEN)
+      const res = await app.request(`${AGENT_BASE}/tasks/42/zaps?limit=${value}`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` },
+      })
+
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('VALIDATION_ERROR')
+    })
+  }
+
+  it('accepts limit at the 10000 ceiling → 200', async () => {
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/zaps?limit=10000`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+  })
+})
+
 // ─── GET /tasks/:id/resources — wire shape (#108 U6) ────────────────
 //
 // Pins the response envelope (`{ resources: [...] }`, not a bare array)

@@ -44,12 +44,14 @@ const MAX_ZAPS_LIMIT = 10_000
  * `services/results/export.ts` / `routes/dashboard/results.ts`, inverted
  * to ASC (`gt`, not `lt`).
  */
+export type GetZapsForTaskResult = { zaps: string[]; nextCursor: string | null } | { error: string }
+
 export async function getZapsForTask(
   taskId: number,
   agentId: number,
   projectId: number,
   opts: { cursor?: ZapCursor | undefined; limit?: number | undefined } = {}
-): Promise<{ zaps: string[]; nextCursor: string | null } | { error: string }> {
+): Promise<GetZapsForTaskResult> {
   // Clamp caller-supplied limit so an agent can't force an unbounded
   // in-memory read (the route is on a hot polling path; an agent
   // requesting `limit=10_000_000` would pull millions of rows + map
@@ -104,6 +106,10 @@ export async function getZapsForTask(
   // bound (`Index Cond`) on `hash_items_hash_list_cracked_idx`, leaving
   // the OR as a cheap tie-break Filter. Same result set, seek instead of
   // scan.
+  //
+  // DO NOT REMOVE the `gte` as "redundant" — it is a query-plan optimization
+  // (verified with EXPLAIN), not dead code. Deleting it silently degrades
+  // this hot path to a full-range rescan; every correctness test stays green.
   if (opts.cursor) {
     conditions.push(
       gte(hashItems.crackedAt, opts.cursor.crackedAt),
@@ -133,12 +139,22 @@ export async function getZapsForTask(
   const page = hasMore ? rows.slice(0, fetchLimit) : rows
   const zaps = page.map((r) => r.hashValue)
 
-  // Mint the continuation token from the last returned row. `crackedAt`
-  // is non-null on every row (the `isNotNull` filter above guarantees
-  // it), so the assertion mirrors `results/export.ts`'s `last.crackedAt!`.
-  const lastRow = page.at(-1)
-  const nextCursor =
-    hasMore && lastRow ? encodeZapCursor({ crackedAt: lastRow.crackedAt!, id: lastRow.id }) : null
+  // Mint the continuation token from the last returned row when more remain.
+  // `fetchLimit >= 1` (clamped above), so `hasMore` implies a non-empty page;
+  // if that invariant is ever broken, throw LOUD rather than silently
+  // returning `nextCursor: null` — a false "exhausted" signal would make the
+  // agent stop polling and skip cracked hashes with no error to trace. The
+  // throw routes through the route's catch to a logged 500 + TASK_ZAP_ERROR.
+  let nextCursor: string | null = null
+  if (hasMore) {
+    const lastRow = page.at(-1)
+    if (!lastRow) {
+      throw new Error('zap pagination invariant violated: hasMore=true with an empty page')
+    }
+    // `crackedAt` is non-null on every row (the `isNotNull` filter above
+    // guarantees it), so the assertion mirrors `results/export.ts`.
+    nextCursor = encodeZapCursor({ crackedAt: lastRow.crackedAt!, id: lastRow.id })
+  }
 
   return { zaps, nextCursor }
 }

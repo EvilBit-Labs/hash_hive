@@ -230,6 +230,53 @@ describe('getZapsForTask — composite cursor pagination', () => {
     expect(result.nextCursor).toBeNull()
   })
 
+  it('returns exactly-limit rows in a single page with nextCursor: null (boundary)', async () => {
+    // Exactly `limit` cracked rows must come back in one call with no
+    // continuation token — pins the strict `>` in `rows.length > fetchLimit`.
+    const [list] = await db
+      .insert(hashLists)
+      .values({ projectId, name: 'list-zap-exact', status: 'ready' })
+      .returning({ id: hashLists.id })
+    const fx = await createTaskFixture(list!.id, 'zap-exact')
+    await db.insert(hashItems).values(
+      ['ex-1', 'ex-2', 'ex-3'].map((hashValue, idx) => ({
+        hashListId: list!.id,
+        hashValue,
+        plaintext: 'pw',
+        crackedAt: new Date(1_752_200_000_000 + idx * 1000),
+      }))
+    )
+
+    const result = await getZapsForTask(fx.taskId, fx.agentId, projectId, { limit: 3 })
+    if ('error' in result) throw new Error(result.error)
+    expect(result.zaps).toEqual(['ex-1', 'ex-2', 'ex-3'])
+    expect(result.nextCursor).toBeNull()
+  })
+
+  it('clamps a below-range limit up to 1 rather than returning zero rows', async () => {
+    // The service independently clamps `Math.max(limit, 1)`; a limit of 0
+    // must still return the first row (and a cursor since more remain), not
+    // an empty page.
+    const [list] = await db
+      .insert(hashLists)
+      .values({ projectId, name: 'list-zap-clamp', status: 'ready' })
+      .returning({ id: hashLists.id })
+    const fx = await createTaskFixture(list!.id, 'zap-clamp')
+    await db.insert(hashItems).values(
+      ['cl-1', 'cl-2', 'cl-3'].map((hashValue, idx) => ({
+        hashListId: list!.id,
+        hashValue,
+        plaintext: 'pw',
+        crackedAt: new Date(1_752_300_000_000 + idx * 1000),
+      }))
+    )
+
+    const result = await getZapsForTask(fx.taskId, fx.agentId, projectId, { limit: 0 })
+    if ('error' in result) throw new Error(result.error)
+    expect(result.zaps).toEqual(['cl-1'])
+    expect(result.nextCursor).not.toBeNull()
+  })
+
   it('moving a row crackedAt forward causes a benign replay, never a skip (KTD4)', async () => {
     // Fresh isolated hash list so the earlier seeded rows don't interfere.
     const [list2] = await db

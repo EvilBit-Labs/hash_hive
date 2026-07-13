@@ -27,18 +27,26 @@
  * exactly against the column, matching how `services/results/export.ts`
  * and `routes/dashboard/results.ts` keyset-paginate this same column.
  */
-import { z } from '@hono/zod-openapi'
+import { z } from 'zod'
+
+import { MAX_PG_INT4 } from '../../lib/pg-limits.js'
 
 /**
  * Server-private composite cursor shape. Mirrors the internal
  * `CrackedCursor` in `services/results/export.ts` but is kept local to
  * the zaps feature — it is not an agent-facing wire shape (the agent
  * only ever sees the opaque base64url token).
+ *
+ * Accepted limitation (not a bug): `crackedAt` is an application-computed
+ * wall-clock value, so concurrent first-time INSERTs can commit in an order
+ * that diverges from timestamp order — a row with an earlier `crackedAt`
+ * that commits after a later one an agent already paged past would be missed
+ * on that walk. Benign for a zap hint list (the agent re-cracks an
+ * already-cracked hash — wasted cycles, never data loss) and inherent to
+ * keyset pagination over an externally-timestamped column (the sibling
+ * `results/export.ts` shares it).
  */
 export type ZapCursor = { readonly crackedAt: Date; readonly id: number }
-
-/** Upper bound for the `id` field — matches the PostgreSQL int4 / `serial` ceiling. */
-const MAX_PG_INT4 = 2_147_483_647
 
 /**
  * Upper bound for the epoch-millis `c` field — JavaScript `Date`'s valid
