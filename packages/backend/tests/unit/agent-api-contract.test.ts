@@ -198,11 +198,13 @@ const handleTaskFailureFixture = {
   task: taskRowFixture,
   retried: false,
 } satisfies Awaited<ReturnType<TasksRetryService['handleTaskFailure']>>
-// getZapsForTask real return is `{zaps, hasMore} | {error}`. PR #190 fixed
-// the shape; this pin enforces it stays correct.
+// getZapsForTask real return is `{zaps, nextCursor} | {error}` (#182
+// replaced `hasMore` with the opaque composite cursor). This pin — via
+// `satisfies Awaited<ReturnType<...>>` — enforces the mock mirrors the
+// service, so a service-shape change breaks this at compile time.
 const getZapsForTaskFixture = {
   zaps: [],
-  hasMore: false,
+  nextCursor: null,
 } satisfies Awaited<ReturnType<TasksZapsService['getZapsForTask']>>
 // getResourcesForTask real return is `{resources} | {error} | {notReady}`
 // (#108 U6; `notReady` added by the referenced-but-unresolved-resource
@@ -1610,13 +1612,14 @@ describe('Agent API: errored-agent rejection across work endpoints', () => {
   )
 })
 
-// ─── ZapResponse wire shape regression test (post-U6 fix) ───────────
+// ─── ZapResponse wire shape regression test ─────────────────────────
 //
 // U6 initially declared ZapResponse as `{ taskId, hashes }` while
-// `getZapsForTask` actually returns `{ zaps, hasMore }`. The fix
-// restored the original `{ zaps, hasMore }` schema. This test pins
-// the contract against the real service mock so the wire shape and
-// the spec can never silently diverge again.
+// `getZapsForTask` actually returns the zaps envelope. #182 changed
+// that envelope from `{ zaps, hasMore }` to `{ zaps, nextCursor }`
+// (opaque composite cursor). This test pins the current contract
+// against the real service mock so the wire shape and the spec can
+// never silently diverge again.
 
 describe('Agent API: POST /tasks/:id/report — wire shape', () => {
   it('returns bare { acknowledged: true } body on the non-failure path', async () => {
@@ -1645,15 +1648,17 @@ describe('Agent API: POST /tasks/:id/report — wire shape', () => {
 })
 
 describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
-  it('returns { zaps, hasMore } body matching getZapsForTask runtime shape', async () => {
-    // Arrange — override the default mock with a non-empty payload so
-    // the field-shape assertion has actual data to verify.
+  it('returns { zaps, nextCursor } body matching getZapsForTask runtime shape', async () => {
+    // Arrange — override the default mock with a non-empty payload and a
+    // continuation token so the field-shape assertion has real data.
     const tasksMod = await import('../../src/services/tasks.js')
     ;(
       tasksMod.getZapsForTask as unknown as {
         mockImplementationOnce: (fn: () => unknown) => void
       }
-    ).mockImplementationOnce(() => Promise.resolve({ zaps: ['hash1', 'hash2'], hasMore: false }))
+    ).mockImplementationOnce(() =>
+      Promise.resolve({ zaps: ['hash1', 'hash2'], nextCursor: 'opaque-token' })
+    )
 
     const token = agentToken(TEST_AGENT_TOKEN)
     const res = await app.request(`${AGENT_BASE}/tasks/42/zaps`, {
@@ -1664,14 +1669,107 @@ describe('Agent API: GET /tasks/:id/zaps — wire shape', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
     expect(body).toHaveProperty('zaps')
-    expect(body).toHaveProperty('hasMore')
+    expect(body).toHaveProperty('nextCursor')
     expect(Array.isArray(body['zaps'])).toBe(true)
-    expect(body['hasMore']).toBe(false)
+    expect(body['nextCursor']).toBe('opaque-token')
+    // `hasMore` was removed in #182 — pin its absence so a regression
+    // can't re-add the redundant key alongside `nextCursor`.
+    expect(body['hasMore']).toBeUndefined()
     // Negative-shape assertions catch a regression that would re-add
     // the wrong keys (`taskId`/`hashes`) and silently break agent
     // codegen consumers parsing this response.
     expect(body['taskId']).toBeUndefined()
     expect(body['hashes']).toBeUndefined()
+  })
+
+  it('emits nextCursor: null (explicit key) at exhaustion', async () => {
+    const tasksMod = await import('../../src/services/tasks.js')
+    ;(
+      tasksMod.getZapsForTask as unknown as {
+        mockImplementationOnce: (fn: () => unknown) => void
+      }
+    ).mockImplementationOnce(() => Promise.resolve({ zaps: ['only-hash'], nextCursor: null }))
+
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/zaps`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    // Exhaustion is an explicit null, never an absent key — a client can
+    // terminate on `nextCursor === null` without also handling absence.
+    expect(body).toHaveProperty('nextCursor')
+    expect(body['nextCursor']).toBeNull()
+  })
+})
+
+// ─── GET /tasks/:id/zaps — malformed cursor is 400, never 500/404 ────
+//
+// The `cursor` param is agent-controlled input decoded at the query
+// boundary (zapQuerySchema). A malformed / out-of-range token must fail
+// validation and return the agent VALIDATION_ERROR envelope (400) via
+// defaultHook — never a 500 (Invalid Date reaching the DB) and never a
+// 404 (the service's not-found path). Validation runs before the handler,
+// so the mocked getZapsForTask is never reached on these paths.
+
+function encodeCursorToken(payload: unknown): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+}
+
+describe('Agent API: GET /tasks/:id/zaps — malformed cursor', () => {
+  const cases: ReadonlyArray<{ name: string; cursor: string }> = [
+    { name: 'non-base64url garbage', cursor: '!!!not-a-cursor!!!' },
+    {
+      name: 'out-of-range id (beyond int4)',
+      cursor: encodeCursorToken({ c: 1_752_000_000_000, i: 2_147_483_648 }),
+    },
+    // The load-bearing case: a structurally valid but out-of-Date-range c
+    // would otherwise decode to an Invalid Date, reach Drizzle, and leak a
+    // 500. Bounding c at decode keeps it on the 400 path.
+    {
+      name: 'out-of-range c (beyond JS Date range)',
+      cursor: encodeCursorToken({ c: 8_640_000_000_000_001, i: 1 }),
+    },
+  ]
+
+  for (const { name, cursor } of cases) {
+    it(`returns 400 VALIDATION_ERROR for ${name}`, async () => {
+      const token = agentToken(TEST_AGENT_TOKEN)
+      const res = await app.request(
+        `${AGENT_BASE}/tasks/42/zaps?cursor=${encodeURIComponent(cursor)}`,
+        { method: 'GET', headers: { authorization: `Bearer ${token}` } }
+      )
+
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('VALIDATION_ERROR')
+    })
+  }
+
+  it('accepts a well-formed cursor and reaches the service (200)', async () => {
+    // A valid token passes validation and hits the default mock → 200.
+    const validCursor = encodeCursorToken({ c: 1_752_000_000_123, i: 7 })
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(
+      `${AGENT_BASE}/tasks/42/zaps?cursor=${encodeURIComponent(validCursor)}`,
+      { method: 'GET', headers: { authorization: `Bearer ${token}` } }
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  it('treats an empty cursor (?cursor=) as absent → 200, not 400', async () => {
+    // A client serializing a nil/absent token as an empty string must
+    // restart the walk from the beginning, not get stuck on a 400.
+    const token = agentToken(TEST_AGENT_TOKEN)
+    const res = await app.request(`${AGENT_BASE}/tasks/42/zaps?cursor=`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.status).toBe(200)
   })
 })
 
