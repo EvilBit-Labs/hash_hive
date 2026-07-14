@@ -77,6 +77,7 @@ import {
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
 import { getResourcesForTask } from '../../services/tasks/task-resources.js'
 import { decodeZapCursor, ZapCursorError } from '../../services/tasks/zap-cursor.js'
+import { MAX_ZAPS_LIMIT } from '../../services/tasks/zaps.js'
 import { registerEnrollRoute } from './enroll.js'
 import { agentInternalError, type AgentInternalErrorCode } from './helpers.js'
 
@@ -389,7 +390,7 @@ const zapQuerySchema = z.object({
         throw err
       }
     }),
-  limit: z.coerce.number().int().min(1).max(10_000).default(10_000),
+  limit: z.coerce.number().int().min(1).max(MAX_ZAPS_LIMIT).default(MAX_ZAPS_LIMIT),
 })
 
 // ─── POST /heartbeat — agent heartbeat ──────────────────────────────

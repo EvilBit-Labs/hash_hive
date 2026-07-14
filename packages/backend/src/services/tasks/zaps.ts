@@ -22,8 +22,12 @@ import { encodeZapCursor, type ZapCursor } from './zap-cursor.js'
  * clamped up. This is the *only* bound between an agent's polling
  * query and the SQL planner, so a malformed or hostile agent can't
  * force a large in-memory read.
+ *
+ * Exported so the agent route's `zapQuerySchema` bounds `limit` against
+ * the same value — one source of truth, so the route's boundary reject
+ * and the service's clamp can't drift apart.
  */
-const MAX_ZAPS_LIMIT = 10_000
+export const MAX_ZAPS_LIMIT = 10_000
 
 /**
  * Returns "zaps" — hashes already cracked by any campaign sharing this
