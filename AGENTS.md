@@ -10,6 +10,7 @@ This file provides AI coding assistants with project context. Substantive docume
 - **[Testing](./docs/testing.md)** -- test strategy, bun:test patterns, mock patterns, frontend test utilities
 - **[Known Gotchas](./GOTCHAS.md)** -- hard-won lessons by domain (TypeScript strict mode, Hono, Drizzle, BetterAuth, bun:test, frontend JSX)
 - **[Documented Solutions](./docs/solutions/)** -- searchable knowledge store of past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+- **[Domain Concepts](./CONCEPTS.md)** -- shared domain vocabulary (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
 - **[Frontend Design Context](./.impeccable.md)** -- users, brand personality, aesthetic direction, anti-references, and the five design principles every UI surface must follow. Read before any frontend visual work.
 
 ## Planning & Status
