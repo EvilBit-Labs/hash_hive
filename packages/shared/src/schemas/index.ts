@@ -901,7 +901,7 @@ export const taskResourceEntrySchema = z.object({
 /**
  * Response body for `GET /tasks/{taskId}/resources`. Wrapped in a
  * `resources` key (rather than a bare array) to match every other
- * agent-surface response's envelope shape (e.g. `{ zaps, hasMore }`)
+ * agent-surface response's envelope shape (e.g. `{ zaps, nextCursor }`)
  * and to leave room for additive top-level fields later without a
  * breaking wire change.
  */

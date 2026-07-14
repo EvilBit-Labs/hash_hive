@@ -47,6 +47,7 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../../types.js'
 
 import { logger } from '../../config/logger.js'
+import { MAX_PG_INT4 } from '../../lib/pg-limits.js'
 import { requireAgentToken, requireAgentTokenForHeartbeatRecovery } from '../../middleware/auth.js'
 import {
   AGENT_RESPONSE_REFS,
@@ -75,6 +76,8 @@ import {
 } from '../../services/tasks.js'
 import { getStopTaskIdsForAgent } from '../../services/tasks/preemption.js'
 import { getResourcesForTask } from '../../services/tasks/task-resources.js'
+import { decodeZapCursor, ZapCursorError } from '../../services/tasks/zap-cursor.js'
+import { MAX_ZAPS_LIMIT } from '../../services/tasks/zaps.js'
 import { registerEnrollRoute } from './enroll.js'
 import { agentInternalError, type AgentInternalErrorCode } from './helpers.js'
 
@@ -201,16 +204,24 @@ const taskReportRequestSchema = z
   .openapi('TaskReport')
 
 // Mirrors `getZapsForTask`'s runtime return shape (see
-// `services/tasks/zaps.ts`) and the pre-deletion `agent-api.yaml`
-// `ZapResponse` schema. `zaps` is the list of already-cracked hash
-// values for the task's hash list; `hasMore` signals truncation beyond
-// the requested `limit`. The agent's documented contract — do not
-// rename either key or generated Go clients will silently drop cracked
-// hashes and the agent will re-run already-cracked work.
+// `services/tasks/zaps.ts`). `zaps` is the list of already-cracked hash
+// values for the task's hash list. `nextCursor` is an opaque
+// continuation token: the agent echoes it back as the `cursor` query
+// param to fetch the next page, and it is ALWAYS present — a base64url
+// string when more rows remain, and explicit `null` (never an absent
+// key) when the set is exhausted, so a client terminates cleanly on
+// `nextCursor === null`. This replaced the prior `hasMore: boolean`,
+// which carried no cursor material forward and could not survive rows
+// sharing a `crackedAt` timestamp (#182). The agent's documented
+// contract — do not rename either key or generated Go clients break.
 const zapResponseSchema = z
   .object({
     zaps: z.array(z.string()),
-    hasMore: z.boolean(),
+    nextCursor: z.string().nullable().openapi({
+      description:
+        'Opaque continuation token, or `null` at exhaustion. Pass it back verbatim as the `cursor` query param to fetch the next page; treat it as opaque (do not parse). Always present — terminate when it is `null`.',
+      example: 'eyJjIjoxNzUyMDAwMDAwMDAwLCJpIjo0Mn0',
+    }),
   })
   .openapi('ZapResponse')
 
@@ -309,8 +320,9 @@ const downloadUrlResponseSchema = z
 // guard). The `.max(MAX_PG_INT4)` upper bound keeps absurd inputs
 // like `/tasks/1e15/report` from reaching the service layer (and the
 // downstream PostgreSQL `serial` / int4 column) where they would
-// surface as an opaque 500 instead of a clean 400.
-const MAX_PG_INT4 = 2_147_483_647
+// surface as an opaque 500 instead of a clean 400. `MAX_PG_INT4` is
+// shared from `lib/pg-limits.js` so the cursor codec and this route
+// agree on one source of truth for the int4 ceiling.
 const taskIdParamSchema = z.object({
   taskId: z.coerce.number().int().positive().max(MAX_PG_INT4).openapi({ example: 42 }),
 })
@@ -333,12 +345,52 @@ const resourceParamSchema = z.object({
   id: z.coerce.number().int().positive().max(MAX_PG_INT4).openapi({ example: 1 }),
 })
 
+// `cursor` is the opaque, agent-controlled continuation token from a
+// prior response's `nextCursor`. It is decoded and validated HERE, at
+// the request boundary, not in the service: `decodeZapCursor` throws on
+// any malformed / wrong-shape / out-of-range token, and reporting that
+// as a Zod issue routes it through `agentOpenApiHonoOptions.defaultHook`
+// to a clean 400 `VALIDATION_ERROR`. Decoding in the service instead
+// would surface a bad cursor as the route's 404 (`{ error }` path) or a
+// 500 — both wrong per the contract ("malformed cursor returns 400, not
+// a 500"). Absent cursor (omitted OR empty string) → `undefined` → start
+// from the beginning; an empty `?cursor=` is a client serializing a
+// nil/absent token, not a malformed one, so it restarts rather than 400s.
+//
+// `.max(MAX_ZAP_CURSOR_LEN)` bounds the raw token BEFORE base64url-decode
+// + JSON.parse so a hostile agent can't force decode/parse work on a
+// multi-megabyte query value — the cursor is the one variable-length input
+// on this hot polling path, and a real token is well under 100 chars.
+const MAX_ZAP_CURSOR_LEN = 512
 const zapQuerySchema = z.object({
-  since: z.iso
-    .datetime()
+  cursor: z
+    .string()
+    .max(MAX_ZAP_CURSOR_LEN)
     .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  limit: z.coerce.number().int().min(1).max(10_000).default(10_000),
+    .openapi({
+      description:
+        'Opaque continuation token from a prior response’s `nextCursor`. Echo it back verbatim to fetch the next page; do not parse or construct it. Omit (or send empty) to start from the beginning.',
+      example: 'eyJjIjoxNzUyMDAwMDAwMDAwLCJpIjo0Mn0',
+    })
+    .transform((token, ctx) => {
+      if (token === undefined || token === '') {
+        return undefined
+      }
+      try {
+        return decodeZapCursor(token)
+      } catch (err) {
+        // Only a malformed token (ZapCursorError) is a client 400. Anything
+        // else thrown from the decode path is an unexpected server fault —
+        // rethrow it so the route's catch logs it and returns a 500, rather
+        // than silently mislabeling a server bug as agent-supplied bad input.
+        if (err instanceof ZapCursorError) {
+          ctx.addIssue({ code: 'custom', message: 'Invalid cursor' })
+          return z.NEVER
+        }
+        throw err
+      }
+    }),
+  limit: z.coerce.number().int().min(1).max(MAX_ZAPS_LIMIT).default(MAX_ZAPS_LIMIT),
 })
 
 // ─── POST /heartbeat — agent heartbeat ──────────────────────────────
@@ -530,7 +582,7 @@ const zapsRoute = createRoute({
   tags: ['Tasks'],
   summary: 'Retrieve cracked hash values for a task',
   description:
-    "Returns hash values that have been cracked from the same hash list as the given task. Agents use this to build a 'zap list' so they can skip already-cracked hashes during processing.",
+    "Returns hash values that have been cracked from the same hash list as the given task. Agents use this to build a 'zap list' so they can skip already-cracked hashes during processing. Pagination is an opaque composite cursor: pass the `cursor` from a prior response's `nextCursor` to continue; omit it to start from the beginning; stop when `nextCursor` is `null`. BREAKING CHANGE (#182): the former `since` timestamp query param was removed in favor of `cursor`/`nextCursor`, which paginate correctly even when more cracked rows share one `crackedAt` timestamp than fit in `limit` — a case `since` could not handle without skipping or replaying rows.",
   security: [{ AgentBearer: [] }],
   request: {
     params: taskIdParamSchema,
@@ -551,10 +603,10 @@ const zapsRoute = createRoute({
 agentRoutes.openapi(zapsRoute, async (c) => {
   const { agentId, projectId } = c.get('agent')
   const { taskId } = c.req.valid('param')
-  const { since, limit } = c.req.valid('query')
+  const { cursor, limit } = c.req.valid('query')
 
   try {
-    const result = await getZapsForTask(taskId, agentId, projectId, { since, limit })
+    const result = await getZapsForTask(taskId, agentId, projectId, { cursor, limit })
 
     if ('error' in result) {
       return c.json({ error: { code: 'TASK_NOT_FOUND', message: result.error } }, 404)
