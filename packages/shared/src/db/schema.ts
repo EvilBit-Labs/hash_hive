@@ -17,6 +17,8 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 
+import type { HashListTypeAnalysis } from '../schemas/hash-lists.js'
+
 // Resource lifecycle status union - duplicated from
 // `../schemas/resources.ts`'s `resourceStatusSchema` to avoid a
 // circular import (schemas/index.ts already imports from this file).
@@ -499,6 +501,10 @@ export const hashLists = pgTable(
     source: varchar('source', { length: 50 }).notNull().default('upload'),
     fileRef: jsonb('file_ref').default({}),
     statistics: jsonb('statistics').default({}),
+    // Per-list hash-type analysis accumulated at ingestion (foundation toward
+    // #202). Nullable: null = not yet analyzed / legacy list. Shape defined and
+    // validated by hashListTypeAnalysisSchema in @hashhive/shared.
+    typeAnalysis: jsonb('type_analysis').$type<HashListTypeAnalysis>(),
     status: varchar('status', { length: 20 })
       .$type<ResourceStatusLiteral>()
       .notNull()

@@ -274,6 +274,13 @@
       "when": 1783870602121,
       "tag": "0038_loose_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1784244767986,
+      "tag": "0039_mixed_fenris",
+      "breakpoints": true
     }
   ]
 }

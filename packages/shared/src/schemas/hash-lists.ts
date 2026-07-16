@@ -41,3 +41,46 @@ export const hashListListResponseSchema = z
   })
   .strict()
   .openapi('HashListListResponse')
+
+/**
+ * Per-list hash-type analysis (foundation toward #202).
+ *
+ * Accumulated during ingestion (`queue/workers/hash-list-parser.ts`) by running
+ * each entry through `guessTopHashType` and counting detected hashcat modes.
+ * Persisted to the nullable `hash_lists.type_analysis` jsonb column
+ * (`null` = not yet analyzed / legacy list). This is the source of the split
+ * work's mixed-list trigger in #202's second half.
+ *
+ * - `verdict`: `homogeneous` (one detected mode within noise), `mixed` (2+ modes
+ *   above the noise threshold), or `needs-review` (unidentified entries dominate
+ *   or declared-vs-detected mismatch).
+ * - `detectedModes`: histogram of detected hashcat modes, sorted by count desc.
+ * - `sampled`: true when the list exceeded the scan cap and detection stopped
+ *   early (all rows still insert).
+ * - `declaredMode`: the list's declared hashcat mode when set, for mismatch
+ *   detection; null otherwise.
+ * - `analyzedAt`: ISO-8601 timestamp of when the analysis was computed.
+ */
+export const hashListDetectedModeSchema = z
+  .object({
+    hashcatMode: z.number().int().nonnegative(),
+    count: z.number().int().nonnegative(),
+  })
+  .strict()
+  .openapi('HashListDetectedMode')
+
+export const hashListTypeAnalysisSchema = z
+  .object({
+    verdict: z.enum(['homogeneous', 'mixed', 'needs-review']),
+    detectedModes: z.array(hashListDetectedModeSchema),
+    unidentifiedCount: z.number().int().nonnegative(),
+    scannedCount: z.number().int().nonnegative(),
+    sampled: z.boolean(),
+    declaredMode: z.number().int().nonnegative().nullable(),
+    analyzedAt: z.string(),
+  })
+  .strict()
+  .openapi('HashListTypeAnalysis')
+
+export type HashListDetectedMode = z.infer<typeof hashListDetectedModeSchema>
+export type HashListTypeAnalysis = z.infer<typeof hashListTypeAnalysisSchema>

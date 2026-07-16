@@ -275,7 +275,12 @@ export type { AttackModeName } from './results.js'
 // Results page's hash-list filter dropdown and the hash list detail
 // stats card. Re-exported from the barrel so consumers keep importing
 // from `@hashhive/shared` unchanged.
-export { hashListListResponseSchema, hashListSummarySchema } from './hash-lists.js'
+export {
+  hashListDetectedModeSchema,
+  hashListListResponseSchema,
+  hashListSummarySchema,
+  hashListTypeAnalysisSchema,
+} from './hash-lists.js'
 
 /**
  * Canonical agent status values matching the persisted `agents.status` column.

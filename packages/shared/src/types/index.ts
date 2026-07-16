@@ -148,8 +148,10 @@ import type {
   crackedResultRowSchema,
   listResultsResponseSchema,
   // Hash-lists listing schemas (issue #165 / U2)
+  hashListDetectedModeSchema,
   hashListListResponseSchema,
   hashListSummarySchema,
+  hashListTypeAnalysisSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -387,6 +389,8 @@ export type CrackedResultRow = z.infer<typeof crackedResultRowSchema>
 export type ListResultsResponse = z.infer<typeof listResultsResponseSchema>
 export type HashListSummary = z.infer<typeof hashListSummarySchema>
 export type HashListListResponse = z.infer<typeof hashListListResponseSchema>
+export type HashListDetectedMode = z.infer<typeof hashListDetectedModeSchema>
+export type HashListTypeAnalysis = z.infer<typeof hashListTypeAnalysisSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
