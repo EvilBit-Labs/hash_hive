@@ -10,6 +10,12 @@ import { logger } from '../../config/logger.js'
 import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
 import { db } from '../../db/index.js'
 import { emitResourceUpdate } from '../../services/events.js'
+import { guessTopHashType } from '../../services/hash-analysis.js'
+import {
+  buildTypeAnalysis,
+  TYPE_DETECTION_SCAN_CAP,
+} from '../../services/hash-items/type-analysis.js'
+import { getHashTypeById } from '../../services/resources.js'
 import { MAX_LINE_LENGTH, streamLines } from '../../services/resources/line-count.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -152,6 +158,12 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         throw new Error(`Hash list ${hashListId} has no file reference`)
       }
 
+      // Resolve the list's declared hashcat mode (if any) once, up front —
+      // used only for the declared-vs-detected mismatch check in
+      // buildTypeAnalysis, never per-line.
+      const declaredHashType = hl.hashTypeId !== null ? await getHashTypeById(hl.hashTypeId) : null
+      const declaredMode = declaredHashType?.hashcatMode ?? null
+
       // Stream the file line by line via the shared storage walker — never
       // buffer the whole file in memory. The shared util owns the WebStream +
       // TextDecoder mechanics (and yields the final no-trailing-newline line);
@@ -160,6 +172,16 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
       let batch: HashItemInsert[] = []
       let linesProcessed = 0
       let skippedLines = 0
+
+      // Type-detection accumulators (issue #202, FU3). Detection runs against
+      // the extracted hash token (parsed.hashValue), not the raw line — a raw
+      // `hash:plaintext` line would otherwise misclassify on the colon.
+      // Detection stops once TYPE_DETECTION_SCAN_CAP entries have been
+      // scanned (sampled=true), but row insertion is never gated by this cap.
+      const typeHistogram = new Map<number, number>()
+      let unidentifiedCount = 0
+      let scannedCount = 0
+      let sampled = false
 
       for await (const raw of streamLines(fileRef.key, fileRef.bucket)) {
         const line = raw.trim()
@@ -177,6 +199,19 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
           continue
         }
         batch.push(parsed)
+
+        if (scannedCount < TYPE_DETECTION_SCAN_CAP) {
+          const guess = guessTopHashType(parsed.hashValue)
+          if (guess === null) {
+            unidentifiedCount++
+          } else {
+            typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
+          }
+          scannedCount++
+          if (scannedCount >= TYPE_DETECTION_SCAN_CAP) {
+            sampled = true
+          }
+        }
 
         if (batch.length >= BATCH_SIZE) {
           await flushBatch(batch)
@@ -215,13 +250,22 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         crackRate,
         lastUpdated: lastUpdated.toISOString(),
       }
+      const typeAnalysis = buildTypeAnalysis(
+        typeHistogram,
+        unidentifiedCount,
+        scannedCount,
+        sampled,
+        declaredMode
+      )
       // Atomic guard: only flip processing -> ready. If another processor
       // already transitioned the row (concurrent re-run, manual intervention),
       // the WHERE matches zero rows and we skip the event emit — preventing a
-      // duplicate hash_list_ready event from leaking out.
+      // duplicate hash_list_ready event from leaking out. typeAnalysis rides
+      // in the same guarded update so a duplicate parse event can't
+      // double-write it either.
       const flipped = await db
         .update(hashLists)
-        .set({ status: 'ready', statistics, updatedAt: lastUpdated })
+        .set({ status: 'ready', statistics, typeAnalysis, updatedAt: lastUpdated })
         .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'processing')))
         .returning({ id: hashLists.id })
 
@@ -232,6 +276,8 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
           skippedLines,
           totalCount: total,
           crackedCount: cracked,
+          typeVerdict: typeAnalysis.verdict,
+          typeSampled: typeAnalysis.sampled,
           flipped: flipped.length > 0,
         },
         'Hash list parsing complete (streamed)'
