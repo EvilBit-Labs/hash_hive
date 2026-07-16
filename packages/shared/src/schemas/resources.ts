@@ -14,6 +14,8 @@
 import '../openapi-extension.js'
 import { z } from 'zod'
 
+import { hashListTypeAnalysisSchema } from './hash-lists.js'
+
 export const hashCandidateSchema = z
   .object({
     name: z.string(),
@@ -242,6 +244,16 @@ export const resourceWireSchema = z
  * Wire shape of a hash list detail row returned from
  * `GET /dashboard/resources/hash-lists/{id}`. Extends the list shape
  * with the parsed statistics payload.
+ *
+ * `typeAnalysis` mirrors the nullable `hash_lists.type_analysis` jsonb
+ * column (foundation toward #202): `null` for a legacy list that
+ * predates the analysis feature or hasn't been (re-)ingested yet,
+ * otherwise the persisted `HashListTypeAnalysis` computed during
+ * ingestion. The route (`getHashListRoute` in
+ * `packages/backend/src/routes/dashboard/resources.ts`) projects the
+ * full DB row onto the wire via spread, so this field requires no
+ * additional route-level mapping - it rides along with `hashTypeId`
+ * and `status`.
  */
 export const hashListDetailWireSchema = z
   .object({
@@ -251,6 +263,7 @@ export const hashListDetailWireSchema = z
     hashTypeId: z.number().int().positive().nullable(),
     status: resourceStatusSchema,
     statistics: hashListStatisticsSchema,
+    typeAnalysis: hashListTypeAnalysisSchema.nullable(),
     createdAt: z.string(),
   })
   .openapi('HashListDetailWire')

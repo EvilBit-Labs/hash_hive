@@ -11,6 +11,8 @@
  * `resources-delete.test.ts` and `hash-list-pipeline.test.ts` rely on.
  * Mirrors the dashboard-campaigns-routes isolation pattern.
  */
+import type { HashListTypeAnalysis } from '@hashhive/shared'
+
 import { describe, expect, it, mock } from 'bun:test'
 
 const IS_ISOLATED = process.env['RESOURCES_ROUTES_TEST_ISOLATED'] === '1'
@@ -86,6 +88,12 @@ if (!IS_ISOLATED) {
 
   // ─── Mock the Resources Service Layer ───────────────────────────────
 
+  // `typeAnalysis` mirrors the real `getHashListById` return shape -
+  // the `hashLists` Drizzle row carries a nullable
+  // `typeAnalysis: HashListTypeAnalysis | null` jsonb column
+  // (`packages/shared/src/db/schema.ts`). `null` is the legacy /
+  // not-yet-analyzed default so existing tests that don't set it keep
+  // exercising that branch.
   type HashListRow = {
     id: number
     projectId: number
@@ -94,6 +102,7 @@ if (!IS_ISOLATED) {
     status: string
     fileRef: Record<string, unknown> | null
     statistics: Record<string, unknown> | null
+    typeAnalysis: HashListTypeAnalysis | null
     createdAt: Date
     updatedAt: Date
   }
@@ -106,6 +115,7 @@ if (!IS_ISOLATED) {
     status: 'processing',
     fileRef: { bucket: 'hashhive', key: '1/hash-lists/42-test.txt' },
     statistics: null,
+    typeAnalysis: null,
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,
@@ -1118,6 +1128,52 @@ if (!IS_ISOLATED) {
       // Tighter than "not 400" - a regression that returns 200 with
       // an empty body would have escaped the original assertion.
       expect(res.status).toBeGreaterThanOrEqual(500)
+    })
+  })
+
+  describe('GET /hash-lists/{id} - detail with typeAnalysis (issue #202 FU4)', () => {
+    const DETAIL_URL = '/api/v1/dashboard/resources/hash-lists/42'
+
+    it('returns the persisted typeAnalysis object for a mixed-hash-type list', async () => {
+      const mixedAnalysis = {
+        verdict: 'mixed',
+        detectedModes: [
+          { hashcatMode: 0, count: 40 },
+          { hashcatMode: 1000, count: 10 },
+        ],
+        unidentifiedCount: 0,
+        scannedCount: 50,
+        sampled: false,
+        declaredMode: null,
+        analyzedAt: '2026-07-15T00:00:00.000Z',
+      } satisfies HashListTypeAnalysis
+
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) =>
+        makeHashList({ id, typeAnalysis: mixedAnalysis })
+      )
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: { typeAnalysis?: unknown } }
+      expect(json.hashList?.typeAnalysis).toEqual(mixedAnalysis)
+    })
+
+    it('returns typeAnalysis: null for a legacy list that predates analysis persistence', async () => {
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) =>
+        makeHashList({ id, typeAnalysis: null })
+      )
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: { typeAnalysis?: unknown } }
+      // Explicit null, not absent - a legacy/unanalyzed row is a
+      // known, expected state, not an error.
+      expect(json.hashList).toHaveProperty('typeAnalysis')
+      expect(json.hashList?.typeAnalysis).toBeNull()
     })
   })
 } // end IS_ISOLATED
