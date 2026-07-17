@@ -1,11 +1,18 @@
 /**
- * Real-DB tests for issue #202 SU3 — campaign-wizard split + review flow.
+ * Real-DB tests for issue #202 SU3/SU7 — campaign-wizard split + review flow.
  *
- * Covers the create-path branch (`createCampaignOrSplit`) and the confirm
- * flow (`confirmSplitCampaign`), including the KTD6 same-mode merge. Mirrors
- * `hash-list-split.db.test.ts`'s fixture conventions (SU2) — the confident
- * fixture is a SHA-512 Crypt string (`$6$...`, mode 1800) since a raw 32-hex
- * string is ambiguous (NTLM/LM/MD5/MD4 collide on length).
+ * Covers the create-path branch (`createCampaignOrSplit`), the async status
+ * poll (`getSplitStatus`), and the confirm flow (`confirmSplitCampaign`),
+ * including the KTD6 same-mode merge. Mirrors `hash-list-split.db.test.ts`'s
+ * fixture conventions (SU2) — the confident fixture is a SHA-512 Crypt
+ * string (`$6$...`, mode 1800) since a raw 32-hex string is ambiguous
+ * (NTLM/LM/MD5/MD4 collide on length).
+ *
+ * As of SU7, `createCampaignOrSplit` no longer runs `runSplitAnalysis`
+ * inline — it enqueues a job and returns `split_pending`. The db test lane
+ * has no live Redis (mirrors `hash-list-split.db.test.ts`), so these tests
+ * call `runSplitAnalysis` directly to simulate the worker running the job,
+ * then assert on `getSplitStatus`'s resulting status transition.
  *
  * Runs under `just test-db` (preload: tests/preload-db.ts). Uses the shared
  * drizzle client from `../../src/db/index.js`.
@@ -22,7 +29,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { confirmSplitCampaign, createCampaignOrSplit } from '../../src/services/campaign-split.js'
+import { runSplitAnalysis } from '../../src/queue/workers/hash-list-split.js'
+import { getSplitStatus } from '../../src/services/campaign-split-status.js'
+import {
+  _campaignSplitDeps,
+  confirmSplitCampaign,
+  createCampaignOrSplit,
+} from '../../src/services/campaign-split.js'
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -109,7 +122,7 @@ async function campaignsOn(hashListId: number) {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('createCampaignOrSplit + confirmSplitCampaign — mixed list full flow', () => {
-  it('splits, resolves the ambiguous group, and creates a parent + one sub-campaign per resolved sub-list', async () => {
+  it('enqueues (split_pending), the worker splits, status transitions to ready, resolves the ambiguous group, and creates a parent + one sub-campaign per resolved sub-list', async () => {
     const parentId = await createHashList('split-confirm-mixed-parent', mixedTypeAnalysis())
     const confidentValues = [sha512Crypt('salt0001'), sha512Crypt('salt0002')]
     const ambiguousValues = [HEX32, 'd'.repeat(32)]
@@ -120,22 +133,56 @@ describe('createCampaignOrSplit + confirmSplitCampaign — mixed list full flow'
       ...unidentifiedValues,
     ])
 
+    // First call against a never-split mixed parent: no `runSplitAnalysis`
+    // run inline (SU7) — just the pending signal. No children yet.
     const createResult = await createCampaignOrSplit({
       projectId: projId,
       name: 'mixed-campaign',
       hashListId: parentId,
       attacks: [],
     })
+    expect(createResult.kind).toBe('split_pending')
+    if (createResult.kind !== 'split_pending') throw new Error('expected split_pending')
+    expect(createResult.hashListId).toBe(parentId)
+    expect(await childrenOf(parentId)).toHaveLength(0)
 
-    expect(createResult.kind).toBe('split_review')
-    if (createResult.kind !== 'split_review') throw new Error('expected split_review')
-    expect(createResult.confident).toHaveLength(1)
-    expect(createResult.confident[0]?.mode).toBe(SHA512_CRYPT_MODE)
-    expect(createResult.ambiguous).toHaveLength(1)
-    expect(createResult.ambiguous[0]?.candidateModes).toEqual(HEX32_SIGNATURE)
-    expect(createResult.unidentified).toHaveLength(1)
+    // The db test lane has no live Redis to run the real worker — simulate
+    // it by calling the same core the job processor calls.
+    const splitResult = await runSplitAnalysis(parentId)
+    expect(splitResult.outcome).toBe('split')
 
-    const ambiguousSubListId = createResult.ambiguous[0]!.id
+    // Status poll now reads `ready` off the children that exist (not off
+    // job state — the db lane has no queue manager, so job lookup returns
+    // null and the children-exist branch is what carries the signal).
+    const statusResult = await getSplitStatus(parentId, projId)
+    expect(statusResult.kind).toBe('ok')
+    if (statusResult.kind !== 'ok') throw new Error('expected ok')
+    expect(statusResult.response.status).toBe('ready')
+    const reviewGroups = statusResult.response.reviewGroups
+    expect(reviewGroups).not.toBeNull()
+    if (!reviewGroups) throw new Error('expected reviewGroups')
+    expect(reviewGroups.confident).toHaveLength(1)
+    expect(reviewGroups.confident[0]?.mode).toBe(SHA512_CRYPT_MODE)
+    expect(reviewGroups.ambiguous).toHaveLength(1)
+    expect(reviewGroups.ambiguous[0]?.candidateModes).toEqual(HEX32_SIGNATURE)
+    expect(reviewGroups.unidentified).toHaveLength(1)
+
+    // A second createCampaignOrSplit call now finds the children the
+    // worker created and returns the review groups directly, same as the
+    // status poll's `ready` branch — the already-split path.
+    const secondCreateResult = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'mixed-campaign',
+      hashListId: parentId,
+      attacks: [],
+    })
+    expect(secondCreateResult.kind).toBe('split_review')
+    if (secondCreateResult.kind !== 'split_review') throw new Error('expected split_review')
+    expect(secondCreateResult.confident).toHaveLength(1)
+    expect(secondCreateResult.ambiguous).toHaveLength(1)
+    expect(secondCreateResult.unidentified).toHaveLength(1)
+
+    const ambiguousSubListId = reviewGroups.ambiguous[0]!.id
 
     const confirmResult = await confirmSplitCampaign({
       projectId: projId,
@@ -183,7 +230,7 @@ describe('createCampaignOrSplit + confirmSplitCampaign — mixed list full flow'
     expect(resolvedList!.typeAnalysis?.verdict).toBe('homogeneous')
 
     // ── The unidentified sub-list gets NO sub-campaign ──
-    const unidentifiedSubListId = createResult.unidentified[0]!.id
+    const unidentifiedSubListId = reviewGroups.unidentified[0]!.id
     const unidentifiedCampaigns = await campaignsOn(unidentifiedSubListId)
     expect(unidentifiedCampaigns).toHaveLength(0)
   })
@@ -253,6 +300,34 @@ describe('confirmSplitCampaign — KTD6 same-mode merge', () => {
   })
 })
 
+describe('createCampaignOrSplit — already-split parent (children exist)', () => {
+  it('returns split_review directly, with no enqueue, when the parent already has children', async () => {
+    const parentId = await createHashList('split-confirm-already-split-parent', mixedTypeAnalysis())
+    const childId = await createHashList(
+      'split-confirm-already-split-child',
+      mixedTypeAnalysis({
+        verdict: 'homogeneous',
+        detectedModes: [{ hashcatMode: 1800, count: 1 }],
+      }),
+      parentId
+    )
+    await insertHashValues(childId, [sha512Crypt('already-split-1')])
+
+    const result = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'already-split-campaign',
+      hashListId: parentId,
+      attacks: [],
+    })
+
+    expect(result.kind).toBe('split_review')
+    if (result.kind !== 'split_review') throw new Error('expected split_review')
+    expect(result.parentHashListId).toBe(parentId)
+    expect(result.confident).toHaveLength(1)
+    expect(result.confident[0]?.id).toBe(childId)
+  })
+})
+
 describe('createCampaignOrSplit — non-split regression + degenerate cases', () => {
   it('creates a plain campaign unchanged for a homogeneous list', async () => {
     const listId = await createHashList(
@@ -287,40 +362,107 @@ describe('createCampaignOrSplit — non-split regression + degenerate cases', ()
     expect(result.kind).toBe('created')
   })
 
-  it('falls back to a plain campaign with no scaffolding when the split classifier degenerates to a single group', async () => {
+  it('single_group: status surfaces the degenerate outcome, and the skipSplit resubmit falls back to a plain campaign with no scaffolding', async () => {
     const listId = await createHashList('split-confirm-degenerate-single', mixedTypeAnalysis())
     // All items classify to the SAME confident group despite the
     // ingestion-time "mixed" verdict — planSplit collapses to one group.
     await insertHashValues(listId, [sha512Crypt('deg00001'), sha512Crypt('deg00002')])
 
-    const result = await createCampaignOrSplit({
+    const pendingResult = await createCampaignOrSplit({
       projectId: projId,
       name: 'degenerate-single-campaign',
       hashListId: listId,
       attacks: [],
     })
+    expect(pendingResult.kind).toBe('split_pending')
 
-    expect(result.kind).toBe('created')
+    // Simulate the worker running the job: the classifier collapses to one
+    // group, so no children are created (items stay on the original list).
+    const splitResult = await runSplitAnalysis(listId)
+    expect(splitResult.outcome).toBe('degenerate-single-group')
+    expect(await childrenOf(listId)).toHaveLength(0)
+
+    // The db lane has no queue manager, so the status lookup finds no job
+    // and can't observe the degenerate outcome the same way a live poll
+    // would (jobInfo is null -> `pending`). What matters for this test is
+    // the client-facing recovery path: the wizard's `single_group` handler
+    // re-submits with `skipSplit: true` regardless of how it learned the
+    // outcome, and that resubmit must fall back to a plain campaign with no
+    // scaffolding.
+    const statusResult = await getSplitStatus(listId, projId)
+    expect(statusResult.kind).toBe('ok')
+    if (statusResult.kind !== 'ok') throw new Error('expected ok')
+    expect(statusResult.response.status).toBe('pending')
+
+    const skipSplitResult = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'degenerate-single-campaign',
+      hashListId: listId,
+      attacks: [],
+      skipSplit: true,
+    })
+
+    expect(skipSplitResult.kind).toBe('created')
     const children = await childrenOf(listId)
     expect(children).toHaveLength(0)
     const items = await db.select().from(hashItems).where(eq(hashItems.hashListId, listId))
     expect(items).toHaveLength(2)
   })
 
-  it('returns split_empty and creates no campaign for an empty mixed-verdict list', async () => {
+  it('degenerate-empty: enqueues (split_pending) and creates no campaign or children once the worker runs', async () => {
     const listId = await createHashList('split-confirm-degenerate-empty', mixedTypeAnalysis())
 
-    const result = await createCampaignOrSplit({
+    const pendingResult = await createCampaignOrSplit({
       projectId: projId,
       name: 'degenerate-empty-campaign',
       hashListId: listId,
       attacks: [],
     })
+    expect(pendingResult.kind).toBe('split_pending')
 
-    expect(result.kind).toBe('split_empty')
+    const splitResult = await runSplitAnalysis(listId)
+    expect(splitResult.outcome).toBe('degenerate-empty')
+
     const rows = await campaignsOn(listId)
     expect(rows).toHaveLength(0)
     const children = await childrenOf(listId)
     expect(children).toHaveLength(0)
+  })
+})
+
+describe('getSplitStatus — degenerate outcomes read through a stubbed QueueManager', () => {
+  it('completed degenerate-empty job -> status "empty" with a message', async () => {
+    const listId = await createHashList('split-status-empty-job', mixedTypeAnalysis())
+
+    // The db test lane has no live Redis (see the file-level doc comment),
+    // so this stubs `_campaignSplitDeps.getQueueContext` — the same seam
+    // `enqueueSplitJob`/`getSplitJobInfo` use — to prove `getSplitStatus`
+    // actually reads a job's `returnvalue` through `QueueManager.getJobInfo`
+    // for the outcomes that leave no `hash_lists` children row to read
+    // instead (advisor-flagged gap: the pure `deriveSplitStatus` unit tests
+    // alone don't exercise this wiring).
+    const fakeQueueManager = {
+      getJobInfo: async () => ({
+        state: 'completed',
+        returnvalue: { outcome: 'degenerate-empty' },
+        failedReason: null,
+      }),
+    }
+    const originalGetQueueContext = _campaignSplitDeps.getQueueContext
+    _campaignSplitDeps.getQueueContext = (() =>
+      Promise.resolve({
+        getQueueManager: () => fakeQueueManager,
+      })) as typeof _campaignSplitDeps.getQueueContext
+
+    try {
+      const result = await getSplitStatus(listId, projId)
+      expect(result.kind).toBe('ok')
+      if (result.kind !== 'ok') throw new Error('expected ok')
+      expect(result.response.status).toBe('empty')
+      expect(result.response.reviewGroups).toBeNull()
+      expect(result.response.message).not.toBeNull()
+    } finally {
+      _campaignSplitDeps.getQueueContext = originalGetQueueContext
+    }
   })
 })

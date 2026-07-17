@@ -13,7 +13,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'bun:test'
 
-import { useCampaignDelete, useCampaignLifecycle } from '../../src/hooks/use-campaigns'
+import {
+  useCampaignDelete,
+  useCampaignLifecycle,
+  useCreateCampaign,
+  useSplitStatus,
+} from '../../src/hooks/use-campaigns'
 import { mockFetch, restoreFetch } from '../mocks/fetch'
 import { cleanupAll } from '../test-utils'
 
@@ -173,5 +178,97 @@ describe('useCampaignDelete', () => {
     await waitFor(() => {
       expect(result.current.isError).toBe(true)
     })
+  })
+})
+
+describe('useCreateCampaign — async split-pending branch (issue #202 SU7)', () => {
+  it('maps a 202 splitPending response to kind: split_pending', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        POST: { status: 202, body: { splitPending: true, hashListId: 9 } },
+      },
+    })
+
+    const { result } = renderHook(() => useCreateCampaign(), wrapper())
+
+    result.current.mutate({ name: 'Mixed', hashListId: 9 })
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.data).toEqual({ kind: 'split_pending', hashListId: 9 })
+  })
+
+  it('still maps a 200 SplitReviewGroups response to kind: split_review (already-split)', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        POST: {
+          status: 200,
+          body: { parentHashListId: 9, confident: [], ambiguous: [], unidentified: [] },
+        },
+      },
+    })
+
+    const { result } = renderHook(() => useCreateCampaign(), wrapper())
+
+    result.current.mutate({ name: 'Mixed', hashListId: 9 })
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.data?.kind).toBe('split_review')
+  })
+
+  it('still maps a 201 created-campaign response to kind: created', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns': {
+        POST: {
+          status: 201,
+          body: { campaign: { id: 5, name: 'Plain', status: 'draft', projectId: 1 }, attacks: [] },
+        },
+      },
+    })
+
+    const { result } = renderHook(() => useCreateCampaign(), wrapper())
+
+    result.current.mutate({ name: 'Plain', hashListId: 1 })
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.data).toEqual({
+      kind: 'created',
+      campaign: { id: 5, name: 'Plain', status: 'draft', projectId: 1 },
+    })
+  })
+})
+
+describe('useSplitStatus (issue #202 SU7)', () => {
+  it('is disabled (no fetch) when hashListId is null', async () => {
+    fetchMock = mockFetch({})
+    const { result } = renderHook(() => useSplitStatus(null), wrapper())
+
+    // Give any accidental fetch a chance to fire before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fetches the status endpoint for the given hashListId', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/campaigns/split/status/9': {
+        GET: { status: 200, body: { status: 'pending', reviewGroups: null, message: null } },
+      },
+    })
+
+    const { result } = renderHook(() => useSplitStatus(9), wrapper())
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(result.current.data?.status).toBe('pending')
+
+    const urls = getFetchUrls(fetchMock)
+    expect(urls.some((u) => u.includes('/dashboard/campaigns/split/status/9'))).toBe(true)
   })
 })

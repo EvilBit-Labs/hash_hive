@@ -260,19 +260,27 @@ if (IS_ISOLATED) {
             }
             return Promise.resolve([])
           },
-          onConflictDoNothing: () => {
-            // For hash_items batch inserts. Append (dedupe by hashValue per list).
-            if (table === hashItemsRef && Array.isArray(values)) {
+          onConflictDoNothing: () => ({
+            // `flushBatch` (issue #202 code review fix) chains
+            // `.returning({ hashValue })` off `onConflictDoNothing()` so it
+            // can run type detection against only the rows Postgres
+            // actually inserted. Mirror real `ON CONFLICT DO NOTHING
+            // RETURNING` semantics here: only rows that DIDN'T collide with
+            // an existing (hashListId, hashValue) pair come back.
+            returning: () => {
+              if (table !== hashItemsRef || !Array.isArray(values)) return Promise.resolve([])
+              const insertedRows: Array<{ hashValue: string }> = []
               for (const v of values) {
                 const list = state.hashItemsByList.get(v.hashListId) ?? []
                 if (!list.some((x) => x['hashValue'] === v.hashValue)) {
                   list.push({ ...v, id: list.length + 1 })
+                  insertedRows.push({ hashValue: v.hashValue })
                 }
                 state.hashItemsByList.set(v.hashListId, list)
               }
-            }
-            return Promise.resolve()
-          },
+              return Promise.resolve(insertedRows)
+            },
+          }),
         }),
       }),
       update: (table: unknown) => ({

@@ -162,6 +162,15 @@ interface Seed {
   rogueParentId: number
   rogueChildId: number
   rogueChildCampaignId: number
+
+  // "stranded" scenario (#202 code review P2): `confirmSplitCampaign`
+  // crashed between flipping a child's `type_analysis` to `homogeneous`
+  // and creating its sub-campaign. One child has a real, completed
+  // sub-campaign; the other is already resolved (mode-bearing) but has NO
+  // campaign linked at all.
+  strandedParentId: number
+  strandedChild1Id: number
+  strandedChild2Id: number
 }
 
 let seed: Seed
@@ -324,6 +333,45 @@ beforeAll(async () => {
     }),
   })
 
+  // ── "stranded" scenario (#202 code review P2) ────────────────────────
+  // A real split parent + one real, COMPLETED sub-campaign, PLUS a second
+  // child that is already resolved (`type_analysis.verdict ===
+  // 'homogeneous'`) but has no campaign linked at all — the exact state a
+  // crash between `applyAssignmentsAndMerge`'s child-flip transaction and
+  // `confirmSplitCampaign`'s per-group `createCampaign` call would leave
+  // behind.
+  const strandedParentId = await insertHashList('stranded-parent')
+  const strandedParentCampaignId = await insertCampaign({
+    hashListId: strandedParentId,
+    status: 'running',
+  })
+
+  const strandedChild1Id = await insertHashList('stranded-child-1', {
+    parentHashListId: strandedParentId,
+    typeAnalysis: homogeneousAnalysis(1000, 10),
+  })
+  await insertItems(strandedChild1Id, 10)
+  await insertCampaign({
+    hashListId: strandedChild1Id,
+    status: 'completed',
+    parentCampaignId: strandedParentCampaignId,
+    progress: taskProgress({
+      totalTasks: 2,
+      completedTasks: 2,
+      tasksFailed: 0,
+      overallProgress: 1,
+      hashTotal: 10,
+      hashCracked: 10,
+    }),
+  })
+
+  // Resolved (mode-bearing) but stranded — no campaign row targets it.
+  const strandedChild2Id = await insertHashList('stranded-child-2', {
+    parentHashListId: strandedParentId,
+    typeAnalysis: homogeneousAnalysis(1800, 7),
+  })
+  await insertItems(strandedChild2Id, 7)
+
   seed = {
     completeParentId,
     completeChild1Id,
@@ -336,6 +384,9 @@ beforeAll(async () => {
     rogueParentId,
     rogueChildId,
     rogueChildCampaignId,
+    strandedParentId,
+    strandedChild1Id,
+    strandedChild2Id,
   }
 })
 
@@ -426,5 +477,27 @@ describe('getHashListSplitProgress — rogue campaign against a child hash list 
     expect(sub!.overallProgress).toBe(1)
     expect(sub!.hashProgress!.total).toBe(10)
     expect(sub!.hashProgress!.cracked).toBe(10)
+  })
+})
+
+describe('getHashListSplitProgress — stranded mode-bearing child with no sub-campaign (#202 code review P2)', () => {
+  it('is NOT done even though every real sub-campaign has completed', async () => {
+    const result = await getHashListSplitProgress(seed.strandedParentId, projId)
+    expect(result).not.toBeNull()
+
+    const sub = result!.subCampaignProgress
+    expect(sub).not.toBeNull()
+    // Only ONE real sub-campaign exists (for stranded-child-1), and it's
+    // complete — the pre-fix `done` computation would read `true` here.
+    expect(sub!.subCampaignCount).toBe(1)
+    expect(sub!.completedSubCampaignCount).toBe(1)
+    // The dangling resolved child (stranded-child-2) forces `done: false`.
+    expect(sub!.pendingSubCampaignCount).toBe(1)
+    expect(sub!.done).toBe(false)
+  })
+
+  it('does not count the stranded child toward needsTypeCount — it is resolved, not needs-review', async () => {
+    const result = await getHashListSplitProgress(seed.strandedParentId, projId)
+    expect(result!.needsTypeCount).toBe(0)
   })
 })

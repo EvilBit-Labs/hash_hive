@@ -90,6 +90,14 @@ function garbageLines(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `garbage-unidentifiable-line-${i}`)
 }
 
+/** Repeats a single hash value `n` times — every repeat collides with the
+ * first insert on `(hashListId, hashValue)` and is dropped by
+ * `onConflictDoNothing()`, so only ONE `hash_items` row survives no matter
+ * how large `n` is. */
+function duplicateLines(value: string, n: number): string[] {
+  return Array.from({ length: n }, () => value)
+}
+
 /**
  * Test-local orchestration of the REAL exported detection + persistence
  * primitives (parseHashLine, guessTopHashType, buildTypeAnalysis) plus the
@@ -97,9 +105,17 @@ function garbageLines(n: number): string[] {
  * docstring for why this composes real exports rather than driving the
  * literal worker processor.
  *
+ * Mirrors the real worker's `flushBatch` + `accumulateTypeDetection` seam
+ * (issue #202 code review fix): detection runs on the rows Postgres
+ * ACTUALLY inserted (`RETURNING` on an `ON CONFLICT DO NOTHING` insert only
+ * reports non-colliding rows), not on every raw parsed line — a duplicate-
+ * heavy fixture collapses to one `hash_items` row per distinct hash value,
+ * and the histogram must reflect that deduplicated composition.
+ *
  * `scanLimit` lets a test simulate an early-stopped scan (the `sampled`
  * cap) without touching the real 1,000,000-line module constant — every
- * line is still parsed and inserted; only the detection scan stops early.
+ * line is still parsed and inserted; only the detection scan (now over
+ * inserted rows) stops early.
  */
 async function ingestAndPersist(
   hashListId: number,
@@ -117,31 +133,34 @@ async function ingestAndPersist(
   const histogram = new Map<number, number>()
   let unidentifiedCount = 0
   let scannedCount = 0
-  let sampled = false
 
   const batch = []
   for (const line of lines) {
     const parsed = parseHashLine(line, hashListId)
     if (parsed === null) continue
     batch.push(parsed)
+  }
 
-    if (scannedCount < scanLimit) {
-      const guess = guessTopHashType(parsed.hashValue)
-      if (guess === null) {
-        unidentifiedCount++
-      } else {
-        histogram.set(guess.hashcatMode, (histogram.get(guess.hashcatMode) ?? 0) + 1)
-      }
-      scannedCount++
-      if (scannedCount >= scanLimit) {
-        sampled = true
-      }
+  const insertedRows =
+    batch.length > 0
+      ? await db
+          .insert(hashItems)
+          .values(batch)
+          .onConflictDoNothing()
+          .returning({ hashValue: hashItems.hashValue })
+      : []
+
+  for (const row of insertedRows) {
+    if (scannedCount >= scanLimit) break
+    const guess = guessTopHashType(row.hashValue)
+    if (guess === null) {
+      unidentifiedCount++
+    } else {
+      histogram.set(guess.hashcatMode, (histogram.get(guess.hashcatMode) ?? 0) + 1)
     }
+    scannedCount++
   }
-
-  if (batch.length > 0) {
-    await db.insert(hashItems).values(batch).onConflictDoNothing()
-  }
+  const sampled = scannedCount >= scanLimit
 
   const [statsResult] = await db
     .select({
@@ -173,7 +192,7 @@ async function ingestAndPersist(
     .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'processing')))
     .returning({ id: hashLists.id })
 
-  return { typeAnalysis, flipped: flipped.length > 0, insertedCount: batch.length }
+  return { typeAnalysis, flipped: flipped.length > 0, insertedCount: insertedRows.length }
 }
 
 async function createProcessingList(name: string): Promise<number> {
@@ -284,6 +303,50 @@ describe('ingestion type detection — mixed list', () => {
       .from(hashLists)
       .where(eq(hashLists.id, listId))
     expect(persisted!.typeAnalysis).toEqual(result.typeAnalysis)
+  })
+})
+
+describe('ingestion type detection — duplicate-heavy list (issue #202 code review fix)', () => {
+  it('detects on the DEDUPLICATED hash_items composition, not raw parsed lines — a single value repeated hundreds of times cannot drown out a smaller set of genuinely distinct hashes', async () => {
+    const [dupValue] = sha512Lines(1)
+    // 990 raw lines, all the SAME SHA-512 value — onConflictDoNothing
+    // collapses these to exactly ONE hash_items row.
+    const duplicateHeavy = duplicateLines(dupValue!, 990)
+    // 10 raw lines, each a DISTINCT NTLM value — all 10 survive dedup.
+    const ntlm = ntlmLines(10)
+    const listId = await createProcessingList('duplicate-heavy-mixed')
+
+    const result = await ingestAndPersist(listId, [...duplicateHeavy, ...ntlm])
+
+    // Only 11 rows land in hash_items: 1 deduplicated SHA-512 + 10 distinct
+    // NTLM — proves the fixture's duplicates never reach the table twice.
+    const rows = await db
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, listId))
+    expect(rows).toHaveLength(11)
+
+    // Pre-fix (raw-line counting, the bug): SHA-512 = 990/1000 = 99% of raw
+    // lines, NTLM = 10/1000 = 1% — below the 5% noise floor, so the
+    // pre-fix histogram would have called this list `homogeneous` (SHA-512
+    // only) and silently skipped the split flow at campaign create.
+    //
+    // Post-fix (deduplicated composition, correct): SHA-512 = 1/11 ~= 9.1%
+    // and NTLM = 10/11 ~= 90.9% of INSERTED rows — both clear the noise
+    // floor, so the correct verdict is `mixed`.
+    expect(result.insertedCount).toBe(11)
+    expect(result.typeAnalysis.scannedCount).toBe(11)
+    expect(result.typeAnalysis.verdict).toBe('mixed')
+    const modes = new Map(result.typeAnalysis.detectedModes.map((m) => [m.hashcatMode, m.count]))
+    expect(modes.get(1700)).toBe(1) // SHA-512, deduplicated down to one row
+    expect(modes.get(1000)).toBe(10) // NTLM, ten genuinely distinct rows
+    expect(result.typeAnalysis.unidentifiedCount).toBe(0)
+
+    const [persisted] = await db
+      .select({ typeAnalysis: hashLists.typeAnalysis })
+      .from(hashLists)
+      .where(eq(hashLists.id, listId))
+    expect(persisted!.typeAnalysis?.verdict).toBe('mixed')
   })
 })
 

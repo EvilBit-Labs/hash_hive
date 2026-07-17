@@ -267,11 +267,20 @@ export const subCampaignHashProgressWireSchema = z
  * derived from the parent campaign's row.
  *
  * `done` is true only when EVERY sub-campaign counted here has reached
- * `completed` - needs-type children have no sub-campaign at all, so they
- * are excluded from both `subCampaignCount` and `done` by construction,
- * not by a separate filter. This is what lets an otherwise-complete
- * parent read as done even while `HashListDetailWire.needsTypeCount` is
- * still nonzero.
+ * `completed` AND `pendingSubCampaignCount` is zero - needs-type children
+ * have no sub-campaign at all, so they are excluded from both
+ * `subCampaignCount` and `done` by construction, not by a separate filter.
+ * This is what lets an otherwise-complete parent read as done even while
+ * `HashListDetailWire.needsTypeCount` is still nonzero.
+ *
+ * `pendingSubCampaignCount` (code review fix, #202) counts mode-bearing
+ * (resolved, `verdict: 'homogeneous'`) children that have NO sub-campaign
+ * linked yet - the signature of a `confirmSplitCampaign` crash between
+ * flipping a child's `type_analysis` to `homogeneous` and creating its
+ * sub-campaign (that flow is not a single atomic transaction). A nonzero
+ * value here forces `done` to `false` even when every sub-campaign that
+ * DOES exist has completed, so a partially-confirmed split can't read as
+ * finished.
  */
 export const subCampaignProgressWireSchema = z
   .object({
@@ -283,6 +292,7 @@ export const subCampaignProgressWireSchema = z
     tasksFailed: z.number().int().nonnegative(),
     overallProgress: z.number().min(0).max(1),
     hashProgress: subCampaignHashProgressWireSchema.nullable(),
+    pendingSubCampaignCount: z.number().int().nonnegative(),
   })
   .openapi('SubCampaignProgress')
 

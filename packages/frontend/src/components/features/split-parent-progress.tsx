@@ -35,6 +35,7 @@ export function SubCampaignProgressSummary({
     tasksFailed,
     overallProgress,
     hashProgress,
+    pendingSubCampaignCount,
   } = progress
 
   return (
@@ -67,6 +68,14 @@ export function SubCampaignProgressSummary({
           />
         )}
       </div>
+
+      {pendingSubCampaignCount > 0 && (
+        <output className="block text-xs text-warning">
+          {pendingSubCampaignCount.toLocaleString()}{' '}
+          {pendingSubCampaignCount === 1 ? 'sub-campaign is' : 'sub-campaigns are'} still being
+          created for a resolved hash type.
+        </output>
+      )}
     </div>
   )
 }

@@ -1,21 +1,27 @@
 /**
- * Campaign-wizard split + review flow (issue #202, unit SU3).
+ * Campaign-wizard split + review flow (issue #202, units SU3/SU7).
  *
  * Turns the mixed-hash-list dead end (a mixed/needs-review list would
  * otherwise hit `mode_conflict` or silently crack the wrong hash type) into
- * a two-step flow:
+ * a three-step flow:
  *
  *   1. `createCampaignOrSplit` — the create-path entry point. Reads the
  *      target hash list's persisted `type_analysis.verdict` and branches:
- *        - `null` (never analyzed) or `homogeneous` -> the existing
- *          single-mode path, unchanged (`createCampaignWithAttacks`).
- *        - `mixed` / `needs-review` -> runs `runSplitAnalysis` (the SU2
- *          testable core). `degenerate-empty` is a validation error (no
- *          crackable items). `degenerate-single-group` falls back to the
- *          normal single-mode path on the ORIGINAL hash list (the split
- *          classifier found nothing to split despite the ingestion-time
- *          verdict). `split` / `already-split` return the review groups
- *          instead of creating a campaign — the caller must confirm.
+ *        - `null` (never analyzed) or `homogeneous`, OR the caller passed
+ *          `skipSplit: true` -> the existing single-mode path, unchanged
+ *          (`createCampaignWithAttacks`).
+ *        - `mixed` / `needs-review` with existing children (a prior call
+ *          already split this parent) -> returns the review groups
+ *          directly, same as before.
+ *        - `mixed` / `needs-review` with no children yet -> enqueues the
+ *          `HASH_LIST_SPLIT` job (deduped per hash list, see
+ *          `enqueueSplitJob` below) and returns `{ kind: 'split_pending' }`
+ *          instead of running `runSplitAnalysis` inline. The wizard polls
+ *          `GET /campaigns/split/status/{hashListId}`
+ *          (`services/campaign-split-status.ts`) for the outcome:
+ *          `ready` (children now exist -> review groups), `empty` /
+ *          `single_group` (the classifier's two degenerate outcomes,
+ *          previously handled synchronously here), or `failed`.
  *   2. `confirmSplitCampaign` — takes the user's per-ambiguous-group mode
  *      assignments, resolves them, merges any groups that land on the same
  *      mode (KTD6), then creates the parent campaign (`parentCampaignId`
@@ -24,6 +30,8 @@
  *      resolved by the original split) get a sub-campaign too, with no
  *      assignment needed. Still-ambiguous (unassigned) and unidentified
  *      sub-lists get no sub-campaign.
+ *   3. `getSplitReviewGroups` — shared by the create path (already-split
+ *      case) and the status endpoint's `ready` case.
  *
  * Not fully atomic end-to-end: the assignment/merge step runs in one
  * transaction, but the parent + sub-campaign creates run as separate
@@ -56,10 +64,70 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import type { AuditActor } from './audit-log.js'
 import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campaigns.js'
 
+import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
-import { runSplitAnalysis } from '../queue/workers/hash-list-split.js'
 import { createCampaign, createCampaignWithAttacks } from './campaigns.js'
 import { moveHashItemsToList } from './hash-items/move-items.js'
+
+// Dynamic-import seam so tests can stub the queue access without a live
+// Redis, mirroring `services/resources/line-count-trigger.ts`'s `_deps`
+// pattern (bun:test's mock.module can't override already-cached dynamic
+// imports across files).
+export const _campaignSplitDeps = {
+  getQueueContext: () => import('../queue/context.js'),
+  getQueueConfig: () => import('../config/queue.js'),
+}
+
+/**
+ * BullMQ jobId for a hash list's split-analysis job — deduped per hash list
+ * so a burst of create attempts against the same mixed list collapses to
+ * one job. Exported for `services/campaign-split-status.ts`'s status lookup,
+ * which reads back this same job by id.
+ */
+export function splitJobId(hashListId: number): string {
+  return `split-${hashListId}`
+}
+
+/**
+ * How long a terminal split job's `returnvalue`/`failedReason` stays
+ * queryable before BullMQ evicts it. This is the ONLY signal available for
+ * the two degenerate outcomes (`degenerate-empty` / `degenerate-single-group`)
+ * and for a failed job — both leave no `hash_lists` children row to read
+ * instead, unlike a real split. Long enough to cover realistic wizard
+ * polling; short enough that a terminal job doesn't block a future re-add
+ * past this window (BullMQ dedup+eviction gotcha — see project memory).
+ * NOTE: BullMQ's `age` unit is SECONDS, not ms.
+ */
+const SPLIT_JOB_RETENTION_SECONDS = 10 * 60
+
+/**
+ * Enqueues the async split-analysis job for a mixed hash list (issue #202
+ * SU7). Best-effort: a missing queue manager or an enqueue throw is
+ * swallowed, never rethrown — mirrors `enqueueLineCount` in
+ * `services/resources/line-count-trigger.ts`. A swallowed failure here
+ * means the wizard's status poll sits at `pending` forever (degraded mode,
+ * same as every other best-effort enqueue trigger in this codebase); it
+ * never blocks or fails the `POST /campaigns` request itself.
+ */
+async function enqueueSplitJob(hashListId: number, projectId: number): Promise<void> {
+  try {
+    const { getQueueManager } = await _campaignSplitDeps.getQueueContext()
+    const { QUEUE_NAMES } = await _campaignSplitDeps.getQueueConfig()
+    const qm = getQueueManager()
+    if (!qm) return
+    await qm.enqueue(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      { hashListId, projectId },
+      {
+        jobId: splitJobId(hashListId),
+        removeOnComplete: { age: SPLIT_JOB_RETENTION_SECONDS },
+        removeOnFail: { age: SPLIT_JOB_RETENTION_SECONDS },
+      }
+    )
+  } catch (err) {
+    logger.warn({ err, hashListId }, 'failed to enqueue hash-list-split job')
+  }
+}
 
 // Drizzle transaction handle — the callback argument type of `db.transaction`.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
@@ -119,21 +187,24 @@ export async function getSplitReviewGroups(parentHashListId: number): Promise<Sp
 
 export type CreateCampaignOrSplitResult =
   | CreateCampaignWithAttacksResult
-  // No crackable items at all — the caller (route) maps this to a
-  // validation error; there is nothing to build a campaign or a review
-  // flow around.
-  | { kind: 'split_empty' }
-  // Real split happened (or a prior call already split this parent) —
-  // the caller must present the review groups and call
-  // `confirmSplitCampaign` instead of getting a campaign back directly.
+  // The target list is mixed, no prior call has split it yet, and the
+  // caller didn't pass `skipSplit` — the async split job was enqueued (or
+  // best-effort attempted; see `enqueueSplitJob`). No campaign was created;
+  // the caller must poll `GET /campaigns/split/status/{hashListId}` for the
+  // outcome.
+  | { kind: 'split_pending'; hashListId: number }
+  // A prior call already split this parent — the caller must present the
+  // review groups and call `confirmSplitCampaign` instead of getting a
+  // campaign back directly.
   | ({ kind: 'split_review' } & SplitReviewGroups)
 
 /**
- * Create-path entry point (issue #202 SU3). Same input shape as
- * `createCampaignWithAttacks` — the route calls this instead, and it either
- * passes through to the normal single-mode create (unanalyzed/homogeneous
- * list, or a mixed-verdict list whose split classifier degenerates to one
- * group) or short-circuits into the split/review flow.
+ * Create-path entry point (issue #202 SU3/SU7). Same input shape as
+ * `createCampaignWithAttacks` (plus the optional `skipSplit` escape hatch)
+ * — the route calls this instead, and it either passes through to the
+ * normal single-mode create (unanalyzed/homogeneous list, `skipSplit: true`,
+ * or a mixed-verdict list whose already-split children collapsed to none)
+ * or short-circuits into the split-pending / split-review flow.
  */
 export async function createCampaignOrSplit(input: {
   projectId: number
@@ -144,6 +215,11 @@ export async function createCampaignOrSplit(input: {
   createdBy?: number | undefined
   attacks: ReadonlyArray<InlineAttackInput>
   actor?: AuditActor | undefined
+  // Issue #202 SU7: forces the normal single-mode create even when the
+  // target list's `type_analysis.verdict` is mixed/needs-review. Set by the
+  // wizard's `single_group` fallback after the async split job found
+  // nothing to split.
+  skipSplit?: boolean | undefined
 }): Promise<CreateCampaignOrSplitResult> {
   const [targetList] = await db
     .select({
@@ -172,23 +248,32 @@ export async function createCampaignOrSplit(input: {
     return createCampaignWithAttacks(input)
   }
 
-  const splitResult = await runSplitAnalysis(targetList.id)
-
-  if (splitResult.outcome === 'degenerate-empty') {
-    return { kind: 'split_empty' }
-  }
-
-  if (splitResult.outcome === 'degenerate-single-group') {
-    // The split classifier found nothing to split despite the ingestion-time
-    // "mixed"/"needs-review" verdict — fall back to a plain single-mode
-    // campaign on the ORIGINAL list (its items were never moved).
+  if (input.skipSplit) {
     return createCampaignWithAttacks(input)
   }
 
-  // 'split' or 'already-split': never create a campaign directly — the
-  // caller must present these groups and call `confirmSplitCampaign`.
-  const review = await getSplitReviewGroups(targetList.id)
-  return { kind: 'split_review', ...review }
+  const existingChildren = await db
+    .select({ id: hashLists.id })
+    .from(hashLists)
+    .where(eq(hashLists.parentHashListId, targetList.id))
+    .limit(1)
+
+  if (existingChildren.length > 0) {
+    // A prior call already split this parent — never create a campaign
+    // directly; the caller must present these groups and call
+    // `confirmSplitCampaign`.
+    const review = await getSplitReviewGroups(targetList.id)
+    return { kind: 'split_review', ...review }
+  }
+
+  // First call against this mixed parent: enqueue the async split job
+  // instead of running `runSplitAnalysis` inline (issue #202 SU7 — the
+  // plan's KTD2 requires this to be an async job the wizard polls, not
+  // synchronous request-path work). The two degenerate outcomes
+  // (`degenerate-empty` / `degenerate-single-group`) that used to be
+  // handled here synchronously now surface through the status poll.
+  await enqueueSplitJob(targetList.id, input.projectId)
+  return { kind: 'split_pending', hashListId: targetList.id }
 }
 
 // ─── Confirm ───────────────────────────────────────────────────────────────

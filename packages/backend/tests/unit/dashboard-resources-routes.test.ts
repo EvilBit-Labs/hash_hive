@@ -355,9 +355,17 @@ if (!IS_ISOLATED) {
   // non-promise `.where()` result isn't an array. `null` mirrors the real
   // return for a non-split (leaf) list — every test in this file uses a
   // leaf `makeHashList`, so this default keeps every test byte-for-byte
-  // unchanged.
+  // unchanged. Declared as a named mock (rather than inline) so the FIX A
+  // detail-response-schema test below can override it per-case.
+  const mockGetHashListSplitProgress = mock(
+    async () =>
+      null as null | {
+        needsTypeCount: number
+        subCampaignProgress: unknown
+      }
+  )
   mock.module('../../src/services/hash-items/split-progress.js', () => ({
-    getHashListSplitProgress: mock(async () => null),
+    getHashListSplitProgress: mockGetHashListSplitProgress,
   }))
 
   // Stub db + ioredis to keep src/index.ts evaluation cheap.
@@ -1188,6 +1196,85 @@ if (!IS_ISOLATED) {
       // known, expected state, not an error.
       expect(json.hashList).toHaveProperty('typeAnalysis')
       expect(json.hashList?.typeAnalysis).toBeNull()
+    })
+
+    it('conforms to hashListDetailWireSchema — DB-only fields (fileRef, source, isPermanent, archivedAt, parentHashListId, updatedAt) are not on the wire', async () => {
+      // The route is now bound to `hashListDetailWireSchema` (P2 code
+      // review fix) instead of `z.unknown()`. `makeHashList` carries a
+      // `fileRef` (and, on the real DB row, `source` /`isPermanent` /
+      // `archivedAt` / `parentHashListId` / `updatedAt`) that the schema
+      // deliberately omits — this pins that the handler projects onto the
+      // schema's field set instead of spreading the raw row.
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) => makeHashList({ id }))
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: Record<string, unknown> }
+      expect(json.hashList).toBeDefined()
+      const keys = Object.keys(json.hashList!).sort()
+      expect(keys).toEqual(
+        [
+          'id',
+          'name',
+          'projectId',
+          'hashTypeId',
+          'status',
+          'statistics',
+          'typeAnalysis',
+          'createdAt',
+        ].sort()
+      )
+      expect(json.hashList).not.toHaveProperty('fileRef')
+      expect(json.hashList).not.toHaveProperty('source')
+      expect(json.hashList).not.toHaveProperty('isPermanent')
+      expect(json.hashList).not.toHaveProperty('archivedAt')
+      expect(json.hashList).not.toHaveProperty('parentHashListId')
+      expect(json.hashList).not.toHaveProperty('updatedAt')
+      // createdAt is projected as an ISO string, not a raw Date.
+      expect(typeof json.hashList!['createdAt']).toBe('string')
+    })
+
+    it('surfaces needsTypeCount / subCampaignProgress (including pendingSubCampaignCount) for a split parent', async () => {
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) => makeHashList({ id }))
+      mockGetHashListSplitProgress.mockReset()
+      mockGetHashListSplitProgress.mockImplementation(async () => ({
+        needsTypeCount: 4,
+        subCampaignProgress: {
+          subCampaignCount: 1,
+          completedSubCampaignCount: 1,
+          done: false,
+          totalTasks: 2,
+          completedTasks: 2,
+          tasksFailed: 0,
+          overallProgress: 1,
+          hashProgress: null,
+          // The stranded-child fix (#202 code review P2): a resolved child
+          // with no linked campaign forces `done: false` even though every
+          // REAL sub-campaign has completed.
+          pendingSubCampaignCount: 1,
+        },
+      }))
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as {
+        hashList?: { needsTypeCount?: number; subCampaignProgress?: Record<string, unknown> }
+      }
+      expect(json.hashList?.needsTypeCount).toBe(4)
+      expect(json.hashList?.subCampaignProgress).toMatchObject({
+        subCampaignCount: 1,
+        done: false,
+        pendingSubCampaignCount: 1,
+      })
+
+      // Reset back to the file-wide default (null / non-split) so later
+      // tests in this describe block aren't affected by this override.
+      mockGetHashListSplitProgress.mockReset()
+      mockGetHashListSplitProgress.mockImplementation(async () => null)
     })
   })
 } // end IS_ISOLATED

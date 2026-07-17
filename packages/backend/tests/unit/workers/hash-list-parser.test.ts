@@ -13,7 +13,24 @@ mock.module('../../../src/config/logger.js', () => ({
 }))
 
 // Mock DB with chainable query builder
-const mockInsertOnConflict = mock(() => Promise.resolve())
+//
+// `flushBatch` now chains `.onConflictDoNothing().returning({ hashValue })`
+// (issue #202 code review fix — type detection runs against ACTUALLY-
+// INSERTED rows, not raw parsed lines). `mockInsertReturning` echoes back
+// `{ hashValue }` for every row in the most recent `.values(...)` call so
+// `accumulateTypeDetection` has real rows to iterate over — reading
+// `mockInsertValues.mock.calls` (which bun's `mock()` records regardless of
+// which implementation is currently installed) rather than a hand-threaded
+// closure var, so it keeps working across every test's
+// `mockInsertValues.mockReset()` + `mockImplementation(...)` override below.
+const mockInsertReturning = mock(() => {
+  const lastCall = mockInsertValues.mock.calls.at(-1) as
+    | [Array<Record<string, unknown>>]
+    | undefined
+  const batch = lastCall?.[0] ?? []
+  return Promise.resolve(batch.map((row) => ({ hashValue: row['hashValue'] })))
+})
+const mockInsertOnConflict = mock(() => ({ returning: mockInsertReturning }))
 const mockInsertValues = mock(() => ({ onConflictDoNothing: mockInsertOnConflict }))
 const mockUpdateSetCalls: Array<Record<string, unknown>> = []
 // Queue of values for the `.returning()` call following `update.set.where.returning(...)`.

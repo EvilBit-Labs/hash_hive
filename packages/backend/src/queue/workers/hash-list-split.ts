@@ -1,37 +1,43 @@
 /**
- * U(SU2) — Mixed hash-list split analysis worker.
+ * U(SU2/SU7) — Mixed hash-list split analysis worker.
  *
  * Partitions a mixed-verdict parent hash list's items into per-type
  * sub-lists (`hash_lists.parent_hash_list_id`) and moves the rows, per the
  * cross-unit contract pinned in `services/hash-items/split-analysis.ts`.
  *
  * Exported surface:
- *   - `runSplitAnalysis` — the testable DB core. As of SU3
- *     (`services/campaign-split.ts`'s `createCampaignOrSplit`), this is
- *     the ONLY way it currently runs: it is awaited SYNCHRONOUSLY inside
- *     the `POST /dashboard/campaigns` request path, not dispatched through
- *     BullMQ. Real-DB tests call it directly for the same reason
- *     `processImportPairs` in `hash-import-worker.ts` does (the db test
- *     lane has no live Redis).
- *   - `createHashListSplitWorker` — thin BullMQ factory wrapping the core,
- *     registered on `QUEUE_NAMES.HASH_LIST_SPLIT` for a future
- *     async-dispatch path (large parents deferred off the request path).
- *     Nothing calls `queue.add()` for this queue yet, so the worker is
- *     live but currently never receives a job — see the queue name's doc
- *     comment in `config/queue.ts`.
+ *   - `runSplitAnalysis` — the testable DB core, and (as of SU7) the
+ *     processor `createHashListSplitWorker` invokes for a real
+ *     `HASH_LIST_SPLIT` job. `services/campaign-split.ts`'s
+ *     `createCampaignOrSplit` no longer awaits it inline: on a first call
+ *     against a mixed parent it enqueues the job (deduped per hash list via
+ *     `splitJobId`) and returns immediately, and the wizard polls
+ *     `GET /campaigns/split/status/{hashListId}`
+ *     (`services/campaign-split-status.ts`) for the outcome. Real-DB tests
+ *     still call `runSplitAnalysis` directly to simulate the worker running
+ *     the job, the same way `processImportPairs` in `hash-import-worker.ts`
+ *     does (the db test lane has no live Redis).
+ *   - `createHashListSplitWorker` — the live BullMQ worker for
+ *     `QUEUE_NAMES.HASH_LIST_SPLIT`, registered in `worker-jobs.ts`. Its
+ *     processor returns the full `SplitResult` (not just void) so the
+ *     job's `returnvalue` carries `outcome` — the status endpoint reads
+ *     that `returnvalue` directly for the two degenerate outcomes, which
+ *     leave no `hash_lists` children row to read instead.
  *
  * "Split in progress" tracking: there is no dedicated `hash_lists.status`
  * value for this (the `ResourceStatusLiteral` union is pinned and does not
  * get a new member for this feature). Instead:
  *   - In-flight is whatever the BullMQ job's own lifecycle says (queued /
- *     active / completed / failed) — callers that need a live progress
- *     signal read the job, not the resource row.
+ *     active / completed / failed) — the status endpoint reads the job via
+ *     `QueueManager.getJobInfo`, not the resource row.
  *   - Idempotency / duplicate-job protection is guarded by data, not a
  *     status flag: `runSplitAnalysis` takes a `FOR UPDATE` row lock on the
  *     parent, then checks whether it already has children. A second call
  *     (retry, duplicate enqueue, concurrent trigger) serializes behind the
  *     lock and finds the children already there, so it is a pure no-op
- *     (`outcome: 'already-split'`) — it can never double-split.
+ *     (`outcome: 'already-split'`) — it can never double-split. BullMQ's
+ *     own jobId dedup (`splitJobId`) prevents a second job from even being
+ *     enqueued for the same parent while one is outstanding.
  */
 
 import type { HashListTypeAnalysis } from '@hashhive/shared'

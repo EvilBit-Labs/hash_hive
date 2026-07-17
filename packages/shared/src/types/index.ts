@@ -159,10 +159,12 @@ import type {
   confirmSplitCampaignResponseSchema,
   resolvedSubCampaignSchema,
   splitAssignmentRequestSchema,
+  splitPendingResponseSchema,
   splitReviewAmbiguousGroupSchema,
   splitReviewConfidentGroupSchema,
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
+  splitStatusResponseSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -410,6 +412,8 @@ export type SplitAssignmentRequest = z.infer<typeof splitAssignmentRequestSchema
 export type ConfirmSplitCampaignRequest = z.infer<typeof confirmSplitCampaignRequestSchema>
 export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
 export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
+export type SplitPendingResponse = z.infer<typeof splitPendingResponseSchema>
+export type SplitStatusResponse = z.infer<typeof splitStatusResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>

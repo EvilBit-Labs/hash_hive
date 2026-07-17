@@ -1,6 +1,7 @@
 import {
   createHashListRequestSchema,
   detectHashTypeRequestSchema,
+  hashListDetailWireSchema,
   hashListWireSchema,
   maskLists,
   ruleLists,
@@ -332,7 +333,7 @@ const getHashListRoute = createRoute({
       description: 'Hash list',
       content: {
         'application/json': {
-          schema: z.object({ hashList: z.unknown() }),
+          schema: z.object({ hashList: hashListDetailWireSchema }),
         },
       },
     },
@@ -370,14 +371,27 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
   // is byte-for-byte unchanged (#202, SU5).
   const splitProgress = await getHashListSplitProgress(hashListId, projectId)
 
+  // Projected onto `hashListDetailWireSchema` field-by-field rather than
+  // `...hl` spread: the DB row also carries `source`, `fileRef`,
+  // `isPermanent`, `archivedAt`, `parentHashListId`, and `updatedAt`, none
+  // of which the wire schema declares or the detail page
+  // (`hash-list-detail.tsx`) reads. Spreading them back onto a route bound
+  // to the real schema would fail TypeScript's excess-property check on
+  // this object literal.
   return c.json(
     {
       hashList: {
-        ...hl,
+        id: hl.id,
+        name: hl.name,
+        projectId: hl.projectId,
+        hashTypeId: hl.hashTypeId,
+        status: hl.status,
         statistics: {
           ...liveStats,
           ...(lastUpdated ? { lastUpdated } : {}),
         },
+        typeAnalysis: hl.typeAnalysis ?? null,
+        createdAt: hl.createdAt.toISOString(),
         ...(splitProgress
           ? {
               needsTypeCount: splitProgress.needsTypeCount,

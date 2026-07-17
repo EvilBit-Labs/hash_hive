@@ -7,7 +7,9 @@ import {
   confirmSplitCampaignRequestSchema,
   confirmSplitCampaignResponseSchema,
   inlineAttackRequestSchema,
+  splitPendingResponseSchema,
   splitReviewGroupsSchema,
+  splitStatusResponseSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -23,6 +25,7 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
+import { getSplitStatus } from '../../services/campaign-split-status.js'
 import { confirmSplitCampaign, createCampaignOrSplit } from '../../services/campaign-split.js'
 import {
   deleteCampaign,
@@ -199,6 +202,11 @@ const createCampaignSchema = z.object({
   hashListId: z.number().int().positive(),
   priority: z.number().int().min(1).max(10).optional(),
   attacks: z.array(inlineAttackRequestSchema).optional(),
+  // Issue #202 SU7: force the plain single-mode create path even when the
+  // target hash list is mixed/needs-review. Used by the wizard's
+  // `single_group` fallback after the async split job found nothing to
+  // split (see `createCampaignOrSplit` in services/campaign-split.ts).
+  skipSplit: z.boolean().optional(),
 })
 
 const createCampaignRoute = createRoute({
@@ -220,19 +228,24 @@ const createCampaignRoute = createRoute({
       description: 'Campaign (and any inline attacks) created.',
       content: { 'application/json': { schema: createCampaignResponseSchema } },
     },
-    // Issue #202 SU3: the target hash list's persisted `type_analysis`
-    // says it mixes more than one hash type — no campaign is created.
-    // The caller must resolve the `ambiguous` groups' candidate modes and
-    // confirm via `POST /campaigns/split/confirm`.
+    // Issue #202 SU3: a PRIOR call already split this parent — no new
+    // campaign is created. The caller must resolve the `ambiguous` groups'
+    // candidate modes and confirm via `POST /campaigns/split/confirm`.
     200: {
       description:
-        'The target hash list is mixed — split analysis ran and no campaign was created. Resolve the returned review groups and call POST /campaigns/split/confirm.',
+        'The target hash list was already split by a prior call — no campaign was created. Resolve the returned review groups and call POST /campaigns/split/confirm.',
       content: { 'application/json': { schema: splitReviewGroupsSchema } },
+    },
+    // Issue #202 SU7: the target hash list is mixed and has not been split
+    // yet — the async split job was enqueued instead of running inline.
+    // Poll GET /campaigns/split/status/{hashListId} for the outcome.
+    202: {
+      description:
+        'The target hash list is mixed and split analysis was enqueued. Poll GET /campaigns/split/status/{hashListId} for the outcome.',
+      content: { 'application/json': { schema: splitPendingResponseSchema } },
     },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
-    // Also covers HASH_LIST_SPLIT_EMPTY (issue #202 SU3): the target hash
-    // list is mixed-verdict but has zero crackable items to split.
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Inline attacks referenced a missing resource.',
@@ -274,6 +287,7 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
       createdBy: userId,
       attacks: data.attacks ?? [],
       actor,
+      skipSplit: data.skipSplit,
     })
   } catch (err) {
     logger.error(
@@ -340,13 +354,8 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
-  if (result.kind === 'split_empty') {
-    return dashboardError(
-      c,
-      400,
-      'HASH_LIST_SPLIT_EMPTY',
-      'Hash list has no crackable items to split into a campaign'
-    )
+  if (result.kind === 'split_pending') {
+    return c.json({ splitPending: true as const, hashListId: result.hashListId }, 202)
   }
 
   if (result.kind === 'split_review') {
@@ -442,6 +451,49 @@ campaignRoutes.openapi(confirmSplitCampaignRoute, async (c) => {
         201
       )
   }
+})
+
+// ─── Split status polling (issue #202 SU7) ─────────────────────────
+//
+// Distinct three-segment path so it can never collide with `/{id}`
+// (one segment) or `/split/confirm` (a different literal second
+// segment) regardless of registration order — same reasoning as the
+// confirm route's comment above.
+const hashListIdParamSchema = z.object({
+  hashListId: z.coerce.number().int().positive(),
+})
+
+const splitStatusRoute = createRoute({
+  method: 'get',
+  path: '/split/status/{hashListId}',
+  tags: ['Campaigns'],
+  summary: 'Poll the async mixed hash-list split analysis job',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    params: hashListIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Current split status.',
+      content: { 'application/json': { schema: splitStatusResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+campaignRoutes.openapi(splitStatusRoute, async (c) => {
+  const { hashListId } = c.req.valid('param')
+  const { projectId } = c.get('scopedUser')!
+
+  const result = await getSplitStatus(hashListId, projectId)
+  if (result.kind === 'not_found') {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+  }
+  return c.json(result.response, 200)
 })
 
 const getCampaignRoute = createRoute({

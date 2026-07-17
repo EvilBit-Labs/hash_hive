@@ -128,15 +128,78 @@ export function parseHashLine(line: string, hashListId: number) {
 /**
  * Flush a batch of parsed hash items to the database.
  * Uses onConflictDoNothing for idempotency on (hashListId, hashValue).
+ *
+ * Returns the rows Postgres actually inserted (`RETURNING` on an
+ * `ON CONFLICT DO NOTHING` insert only reports rows that didn't collide) so
+ * the caller can run type detection against the DEDUPLICATED composition of
+ * `hash_items` rather than every raw parsed line (issue #202 code review
+ * fix — see `accumulateTypeDetection` below).
  */
 type HashItemInsert = NonNullable<ReturnType<typeof parseHashLine>>
 
-async function flushBatch(batch: ReadonlyArray<HashItemInsert>): Promise<void> {
-  if (batch.length === 0) return
-  await db
+async function flushBatch(
+  batch: ReadonlyArray<HashItemInsert>
+): Promise<Array<{ hashValue: string }>> {
+  if (batch.length === 0) return []
+  return db
     .insert(hashItems)
     .values([...batch])
     .onConflictDoNothing()
+    .returning({ hashValue: hashItems.hashValue })
+}
+
+/** Accumulated type-detection state threaded through `accumulateTypeDetection`. */
+interface TypeDetectionState {
+  unidentifiedCount: number
+  scannedCount: number
+  sampled: boolean
+}
+
+/**
+ * Runs `guessTopHashType` against a batch of ACTUALLY-INSERTED (post-dedup)
+ * hash values and folds the results into `typeHistogram` (mutated in place,
+ * matching the existing `Map.set` accumulation style elsewhere in this
+ * file) plus the returned `unidentifiedCount` / `scannedCount` / `sampled`
+ * state.
+ *
+ * Detection must run on deduplicated rows, not raw parsed lines: a
+ * duplicate-heavy file would otherwise let a handful of repeated hash
+ * values dominate the histogram before `flushBatch`'s
+ * `onConflictDoNothing()` collapses them down to one `hash_items` row,
+ * producing a `type_analysis.verdict` that disagrees with what's actually
+ * in the table (e.g. a genuinely mixed list reading `homogeneous`, which
+ * then wrongly skips the split flow at campaign create).
+ *
+ * `TYPE_DETECTION_SCAN_CAP` still bounds the total number of hash values
+ * scanned — now counted against inserted rows instead of raw lines — and
+ * `sampled` still latches true once the cap is reached. No-ops (returns
+ * the input state unchanged) once already sampled, so callers can skip
+ * invoking this for later batches without extra bookkeeping.
+ */
+function accumulateTypeDetection(
+  insertedRows: ReadonlyArray<{ hashValue: string }>,
+  typeHistogram: Map<number, number>,
+  state: TypeDetectionState
+): TypeDetectionState {
+  if (state.sampled) return state
+
+  let { unidentifiedCount, scannedCount } = state
+  for (const row of insertedRows) {
+    if (scannedCount >= TYPE_DETECTION_SCAN_CAP) break
+    const guess = guessTopHashType(row.hashValue)
+    if (guess === null) {
+      unidentifiedCount++
+    } else {
+      typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
+    }
+    scannedCount++
+  }
+
+  return {
+    unidentifiedCount,
+    scannedCount,
+    sampled: scannedCount >= TYPE_DETECTION_SCAN_CAP,
+  }
 }
 
 export function createHashListParserWorker(connection: Redis): Worker<HashListParseJob> {
@@ -184,14 +247,17 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
       let skippedLines = 0
 
       // Type-detection accumulators (issue #202, FU3). Detection runs against
-      // the extracted hash token (parsed.hashValue), not the raw line — a raw
-      // `hash:plaintext` line would otherwise misclassify on the colon.
-      // Detection stops once TYPE_DETECTION_SCAN_CAP entries have been
-      // scanned (sampled=true), but row insertion is never gated by this cap.
+      // the extracted hash token (parsed.hashValue) of ACTUALLY-INSERTED
+      // (post-dedup) rows, not every raw parsed line — see
+      // `accumulateTypeDetection`'s doc comment. Detection stops once
+      // TYPE_DETECTION_SCAN_CAP inserted rows have been scanned
+      // (sampled=true), but row insertion is never gated by this cap.
       const typeHistogram = new Map<number, number>()
-      let unidentifiedCount = 0
-      let scannedCount = 0
-      let sampled = false
+      let detectionState: TypeDetectionState = {
+        unidentifiedCount: 0,
+        scannedCount: 0,
+        sampled: false,
+      }
 
       for await (const raw of streamLines(fileRef.key, fileRef.bucket)) {
         const line = raw.trim()
@@ -210,32 +276,23 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         }
         batch.push(parsed)
 
-        if (scannedCount < TYPE_DETECTION_SCAN_CAP) {
-          const guess = guessTopHashType(parsed.hashValue)
-          if (guess === null) {
-            unidentifiedCount++
-          } else {
-            typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
-          }
-          scannedCount++
-          if (scannedCount >= TYPE_DETECTION_SCAN_CAP) {
-            sampled = true
-          }
-        }
-
         if (batch.length >= BATCH_SIZE) {
-          await flushBatch(batch)
+          const insertedRows = await flushBatch(batch)
           linesProcessed += batch.length
           batch = []
+          detectionState = accumulateTypeDetection(insertedRows, typeHistogram, detectionState)
           await job.updateProgress(linesProcessed)
         }
       }
 
       // Flush remaining batch
       if (batch.length > 0) {
-        await flushBatch(batch)
+        const insertedRows = await flushBatch(batch)
         linesProcessed += batch.length
+        detectionState = accumulateTypeDetection(insertedRows, typeHistogram, detectionState)
       }
+
+      const { unidentifiedCount, scannedCount, sampled } = detectionState
 
       // Recompute statistics from actual data (crash-safe, not accumulated).
       // Single roundtrip: COUNT(*) + COUNT(*) FILTER (WHERE cracked_at IS NOT NULL).

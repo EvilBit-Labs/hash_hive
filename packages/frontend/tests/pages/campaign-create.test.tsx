@@ -1044,3 +1044,199 @@ describe('CampaignCreatePage split-review flow (issue #202 SU6)', () => {
     })
   })
 })
+
+describe('CampaignCreatePage async split-pending -> status polling (issue #202 SU7)', () => {
+  let qc: QueryClient
+
+  beforeEach(() => {
+    setAdminWithProject()
+    qc = createTestQueryClient()
+    seedResourceQueries(qc)
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'Mixed List Campaign',
+      description: '',
+      priority: 5,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      attacks: [],
+    })
+  })
+
+  it('shows the Analyzing panel on 202, then renders the review UI once the status poll reports ready', async () => {
+    // Stateful status mock: the first poll returns `pending` so the Analyzing
+    // panel is deterministically observable, then flips to `ready`. A fixed
+    // `ready` response races the transient panel (the poll can resolve before
+    // the assertion runs).
+    let statusPollCount = 0
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (method === 'POST' && url.endsWith('/dashboard/campaigns')) {
+        return new Response(JSON.stringify({ splitPending: true, hashListId: 9 }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (method === 'GET' && url.includes('/dashboard/campaigns/split/status/9')) {
+        statusPollCount++
+        const body =
+          statusPollCount === 1
+            ? { status: 'pending', reviewGroups: null, message: null }
+            : {
+                status: 'ready',
+                reviewGroups: {
+                  parentHashListId: 9,
+                  confident: [{ id: 201, mode: 1000, itemCount: 500 }],
+                  ambiguous: [],
+                  unidentified: [],
+                },
+                message: null,
+              }
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      const routes = defaultRoutes() as Record<string, { status: number; body: unknown }>
+      for (const [path, config] of Object.entries(routes)) {
+        if (url.includes(path)) {
+          return new Response(JSON.stringify(config.body), {
+            status: config.status,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      return new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 })
+    }) as typeof fetch
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Analyzing mixed list...')).toBeDefined()
+      })
+
+      // Timeout exceeds SPLIT_STATUS_POLL_INTERVAL_MS (1500ms) so the second
+      // poll (which flips pending -> ready) fires before the assertion gives up.
+      await waitFor(
+        () => {
+          expect(screen.getByText('This hash list mixes more than one hash type.')).toBeDefined()
+        },
+        { timeout: 3000 }
+      )
+      expect(screen.getByText('500 hashes')).toBeDefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('shows an error banner when the status poll reports empty (no crackable items)', async () => {
+    fetchMock = mockFetch({
+      ...defaultRoutes(),
+      '/dashboard/campaigns': {
+        POST: { status: 202, body: { splitPending: true, hashListId: 9 } },
+      },
+      '/dashboard/campaigns/split/status/9': {
+        GET: {
+          status: 200,
+          body: { status: 'empty', reviewGroups: null, message: 'no crackable items found' },
+        },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('no crackable items found')).toBeDefined()
+    })
+    // The pending panel is gone — the summary step is back, so the user
+    // can adjust and retry.
+    expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+  })
+
+  it('single_group: auto-resubmits once with skipSplit and falls back to a plain campaign', async () => {
+    let campaignPostCount = 0
+    let statusPollCount = 0
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = (init?.method ?? 'GET').toUpperCase()
+
+      if (method === 'POST' && url.endsWith('/dashboard/campaigns')) {
+        campaignPostCount++
+        const body =
+          typeof init?.body === 'string' ? (JSON.parse(init.body) as { skipSplit?: boolean }) : {}
+        if (body.skipSplit === true) {
+          return new Response(
+            JSON.stringify({
+              campaign: { id: 777, name: 'Mixed List Campaign', status: 'draft', projectId: 1 },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+        return new Response(JSON.stringify({ splitPending: true, hashListId: 9 }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (method === 'GET' && url.includes('/dashboard/campaigns/split/status/9')) {
+        // First poll returns pending so the Analyzing panel is deterministically
+        // observable before the single_group outcome triggers the auto-resubmit.
+        statusPollCount++
+        const status = statusPollCount === 1 ? 'pending' : 'single_group'
+        return new Response(JSON.stringify({ status, reviewGroups: null, message: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+
+      const routes = defaultRoutes() as Record<string, { status: number; body: unknown }>
+      for (const [path, config] of Object.entries(routes)) {
+        if (url.includes(path)) {
+          return new Response(JSON.stringify(config.body), {
+            status: config.status,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      return new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 })
+    }) as typeof fetch
+
+    try {
+      renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Analyzing mixed list...')).toBeDefined()
+      })
+
+      // The single_group status auto-resubmits with skipSplit, which
+      // succeeds and resets the wizard back to Step 0. Timeout exceeds the
+      // 1500ms poll interval so the second poll (pending -> single_group) fires.
+      await waitFor(
+        () => {
+          expect(screen.getByLabelText('Campaign Name')).toBeDefined()
+        },
+        { timeout: 3000 }
+      )
+      expect(campaignPostCount).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})

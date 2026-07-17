@@ -36,7 +36,11 @@ import {
 
 import type { db as _db } from '../../db/index.js'
 
-type Db = typeof _db
+// Exported so `tests/db/scope-helpers-parity.db.test.ts` (#202 code review
+// fix) can drive `resolveHashListScopeForExport` with the real shared `db`
+// client and assert it stays byte-for-byte in lockstep with
+// `resolveHashListScope` in `services/hash-items/list-scope.ts`.
+export type Db = typeof _db
 
 // ─── CSV formula injection guard ────────────────────────────────────────────────
 
@@ -228,8 +232,17 @@ function escapeLikeForExport(value: string): string {
  * reason as `escapeLikeForExport` above — that module imports `db` at
  * module scope, which would break this file's "no module-scope db import"
  * invariant. `db` is threaded through explicitly instead.
+ *
+ * Exported (code review fix, #202) ONLY so
+ * `tests/db/scope-helpers-parity.db.test.ts` can call it directly against
+ * the real shared `db` client and pin it against `resolveHashListScope` —
+ * the two are intentionally-duplicated code, and without a test exercising
+ * both, a future edit to one that silently diverges from the other (e.g. a
+ * dropped `project_id` predicate) would go uncaught. No other caller
+ * outside this module should use it; `createExport`'s `scope: 'hash-list'`
+ * path is the production entrypoint.
  */
-async function resolveHashListScopeForExport(
+export async function resolveHashListScopeForExport(
   db: Db,
   id: number,
   projectId: number

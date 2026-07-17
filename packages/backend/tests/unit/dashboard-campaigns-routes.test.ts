@@ -435,6 +435,22 @@ if (!IS_ISOLATED) {
     getSplitReviewGroups: mockGetSplitReviewGroups,
   }))
 
+  // ─── Mock the Split-Status Service (issue #202 SU7) ─────────────────
+  type CampaignSplitStatusService = typeof import('../../src/services/campaign-split-status.js')
+  type GetSplitStatusResult = Awaited<ReturnType<CampaignSplitStatusService['getSplitStatus']>>
+
+  const mockGetSplitStatus = mock<CampaignSplitStatusService['getSplitStatus']>(
+    async () =>
+      ({
+        kind: 'ok',
+        response: { status: 'pending', reviewGroups: null, message: null },
+      }) satisfies GetSplitStatusResult
+  )
+
+  mock.module('../../src/services/campaign-split-status.js', () => ({
+    getSplitStatus: mockGetSplitStatus,
+  }))
+
   // Archive/restore live in campaign-dashboard.js and the archive route imports
   // them directly (not via the campaigns.js facade), so mock that module too.
   // Spread the REAL module first so every other export (getCampaignTaskStats,
@@ -1228,16 +1244,28 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(201)
     })
 
-    // Issue #202 SU3: split/review branch.
-    it('returns 400 HASH_LIST_SPLIT_EMPTY when the mixed list has no crackable items', async () => {
-      mockCreateCampaignOrSplit.mockResolvedValueOnce({ kind: 'split_empty' })
-      const res = await postCampaign({ name: 'Empty mixed list', hashListId: 1 })
-      expect(res.status).toBe(400)
-      const body = (await res.json()) as { error?: { code?: string } }
-      expect(body.error?.code).toBe('HASH_LIST_SPLIT_EMPTY')
+    // Issue #202 SU7: split-pending branch — first call against a
+    // never-split mixed list enqueues the async job instead of running it
+    // inline; the degenerate outcomes (previously HASH_LIST_SPLIT_EMPTY
+    // etc.) now surface through GET /campaigns/split/status/{hashListId}.
+    it('returns 202 splitPending when the mixed list has not been split yet', async () => {
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({ kind: 'split_pending', hashListId: 9 })
+      const res = await postCampaign({ name: 'Mixed list, first call', hashListId: 9 })
+      expect(res.status).toBe(202)
+      const body = (await res.json()) as { splitPending?: boolean; hashListId?: number }
+      expect(body.splitPending).toBe(true)
+      expect(body.hashListId).toBe(9)
     })
 
-    it('returns 200 with review groups when the target hash list is mixed', async () => {
+    it('passes skipSplit through to createCampaignOrSplit', async () => {
+      mockCreateCampaignOrSplit.mockClear()
+      const res = await postCampaign({ name: 'Skip split', hashListId: 1, skipSplit: true })
+      expect(res.status).toBe(201)
+      expect(mockCreateCampaignOrSplit).toHaveBeenCalledTimes(1)
+      expect(mockCreateCampaignOrSplit.mock.calls[0]?.[0]).toMatchObject({ skipSplit: true })
+    })
+
+    it('returns 200 with review groups when the target hash list was already split', async () => {
       mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'split_review',
         parentHashListId: 1,
@@ -1329,6 +1357,100 @@ if (!IS_ISOLATED) {
       expect(res.status).toBe(200)
       const spec = (await res.json()) as { paths?: Record<string, unknown> }
       expect(spec.paths?.['/campaigns/split/confirm']).toBeDefined()
+    })
+  })
+
+  describe('GET /campaigns/split/status/{hashListId} (issue #202 SU7)', () => {
+    function getStatus(hashListId: number | string) {
+      return app.request(`${DASH_CAMPAIGNS}/split/status/${hashListId}`, {
+        headers: makeHeaders(),
+      })
+    }
+
+    it('returns 200 with the pending status while the job is still running', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({
+        kind: 'ok',
+        response: { status: 'pending', reviewGroups: null, message: null },
+      })
+      const res = await getStatus(9)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { status?: string; reviewGroups?: unknown }
+      expect(body.status).toBe('pending')
+      expect(body.reviewGroups).toBeNull()
+    })
+
+    it('returns 200 with status "ready" and the review groups once children exist', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({
+        kind: 'ok',
+        response: {
+          status: 'ready',
+          reviewGroups: {
+            parentHashListId: 9,
+            confident: [{ id: 11, mode: 1800, itemCount: 2 }],
+            ambiguous: [],
+            unidentified: [],
+          },
+          message: null,
+        },
+      })
+      const res = await getStatus(9)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        status?: string
+        reviewGroups?: { confident?: unknown[] }
+      }
+      expect(body.status).toBe('ready')
+      expect(body.reviewGroups?.confident).toHaveLength(1)
+    })
+
+    it('returns 200 with status "single_group" for the degenerate collapse-to-one-group outcome', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({
+        kind: 'ok',
+        response: { status: 'single_group', reviewGroups: null, message: null },
+      })
+      const res = await getStatus(9)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { status?: string }
+      expect(body.status).toBe('single_group')
+    })
+
+    it('returns 200 with status "empty" and a message for the no-crackable-items outcome', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({
+        kind: 'ok',
+        response: { status: 'empty', reviewGroups: null, message: 'no crackable items' },
+      })
+      const res = await getStatus(9)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { status?: string; message?: string }
+      expect(body.status).toBe('empty')
+      expect(body.message).toBe('no crackable items')
+    })
+
+    it('returns 200 with status "failed" and the failure reason', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({
+        kind: 'ok',
+        response: { status: 'failed', reviewGroups: null, message: 'DB unavailable' },
+      })
+      const res = await getStatus(9)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { status?: string; message?: string }
+      expect(body.status).toBe('failed')
+      expect(body.message).toBe('DB unavailable')
+    })
+
+    it('returns 404 RESOURCE_NOT_FOUND when the hash list does not exist or is outside the project', async () => {
+      mockGetSplitStatus.mockResolvedValueOnce({ kind: 'not_found' })
+      const res = await getStatus(999)
+      expect(res.status).toBe(404)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
+    })
+
+    it('registers /campaigns/split/status/{hashListId} in the served openapi.json', async () => {
+      const res = await app.request('/api/v1/dashboard/openapi.json', { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const spec = (await res.json()) as { paths?: Record<string, unknown> }
+      expect(spec.paths?.['/campaigns/split/status/{hashListId}']).toBeDefined()
     })
   })
 

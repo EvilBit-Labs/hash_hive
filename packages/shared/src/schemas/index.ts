@@ -196,6 +196,14 @@ export const createCampaignRequestSchema = insertCampaignSchema
      * single-row insert path.
      */
     attacks: z.array(inlineAttackRequestSchema).optional(),
+    /**
+     * Issue #202 SU7: force the plain single-mode create path even when the
+     * target hash list's `type_analysis.verdict` is mixed/needs-review.
+     * Used by the campaign wizard's `single_group` fallback — the async
+     * split job ran and found nothing to split, so the client re-submits
+     * with this set to skip re-triggering the split analysis.
+     */
+    skipSplit: z.boolean().optional(),
   })
   .openapi('CreateCampaignRequest')
 
@@ -291,10 +299,13 @@ export {
   confirmSplitCampaignResponseSchema,
   resolvedSubCampaignSchema,
   splitAssignmentRequestSchema,
+  splitPendingResponseSchema,
   splitReviewAmbiguousGroupSchema,
   splitReviewConfidentGroupSchema,
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
+  splitStatusLiteralSchema,
+  splitStatusResponseSchema,
 } from './campaign-split.js'
 
 /**

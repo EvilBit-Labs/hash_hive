@@ -23,6 +23,18 @@
  * needs-type child has none). This is what keeps an otherwise-complete
  * parent from reading as stalled just because some hashes still need a
  * type assigned.
+ *
+ * "Pending" sub-lists (code review fix, #202) - children that ARE resolved
+ * (`type_analysis.verdict === 'homogeneous'`) but have NO sub-campaign
+ * linked yet. `confirmSplitCampaign` is not one atomic transaction across
+ * its whole flow: `applyAssignmentsAndMerge` flips a child to `homogeneous`
+ * in its own transaction, and the parent campaign plus each sub-campaign
+ * are created in separate statements afterward. A crash in that window
+ * strands a resolved child with no campaign at all - invisible to both
+ * `needsTypeCount` (verdict isn't `needs-review`) and
+ * `subCampaignProgress` (no campaign row exists). `pendingSubCampaignCount`
+ * counts these and forces `subCampaignProgress.done` to `false` whenever
+ * it is nonzero, so a partially-confirmed split can never read complete.
  */
 import type { SubCampaignHashProgress, SubCampaignProgress } from '@hashhive/shared'
 
@@ -147,8 +159,44 @@ export async function getHashListSplitProgress(
     needsTypeCount = Number(row?.total ?? 0)
   }
 
+  // Mode-bearing (resolved) children with NO linked sub-campaign at all
+  // (issue #202 code review fix). `confirmSplitCampaign` is not atomic
+  // across its whole flow — `applyAssignmentsAndMerge` flips a child's
+  // `type_analysis` to `homogeneous` in one transaction, then the parent
+  // campaign and each sub-campaign are created in separate statements
+  // afterward. A crash in that window strands a resolved child with no
+  // campaign targeting it: invisible to `needsTypeChildIds` (verdict isn't
+  // `needs-review`) AND invisible to `subCampaignRows` (no campaign row
+  // exists yet). Without this, such a parent can read `done` once every
+  // campaign that DID get created finishes, even though a resolved
+  // sub-list is still waiting on its own campaign.
+  const pendingSubCampaignCount = children.filter(
+    (c) => c.typeAnalysis?.verdict === 'homogeneous' && !hashListIdsWithSubCampaign.has(c.id)
+  ).length
+
   if (subCampaignRows.length === 0) {
-    return { needsTypeCount, subCampaignProgress: null }
+    if (pendingSubCampaignCount === 0) {
+      return { needsTypeCount, subCampaignProgress: null }
+    }
+    // The confirm crashed before ANY sub-campaign (or even the parent
+    // campaign) was created, yet at least one child is already resolved.
+    // Surface a zeroed, explicitly-not-done progress object rather than
+    // `null` so the parent can't read as "nothing to track" while a
+    // resolved split sits half-materialized.
+    return {
+      needsTypeCount,
+      subCampaignProgress: {
+        subCampaignCount: 0,
+        completedSubCampaignCount: 0,
+        done: false,
+        totalTasks: 0,
+        completedTasks: 0,
+        tasksFailed: 0,
+        overallProgress: 0,
+        hashProgress: null,
+        pendingSubCampaignCount,
+      },
+    }
   }
 
   let totalTasks = 0
@@ -178,7 +226,10 @@ export async function getHashListSplitProgress(
     if (row.status === 'completed') completedSubCampaignCount += 1
   }
 
-  const done = completedSubCampaignCount === subCampaignRows.length
+  // A dangling mode-bearing child with no sub-campaign yet (confirm crashed
+  // mid-loop) means the split is only partially materialized, regardless
+  // of whether every campaign that DID get created has finished.
+  const done = completedSubCampaignCount === subCampaignRows.length && pendingSubCampaignCount === 0
 
   // Mirrors updateCampaignProgress's own zero-task guard: with no tasks
   // reported yet, a fully-`completed` set of children is 100% (e.g. every
@@ -205,6 +256,7 @@ export async function getHashListSplitProgress(
       tasksFailed,
       overallProgress: Math.round(overallProgress * 10000) / 10000,
       hashProgress,
+      pendingSubCampaignCount,
     },
   }
 }

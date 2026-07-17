@@ -1,14 +1,25 @@
 /**
- * Campaign-wizard split + review flow wire shapes (issue #202, unit SU3).
+ * Campaign-wizard split + review flow wire shapes (issue #202, unit SU3/SU7).
  *
- * `POST /api/v1/dashboard/campaigns` returns `SplitReviewGroups` (200)
- * instead of a created campaign (201) when the target hash list's
- * `type_analysis.verdict` is `mixed`/`needs-review` and the split classifier
- * found more than one group. The caller then resolves the `ambiguous`
- * groups' candidate modes and posts `ConfirmSplitCampaignRequest` to
- * `POST /api/v1/dashboard/campaigns/split/confirm`, which creates the
- * parent campaign plus one single-mode sub-campaign per resolved sub-list
- * (`ConfirmSplitCampaignResponse`).
+ * `POST /api/v1/dashboard/campaigns` against a mixed/needs-review hash list
+ * enqueues the async split analysis job and returns 202
+ * `{ splitPending: true, hashListId }` (unless the parent was already split,
+ * in which case it returns `SplitReviewGroups` at 200 the same as before).
+ * The wizard then polls `GET /api/v1/dashboard/campaigns/split/status/{hashListId}`
+ * (`SplitStatusResponse`) until the job resolves:
+ *   - `ready` — children exist; `reviewGroups` is populated. The caller
+ *     resolves the `ambiguous` groups' candidate modes and posts
+ *     `ConfirmSplitCampaignRequest` to `POST /campaigns/split/confirm`,
+ *     which creates the parent campaign plus one single-mode sub-campaign
+ *     per resolved sub-list (`ConfirmSplitCampaignResponse`).
+ *   - `empty` — the list has no crackable items; the wizard surfaces `message`
+ *     as an error.
+ *   - `single_group` — the split classifier found nothing to split despite
+ *     the mixed verdict; the wizard re-submits `POST /campaigns` with
+ *     `skipSplit: true` to fall back to a plain single-mode campaign on the
+ *     original list.
+ *   - `failed` — the job errored; `message` carries the failure reason.
+ *   - `pending` — still queued/running; the wizard keeps polling.
  */
 import '../openapi-extension.js'
 import { z } from 'zod'
@@ -84,3 +95,30 @@ export const confirmSplitCampaignResponseSchema = z
   })
   .strict()
   .openapi('ConfirmSplitCampaignResponse')
+
+// ─── Async split status polling (issue #202 SU7) ────────────────────────
+
+export const splitPendingResponseSchema = z
+  .object({
+    splitPending: z.literal(true),
+    hashListId: z.number().int().positive(),
+  })
+  .strict()
+  .openapi('SplitPendingResponse')
+
+export const splitStatusLiteralSchema = z.enum([
+  'pending',
+  'ready',
+  'failed',
+  'empty',
+  'single_group',
+])
+
+export const splitStatusResponseSchema = z
+  .object({
+    status: splitStatusLiteralSchema,
+    reviewGroups: splitReviewGroupsSchema.nullable(),
+    message: z.string().nullable(),
+  })
+  .strict()
+  .openapi('SplitStatusResponse')
