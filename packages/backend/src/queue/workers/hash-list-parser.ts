@@ -1,6 +1,6 @@
 import type Redis from 'ioredis'
 
-import { hashItems, hashLists } from '@hashhive/shared'
+import { hashItems, hashLists, hashTypes } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
 import { and, count, eq, sql } from 'drizzle-orm'
 
@@ -15,7 +15,6 @@ import {
   buildTypeAnalysis,
   TYPE_DETECTION_SCAN_CAP,
 } from '../../services/hash-items/type-analysis.js'
-import { getHashTypeById } from '../../services/resources.js'
 import { MAX_LINE_LENGTH, streamLines } from '../../services/resources/line-count.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -160,9 +159,20 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
 
       // Resolve the list's declared hashcat mode (if any) once, up front —
       // used only for the declared-vs-detected mismatch check in
-      // buildTypeAnalysis, never per-line.
-      const declaredHashType = hl.hashTypeId !== null ? await getHashTypeById(hl.hashTypeId) : null
-      const declaredMode = declaredHashType?.hashcatMode ?? null
+      // buildTypeAnalysis, never per-line. Queried directly off hashTypes
+      // (rather than via services/resources) so the parser worker's module
+      // graph stays light and doesn't drag the whole resources module — and
+      // its @hashhive/shared imports — into isolated-phase test mocks.
+      const declaredMode =
+        hl.hashTypeId !== null
+          ? ((
+              await db
+                .select({ hashcatMode: hashTypes.hashcatMode })
+                .from(hashTypes)
+                .where(eq(hashTypes.id, hl.hashTypeId))
+                .limit(1)
+            )[0]?.hashcatMode ?? null)
+          : null
 
       // Stream the file line by line via the shared storage walker — never
       // buffer the whole file in memory. The shared util owns the WebStream +
