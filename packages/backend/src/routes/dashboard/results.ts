@@ -11,7 +11,7 @@ import {
   resolveAttackModeName,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, desc, eq, gte, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -29,6 +29,7 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { getCampaignById } from '../../services/campaigns.js'
+import { resolveHashListScope } from '../../services/hash-items/list-scope.js'
 import { escapeLike, getHashListById } from '../../services/resources.js'
 import {
   buildExportScopeParams,
@@ -106,7 +107,7 @@ type ResultsFilterInput = {
   endDate: string | undefined
 }
 
-function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
+async function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
 
   // Scope via `hashLists.projectId`, NOT `campaigns.projectId`:
@@ -121,7 +122,12 @@ function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
     conditions.push(eq(hashItems.campaignId, campaignId))
   }
   if (hashListId) {
-    conditions.push(eq(hashItems.hashListId, hashListId))
+    // A leaf hashListId resolves to `[hashListId]` (identical to the
+    // pre-SU4 single-id filter); a split parent resolves to
+    // `[hashListId, ...childIds]` since its own hash_items were moved to
+    // its sub-lists (#202 SU4).
+    const scopeIds = await resolveHashListScope(hashListId, projectId)
+    conditions.push(inArray(hashItems.hashListId, scopeIds))
   }
   if (search) {
     const escaped = escapeLike(search)
@@ -186,7 +192,7 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
   const { projectId } = scope
 
   const { limit, offset, campaignId, hashListId, q, startDate, endDate } = c.req.valid('query')
-  const conditions = buildResultFilters(projectId, {
+  const conditions = await buildResultFilters(projectId, {
     campaignId,
     hashListId,
     q,
@@ -220,8 +226,17 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
       .orderBy(desc(hashItems.crackedAt))
       .limit(limit)
       .offset(offset),
+    // Deduped on hashValue (#202 SU4): a hashValue that exists as a
+    // separate row under two sibling sub-lists (propagateCrack marks a
+    // hashValue cracked everywhere it appears) must not inflate the
+    // reported total. No-op for any single un-split hash list — hashValue
+    // is already unique within one list — and for the unfiltered
+    // project-wide view, since two un-related leaf lists sharing a
+    // hashValue is the pre-existing documented behavior (see
+    // `services/hash-items/search.ts`) this endpoint's `total` already
+    // didn't dedupe across; SU4 only closes the parent/child gap.
     db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: sql<number>`count(distinct ${hashItems.hashValue})` })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
       .where(and(...conditions)),
@@ -293,7 +308,7 @@ const exportResultsRoute = createRoute({
  *   `crackedAt < cursor.crackedAt OR (crackedAt = cursor.crackedAt AND id < cursor.id)`.
  */
 async function fetchCsvBatch(
-  baseConditions: ReturnType<typeof buildResultFilters>,
+  baseConditions: Awaited<ReturnType<typeof buildResultFilters>>,
   cursor: { crackedAt: Date; id: number } | null
 ) {
   const cursorPredicate = cursor
@@ -444,7 +459,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   const filters: ResultsFilterInput = { campaignId, hashListId, q, startDate, endDate }
   // Build conditions once at handler entry — each pull only composes the
   // cursor predicate on top.
-  const baseConditions = buildResultFilters(projectId, filters)
+  const baseConditions = await buildResultFilters(projectId, filters)
 
   const encoder = new TextEncoder()
   // `pull` is contractually single-threaded by the ReadableStream

@@ -219,6 +219,33 @@ function escapeLikeForExport(value: string): string {
   return value.replace(/[%_\\]/g, '\\$&')
 }
 
+/**
+ * Resolve a hash-list scope id to `[id, ...childIds]` (#202 SU4).
+ *
+ * Mirrors `services/hash-items/list-scope.ts`'s `resolveHashListScope`
+ * exactly (single query: `where (id = $1 or parent_hash_list_id = $1) and
+ * project_id = $2`) but is duplicated rather than imported, for the same
+ * reason as `escapeLikeForExport` above — that module imports `db` at
+ * module scope, which would break this file's "no module-scope db import"
+ * invariant. `db` is threaded through explicitly instead.
+ */
+async function resolveHashListScopeForExport(
+  db: Db,
+  id: number,
+  projectId: number
+): Promise<number[]> {
+  const rows = await db
+    .select({ id: hashLists.id })
+    .from(hashLists)
+    .where(
+      and(
+        or(eq(hashLists.id, id), eq(hashLists.parentHashListId, id)),
+        eq(hashLists.projectId, projectId)
+      )
+    )
+  return rows.map((r) => r.id)
+}
+
 // ─── Cursor types ───────────────────────────────────────────────────────────────
 
 /** Keyset cursor for cracked-pairs / plaintext-only variants (crackedAt DESC, id DESC). */
@@ -250,12 +277,22 @@ export type ExportOverrides = {
 
 const DEFAULT_BATCH_SIZE = 1_000
 
-function buildCrackedBaseConditions(params: ExportScopeParams, filters?: ExportFilters) {
+async function buildCrackedBaseConditions(
+  db: Db,
+  params: ExportScopeParams,
+  filters?: ExportFilters
+) {
   const base = [eq(hashLists.projectId, params.projectId), isNotNull(hashItems.crackedAt)]
 
   const withScope =
     params.scope === 'hash-list'
-      ? [...base, eq(hashItems.hashListId, params.hashListId)]
+      ? [
+          ...base,
+          inArray(
+            hashItems.hashListId,
+            await resolveHashListScopeForExport(db, params.hashListId, params.projectId)
+          ),
+        ]
       : params.scope === 'campaign'
         ? [...base, eq(hashItems.campaignId, params.campaignId)]
         : base
@@ -275,13 +312,13 @@ function buildCrackedBaseConditions(params: ExportScopeParams, filters?: ExportF
   ]
 }
 
-function createDefaultCrackedFetcher(
+async function createDefaultCrackedFetcher(
   db: Db,
   params: ExportScopeParams,
   batchSize: number,
   filters?: ExportFilters
-): CrackedBatchFetcher {
-  const baseConditions = buildCrackedBaseConditions(params, filters)
+): Promise<CrackedBatchFetcher> {
+  const baseConditions = await buildCrackedBaseConditions(db, params, filters)
 
   return async (cursor) => {
     const conditions = [
@@ -319,16 +356,25 @@ function createDefaultCrackedFetcher(
   }
 }
 
-function createDefaultUncrackedFetcher(
+async function createDefaultUncrackedFetcher(
   db: Db,
   params: ExportScopeParams,
   batchSize: number,
   filters?: ExportFilters
-): UncrackedBatchFetcher {
+): Promise<UncrackedBatchFetcher> {
   // q filter applies to uncracked rows (hashValue only; plaintext is NULL for uncracked).
   // Date filters are omitted — crackedAt is NULL for all uncracked rows by definition,
   // so a crackedAt date range would exclude every row in this variant.
   const escapedQ = filters?.q != null ? escapeLikeForExport(filters.q) : null
+
+  // Resolved once, up front, rather than per-page inside the closure below
+  // — a leaf list resolves to `[hashListId]` (identical to the pre-SU4
+  // single-id filter); a split parent resolves to `[hashListId,
+  // ...childIds]` (#202 SU4).
+  const hashListScopeIds =
+    params.scope === 'hash-list'
+      ? await resolveHashListScopeForExport(db, params.hashListId, params.projectId)
+      : null
 
   return async (cursor) => {
     const baseConds = [
@@ -340,12 +386,12 @@ function createDefaultUncrackedFetcher(
       ...(cursor != null ? [lt(hashItems.id, cursor.id)] : []),
     ]
 
-    if (params.scope === 'hash-list') {
+    if (params.scope === 'hash-list' && hashListScopeIds != null) {
       return db
         .select({ id: hashItems.id, hashValue: hashItems.hashValue })
         .from(hashItems)
         .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-        .where(and(...baseConds, eq(hashItems.hashListId, params.hashListId)))
+        .where(and(...baseConds, inArray(hashItems.hashListId, hashListScopeIds)))
         .orderBy(desc(hashItems.id))
         .limit(batchSize)
     }
@@ -401,7 +447,7 @@ function createDefaultSkippedCounter(
             isNull(hashItems.plaintext)
           )
 
-    const conditions = [...buildCrackedBaseConditions(params, filters), modeFilter]
+    const conditions = [...(await buildCrackedBaseConditions(db, params, filters)), modeFilter]
 
     const [row] = await db
       .select({ n: count(hashItems.id) })
@@ -498,7 +544,8 @@ export async function createExport(
 
   if (variant === 'uncracked') {
     const fetchBatch =
-      overrides.fetchUncrackedBatch ?? createDefaultUncrackedFetcher(db, params, batchSize, filters)
+      overrides.fetchUncrackedBatch ??
+      (await createDefaultUncrackedFetcher(db, params, batchSize, filters))
 
     async function* uncrackedStream(): AsyncGenerator<string> {
       yield EXPORT_CSV_HEADERS.uncracked
@@ -509,7 +556,8 @@ export async function createExport(
   }
 
   const fetchBatch =
-    overrides.fetchCrackedBatch ?? createDefaultCrackedFetcher(db, params, batchSize, filters)
+    overrides.fetchCrackedBatch ??
+    (await createDefaultCrackedFetcher(db, params, batchSize, filters))
 
   async function* crackedStream(): AsyncGenerator<string> {
     if (format === 'csv') yield EXPORT_CSV_HEADERS[variant]

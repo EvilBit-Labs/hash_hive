@@ -351,7 +351,7 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
-  const liveStats = await getHashListStats(hashListId)
+  const liveStats = await getHashListStats(hashListId, projectId)
 
   // Strip legacy keys so a pre-rename row (parsed before U1 shipped) doesn't
   // leak `{total, cracked, remaining, skippedLines}` into the response next

@@ -97,9 +97,12 @@ controlStatsRoutes.openapi(getStatsRoute, async (c) => {
         .groupBy(tasks.status),
       // Cracked-hash count scoped by hash-list ownership: see the
       // matching block in `routes/dashboard/stats.ts` for the
-      // null-campaignId / contract-intent rationale.
+      // null-campaignId / contract-intent rationale. `count(distinct
+      // hashValue)` (#202 SU4): see the matching comment in
+      // `routes/dashboard/stats.ts` — dedupes a hashValue shared across
+      // sibling split sub-lists (or any two lists) to ONE cracked target.
       db
-        .select({ count: sql<number>`count(*)` })
+        .select({ count: sql<number>`count(distinct ${hashItems.hashValue})` })
         .from(hashItems)
         .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
         .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),

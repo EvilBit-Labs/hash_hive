@@ -115,7 +115,7 @@ async function runFilter(
     endDate?: string
   }
 ): Promise<number[]> {
-  const conditions = buildResultFilters(projectId, filters)
+  const conditions = await buildResultFilters(projectId, filters)
   const rows = await db
     .select({ id: hashItems.id })
     .from(hashItems)

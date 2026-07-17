@@ -145,9 +145,18 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
     // non-null `crackedAt` across the project's hash lists"). The
     // `hash_items_hash_list_cracked_idx` composite index on
     // `(hashListId, crackedAt)` is purpose-built for this access path.
+    //
+    // `count(distinct hashValue)` (#202 SU4): `propagateCrack` marks a
+    // hashValue cracked everywhere it appears, across every hash list —
+    // so a hashValue that exists as a separate row under two sibling
+    // split sub-lists (or, pre-existing this feature, two independently
+    // uploaded lists that happen to share a hash) must count as ONE
+    // cracked target, not once per row. No-op for a project with no
+    // duplicate hashValues across its lists — the overwhelmingly common
+    // case.
     db
       .select({
-        count: sql<number>`count(*)`,
+        count: sql<number>`count(distinct ${hashItems.hashValue})`,
       })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))

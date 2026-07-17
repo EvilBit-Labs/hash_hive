@@ -20,7 +20,8 @@
  */
 import { hashItems, hashListListResponseSchema, hashLists } from '@hashhive/shared'
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
-import { eq, isNotNull, sql } from 'drizzle-orm'
+import { and, eq, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 
 import type { AppEnv } from '../../types.js'
 
@@ -73,19 +74,48 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
   const { projectId } = scope
 
   // LEFT JOIN preserves hash lists with zero items (the otherwise-empty
-  // right side returns 0 from COUNT). The cracked count uses Postgres'
-  // `FILTER (WHERE ...)` aggregate so the cracked semantics live in
-  // one query rather than a self-join.
+  // right side returns 0 from COUNT).
+  //
+  // #202 SU4: a split parent's own `hash_items` are empty — its items were
+  // moved to its sub-lists — so a plain single-table join would report
+  // `hashCount: 0, crackedCount: 0` for a parent row, hiding the real
+  // aggregate. `childHashLists` is a one-level self-join to the parent's
+  // direct children (grandchild nesting is out of scope — see
+  // `services/hash-items/list-scope.ts`), and `hashItems` joins on
+  // EITHER the row's own id OR one of its children's ids. For a leaf list
+  // (no children), `childHashLists.id` is always NULL, so the `OR`
+  // collapses to the original single-list join — hashCount/crackedCount
+  // are unchanged from the pre-SU4 query for every un-split list.
+  //
+  // `crackedCount` dedupes on `hashValue` (`count(distinct case when ...
+  // end)` instead of `count(...) FILTER (...)`) so a hashValue that
+  // exists as a separate row under two sibling sub-lists (propagateCrack
+  // marks a hashValue cracked everywhere it appears) counts once in a
+  // parent's aggregate — a no-op for a leaf, where hashValue is already
+  // unique within the list. `hashCount` intentionally stays a raw row
+  // count (not deduped), same rationale as `getHashListStats.totalCount`.
+  const childHashLists = alias(hashLists, 'child_hash_lists')
+
   const rows = await db
     .select({
       id: hashLists.id,
       name: hashLists.name,
       hashTypeId: hashLists.hashTypeId,
       hashCount: sql<number>`count(${hashItems.id})`,
-      crackedCount: sql<number>`count(${hashItems.id}) FILTER (WHERE ${isNotNull(hashItems.crackedAt)})`,
+      crackedCount: sql<number>`count(distinct case when ${hashItems.crackedAt} is not null then ${hashItems.hashValue} end)`,
     })
     .from(hashLists)
-    .leftJoin(hashItems, eq(hashItems.hashListId, hashLists.id))
+    .leftJoin(
+      childHashLists,
+      and(
+        eq(childHashLists.parentHashListId, hashLists.id),
+        eq(childHashLists.projectId, projectId)
+      )
+    )
+    .leftJoin(
+      hashItems,
+      or(eq(hashItems.hashListId, hashLists.id), eq(hashItems.hashListId, childHashLists.id))
+    )
     .where(eq(hashLists.projectId, projectId))
     .groupBy(hashLists.id)
     .orderBy(hashLists.name)
