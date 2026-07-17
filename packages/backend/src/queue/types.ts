@@ -67,6 +67,19 @@ export interface ResourceCompressionJob {
 }
 
 /**
+ * Payload for the mixed hash-list split analysis job (issue #202 SU2).
+ *
+ * `projectId` is carried for parity with the other resource-scoped job
+ * payloads (log context, future event scoping) even though
+ * `runSplitAnalysis` re-reads it from the parent row itself — never trust
+ * a stale caller-supplied projectId for the actual DB write.
+ */
+export interface HashListSplitJob {
+  hashListId: number
+  projectId: number
+}
+
+/**
  * Payload for the hash import propagation job (U7).
  *
  * CRITICAL (KTD3): recovered plaintexts must NEVER appear in this payload.
@@ -107,4 +120,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HASH_IMPORT_PROPAGATION]: HashImportPropagationJob
   [QUEUE_NAMES.BLOB_RECLAMATION]: BlobReclamationJob
   [QUEUE_NAMES.RESOURCE_COMPRESSION]: ResourceCompressionJob
+  [QUEUE_NAMES.HASH_LIST_SPLIT]: HashListSplitJob
 }

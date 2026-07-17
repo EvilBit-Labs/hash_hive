@@ -8,6 +8,7 @@ import { createAuditRetentionWorker } from './queue/workers/audit-retention.js'
 import { createBlobReclamationWorker } from './queue/workers/blob-reclamation.js'
 import { createHashImportWorker } from './queue/workers/hash-import-worker.js'
 import { createHashListParserWorker } from './queue/workers/hash-list-parser.js'
+import { createHashListSplitWorker } from './queue/workers/hash-list-split.js'
 import { createHealthMonitorWorker } from './queue/workers/health-monitor.js'
 import { createHeartbeatMonitorWorker } from './queue/workers/heartbeat-monitor.js'
 import { createLineCountWorker } from './queue/workers/line-count.js'
@@ -82,6 +83,9 @@ async function main() {
   const resourceCompressionWorker = createResourceCompressionWorker(connection)
   logger.info('Resource compression worker started')
 
+  const hashListSplitWorker = createHashListSplitWorker(connection)
+  logger.info('Hash list split analysis worker started')
+
   const workers = [
     hashListWorker,
     heartbeatWorker,
@@ -92,6 +96,7 @@ async function main() {
     hashImportWorker,
     blobReclamationWorker,
     resourceCompressionWorker,
+    hashListSplitWorker,
   ]
 
   async function shutdown(signal: string) {

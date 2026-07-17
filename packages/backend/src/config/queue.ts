@@ -45,6 +45,15 @@ export const QUEUE_NAMES = {
   // this background pass is the only place either can happen for files too
   // large for the direct-upload path's inline compression (U3).
   RESOURCE_COMPRESSION: 'jobs-resource-compression',
+  // Mixed hash-list split analysis (issue #202 SU2). Event-driven: enqueued
+  // when a hash list's type_analysis verdict comes back 'mixed' (wired by
+  // SU3). Partitions the parent's hash_items into per-type sub-lists
+  // (hash_lists.parent_hash_list_id) — one per confident hashcat mode, one
+  // per ambiguous candidate-mode signature, one for unidentified entries —
+  // and moves the rows. No dedicated status value: "split in progress" is
+  // read off the job's own BullMQ lifecycle, and idempotency is guarded by
+  // whether the parent already has children (see runSplitAnalysis).
+  HASH_LIST_SPLIT: 'jobs-hash-list-split',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
