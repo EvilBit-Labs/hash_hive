@@ -72,6 +72,12 @@ mock.module('reactflow', () => {
     default: ReactFlow,
     Background: () => null,
     Controls: () => null,
+    // `Position` must be present even though CampaignCreatePage doesn't use it:
+    // bun's mock.module persists process-wide, so under CI's file ordering this
+    // mock can be the active `reactflow` when a later test (e.g. campaign-detail,
+    // which renders campaign-dag-view) statically imports `{ Position }`. Omitting
+    // it makes that import fail at link time. Mirrors campaign-dag-view.test.tsx.
+    Position: { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' },
     useNodesState,
     useEdgesState,
   }
