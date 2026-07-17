@@ -1,6 +1,3 @@
-import { hashItems, hashLists } from '@hashhive/shared'
-import { eq, sql } from 'drizzle-orm'
-
 /**
  * Campaign-wizard split + review flow (issue #202, unit SU3).
  *
@@ -44,6 +41,18 @@ import { eq, sql } from 'drizzle-orm'
  * duplicate campaigns are the operator's problem for now — acceptable for
  * v1 per the unit's scope.
  */
+import type {
+  ResolvedSubCampaign,
+  SplitAssignmentRequest,
+  SplitReviewAmbiguousGroup,
+  SplitReviewConfidentGroup,
+  SplitReviewGroups,
+  SplitReviewUnidentifiedGroup,
+} from '@hashhive/shared'
+
+import { campaigns, hashItems, hashLists } from '@hashhive/shared'
+import { and, eq, isNull, sql } from 'drizzle-orm'
+
 import type { AuditActor } from './audit-log.js'
 import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campaigns.js'
 
@@ -56,30 +65,12 @@ import { moveHashItemsToList } from './hash-items/move-items.js'
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 // ─── Review groups ────────────────────────────────────────────────────────
-
-export interface SplitReviewConfidentGroup {
-  id: number
-  mode: number
-  itemCount: number
-}
-
-export interface SplitReviewAmbiguousGroup {
-  id: number
-  candidateModes: number[]
-  itemCount: number
-}
-
-export interface SplitReviewUnidentifiedGroup {
-  id: number
-  itemCount: number
-}
-
-export interface SplitReviewGroups {
-  parentHashListId: number
-  confident: SplitReviewConfidentGroup[]
-  ambiguous: SplitReviewAmbiguousGroup[]
-  unidentified: SplitReviewUnidentifiedGroup[]
-}
+//
+// `SplitReviewConfidentGroup` / `SplitReviewAmbiguousGroup` /
+// `SplitReviewUnidentifiedGroup` / `SplitReviewGroups` are imported from
+// `@hashhive/shared` (AGENTS.md: wire shapes live there as `z.infer` from
+// Zod schemas) rather than hand-declared here — see
+// `packages/shared/src/schemas/campaign-split.ts`.
 
 /**
  * Categorizes an already-split parent's children for the review UI. Reads
@@ -201,20 +192,10 @@ export async function createCampaignOrSplit(input: {
 }
 
 // ─── Confirm ───────────────────────────────────────────────────────────────
-
-export interface SplitAssignment {
-  /** A child hash list of the split parent, currently `ambiguous` (needs-review with candidate modes). */
-  subListId: number
-  /** Must be one of that sub-list's `type_analysis.detectedModes[].hashcatMode` candidates. */
-  mode: number
-}
-
-export interface ResolvedSubCampaign {
-  id: number
-  hashListId: number
-  mode: number
-  parentCampaignId: number
-}
+//
+// `SplitAssignmentRequest` (a sub-list id + the mode assigned to it) and
+// `ResolvedSubCampaign` are imported from `@hashhive/shared` above rather
+// than hand-declared here — see `packages/shared/src/schemas/campaign-split.ts`.
 
 export type ConfirmSplitResult =
   | {
@@ -284,7 +265,7 @@ async function applyAssignmentsAndMerge(
   input: {
     projectId: number
     parentHashListId: number
-    assignments: ReadonlyArray<SplitAssignment>
+    assignments: ReadonlyArray<SplitAssignmentRequest>
   },
   tx: Tx
 ): Promise<
@@ -437,7 +418,7 @@ export async function confirmSplitCampaign(input: {
   description?: string | undefined
   priority?: number | undefined
   createdBy?: number | undefined
-  assignments: ReadonlyArray<SplitAssignment>
+  assignments: ReadonlyArray<SplitAssignmentRequest>
   actor?: AuditActor | undefined
 }): Promise<ConfirmSplitResult> {
   const mergeResult = await db.transaction((tx) =>
@@ -453,6 +434,62 @@ export async function confirmSplitCampaign(input: {
 
   if (mergeResult.kind !== 'resolved') {
     return mergeResult
+  }
+
+  // Idempotency guard (P2 code review fix): an all-confident split has an
+  // empty `assignments` payload, so a client retry (e.g. a timeout after
+  // the server already committed) would otherwise re-run the merge
+  // (harmless — the resolved groups recompute to the same result) and then
+  // create a SECOND full parent + sub-campaign set, since
+  // `campaigns.hashListId` carries no unique constraint. Detect a prior
+  // confirm by looking for the parent campaign this call would otherwise
+  // create — a campaign already targeting `parentHashListId` with no
+  // `parentCampaignId` of its own — and, if found, reconstruct the
+  // response from the existing rows instead of creating duplicates.
+  const [existingParentCampaign] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.hashListId, input.parentHashListId),
+        eq(campaigns.projectId, input.projectId),
+        isNull(campaigns.parentCampaignId)
+      )
+    )
+    .limit(1)
+
+  if (existingParentCampaign) {
+    const existingSubCampaignRows = await db
+      .select()
+      .from(campaigns)
+      .where(
+        and(
+          eq(campaigns.parentCampaignId, existingParentCampaign.id),
+          eq(campaigns.projectId, input.projectId)
+        )
+      )
+
+    const existingSubCampaigns: ResolvedSubCampaign[] = existingSubCampaignRows.map((sub) => {
+      if (sub.hashcatMode === null) {
+        // A sub-campaign created via this flow always latches hashcatMode
+        // at insert time (see createCampaign below) — a null here means
+        // the row was never actually created by confirmSplitCampaign, so
+        // surface it loudly rather than shipping a bogus `mode: 0`.
+        throw new Error(`confirmSplitCampaign: existing sub-campaign ${sub.id} has no hashcatMode`)
+      }
+      return {
+        id: sub.id,
+        hashListId: sub.hashListId,
+        mode: sub.hashcatMode,
+        parentCampaignId: existingParentCampaign.id,
+      }
+    })
+
+    return {
+      kind: 'confirmed',
+      parentCampaign: existingParentCampaign,
+      subCampaigns: existingSubCampaigns,
+    }
   }
 
   const parentCampaign = await createCampaign(

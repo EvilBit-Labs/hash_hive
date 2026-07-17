@@ -22,6 +22,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
-CREATE TRIGGER hash_lists_parent_project_check_trg
+CREATE OR REPLACE TRIGGER hash_lists_parent_project_check_trg
   BEFORE INSERT OR UPDATE OF parent_hash_list_id, project_id ON hash_lists
   FOR EACH ROW EXECUTE FUNCTION hash_lists_parent_project_check();

@@ -24,33 +24,25 @@
  * parent from reading as stalled just because some hashes still need a
  * type assigned.
  */
+import type { SubCampaignHashProgress, SubCampaignProgress } from '@hashhive/shared'
+
 import { campaigns, hashItems, hashLists } from '@hashhive/shared'
-import { and, count, eq, inArray } from 'drizzle-orm'
+import { and, count, eq, inArray, isNull } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
 
-export interface SubCampaignHashProgress {
-  total: number
-  cracked: number
-  remaining: number
-  percentage: number
-}
-
-export interface SubCampaignProgressSummary {
-  subCampaignCount: number
-  completedSubCampaignCount: number
-  /** True only when every mode-bearing sub-campaign counted here has status 'completed'. */
-  done: boolean
-  totalTasks: number
-  completedTasks: number
-  tasksFailed: number
-  overallProgress: number
-  hashProgress: SubCampaignHashProgress | null
-}
-
+// `SubCampaignHashProgress` / `SubCampaignProgress` are imported from
+// `@hashhive/shared` (AGENTS.md: wire shapes live there as `z.infer` from
+// Zod schemas) rather than hand-declared here — see
+// `subCampaignHashProgressWireSchema` / `subCampaignProgressWireSchema` in
+// `packages/shared/src/schemas/resources.ts`. `HashListSplitProgress`
+// itself has no dedicated wire schema (its two fields ride the parent hash
+// list detail response as flat top-level fields, not a nested object — see
+// `routes/dashboard/resources.ts`), so it stays a plain local composition
+// of the two shared types below.
 export interface HashListSplitProgress {
   needsTypeCount: number
-  subCampaignProgress: SubCampaignProgressSummary | null
+  subCampaignProgress: SubCampaignProgress | null
 }
 
 /** Narrows a `campaigns.progress` jsonb cell to a `Record` (or null for an empty/legacy row). */
@@ -104,19 +96,39 @@ export async function getHashListSplitProgress(
 
   if (children.length === 0) return null
 
-  const childIds = children.map((c) => c.id)
-
-  // Every sub-campaign targets exactly one child's hashListId (SU3's
-  // confirmSplitCampaign) — a child with no matching row here has no
-  // sub-campaign at all.
-  const subCampaignRows = await db
-    .select({
-      status: campaigns.status,
-      hashListId: campaigns.hashListId,
-      progress: campaigns.progress,
-    })
+  // The split PARENT campaign — the one campaign row created by SU3's
+  // confirmSplitCampaign against THIS hash list (hashListId = hashListId,
+  // parentCampaignId IS NULL). Sub-campaigns are found via THIS campaign's
+  // id, not by "hashListId is one of the children" — a user can create an
+  // unrelated campaign directly against a child hash list without ever
+  // going through the split-confirm flow, and that campaign must NOT be
+  // folded into the parent's aggregate progress. `null` here means the
+  // split was materialized (children exist) but never confirmed into a
+  // campaign yet — same no-sub-campaign-progress outcome as before.
+  const [parentCampaign] = await db
+    .select({ id: campaigns.id })
     .from(campaigns)
-    .where(and(inArray(campaigns.hashListId, childIds), eq(campaigns.projectId, projectId)))
+    .where(
+      and(
+        eq(campaigns.hashListId, hashListId),
+        eq(campaigns.projectId, projectId),
+        isNull(campaigns.parentCampaignId)
+      )
+    )
+    .limit(1)
+
+  const subCampaignRows = parentCampaign
+    ? await db
+        .select({
+          status: campaigns.status,
+          hashListId: campaigns.hashListId,
+          progress: campaigns.progress,
+        })
+        .from(campaigns)
+        .where(
+          and(eq(campaigns.parentCampaignId, parentCampaign.id), eq(campaigns.projectId, projectId))
+        )
+    : []
 
   const hashListIdsWithSubCampaign = new Set(subCampaignRows.map((r) => r.hashListId))
 

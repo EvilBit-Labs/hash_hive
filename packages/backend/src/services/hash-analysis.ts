@@ -133,6 +133,21 @@ export interface HashCandidate {
 }
 
 /**
+ * Structured/prefixed formats ($-crypt, `*`-MySQL, `md5`-Postgres, `::`-NetNTLM)
+ * are near-certain (0.95) vs. raw hex's length-shared ambiguity (0.7). Shared by
+ * both `guessHashType` and `guessTopHashType` so their confidence rule — and the
+ * agreement invariant between them — can't drift apart on a one-sided edit.
+ */
+function isStructuredHashFormat(trimmed: string): boolean {
+  return (
+    trimmed.includes('$') ||
+    trimmed.startsWith('*') ||
+    trimmed.startsWith('md5') ||
+    trimmed.includes('::')
+  )
+}
+
+/**
  * Analyzes a hash string and returns ranked candidate types.
  * Confidence scoring:
  *   - Structured/prefixed formats get high confidence (0.95) since they're unambiguous
@@ -156,11 +171,7 @@ export function guessHashType(hashValue: string): HashCandidate[] {
       seenModes.add(pattern.hashcatMode)
 
       // Structured formats are near-certain; raw hex shares lengths
-      const isStructured =
-        trimmed.includes('$') ||
-        trimmed.startsWith('*') ||
-        trimmed.startsWith('md5') ||
-        trimmed.includes('::')
+      const isStructured = isStructuredHashFormat(trimmed)
       const baseConfidence = isStructured ? 0.95 : 0.7
 
       // Decay confidence for later matches of same-length raw hex
@@ -206,11 +217,7 @@ export function guessTopHashType(hashValue: string): TopHashGuess | null {
     return null
   }
 
-  const isStructured =
-    trimmed.includes('$') ||
-    trimmed.startsWith('*') ||
-    trimmed.startsWith('md5') ||
-    trimmed.includes('::')
+  const isStructured = isStructuredHashFormat(trimmed)
 
   for (const pattern of HASH_PATTERNS) {
     if (pattern.regex.test(trimmed)) {

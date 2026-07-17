@@ -45,14 +45,20 @@ export const QUEUE_NAMES = {
   // this background pass is the only place either can happen for files too
   // large for the direct-upload path's inline compression (U3).
   RESOURCE_COMPRESSION: 'jobs-resource-compression',
-  // Mixed hash-list split analysis (issue #202 SU2). Event-driven: enqueued
-  // when a hash list's type_analysis verdict comes back 'mixed' (wired by
-  // SU3). Partitions the parent's hash_items into per-type sub-lists
+  // Mixed hash-list split analysis (issue #202 SU2). Partitions a mixed
+  // hash list's hash_items into per-type sub-lists
   // (hash_lists.parent_hash_list_id) — one per confident hashcat mode, one
   // per ambiguous candidate-mode signature, one for unidentified entries —
-  // and moves the rows. No dedicated status value: "split in progress" is
-  // read off the job's own BullMQ lifecycle, and idempotency is guarded by
-  // whether the parent already has children (see runSplitAnalysis).
+  // and moves the rows. As of SU3, this queue is NOT yet fed: the split
+  // core (`runSplitAnalysis`) runs SYNCHRONOUSLY inside the
+  // POST /dashboard/campaigns request path (`services/campaign-split.ts`'s
+  // `createCampaignOrSplit`), which awaits it directly rather than calling
+  // `queue.add()`. The worker below is registered and ready for a future
+  // async-dispatch path but currently never receives a job on this queue.
+  // No dedicated status value: "split in progress" is read off the job's
+  // own BullMQ lifecycle once something does enqueue it, and idempotency is
+  // guarded by whether the parent already has children (see
+  // runSplitAnalysis) regardless of how it's invoked.
   HASH_LIST_SPLIT: 'jobs-hash-list-split',
 } as const
 

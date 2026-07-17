@@ -11,10 +11,9 @@
  * import path.
  */
 import { campaigns, hashItems, tasks } from '@hashhive/shared'
-import { and, eq, gt, gte, inArray, isNotNull, or, type SQL } from 'drizzle-orm'
+import { and, eq, gt, gte, isNotNull, or, type SQL } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
-import { resolveHashListScope } from '../hash-items/list-scope.js'
 import { encodeZapCursor, type ZapCursor } from './zap-cursor.js'
 
 /**
@@ -85,23 +84,21 @@ export async function getZapsForTask(
     return { zaps: [], nextCursor: null }
   }
 
-  // A leaf hashListId resolves to `[hashListId]` (identical to the
-  // pre-SU4 single-id filter); a split parent resolves to `[hashListId,
-  // ...childIds]` since its own hash_items were moved to its sub-lists
-  // (#202 SU4). In the current split design a task's campaign always
-  // points at a resolved (leaf) sub-list, never the parent, so this is a
-  // no-op in practice — routed through the helper anyway for defense in
-  // depth against a future campaign type that does target a parent
-  // directly. Not deduped on hashValue: a duplicate zap costs the agent
-  // one redundant skip check, not a correctness bug.
-  const scopeIds = await resolveHashListScope(taskRow.hashListId, projectId)
+  // A task's campaign always targets a leaf hash list: a split sub-campaign
+  // cracks a per-type sub-list (itself a leaf), and a split PARENT campaign is
+  // attackless so never has tasks (#202 SU3/SU4). So there is no parent to
+  // expand here — filter directly on the task's own hashListId. This keeps the
+  // agent's hot polling path free of an extra hash_lists round trip per zap
+  // fetch. Ownership is already enforced by the campaigns.projectId join above.
+  // (If a future campaign type ever targets a parent directly, route this
+  // through resolveHashListScope like the dashboard read paths.)
 
   // Build conditions for cracked hash items. Typed to allow the
   // `or(...)` (which is `SQL | undefined`) without a non-null assertion —
   // `and(...conditions)` filters undefined itself, matching the pattern
   // in `services/results/export.ts`.
   const conditions: Array<SQL | undefined> = [
-    inArray(hashItems.hashListId, scopeIds),
+    eq(hashItems.hashListId, taskRow.hashListId),
     isNotNull(hashItems.crackedAt),
   ]
 

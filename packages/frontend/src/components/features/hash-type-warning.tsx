@@ -20,10 +20,9 @@ const VERDICT_COPY: Record<HashListTypeAnalysis['verdict'], string> = {
  * ingestion's per-entry type detection (issue #202, FU3) found more than
  * one hash type, or couldn't identify a meaningful share of entries.
  *
- * Foundation-only: this does not offer a split action. It just tells the
- * operator what was found so they know why a mixed list won't crack
- * cleanly as a single campaign yet — the split flow is the follow-up
- * (issue #202's second half, SU1-SU6).
+ * Advisory only: this banner just reports what ingestion found. Acting on it
+ * happens in the campaign wizard — starting a campaign against a mixed list
+ * walks the operator through the split/review flow (issue #202's second half).
  *
  * Renders nothing for a homogeneous list with zero unidentified entries,
  * so normal (non-mixed) hash lists see zero visual change.
@@ -77,8 +76,8 @@ export function HashTypeWarning({ typeAnalysis, className }: HashTypeWarningProp
         )}
 
         <p className="text-xs text-warning/70">
-          Mixed lists can&apos;t be cracked as a single campaign yet. Splitting into typed sub-lists
-          is coming soon.
+          A mixed list can&apos;t be cracked as one campaign. Start a campaign against this list and
+          the wizard will split it into typed sub-campaigns you can review.
         </p>
       </div>
     </div>

@@ -6,10 +6,19 @@
  * cross-unit contract pinned in `services/hash-items/split-analysis.ts`.
  *
  * Exported surface:
- *   - `runSplitAnalysis` — the testable DB core; real-DB tests call it
- *     directly without needing Redis (mirrors `processImportPairs` in
- *     `hash-import-worker.ts` — the db test lane has no live Redis).
- *   - `createHashListSplitWorker` — thin BullMQ factory wrapping the core.
+ *   - `runSplitAnalysis` — the testable DB core. As of SU3
+ *     (`services/campaign-split.ts`'s `createCampaignOrSplit`), this is
+ *     the ONLY way it currently runs: it is awaited SYNCHRONOUSLY inside
+ *     the `POST /dashboard/campaigns` request path, not dispatched through
+ *     BullMQ. Real-DB tests call it directly for the same reason
+ *     `processImportPairs` in `hash-import-worker.ts` does (the db test
+ *     lane has no live Redis).
+ *   - `createHashListSplitWorker` — thin BullMQ factory wrapping the core,
+ *     registered on `QUEUE_NAMES.HASH_LIST_SPLIT` for a future
+ *     async-dispatch path (large parents deferred off the request path).
+ *     Nothing calls `queue.add()` for this queue yet, so the worker is
+ *     live but currently never receives a job — see the queue name's doc
+ *     comment in `config/queue.ts`.
  *
  * "Split in progress" tracking: there is no dedicated `hash_lists.status`
  * value for this (the `ResourceStatusLiteral` union is pinned and does not

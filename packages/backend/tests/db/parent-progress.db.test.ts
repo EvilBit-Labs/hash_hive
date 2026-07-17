@@ -153,6 +153,15 @@ interface Seed {
 
   // Normal, never-split leaf list — regression control.
   leafId: number
+
+  // "rogue" scenario (#202 code review P1): a real split-confirmed parent
+  // with one mode-bearing sub-campaign, PLUS an unrelated campaign a user
+  // created directly against the sub-campaign's own hash list id (NOT
+  // linked via parentCampaignId). That second campaign must not pollute
+  // the parent's aggregate.
+  rogueParentId: number
+  rogueChildId: number
+  rogueChildCampaignId: number
 }
 
 let seed: Seed
@@ -267,6 +276,54 @@ beforeAll(async () => {
   await insertItems(leafId, 3)
   await insertCampaign({ hashListId: leafId, status: 'running' })
 
+  // ── "rogue" scenario (#202 code review P1) ───────────────────────────
+  // A real split parent + one real sub-campaign (linked via
+  // parentCampaignId), PLUS an unrelated campaign a user created directly
+  // against the SAME child hash list id without going through
+  // confirmSplitCampaign (parentCampaignId left NULL). The old
+  // "hashListId is one of the children" query would have folded the
+  // rogue campaign's progress into the parent's aggregate too.
+  const rogueParentId = await insertHashList('rogue-parent')
+  const rogueParentCampaignId = await insertCampaign({
+    hashListId: rogueParentId,
+    status: 'running',
+  })
+
+  const rogueChildId = await insertHashList('rogue-child', {
+    parentHashListId: rogueParentId,
+    typeAnalysis: homogeneousAnalysis(1000, 10),
+  })
+  await insertItems(rogueChildId, 10)
+  const rogueChildCampaignId = await insertCampaign({
+    hashListId: rogueChildId,
+    status: 'completed',
+    parentCampaignId: rogueParentCampaignId,
+    progress: taskProgress({
+      totalTasks: 2,
+      completedTasks: 2,
+      tasksFailed: 0,
+      overallProgress: 1,
+      hashTotal: 10,
+      hashCracked: 10,
+    }),
+  })
+
+  // The rogue campaign: same hashListId as the real sub-campaign above,
+  // but NOT linked via parentCampaignId — must be excluded entirely.
+  await insertCampaign({
+    hashListId: rogueChildId,
+    status: 'running',
+    parentCampaignId: null,
+    progress: taskProgress({
+      totalTasks: 100,
+      completedTasks: 0,
+      tasksFailed: 0,
+      overallProgress: 0,
+      hashTotal: 10,
+      hashCracked: 0,
+    }),
+  })
+
   seed = {
     completeParentId,
     completeChild1Id,
@@ -276,6 +333,9 @@ beforeAll(async () => {
     partialChild1Id,
     partialChild2Id,
     leafId,
+    rogueParentId,
+    rogueChildId,
+    rogueChildCampaignId,
   }
 })
 
@@ -343,5 +403,28 @@ describe('getHashListSplitProgress — non-split (leaf) list', () => {
   it('returns null — no regression, nothing to surface for a normal list', async () => {
     const result = await getHashListSplitProgress(seed.leafId, projId)
     expect(result).toBeNull()
+  })
+})
+
+describe('getHashListSplitProgress — rogue campaign against a child hash list (#202 P1)', () => {
+  it('ignores a campaign targeting a child hashListId that is not linked via parentCampaignId', async () => {
+    const result = await getHashListSplitProgress(seed.rogueParentId, projId)
+    expect(result).not.toBeNull()
+
+    const sub = result!.subCampaignProgress
+    expect(sub).not.toBeNull()
+    // Exactly ONE sub-campaign counted — the real one, not the rogue.
+    expect(sub!.subCampaignCount).toBe(1)
+    expect(sub!.completedSubCampaignCount).toBe(1)
+    expect(sub!.done).toBe(true)
+    expect(sub!.totalTasks).toBe(2)
+    expect(sub!.completedTasks).toBe(2)
+    // The rogue campaign's 100 totalTasks / 0 overallProgress must not
+    // leak into the aggregate — this would fail with the pre-fix
+    // hashListId-in-children query (totalTasks would read 102, done would
+    // read false, overallProgress would be dragged toward 0).
+    expect(sub!.overallProgress).toBe(1)
+    expect(sub!.hashProgress!.total).toBe(10)
+    expect(sub!.hashProgress!.cracked).toBe(10)
   })
 })

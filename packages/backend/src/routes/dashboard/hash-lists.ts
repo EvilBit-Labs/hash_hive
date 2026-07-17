@@ -20,7 +20,7 @@
  */
 import { hashItems, hashListListResponseSchema, hashLists } from '@hashhive/shared'
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
-import { and, eq, or, sql } from 'drizzle-orm'
+import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 
 import type { AppEnv } from '../../types.js'
@@ -116,7 +116,13 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
       hashItems,
       or(eq(hashItems.hashListId, hashLists.id), eq(hashItems.hashListId, childHashLists.id))
     )
-    .where(eq(hashLists.projectId, projectId))
+    // #202 code review P1: a split sub-list (`parent_hash_list_id IS NOT
+    // NULL`) is an internal implementation detail — the operator interacts
+    // with the split PARENT (whose aggregate already folds in every
+    // child's hash/cracked counts via the join above), never the children
+    // directly. Without this filter, every sub-list also showed up as its
+    // own row in the listing.
+    .where(and(eq(hashLists.projectId, projectId), isNull(hashLists.parentHashListId)))
     .groupBy(hashLists.id)
     .orderBy(hashLists.name)
 
