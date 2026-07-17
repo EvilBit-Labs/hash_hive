@@ -70,12 +70,15 @@ export type SplitOutcome =
   | 'degenerate-single-group'
   | 'already-split'
 
-export interface SplitSubList {
-  id: number
-  kind: SplitGroup['kind']
-  mode: number | null
-  itemCount: number
-}
+/**
+ * Summary of one created (or reconstructed) sub-list. Discriminated on
+ * `kind` — mirrors `SplitGroup`: `mode` exists only for `confident` (the
+ * one case where a single hashcat mode is known), not on `ambiguous` /
+ * `unidentified`.
+ */
+export type SplitSubList =
+  | { id: number; kind: 'confident'; mode: number; itemCount: number }
+  | { id: number; kind: 'ambiguous' | 'unidentified'; itemCount: number }
 
 /**
  * Result of a split-analysis run — the contract SU3 consumes to decide
@@ -100,7 +103,7 @@ function buildSubListName(parentName: string, group: SplitGroup): string {
   if (group.kind === 'confident') {
     suffix = `mode ${group.mode}`
   } else if (group.kind === 'ambiguous') {
-    suffix = `ambiguous (${(group.candidateModes ?? []).join(', ')})`
+    suffix = `ambiguous (${group.candidateModes.join(', ')})`
   } else {
     suffix = 'unidentified'
   }
@@ -121,9 +124,6 @@ function buildGroupTypeAnalysis(group: SplitGroup, itemCount: number): HashListT
   const analyzedAt = new Date().toISOString()
 
   if (group.kind === 'confident') {
-    if (group.mode === undefined) {
-      throw new Error('split-worker: confident group is missing a hashcat mode')
-    }
     return {
       verdict: 'homogeneous',
       detectedModes: [{ hashcatMode: group.mode, count: itemCount }],
@@ -136,10 +136,9 @@ function buildGroupTypeAnalysis(group: SplitGroup, itemCount: number): HashListT
   }
 
   if (group.kind === 'ambiguous') {
-    const candidateModes = group.candidateModes ?? []
     return {
       verdict: 'needs-review',
-      detectedModes: candidateModes.map((hashcatMode) => ({ hashcatMode, count: itemCount })),
+      detectedModes: group.candidateModes.map((hashcatMode) => ({ hashcatMode, count: itemCount })),
       unidentifiedCount: 0,
       scannedCount: itemCount,
       sampled: false,
@@ -191,21 +190,24 @@ async function summarizeExistingChildren(
     .groupBy(hashItems.hashListId)
   const countByListId = new Map(counts.map((c) => [c.hashListId, Number(c.total)]))
 
-  return children.map((child) => {
+  return children.map((child): SplitSubList => {
     const typeAnalysis = child.typeAnalysis
-    const kind: SplitGroup['kind'] =
-      typeAnalysis?.verdict === 'homogeneous'
-        ? 'confident'
-        : (typeAnalysis?.detectedModes.length ?? 0) > 0
-          ? 'ambiguous'
-          : 'unidentified'
-    const mode = kind === 'confident' ? (typeAnalysis?.detectedModes[0]?.hashcatMode ?? null) : null
-    return {
-      id: child.id,
-      kind,
-      mode,
-      itemCount: countByListId.get(child.id) ?? 0,
+    const itemCount = countByListId.get(child.id) ?? 0
+    const detectedMode = typeAnalysis?.detectedModes[0]?.hashcatMode
+
+    // A homogeneous verdict always carries exactly one detectedModes entry
+    // (see buildGroupTypeAnalysis's confident branch), so `detectedMode` is
+    // defined whenever verdict === 'homogeneous' for any row this function
+    // actually persisted. The `undefined` guard exists only so the return
+    // type stays sound against arbitrary persisted data rather than
+    // asserting an invariant with a throw.
+    if (typeAnalysis?.verdict === 'homogeneous' && detectedMode !== undefined) {
+      return { id: child.id, kind: 'confident', mode: detectedMode, itemCount }
     }
+
+    const kind: 'ambiguous' | 'unidentified' =
+      (typeAnalysis?.detectedModes.length ?? 0) > 0 ? 'ambiguous' : 'unidentified'
+    return { id: child.id, kind, itemCount }
   })
 }
 
@@ -294,12 +296,11 @@ export async function runSplitAnalysis(parentHashListId: number): Promise<SplitR
         group.kind === 'confident' ? group.mode : undefined
       )
 
-      createdSubLists.push({
-        id: subListId,
-        kind: group.kind,
-        mode: group.mode ?? null,
-        itemCount: group.itemIds.length,
-      })
+      createdSubLists.push(
+        group.kind === 'confident'
+          ? { id: subListId, kind: 'confident', mode: group.mode, itemCount: group.itemIds.length }
+          : { id: subListId, kind: group.kind, itemCount: group.itemIds.length }
+      )
     }
 
     logger.info(

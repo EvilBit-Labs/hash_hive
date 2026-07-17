@@ -300,6 +300,14 @@ export async function listCampaigns(filters: {
   if (!filters.showArchived) {
     conditions.push(isNull(campaigns.archivedAt))
   }
+  // Split sub-campaigns (issue #202 second half) are children created behind
+  // a parent campaign — the operator interacts with the parent, not the
+  // sub-campaigns directly, so they must never appear as standalone rows in
+  // the flat campaign listing (mirrors `isNull(hashLists.parentHashListId)`
+  // in `routes/dashboard/hash-lists.ts` for the hash-list side of the same
+  // feature). Applies to both the data and count queries since they share
+  // this conditions array.
+  conditions.push(isNull(campaigns.parentCampaignId))
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
   }

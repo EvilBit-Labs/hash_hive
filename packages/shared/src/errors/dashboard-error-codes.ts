@@ -95,6 +95,12 @@ export const DASHBOARD_ERROR_CODES = [
   // of the given parent, isn't an ambiguous group awaiting review, or
   // picked a mode outside that group's candidate modes.
   'SPLIT_ASSIGNMENT_INVALID',
+  // The async split-analysis job could not be enqueued (queue manager
+  // unavailable, or the enqueue call itself failed) — no campaign was
+  // created and no job is running, so the wizard's status poll would
+  // otherwise sit at `pending` forever with no way to recover (code
+  // review fix; previously this failure was swallowed silently).
+  'SPLIT_ENQUEUE_FAILED',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

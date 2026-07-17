@@ -559,8 +559,13 @@ export const hashItems = pgTable(
     taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     // Resolved hashcat mode for this item, persisted during the mixed-list
-    // split pass (#202) so retries don't re-scan. NULL for items that were
-    // never split-analyzed (the common case).
+    // split pass (#202) for downstream visibility/audit (e.g. confirming
+    // which mode a moved item was classified under). Write-only today — no
+    // read site recomputes from it. Split idempotency is NOT derived from
+    // this column; it is enforced separately by `runSplitAnalysis`'s
+    // row-locked parent + children-existence check (see
+    // `queue/workers/hash-list-split.ts`). NULL for items that were never
+    // split-analyzed (the common case).
     detectedHashcatMode: integer('detected_hashcat_mode'),
     metadata: jsonb('metadata').default({}),
     username: varchar('username', { length: 255 }),

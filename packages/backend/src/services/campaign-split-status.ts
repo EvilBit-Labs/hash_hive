@@ -54,6 +54,40 @@ async function getSplitJobInfo(hashListId: number): Promise<QueueJobInfo | null>
   }
 }
 
+/**
+ * Maps a failed split job's `failedReason` to an operator-facing string
+ * safe to return to the dashboard client. `failedReason` is BullMQ's copy
+ * of the raw thrown `Error.message` — for `runSplitAnalysis`
+ * (`queue/workers/hash-list-split.ts`) that can be Postgres/Drizzle text
+ * embedding SQL, table, and column names, which must never round-trip
+ * straight into the wizard's error banner (code review fix). Mirrors
+ * `sanitizeParseError` in `queue/workers/hash-list-parser.ts` — same
+ * rationale, same "stable enum of operator-meaningful reasons, default
+ * generic" shape — but not shared with it directly: the two workers throw
+ * different failure vocabularies (parser: missing/empty upload; split:
+ * missing hash list / a malformed confident group), so a shared mapper
+ * would have to guess which worker's message it's looking at.
+ */
+export function sanitizeSplitError(failedReason: string | null): string {
+  if (!failedReason) return 'Split analysis failed'
+  const msg = failedReason.toLowerCase()
+  // Anchored "hash list" prefix avoids collapsing Postgres "relation ...
+  // not found" / Redis "key not found" / generic "not found" errors into
+  // a misleading "Hash list not found" wire message (mirrors
+  // sanitizeParseError's same anchor for the same reason).
+  if (/\bhash list .* not found\b/i.test(failedReason)) {
+    return 'Hash list not found'
+  }
+  if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('etimedout')) {
+    return 'Storage backend unavailable'
+  }
+  // Default — never leak the raw SQL/internal message to the wire. Covers
+  // e.g. `runSplitAnalysis`'s "confident group is missing a hashcat mode"
+  // internal-invariant failure, which is meaningful to an operator reading
+  // server logs but not to the dashboard client.
+  return 'Split analysis failed'
+}
+
 function extractSplitOutcome(returnvalue: unknown): SplitOutcome | null {
   if (
     returnvalue !== null &&
@@ -95,7 +129,11 @@ export function deriveSplitStatus(
   }
 
   if (jobInfo.state === 'failed') {
-    return { status: 'failed', message: jobInfo.failedReason ?? 'Split analysis failed' }
+    // The raw `failedReason` is deliberately NOT included in this return
+    // value — only the sanitized string reaches the dashboard client.
+    // Callers that want the raw reason for server-side diagnostics read
+    // `jobInfo.failedReason` directly (see `getSplitStatus`'s log call).
+    return { status: 'failed', message: sanitizeSplitError(jobInfo.failedReason) }
   }
 
   if (jobInfo.state === 'completed') {
@@ -145,7 +183,25 @@ export async function getSplitStatus(
 
   const jobInfo = hasChildren ? null : await getSplitJobInfo(hashListId)
   const { status, message } = deriveSplitStatus(hasChildren, jobInfo)
-  const reviewGroups = status === 'ready' ? await getSplitReviewGroups(hashListId) : null
 
-  return { kind: 'ok', response: { status, reviewGroups, message } }
+  if (jobInfo?.state === 'failed') {
+    // Server-side-only log of the RAW failure reason (code review fix) —
+    // `message` above is already sanitized for the wire; the raw
+    // Postgres/Drizzle text an operator needs to actually debug the
+    // failure only ever reaches the log, never the dashboard client.
+    logger.warn({ hashListId, rawReason: jobInfo.failedReason }, 'hash-list-split job failed')
+  }
+
+  // `SplitStatusResponse` is a discriminated union keyed on `status`
+  // (code review fix): `reviewGroups` is required and non-null on the
+  // `ready` branch, and `null` on every other branch — never a flat
+  // "any status, nullable reviewGroups" shape a caller has to
+  // defensively re-check. Building the object inline (rather than a flat
+  // `{ status, reviewGroups, message }`) is what lets TypeScript actually
+  // verify that correlation against the discriminated union type.
+  if (status === 'ready') {
+    const reviewGroups = await getSplitReviewGroups(hashListId)
+    return { kind: 'ok', response: { status: 'ready', reviewGroups, message } }
+  }
+  return { kind: 'ok', response: { status, reviewGroups: null, message } }
 }

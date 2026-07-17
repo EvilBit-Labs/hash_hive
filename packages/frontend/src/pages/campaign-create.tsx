@@ -497,7 +497,11 @@ export function CampaignCreatePage() {
     const data = splitStatusQuery.data
     if (!data || splitPendingHashListId == null) return
 
-    if (data.status === 'ready' && data.reviewGroups) {
+    if (data.status === 'ready') {
+      // `SplitStatusResponse` is a discriminated union keyed on `status`
+      // (code review fix) — `reviewGroups` is required and non-null on the
+      // `ready` branch, so the old `&& data.reviewGroups` defensive check
+      // is no longer needed; the type system now guarantees it.
       setSplitReview(data.reviewGroups)
       setSplitAssignments({})
       setSplitPendingHashListId(null)

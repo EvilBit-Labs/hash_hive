@@ -1,22 +1,19 @@
 /**
  * Real-DB tests for issue #202 FU3/FU6 — ingestion type detection persistence.
  *
- * SCOPE NOTE (read before extending): this file does NOT drive
- * `createHashListParserWorker`'s BullMQ processor. That processor streams
- * its input from object storage (`downloadFile` in `config/storage.ts`) and
- * runs inside a real `bullmq.Worker`; the `test:db` lane provisions Postgres
- * only (no Redis, no S3/SeaweedFS — see the identical constraint documented
- * in `resource-compression-worker.db.test.ts` and `blob-reclamation.db.test.ts`).
- * Mocking `bullmq`/`config/storage.js` here would leak process-wide, because
- * `test:db` runs every file in `tests/db` in one `bun test` invocation
- * (GOTCHAS.md). Unlike `compressChunkedResourceObject` /
- * `reclaimExpiredResourceBlobs`, the parser worker has no injectable-deps
- * seam and no exported pure "parse and persist" core (only `parseHashLine`
- * and `createHashListParserWorker` are exported from
- * `queue/workers/hash-list-parser.ts`) — so there is currently no way to
- * drive the literal worker processor against real Postgres in this lane.
+ * SCOPE NOTE: the bulk of this file (the `ingestAndPersist`-driven describe
+ * blocks below) does NOT drive `createHashListParserWorker`'s BullMQ
+ * processor directly. That processor streams its input from object storage
+ * (`downloadFile` in `config/storage.ts`) and runs inside a real
+ * `bullmq.Worker`; the `test:db` lane provisions Postgres only (no Redis, no
+ * S3/SeaweedFS — see the identical constraint documented in
+ * `resource-compression-worker.db.test.ts` and
+ * `blob-reclamation.db.test.ts`). Mocking `bullmq`/`config/storage.js` here
+ * would leak process-wide, because `test:db` runs every file in `tests/db`
+ * in one `bun test` invocation (GOTCHAS.md).
  *
- * What this file DOES prove, faithfully, against real Postgres:
+ * What the `ingestAndPersist` blocks DO prove, faithfully, against real
+ * Postgres:
  *   - the REAL `parseHashLine` + REAL `guessTopHashType` + REAL
  *     `buildTypeAnalysis` (all imported, not reimplemented) compose into a
  *     histogram/verdict that round-trips intact through the real
@@ -27,12 +24,19 @@
  *     feature (R3 no-regression proof) — detection output never leaks onto
  *     hash_items rows, only onto hash_lists.type_analysis.
  *
- * The `ingestAndPersist` helper below is test-local orchestration composing
- * those three real exports plus the same `db.insert`/`db.update` calls the
- * worker issues. It is intentionally NOT a copy of the worker's batching/
- * streaming loop — see the module docstring above for why the actual
- * processor can't run here, and see FU6 report for the recommendation to
- * extract a pure `ingestHashListContent` core (out of scope for this file).
+ * The `ingestAndPersist` helper is test-local orchestration composing those
+ * three real exports plus the same `db.insert`/`db.update` calls the worker
+ * issues. It exists mainly to exercise an injectable `scanLimit` (simulating
+ * the `sampled` cap without touching the real 1,000,000 constant) that the
+ * extracted worker core below does not expose.
+ *
+ * FU6 follow-up (closed): `queue/workers/hash-list-parser.ts` now exports
+ * `ingestHashListContent` — the actual parse/batch/insert/detect/persist
+ * core the BullMQ processor delegates to (mirrors `hash-import-worker.ts`'s
+ * `processImportPairs`). The "real worker core wiring" describe block below
+ * drives THAT function directly against real Postgres — closing the gap
+ * this file used to only document — rather than composing the same three
+ * primitives a second time.
  *
  * Scale-cap (`TYPE_DETECTION_SCAN_CAP = 1_000_000`) is NOT exercised at its
  * real threshold here — seeding a million rows in a shared db-lane process
@@ -59,7 +63,7 @@ import { and, count, eq, sql } from 'drizzle-orm'
 import { randomBytes } from 'node:crypto'
 
 import { db } from '../../src/db/index.js'
-import { parseHashLine } from '../../src/queue/workers/hash-list-parser.js'
+import { ingestHashListContent, parseHashLine } from '../../src/queue/workers/hash-list-parser.js'
 import { guessTopHashType } from '../../src/services/hash-analysis.js'
 import { buildTypeAnalysis } from '../../src/services/hash-items/type-analysis.js'
 
@@ -427,5 +431,86 @@ describe('ingestion type detection — guarded flip (status must be processing)'
     expect(persisted!.status).toBe('ready')
     // type_analysis was never written because the guarded UPDATE was a no-op.
     expect(persisted!.typeAnalysis).toBeNull()
+  })
+})
+
+// ─── Real worker core wiring (FU6 follow-up) ──────────────────────────────────
+//
+// Drives `ingestHashListContent` — the ACTUAL exported core
+// `createHashListParserWorker`'s BullMQ processor delegates to — directly
+// against real Postgres. Unlike the `ingestAndPersist`-driven blocks above,
+// nothing here is reimplemented: `lines` is handed straight to the real
+// parse/batch/insert/detect/persist pipeline, closing the gap the module
+// docstring used to flag as future work.
+
+describe('ingestHashListContent — real worker core, real Postgres', () => {
+  it('parses, inserts, and persists a homogeneous verdict via the actual exported worker core', async () => {
+    const lines = sha512Lines(15)
+    const listId = await createProcessingList('real-core-homogeneous')
+
+    const result = await ingestHashListContent(listId, lines, null)
+
+    expect(result.flipped).toBe(true)
+    expect(result.linesProcessed).toBe(15)
+    expect(result.skippedLines).toBe(0)
+    expect(result.typeAnalysis.verdict).toBe('homogeneous')
+    expect(result.typeAnalysis.detectedModes).toEqual([{ hashcatMode: 1700, count: 15 }])
+    expect(result.typeAnalysis.unidentifiedCount).toBe(0)
+    expect(result.typeAnalysis.scannedCount).toBe(15)
+    expect(result.typeAnalysis.sampled).toBe(false)
+    expect(result.typeAnalysis.declaredMode).toBeNull()
+
+    const rows = await db
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, listId))
+    expect(rows).toHaveLength(15)
+
+    const [persisted] = await db
+      .select({ typeAnalysis: hashLists.typeAnalysis, status: hashLists.status })
+      .from(hashLists)
+      .where(eq(hashLists.id, listId))
+    expect(persisted!.status).toBe('ready')
+    expect(persisted!.typeAnalysis).toEqual(result.typeAnalysis)
+  })
+
+  it('persists declaredMode and flips to needs-review on a declared-vs-detected mismatch via the real core', async () => {
+    const lines = ntlmLines(5)
+    const listId = await createProcessingList('real-core-declared-mismatch')
+
+    // Declare SHA-512 Crypt-family mode 1700 while every line actually
+    // detects as NTLM (1000) — buildTypeAnalysis's mismatch branch forces
+    // needs-review even though a single mode clears the noise floor.
+    const result = await ingestHashListContent(listId, lines, 1700)
+
+    expect(result.typeAnalysis.declaredMode).toBe(1700)
+    expect(result.typeAnalysis.detectedModes).toEqual([{ hashcatMode: 1000, count: 5 }])
+    expect(result.typeAnalysis.verdict).toBe('needs-review')
+
+    const [persisted] = await db
+      .select({ typeAnalysis: hashLists.typeAnalysis })
+      .from(hashLists)
+      .where(eq(hashLists.id, listId))
+    expect(persisted!.typeAnalysis?.declaredMode).toBe(1700)
+    expect(persisted!.typeAnalysis?.verdict).toBe('needs-review')
+  })
+
+  it('skips blank and over-length lines the same way the worker does, and reports skippedLines', async () => {
+    const overLength = 'a'.repeat(10_001) // MAX_LINE_LENGTH is 10_000
+    const listId = await createProcessingList('real-core-skips')
+
+    const result = await ingestHashListContent(
+      listId,
+      ['', '   ', overLength, ...sha512Lines(2)],
+      null
+    )
+
+    expect(result.linesProcessed).toBe(2)
+    expect(result.skippedLines).toBe(1) // only the over-length line counts as skipped
+    const rows = await db
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, listId))
+    expect(rows).toHaveLength(2)
   })
 })

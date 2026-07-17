@@ -11,7 +11,7 @@ import {
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, eq, isNotNull, ne, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -122,7 +122,12 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
         count: sql<number>`count(*)`,
       })
       .from(campaigns)
-      .where(eq(campaigns.projectId, projectId))
+      // Split sub-campaigns (issue #202 second half) are children of a
+      // parent campaign; without this filter a split campaign would count
+      // as 1 parent + N sub-campaigns in the status breakdown instead of
+      // once. Matches `listCampaigns`' flat-list exclusion in
+      // `services/campaigns.ts`.
+      .where(and(eq(campaigns.projectId, projectId), isNull(campaigns.parentCampaignId)))
       .groupBy(campaigns.status),
 
     db

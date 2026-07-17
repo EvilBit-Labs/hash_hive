@@ -14,7 +14,10 @@ import { describe, expect, it } from 'bun:test'
  */
 import type { QueueJobInfo } from '../../../src/queue/manager.js'
 
-import { deriveSplitStatus } from '../../../src/services/campaign-split-status.js'
+import {
+  deriveSplitStatus,
+  sanitizeSplitError,
+} from '../../../src/services/campaign-split-status.js'
 
 function jobInfo(overrides: Partial<QueueJobInfo>): QueueJobInfo {
   return { state: 'completed', returnvalue: null, failedReason: null, ...overrides }
@@ -42,10 +45,21 @@ describe('deriveSplitStatus', () => {
     }
   })
 
-  it('no children, job failed -> failed with the failure reason', () => {
-    expect(
-      deriveSplitStatus(false, jobInfo({ state: 'failed', failedReason: 'DB connection lost' }))
-    ).toEqual({ status: 'failed', message: 'DB connection lost' })
+  it('no children, job failed -> failed with a SANITIZED message, never the raw failedReason', () => {
+    // Code review fix: `failedReason` is BullMQ's copy of the raw thrown
+    // Error.message — for a Postgres/Drizzle failure that can embed SQL,
+    // table, and column names, which must never round-trip straight to the
+    // dashboard client. A generic-sounding raw reason like "DB connection
+    // lost" isn't itself sensitive, but the point is the wire message must
+    // ALWAYS be the sanitized string, not a pass-through of whatever the
+    // worker happened to throw.
+    const result = deriveSplitStatus(
+      false,
+      jobInfo({ state: 'failed', failedReason: 'DB connection lost' })
+    )
+    expect(result.status).toBe('failed')
+    expect(result.message).toBe(sanitizeSplitError('DB connection lost'))
+    expect(result.message).not.toBe('DB connection lost')
   })
 
   it('no children, job failed with no failedReason -> failed with a fallback message', () => {
@@ -101,5 +115,33 @@ describe('deriveSplitStatus', () => {
     expect(
       deriveSplitStatus(false, jobInfo({ state: 'completed', returnvalue: 'not-an-object' }))
     ).toEqual({ status: 'pending', message: null })
+  })
+})
+
+describe('sanitizeSplitError', () => {
+  it('null failedReason -> generic fallback', () => {
+    expect(sanitizeSplitError(null)).toBe('Split analysis failed')
+  })
+
+  it('a "hash list ... not found" message -> Hash list not found', () => {
+    expect(sanitizeSplitError('Hash list 42 not found')).toBe('Hash list not found')
+  })
+
+  it('a connectivity-flavored message -> Storage backend unavailable', () => {
+    expect(sanitizeSplitError('connect ECONNREFUSED 127.0.0.1:5432')).toBe(
+      'Storage backend unavailable'
+    )
+    expect(sanitizeSplitError('Request timeout after 30000ms')).toBe('Storage backend unavailable')
+  })
+
+  it('never leaks raw SQL/internal text — unrecognized reasons collapse to the generic default', () => {
+    expect(
+      sanitizeSplitError(
+        'insert into "hash_items" ("hash_list_id","hash_value") values ($1,$2) - duplicate key value violates unique constraint "hash_items_pkey"'
+      )
+    ).toBe('Split analysis failed')
+    expect(sanitizeSplitError('split-worker: confident group is missing a hashcat mode')).toBe(
+      'Split analysis failed'
+    )
   })
 })

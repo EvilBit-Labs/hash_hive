@@ -36,7 +36,11 @@ export const splitReviewConfidentGroupSchema = z
 export const splitReviewAmbiguousGroupSchema = z
   .object({
     id: z.number().int().positive(),
-    candidateModes: z.array(z.number().int().nonnegative()),
+    // An ambiguous group is ambiguous BECAUSE the type-detection classifier
+    // found 2+ tied-confidence candidate modes for it — by construction it
+    // can never have fewer than 2 (code review fix: a single-candidate
+    // "ambiguous" group would be a classifier bug, not a valid wire shape).
+    candidateModes: z.array(z.number().int().nonnegative()).min(2),
     itemCount: z.number().int().nonnegative(),
   })
   .strict()
@@ -114,11 +118,64 @@ export const splitStatusLiteralSchema = z.enum([
   'single_group',
 ])
 
-export const splitStatusResponseSchema = z
+// Discriminated on `status` (mirrors `resourceUpdateEventDataSchema`'s wire
+// pattern) rather than a single flat object with `reviewGroups` nullable
+// across every status. The real invariant is `reviewGroups` non-null IFF
+// `status === 'ready'` — a flat shape lets any status carry any
+// `reviewGroups` value, so callers had to defensively re-check
+// `status === 'ready' && reviewGroups` even though the server never sends
+// the other combination (code review fix).
+const splitStatusReadySchema = z
   .object({
-    status: splitStatusLiteralSchema,
-    reviewGroups: splitReviewGroupsSchema.nullable(),
+    status: z.literal('ready'),
+    reviewGroups: splitReviewGroupsSchema,
     message: z.string().nullable(),
   })
   .strict()
+  .openapi('SplitStatusReady')
+
+const splitStatusPendingSchema = z
+  .object({
+    status: z.literal('pending'),
+    reviewGroups: z.null(),
+    message: z.string().nullable(),
+  })
+  .strict()
+  .openapi('SplitStatusPending')
+
+const splitStatusFailedSchema = z
+  .object({
+    status: z.literal('failed'),
+    reviewGroups: z.null(),
+    message: z.string().nullable(),
+  })
+  .strict()
+  .openapi('SplitStatusFailed')
+
+const splitStatusEmptySchema = z
+  .object({
+    status: z.literal('empty'),
+    reviewGroups: z.null(),
+    message: z.string().nullable(),
+  })
+  .strict()
+  .openapi('SplitStatusEmpty')
+
+const splitStatusSingleGroupSchema = z
+  .object({
+    status: z.literal('single_group'),
+    reviewGroups: z.null(),
+    message: z.string().nullable(),
+  })
+  .strict()
+  .openapi('SplitStatusSingleGroup')
+
+export const splitStatusResponseSchema = z
+  .discriminatedUnion('status', [
+    splitStatusPendingSchema,
+    splitStatusReadySchema,
+    splitStatusFailedSchema,
+    splitStatusEmptySchema,
+    splitStatusSingleGroupSchema,
+  ])
   .openapi('SplitStatusResponse')

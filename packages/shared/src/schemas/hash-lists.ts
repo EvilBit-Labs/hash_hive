@@ -80,6 +80,10 @@ export const hashListTypeAnalysisSchema = z
     analyzedAt: z.string(),
   })
   .strict()
+  .refine((a) => a.unidentifiedCount <= a.scannedCount, {
+    message: 'unidentifiedCount cannot exceed scannedCount',
+    path: ['unidentifiedCount'],
+  })
   .openapi('HashListTypeAnalysis')
 
 export type HashListDetectedMode = z.infer<typeof hashListDetectedModeSchema>

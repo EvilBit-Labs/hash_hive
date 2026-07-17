@@ -87,18 +87,17 @@ export interface SplitItem {
 }
 
 /**
- * One partition of the parent's items. `mode` is present only for
- * `kind: 'confident'`; `candidateModes` only for `kind: 'ambiguous'` —
- * mirrors the cross-unit contract's `{ kind, mode?, candidateModes?,
- * itemIds }` shape (optional fields, not a discriminated union) so SU3/SU4
- * can read the group generically without narrowing first.
+ * One partition of the parent's items. Discriminated on `kind` — mirrors
+ * `ClassifyResult` one function up: `mode` exists only on the `confident`
+ * variant, `candidateModes` only on `ambiguous`, and `unidentified` carries
+ * neither. Every consumer (`buildSubListName`, `buildGroupTypeAnalysis`,
+ * `compareGroups`) narrows on `kind` before touching either field, so the
+ * type now enforces what those call sites already assumed at runtime.
  */
-export interface SplitGroup {
-  kind: GroupKind
-  mode?: number
-  candidateModes?: number[]
-  itemIds: number[]
-}
+export type SplitGroup =
+  | { kind: 'confident'; mode: number; itemIds: number[] }
+  | { kind: 'ambiguous'; candidateModes: number[]; itemIds: number[] }
+  | { kind: 'unidentified'; itemIds: number[] }
 
 export type SplitDegenerateReason = 'single-group' | 'empty' | null
 
@@ -127,25 +126,22 @@ function groupKey(classification: ClassifyResult): string {
   return 'unidentified'
 }
 
-interface WorkingGroup {
-  kind: GroupKind
-  mode?: number
-  candidateModes?: number[]
-  itemIds: number[]
-  seenHashValues: Set<string>
-}
+type WorkingGroup =
+  | { kind: 'confident'; mode: number; itemIds: number[]; seenHashValues: Set<string> }
+  | { kind: 'ambiguous'; candidateModes: number[]; itemIds: number[]; seenHashValues: Set<string> }
+  | { kind: 'unidentified'; itemIds: number[]; seenHashValues: Set<string> }
 
 function compareGroups(a: SplitGroup, b: SplitGroup): number {
   const kindDiff = GROUP_KIND_ORDER[a.kind] - GROUP_KIND_ORDER[b.kind]
   if (kindDiff !== 0) return kindDiff
 
-  if (a.kind === 'confident') {
-    return (a.mode ?? 0) - (b.mode ?? 0)
+  if (a.kind === 'confident' && b.kind === 'confident') {
+    return a.mode - b.mode
   }
 
-  if (a.kind === 'ambiguous') {
-    const aSig = a.candidateModes ?? []
-    const bSig = b.candidateModes ?? []
+  if (a.kind === 'ambiguous' && b.kind === 'ambiguous') {
+    const aSig = a.candidateModes
+    const bSig = b.candidateModes
     const maxLen = Math.max(aSig.length, bSig.length)
     for (let i = 0; i < maxLen; i++) {
       const diff = (aSig[i] ?? 0) - (bSig[i] ?? 0)
@@ -175,12 +171,17 @@ export function planSplit(items: readonly SplitItem[]): SplitPlan {
 
     let group = groups.get(key)
     if (!group) {
-      group = { kind: classification.kind, itemIds: [], seenHashValues: new Set<string>() }
-      if (classification.kind === 'confident') {
-        group.mode = classification.mode
-      } else if (classification.kind === 'ambiguous') {
-        group.candidateModes = classification.signature
-      }
+      group =
+        classification.kind === 'confident'
+          ? { kind: 'confident', mode: classification.mode, itemIds: [], seenHashValues: new Set() }
+          : classification.kind === 'ambiguous'
+            ? {
+                kind: 'ambiguous',
+                candidateModes: classification.signature,
+                itemIds: [],
+                seenHashValues: new Set(),
+              }
+            : { kind: 'unidentified', itemIds: [], seenHashValues: new Set() }
       groups.set(key, group)
     }
 
@@ -192,13 +193,16 @@ export function planSplit(items: readonly SplitItem[]): SplitPlan {
     group.itemIds.push(item.id)
   }
 
-  const orderedGroups = [...groups.values()]
-    .map(({ kind, mode, candidateModes, itemIds }) => ({
-      kind,
-      ...(mode !== undefined ? { mode } : {}),
-      ...(candidateModes !== undefined ? { candidateModes } : {}),
-      itemIds,
-    }))
+  const orderedGroups: SplitGroup[] = [...groups.values()]
+    .map((group): SplitGroup => {
+      if (group.kind === 'confident') {
+        return { kind: 'confident', mode: group.mode, itemIds: group.itemIds }
+      }
+      if (group.kind === 'ambiguous') {
+        return { kind: 'ambiguous', candidateModes: group.candidateModes, itemIds: group.itemIds }
+      }
+      return { kind: 'unidentified', itemIds: group.itemIds }
+    })
     .sort(compareGroups)
 
   return {

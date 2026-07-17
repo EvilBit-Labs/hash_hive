@@ -25,8 +25,23 @@ import { hashItems, hashLists, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq } from 'drizzle-orm'
 
+import type { SplitSubList } from '../../src/queue/workers/hash-list-split.js'
+
 import { db } from '../../src/db/index.js'
 import { runSplitAnalysis } from '../../src/queue/workers/hash-list-split.js'
+
+/**
+ * Type-narrowing helper for `SplitSubList`'s discriminated union — `.mode`
+ * only exists on the `confident` variant, so a plain `.find(s => s.kind ===
+ * 'confident')` doesn't narrow the return type; this predicate form does.
+ */
+function findConfident(
+  subLists: readonly SplitSubList[]
+): Extract<SplitSubList, { kind: 'confident' }> | undefined {
+  return subLists.find(
+    (s): s is Extract<SplitSubList, { kind: 'confident' }> => s.kind === 'confident'
+  )
+}
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -126,7 +141,7 @@ describe('runSplitAnalysis — real split (mixed confident + ambiguous + unident
     )
 
     // ── Confident sub-list: detected_hashcat_mode set + homogeneous type_analysis ──
-    const confidentSummary = result.subLists.find((s) => s.kind === 'confident')
+    const confidentSummary = findConfident(result.subLists)
     expect(confidentSummary).toBeDefined()
     expect(confidentSummary?.mode).toBe(SHA512_CRYPT_MODE)
     expect(confidentSummary?.itemCount).toBe(confidentValues.length)
@@ -144,10 +159,10 @@ describe('runSplitAnalysis — real split (mixed confident + ambiguous + unident
       { hashcatMode: SHA512_CRYPT_MODE, count: confidentValues.length },
     ])
 
-    // ── Ambiguous sub-list: null mode, needs-review, candidate modes surfaced ──
+    // ── Ambiguous sub-list: no `mode` field, needs-review, candidate modes surfaced ──
     const ambiguousSummary = result.subLists.find((s) => s.kind === 'ambiguous')
     expect(ambiguousSummary).toBeDefined()
-    expect(ambiguousSummary?.mode).toBeNull()
+    expect(ambiguousSummary).not.toHaveProperty('mode')
     expect(ambiguousSummary?.itemCount).toBe(ambiguousValues.length)
     const ambiguousRows = await itemsOf(ambiguousSummary!.id)
     expect(ambiguousRows).toHaveLength(ambiguousValues.length)
@@ -163,10 +178,10 @@ describe('runSplitAnalysis — real split (mixed confident + ambiguous + unident
       HEX32_SIGNATURE.map((hashcatMode) => ({ hashcatMode, count: ambiguousValues.length }))
     )
 
-    // ── Unidentified sub-list: null mode, needs-review, empty detectedModes ──
+    // ── Unidentified sub-list: no `mode` field, needs-review, empty detectedModes ──
     const unidentifiedSummary = result.subLists.find((s) => s.kind === 'unidentified')
     expect(unidentifiedSummary).toBeDefined()
-    expect(unidentifiedSummary?.mode).toBeNull()
+    expect(unidentifiedSummary).not.toHaveProperty('mode')
     expect(unidentifiedSummary?.itemCount).toBe(unidentifiedValues.length)
     const unidentifiedRows = await itemsOf(unidentifiedSummary!.id)
     expect(unidentifiedRows).toHaveLength(unidentifiedValues.length)
@@ -204,11 +219,11 @@ describe('runSplitAnalysis — real split (mixed confident + ambiguous + unident
     // The already-split reconstruction (summarizeExistingChildren) must
     // report the same kind/mode as the original split — this is the
     // contract SU3 reads on a re-driven job, not just a raw child count.
-    const reconstructedConfident = second.subLists.find((s) => s.kind === 'confident')
+    const reconstructedConfident = findConfident(second.subLists)
     expect(reconstructedConfident?.mode).toBe(SHA512_CRYPT_MODE)
     expect(reconstructedConfident?.itemCount).toBe(1)
     const reconstructedAmbiguous = second.subLists.find((s) => s.kind === 'ambiguous')
-    expect(reconstructedAmbiguous?.mode).toBeNull()
+    expect(reconstructedAmbiguous).not.toHaveProperty('mode')
     expect(reconstructedAmbiguous?.itemCount).toBe(1)
   })
 })

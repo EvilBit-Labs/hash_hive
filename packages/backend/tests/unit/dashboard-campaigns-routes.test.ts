@@ -1257,6 +1257,22 @@ if (!IS_ISOLATED) {
       expect(body.hashListId).toBe(9)
     })
 
+    // Code review fix: a swallowed enqueue failure used to still return
+    // `split_pending`/202 with no job ever created, so the wizard's status
+    // poll sat at "pending" forever with no error surfaced. The service
+    // now returns a typed `split_enqueue_failed` outcome instead, and the
+    // route maps it to a 503 the client can actually show an error for.
+    it('returns 503 SPLIT_ENQUEUE_FAILED when the async split job could not be enqueued', async () => {
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
+        kind: 'split_enqueue_failed',
+        hashListId: 9,
+      })
+      const res = await postCampaign({ name: 'Mixed list, enqueue fails', hashListId: 9 })
+      expect(res.status).toBe(503)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('SPLIT_ENQUEUE_FAILED')
+    })
+
     it('passes skipSplit through to createCampaignOrSplit', async () => {
       mockCreateCampaignOrSplit.mockClear()
       const res = await postCampaign({ name: 'Skip split', hashListId: 1, skipSplit: true })
@@ -1350,6 +1366,23 @@ if (!IS_ISOLATED) {
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
       expect(body.error?.code).toBe('SPLIT_ASSIGNMENT_INVALID')
       expect(body.error?.message).toContain('not a candidate')
+    })
+
+    // Code review fix: the confirm route previously had no try/catch
+    // around confirmSplitCampaign, so an unexpected throw (DB blip mid
+    // merge/create sequence) fell through to the generic onError handler
+    // as a 500 instead of a typed, retryable 503 — mirrors the create
+    // route's equivalent test above.
+    it('returns 503 SERVICE_UNAVAILABLE when confirmSplitCampaign throws', async () => {
+      mockConfirmSplitCampaign.mockRejectedValueOnce(new Error('ECONNRESET during confirm txn'))
+      const res = await postConfirm({
+        parentHashListId: 1,
+        name: 'DB blip',
+        assignments: [{ subListId: 12, mode: 1000 }],
+      })
+      expect(res.status).toBe(503)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('SERVICE_UNAVAILABLE')
     })
 
     it('registers /campaigns/split/confirm in the served openapi.json without a schema-registration error', async () => {

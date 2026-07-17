@@ -377,6 +377,17 @@ describe('Dashboard stats route — project-scoped query construction', () => {
     expect(paramValuesOf(predicate)).toEqual([1])
   })
 
+  it('campaigns query: where(...) also excludes split sub-campaigns (parentCampaignId IS NOT NULL)', async () => {
+    // A split campaign (issue #202 second half) is 1 parent + N sub-campaigns
+    // sharing the same status — without this filter the status breakdown
+    // would count a single split campaign N+1 times.
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.whereCalls.campaigns.length).toBe(1)
+    const predicate = queryRows.whereCalls.campaigns[0]!
+    expect(referencesColumn(predicate, campaigns.parentCampaignId)).toBe(true)
+  })
+
   it('tasks query: joins through campaigns and filters where campaigns.projectId === session.projectId', async () => {
     const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
     expect(res.status).toBe(200)

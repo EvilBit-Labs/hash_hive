@@ -256,7 +256,8 @@ const createCampaignRoute = createRoute({
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     503: {
-      description: 'Transactional create could not run (e.g. DB unavailable).',
+      description:
+        'Transactional create could not run (e.g. DB unavailable), or the target hash list is mixed and the async split-analysis job could not be enqueued (SPLIT_ENQUEUE_FAILED).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
   },
@@ -354,6 +355,19 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'split_enqueue_failed') {
+    logger.warn(
+      { hashListId: result.hashListId, route: 'POST /campaigns', projectId, userId },
+      'split analysis could not be enqueued — surfacing as service unavailable instead of split_pending'
+    )
+    return dashboardError(
+      c,
+      503,
+      'SPLIT_ENQUEUE_FAILED',
+      'Unable to schedule split analysis for this hash list right now. Try again in a moment.'
+    )
+  }
+
   if (result.kind === 'split_pending') {
     return c.json({ splitPending: true as const, hashListId: result.hashListId }, 202)
   }
@@ -410,6 +424,10 @@ const confirmSplitCampaignRoute = createRoute({
         'Parent hash list has not been split yet, or an assignment is invalid (unknown sub-list, not ambiguous, or an out-of-candidate mode).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
+    503: {
+      description: 'Transactional confirm could not run (e.g. DB unavailable).',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
   },
 })
 
@@ -418,16 +436,36 @@ campaignRoutes.openapi(confirmSplitCampaignRoute, async (c) => {
   const { userId, projectId } = c.get('scopedUser')!
   const actor = { actorType: 'user' as const, actorId: userId }
 
-  const result = await confirmSplitCampaign({
-    projectId,
-    parentHashListId: data.parentHashListId,
-    name: data.name,
-    description: data.description,
-    priority: data.priority,
-    createdBy: userId,
-    assignments: data.assignments,
-    actor,
-  })
+  // Wrap in try/catch so a DB blip during the merge/create sequence
+  // surfaces as a typed 503 instead of bubbling to onError as a generic
+  // 500 (code review fix — mirrors the create route's handler above).
+  let result: Awaited<ReturnType<typeof confirmSplitCampaign>>
+  try {
+    result = await confirmSplitCampaign({
+      projectId,
+      parentHashListId: data.parentHashListId,
+      name: data.name,
+      description: data.description,
+      priority: data.priority,
+      createdBy: userId,
+      assignments: data.assignments,
+      actor,
+    })
+  } catch (err) {
+    logger.error(
+      { err, route: 'POST /campaigns/split/confirm', projectId, userId },
+      'confirmSplitCampaign threw — surfacing as service unavailable'
+    )
+    return c.json(
+      {
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Unable to confirm the split campaign right now',
+        },
+      },
+      503
+    )
+  }
 
   switch (result.kind) {
     case 'not_found':

@@ -119,6 +119,34 @@ async function campaignsOn(hashListId: number) {
   return db.select().from(campaigns).where(eq(campaigns.hashListId, hashListId))
 }
 
+/**
+ * The db test lane has no live Redis, so the real `getQueueManager()`
+ * returns `undefined` — meaning `enqueueSplitJob` genuinely fails and
+ * `createCampaignOrSplit` correctly reports `split_enqueue_failed` (code
+ * review fix; see the dedicated "enqueue failure" describe block below,
+ * which exercises that real, UNstubbed path deliberately). The tests in
+ * this file that simulate "the job was enqueued and the worker already
+ * ran it" need the OPPOSITE signal: a successful enqueue, so
+ * `createCampaignOrSplit` returns `split_pending` the same way it would
+ * against a real, healthy queue, so the test can then call
+ * `runSplitAnalysis` directly to simulate the worker (the db lane has no
+ * live worker to consume the job either way — mirrors
+ * `hash-list-split.db.test.ts`'s convention).
+ */
+async function withFakeSuccessfulEnqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const fakeQueueManager = { enqueue: async () => true }
+  const originalGetQueueContext = _campaignSplitDeps.getQueueContext
+  _campaignSplitDeps.getQueueContext = (() =>
+    Promise.resolve({
+      getQueueManager: () => fakeQueueManager,
+    })) as typeof _campaignSplitDeps.getQueueContext
+  try {
+    return await fn()
+  } finally {
+    _campaignSplitDeps.getQueueContext = originalGetQueueContext
+  }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('createCampaignOrSplit + confirmSplitCampaign — mixed list full flow', () => {
@@ -134,13 +162,19 @@ describe('createCampaignOrSplit + confirmSplitCampaign — mixed list full flow'
     ])
 
     // First call against a never-split mixed parent: no `runSplitAnalysis`
-    // run inline (SU7) — just the pending signal. No children yet.
-    const createResult = await createCampaignOrSplit({
-      projectId: projId,
-      name: 'mixed-campaign',
-      hashListId: parentId,
-      attacks: [],
-    })
+    // run inline (SU7) — just the pending signal. No children yet. The db
+    // lane has no live Redis, so a real enqueue would fail (code review
+    // fix — see the dedicated "enqueue failure" describe block); stub a
+    // successful enqueue here to simulate a healthy queue and reach the
+    // `split_pending` state this test wants to exercise.
+    const createResult = await withFakeSuccessfulEnqueue(() =>
+      createCampaignOrSplit({
+        projectId: projId,
+        name: 'mixed-campaign',
+        hashListId: parentId,
+        attacks: [],
+      })
+    )
     expect(createResult.kind).toBe('split_pending')
     if (createResult.kind !== 'split_pending') throw new Error('expected split_pending')
     expect(createResult.hashListId).toBe(parentId)
@@ -368,12 +402,16 @@ describe('createCampaignOrSplit — non-split regression + degenerate cases', ()
     // ingestion-time "mixed" verdict — planSplit collapses to one group.
     await insertHashValues(listId, [sha512Crypt('deg00001'), sha512Crypt('deg00002')])
 
-    const pendingResult = await createCampaignOrSplit({
-      projectId: projId,
-      name: 'degenerate-single-campaign',
-      hashListId: listId,
-      attacks: [],
-    })
+    // The db lane has no live Redis, so stub a successful enqueue (see
+    // `withFakeSuccessfulEnqueue`'s doc comment) to reach `split_pending`.
+    const pendingResult = await withFakeSuccessfulEnqueue(() =>
+      createCampaignOrSplit({
+        projectId: projId,
+        name: 'degenerate-single-campaign',
+        hashListId: listId,
+        attacks: [],
+      })
+    )
     expect(pendingResult.kind).toBe('split_pending')
 
     // Simulate the worker running the job: the classifier collapses to one
@@ -412,12 +450,16 @@ describe('createCampaignOrSplit — non-split regression + degenerate cases', ()
   it('degenerate-empty: enqueues (split_pending) and creates no campaign or children once the worker runs', async () => {
     const listId = await createHashList('split-confirm-degenerate-empty', mixedTypeAnalysis())
 
-    const pendingResult = await createCampaignOrSplit({
-      projectId: projId,
-      name: 'degenerate-empty-campaign',
-      hashListId: listId,
-      attacks: [],
-    })
+    // The db lane has no live Redis, so stub a successful enqueue (see
+    // `withFakeSuccessfulEnqueue`'s doc comment) to reach `split_pending`.
+    const pendingResult = await withFakeSuccessfulEnqueue(() =>
+      createCampaignOrSplit({
+        projectId: projId,
+        name: 'degenerate-empty-campaign',
+        hashListId: listId,
+        attacks: [],
+      })
+    )
     expect(pendingResult.kind).toBe('split_pending')
 
     const splitResult = await runSplitAnalysis(listId)
@@ -464,5 +506,206 @@ describe('getSplitStatus — degenerate outcomes read through a stubbed QueueMan
     } finally {
       _campaignSplitDeps.getQueueContext = originalGetQueueContext
     }
+  })
+})
+
+describe('createCampaignOrSplit — enqueue failure (code review fix)', () => {
+  it('returns split_enqueue_failed, never split_pending, when the queue enqueue call itself fails', async () => {
+    const listId = await createHashList('split-enqueue-failure', mixedTypeAnalysis())
+    await insertHashValues(listId, [sha512Crypt('enqueue-fail-1')])
+
+    // The db test lane has no live Redis, so this stubs
+    // `_campaignSplitDeps.getQueueContext` — the same seam
+    // `enqueueSplitJob` uses — with a QueueManager whose `enqueue` resolves
+    // `false` (mirrors what the real QueueManager returns when `queue.add`
+    // throws or the queue isn't registered; see `queue/manager.ts`).
+    // Previously this failure was discarded and `createCampaignOrSplit`
+    // still returned `split_pending`, leaving the wizard polling forever
+    // against a job that was never created.
+    const fakeQueueManager = { enqueue: async () => false }
+    const originalGetQueueContext = _campaignSplitDeps.getQueueContext
+    _campaignSplitDeps.getQueueContext = (() =>
+      Promise.resolve({
+        getQueueManager: () => fakeQueueManager,
+      })) as typeof _campaignSplitDeps.getQueueContext
+
+    try {
+      const result = await createCampaignOrSplit({
+        projectId: projId,
+        name: 'enqueue-failure-campaign',
+        hashListId: listId,
+        attacks: [],
+      })
+      expect(result.kind).toBe('split_enqueue_failed')
+      if (result.kind !== 'split_enqueue_failed') throw new Error('expected split_enqueue_failed')
+      expect(result.hashListId).toBe(listId)
+
+      // No job, no children, no campaign — nothing was created.
+      expect(await childrenOf(listId)).toHaveLength(0)
+      expect(await campaignsOn(listId)).toHaveLength(0)
+    } finally {
+      _campaignSplitDeps.getQueueContext = originalGetQueueContext
+    }
+  })
+})
+
+describe('confirmSplitCampaign — self-healing retries (code review fix)', () => {
+  const BACKFILL_MODE_A = 9_999_401
+  const BACKFILL_MODE_B = 9_999_402
+  const RETRY_MODE_A = 9_999_501
+  const RETRY_MODE_B = 9_999_502
+
+  async function makeAmbiguousParentWithTwoChildren(
+    slug: string,
+    modeA: number,
+    modeB: number
+  ): Promise<{ parentId: number; childAId: number; childBId: number }> {
+    const parentId = await createHashList(slug)
+    const childAId = await createHashList(
+      `${slug}-child-a`,
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: modeA, count: 2 },
+          { hashcatMode: modeA + 1, count: 2 },
+        ],
+        scannedCount: 2,
+      }),
+      parentId
+    )
+    const childBId = await createHashList(
+      `${slug}-child-b`,
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: modeB, count: 3 },
+          { hashcatMode: modeB + 1, count: 3 },
+        ],
+        scannedCount: 3,
+      }),
+      parentId
+    )
+    await insertHashValues(childAId, [`${slug}-a-1`, `${slug}-a-2`])
+    await insertHashValues(childBId, [`${slug}-b-1`, `${slug}-b-2`, `${slug}-b-3`])
+    return { parentId, childAId, childBId }
+  }
+
+  it('partial confirm (parent + 1 of 2 sub-campaigns) self-heals on retry: backfills the missing sub-campaign without duplicating the surviving one', async () => {
+    const { parentId, childAId, childBId } = await makeAmbiguousParentWithTwoChildren(
+      'split-confirm-backfill',
+      BACKFILL_MODE_A,
+      BACKFILL_MODE_B
+    )
+
+    const firstResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'backfill-campaign',
+      assignments: [
+        { subListId: childAId, mode: BACKFILL_MODE_A },
+        { subListId: childBId, mode: BACKFILL_MODE_B },
+      ],
+    })
+    expect(firstResult.kind).toBe('confirmed')
+    if (firstResult.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(firstResult.subCampaigns).toHaveLength(2)
+
+    // Simulate the documented crash window: a prior run got as far as
+    // creating the parent campaign and ONE of the two sub-campaigns before
+    // dying. Deleting one of the just-created sub-campaign rows reproduces
+    // that exact DB state (parent exists, children already resolved,
+    // partial sub-campaign set) without needing to literally interrupt
+    // `confirmSplitCampaign` mid-execution.
+    const survivingSub = firstResult.subCampaigns.find((s) => s.hashListId === childAId)!
+    const missingSub = firstResult.subCampaigns.find((s) => s.hashListId === childBId)!
+    await db.delete(campaigns).where(eq(campaigns.id, missingSub.id))
+    expect(await campaignsOn(childBId)).toHaveLength(0)
+
+    // Retry with the SAME assignments the first call used.
+    const retryResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'backfill-campaign',
+      assignments: [
+        { subListId: childAId, mode: BACKFILL_MODE_A },
+        { subListId: childBId, mode: BACKFILL_MODE_B },
+      ],
+    })
+    expect(retryResult.kind).toBe('confirmed')
+    if (retryResult.kind !== 'confirmed') throw new Error('expected confirmed')
+
+    // Same parent campaign — never re-created.
+    expect(retryResult.parentCampaign.id).toBe(firstResult.parentCampaign.id)
+
+    // The complete set is now present: the surviving sub-campaign is
+    // returned UNCHANGED (same id, not recreated); the missing one is
+    // backfilled with a fresh row targeting the same sub-list + mode.
+    expect(retryResult.subCampaigns).toHaveLength(2)
+    const retrySurviving = retryResult.subCampaigns.find((s) => s.hashListId === childAId)
+    const retryBackfilled = retryResult.subCampaigns.find((s) => s.hashListId === childBId)
+    expect(retrySurviving?.id).toBe(survivingSub.id)
+    expect(retryBackfilled?.id).not.toBe(missingSub.id)
+    expect(retryBackfilled?.mode).toBe(BACKFILL_MODE_B)
+
+    // DB-level: exactly one campaign row per sub-list under this parent —
+    // no duplicate for the surviving one, exactly one backfilled row for
+    // the missing one.
+    const allSubs = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.parentCampaignId, retryResult.parentCampaign.id))
+    expect(allSubs).toHaveLength(2)
+    expect(await campaignsOn(childAId)).toHaveLength(1)
+    expect(await campaignsOn(childBId)).toHaveLength(1)
+  })
+
+  it('a fully-confirmed ambiguous split re-run returns the same set with no duplicates and no invalid_assignment 409 (permanent-409 regression)', async () => {
+    const { parentId, childAId, childBId } = await makeAmbiguousParentWithTwoChildren(
+      'split-confirm-full-retry',
+      RETRY_MODE_A,
+      RETRY_MODE_B
+    )
+
+    const assignments = [
+      { subListId: childAId, mode: RETRY_MODE_A },
+      { subListId: childBId, mode: RETRY_MODE_B },
+    ]
+
+    const firstResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'full-retry-campaign',
+      assignments,
+    })
+    expect(firstResult.kind).toBe('confirmed')
+    if (firstResult.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(firstResult.subCampaigns).toHaveLength(2)
+
+    // Re-run with the IDENTICAL assignments — a client retry after a
+    // timeout on an already-successful response. Before the fix, this
+    // would hit `invalid_assignment` on every retry (the children are no
+    // longer 'needs-review') with no way to ever get a `confirmed`
+    // response back.
+    const retryResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'full-retry-campaign',
+      assignments,
+    })
+    expect(retryResult.kind).toBe('confirmed')
+    if (retryResult.kind !== 'confirmed') throw new Error('expected confirmed')
+
+    expect(retryResult.parentCampaign.id).toBe(firstResult.parentCampaign.id)
+    const firstIds = firstResult.subCampaigns.map((s) => s.id).sort((a, b) => a - b)
+    const retryIds = retryResult.subCampaigns.map((s) => s.id).sort((a, b) => a - b)
+    expect(retryIds).toEqual(firstIds)
+
+    // DB-level: still exactly 2 sub-campaigns under this parent — the
+    // retry created nothing new.
+    const allSubs = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.parentCampaignId, retryResult.parentCampaign.id))
+    expect(allSubs).toHaveLength(2)
   })
 })

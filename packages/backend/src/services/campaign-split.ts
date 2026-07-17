@@ -41,13 +41,22 @@
  * still holding a row lock — a same-process deadlock, not just a race — so
  * this mirrors the rest of the codebase's pattern of chaining independent
  * transactions rather than reworking `createCampaign`/`createCampaignWithAttacks`
- * to accept an external `tx` handle. A crash between steps can leave the
- * merge committed with some/none of the campaigns created; a retry of
- * `confirmSplitCampaign` is safe for the un-created campaigns (the
- * assignments have already been applied, so a second call's assignment
- * validation will reject the affected sub-lists as no-longer-ambiguous) but
- * duplicate campaigns are the operator's problem for now — acceptable for
- * v1 per the unit's scope.
+ * to accept an external `tx` handle.
+ *
+ * A crash between steps can leave the merge committed with some/none of the
+ * campaigns created. `confirmSplitCampaign` is self-healing across a
+ * SEQUENTIAL retry of the same call (code review fix): `applyAssignmentsAndMerge`
+ * tolerates re-submitting assignments a prior run already applied instead of
+ * rejecting them as no-longer-ambiguous, and the parent-campaign lookup that
+ * follows backfills any `mergeResult.groups` entry that doesn't already have
+ * a linked sub-campaign — a fully-completed prior run backfills nothing, a
+ * partial one completes. This does NOT cover genuinely CONCURRENT confirms
+ * against the same parent racing each other past the parent-campaign
+ * existence check before either has committed its create — that residual
+ * duplicate-creation risk is unchanged from before and still the operator's
+ * problem for now (acceptable for v1 per the unit's scope; the `for('update')`
+ * row lock inside `applyAssignmentsAndMerge` only serializes the merge step,
+ * not the campaign creates that follow it in a separate transaction).
  */
 import type {
   ResolvedSubCampaign,
@@ -102,20 +111,24 @@ const SPLIT_JOB_RETENTION_SECONDS = 10 * 60
 
 /**
  * Enqueues the async split-analysis job for a mixed hash list (issue #202
- * SU7). Best-effort: a missing queue manager or an enqueue throw is
- * swallowed, never rethrown — mirrors `enqueueLineCount` in
- * `services/resources/line-count-trigger.ts`. A swallowed failure here
- * means the wizard's status poll sits at `pending` forever (degraded mode,
- * same as every other best-effort enqueue trigger in this codebase); it
- * never blocks or fails the `POST /campaigns` request itself.
+ * SU7). Returns whether the enqueue actually succeeded — a missing queue
+ * manager or an enqueue throw both resolve to `false` rather than
+ * rethrowing (mirrors `enqueueLineCount` in
+ * `services/resources/line-count-trigger.ts` for the never-throw part),
+ * but unlike that best-effort trigger the caller (`createCampaignOrSplit`)
+ * MUST check this return value: a swallowed `false` here with no caller
+ * follow-up would leave no job running and no campaign created, so the
+ * wizard's status poll would sit at `pending` forever with no way to
+ * recover (code review fix — see `CreateCampaignOrSplitResult`'s
+ * `split_enqueue_failed` branch).
  */
-async function enqueueSplitJob(hashListId: number, projectId: number): Promise<void> {
+async function enqueueSplitJob(hashListId: number, projectId: number): Promise<boolean> {
   try {
     const { getQueueManager } = await _campaignSplitDeps.getQueueContext()
     const { QUEUE_NAMES } = await _campaignSplitDeps.getQueueConfig()
     const qm = getQueueManager()
-    if (!qm) return
-    await qm.enqueue(
+    if (!qm) return false
+    return await qm.enqueue(
       QUEUE_NAMES.HASH_LIST_SPLIT,
       { hashListId, projectId },
       {
@@ -126,6 +139,7 @@ async function enqueueSplitJob(hashListId: number, projectId: number): Promise<v
     )
   } catch (err) {
     logger.warn({ err, hashListId }, 'failed to enqueue hash-list-split job')
+    return false
   }
 }
 
@@ -197,6 +211,13 @@ export type CreateCampaignOrSplitResult =
   // review groups and call `confirmSplitCampaign` instead of getting a
   // campaign back directly.
   | ({ kind: 'split_review' } & SplitReviewGroups)
+  // The target list is mixed and unsplit, but the async split job could
+  // NOT be enqueued (queue manager unavailable, or the enqueue itself
+  // failed). No campaign was created and no job is running — the caller
+  // must surface this as a hard failure, never as `split_pending` (code
+  // review fix: `split_pending` here would have the wizard poll forever
+  // against a job that doesn't exist).
+  | { kind: 'split_enqueue_failed'; hashListId: number }
 
 /**
  * Create-path entry point (issue #202 SU3/SU7). Same input shape as
@@ -272,7 +293,16 @@ export async function createCampaignOrSplit(input: {
   // synchronous request-path work). The two degenerate outcomes
   // (`degenerate-empty` / `degenerate-single-group`) that used to be
   // handled here synchronously now surface through the status poll.
-  await enqueueSplitJob(targetList.id, input.projectId)
+  //
+  // Code review fix: the enqueue's success is no longer discarded. A
+  // failed enqueue means there is no job for the status poll to ever find
+  // — returning `split_pending` anyway would have the wizard poll
+  // `GET /campaigns/split/status/{hashListId}` forever against a job that
+  // was never created, with no error ever surfacing.
+  const enqueued = await enqueueSplitJob(targetList.id, input.projectId)
+  if (!enqueued) {
+    return { kind: 'split_enqueue_failed', hashListId: targetList.id }
+  }
   return { kind: 'split_pending', hashListId: targetList.id }
 }
 
@@ -381,6 +411,19 @@ async function applyAssignmentsAndMerge(
 
   const childById = new Map(children.map((c) => [c.id, c]))
 
+  // Code review fix (self-healing retries): a subListId that is no longer
+  // an ambiguous child — because it was already resolved (or merged away)
+  // by a PRIOR run of this exact call — used to hard-fail validation here,
+  // turning a legitimate retry (client timeout after the server already
+  // committed, a crash between this transaction and the sequential
+  // campaign creates that follow it) into a PERMANENT 409: every retry
+  // re-submits the same assignments, and every retry fails the same way,
+  // with no way to ever complete. The two branches below (`continue`
+  // instead of erroring) make this validation pass idempotent: a request
+  // whose assignments were already fully or partially applied by a prior
+  // committed run of this call is treated as "already done" rather than
+  // "invalid". `confirmSplitCampaign`'s existing-parent-campaign check
+  // (below) then backfills whatever the prior run didn't finish creating.
   const seenSubListIds = new Set<number>()
   for (const assignment of input.assignments) {
     if (seenSubListIds.has(assignment.subListId)) {
@@ -393,13 +436,29 @@ async function applyAssignmentsAndMerge(
 
     const child = childById.get(assignment.subListId)
     if (!child) {
-      return {
-        kind: 'invalid_assignment',
-        reason: `Sub-list ${assignment.subListId} is not a child of hash list ${parent.id}`,
-      }
+      // The ONLY thing that ever deletes a `hash_lists` child row is the
+      // KTD6 same-mode merge below, and that only ever runs as part of
+      // THIS function. A missing child is therefore either a genuinely
+      // bogus id (the wizard only ever sources subListIds from a review
+      // groups response it fetched, so this would require a client bug)
+      // or one this exact assignment already merged away in a prior run —
+      // tolerate it as a no-op rather than erroring, since there is no
+      // durable way to tell the two apart and erroring breaks the retry.
+      continue
     }
 
     const typeAnalysis = child.typeAnalysis
+    if (typeAnalysis?.verdict === 'homogeneous') {
+      // Already resolved — either originally confident (never needed this
+      // assignment) or resolved by a prior run of this same assignment.
+      // No re-validation against the (now-gone) ambiguous state; it is
+      // already picked up by the `resolved` collection loop below via its
+      // own stored mode, whether or not it matches `assignment.mode`
+      // (mode is immutable once resolved — this assignment can't "undo"
+      // a resolution to try a different one).
+      continue
+    }
+
     const candidateModes = typeAnalysis?.detectedModes.map((d) => d.hashcatMode) ?? []
     const isAmbiguous = typeAnalysis?.verdict === 'needs-review' && candidateModes.length > 0
     if (!isAmbiguous) {
@@ -521,16 +580,31 @@ export async function confirmSplitCampaign(input: {
     return mergeResult
   }
 
-  // Idempotency guard (P2 code review fix): an all-confident split has an
-  // empty `assignments` payload, so a client retry (e.g. a timeout after
-  // the server already committed) would otherwise re-run the merge
-  // (harmless — the resolved groups recompute to the same result) and then
-  // create a SECOND full parent + sub-campaign set, since
-  // `campaigns.hashListId` carries no unique constraint. Detect a prior
-  // confirm by looking for the parent campaign this call would otherwise
-  // create — a campaign already targeting `parentHashListId` with no
-  // `parentCampaignId` of its own — and, if found, reconstruct the
-  // response from the existing rows instead of creating duplicates.
+  // Idempotency guard + self-healing backfill (code review fix, extends the
+  // original P2 guard). `mergeResult.groups` is now ALWAYS the full,
+  // current, resolved sub-list set for this parent — regardless of whether
+  // this is the first-ever call or a retry, because `applyAssignmentsAndMerge`
+  // above tolerates re-submitting already-applied assignments instead of
+  // erroring. So `mergeResult.groups` is exactly "the expected sub-list
+  // set" this function needs to have a campaign for.
+  //
+  // Detect a prior confirm by looking for the parent campaign this call
+  // would otherwise create — a campaign already targeting
+  // `parentHashListId` with no `parentCampaignId` of its own. Three cases:
+  //   - No prior confirm: no existing parent campaign. Create the parent,
+  //     then every sub-campaign in `mergeResult.groups`.
+  //   - Prior confirm crashed before creating the parent (but after the
+  //     merge transaction committed): same as above — `mergeResult.groups`
+  //     reflects the already-resolved children, so this creates the parent
+  //     + full sub-campaign set fresh, exactly once.
+  //   - Prior confirm crashed partway through the sub-campaign loop (or
+  //     completed fully): the parent campaign exists. BACKFILL only the
+  //     `mergeResult.groups` entries that don't already have a
+  //     `campaigns` row linked via `parentCampaignId` + `hashListId` —
+  //     a fully-completed prior run backfills nothing (returns the
+  //     existing set unchanged); a partial one completes it. Never
+  //     re-creates a sub-campaign for a group that already has one, so
+  //     `campaigns.hashListId` needing no unique constraint stays safe.
   const [existingParentCampaign] = await db
     .select()
     .from(campaigns)
@@ -543,57 +617,63 @@ export async function confirmSplitCampaign(input: {
     )
     .limit(1)
 
-  if (existingParentCampaign) {
-    const existingSubCampaignRows = await db
-      .select()
-      .from(campaigns)
-      .where(
-        and(
-          eq(campaigns.parentCampaignId, existingParentCampaign.id),
-          eq(campaigns.projectId, input.projectId)
-        )
-      )
-
-    const existingSubCampaigns: ResolvedSubCampaign[] = existingSubCampaignRows.map((sub) => {
-      if (sub.hashcatMode === null) {
-        // A sub-campaign created via this flow always latches hashcatMode
-        // at insert time (see createCampaign below) — a null here means
-        // the row was never actually created by confirmSplitCampaign, so
-        // surface it loudly rather than shipping a bogus `mode: 0`.
-        throw new Error(`confirmSplitCampaign: existing sub-campaign ${sub.id} has no hashcatMode`)
-      }
-      return {
-        id: sub.id,
-        hashListId: sub.hashListId,
-        mode: sub.hashcatMode,
-        parentCampaignId: existingParentCampaign.id,
-      }
-    })
-
-    return {
-      kind: 'confirmed',
-      parentCampaign: existingParentCampaign,
-      subCampaigns: existingSubCampaigns,
-    }
-  }
-
-  const parentCampaign = await createCampaign(
-    {
-      projectId: input.projectId,
-      name: input.name,
-      description: input.description,
-      hashListId: input.parentHashListId,
-      priority: input.priority,
-      createdBy: input.createdBy,
-    },
-    input.actor
-  )
+  const parentCampaign =
+    existingParentCampaign ??
+    (await createCampaign(
+      {
+        projectId: input.projectId,
+        name: input.name,
+        description: input.description,
+        hashListId: input.parentHashListId,
+        priority: input.priority,
+        createdBy: input.createdBy,
+      },
+      input.actor
+    ))
   if (!parentCampaign) {
     throw new Error('confirmSplitCampaign: parent campaign insert returned no row')
   }
 
+  const existingSubCampaignRows = existingParentCampaign
+    ? await db
+        .select()
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.parentCampaignId, parentCampaign.id),
+            eq(campaigns.projectId, input.projectId)
+          )
+        )
+    : []
+  // Keyed by the sub-list `hashListId` a sub-campaign targets — that's the
+  // stable identity `mergeResult.groups` cross-references against, not the
+  // sub-campaign's own id.
+  const existingByHashListId = new Map(existingSubCampaignRows.map((sub) => [sub.hashListId, sub]))
+
   const subCampaigns: ResolvedSubCampaign[] = []
   for (const group of mergeResult.groups) {
+    const existingSub = existingByHashListId.get(group.id)
+    if (existingSub) {
+      if (existingSub.hashcatMode === null) {
+        // A sub-campaign created via this flow always latches hashcatMode
+        // at insert time (see the createCampaign call below) — a null here
+        // means the row was never actually created by confirmSplitCampaign,
+        // so surface it loudly rather than shipping a bogus `mode: 0`.
+        throw new Error(
+          `confirmSplitCampaign: existing sub-campaign ${existingSub.id} has no hashcatMode`
+        )
+      }
+      subCampaigns.push({
+        id: existingSub.id,
+        hashListId: group.id,
+        mode: existingSub.hashcatMode,
+        parentCampaignId: parentCampaign.id,
+      })
+      continue
+    }
+
+    // Not yet created (first-ever run, or backfilling what a partial prior
+    // run left missing).
     const subCampaign = await createCampaign(
       {
         projectId: input.projectId,
@@ -606,14 +686,20 @@ export async function confirmSplitCampaign(input: {
       },
       input.actor
     )
-    if (subCampaign) {
-      subCampaigns.push({
-        id: subCampaign.id,
-        hashListId: group.id,
-        mode: group.mode,
-        parentCampaignId: parentCampaign.id,
-      })
+    if (!subCampaign) {
+      // Mirrors the parent-campaign guard above (code review fix): a group
+      // silently vanishing from the response because its insert raced to
+      // no row is worse than a loud failure the caller can retry.
+      throw new Error(
+        `confirmSplitCampaign: sub-campaign insert for hash list ${group.id} returned no row`
+      )
     }
+    subCampaigns.push({
+      id: subCampaign.id,
+      hashListId: group.id,
+      mode: group.mode,
+      parentCampaignId: parentCampaign.id,
+    })
   }
 
   return { kind: 'confirmed', parentCampaign, subCampaigns }
