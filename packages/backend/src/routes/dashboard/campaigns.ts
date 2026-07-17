@@ -4,7 +4,10 @@ import {
   type CampaignStatus,
   campaignEtaSchema,
   changeCampaignPriorityRequestSchema,
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
   inlineAttackRequestSchema,
+  splitReviewGroupsSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -20,9 +23,8 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
+import { confirmSplitCampaign, createCampaignOrSplit } from '../../services/campaign-split.js'
 import {
-  createCampaign,
-  createCampaignWithAttacks,
   deleteCampaign,
   changeRunningCampaignPriority,
   computeCampaignEtaState,
@@ -218,8 +220,19 @@ const createCampaignRoute = createRoute({
       description: 'Campaign (and any inline attacks) created.',
       content: { 'application/json': { schema: createCampaignResponseSchema } },
     },
+    // Issue #202 SU3: the target hash list's persisted `type_analysis`
+    // says it mixes more than one hash type — no campaign is created.
+    // The caller must resolve the `ambiguous` groups' candidate modes and
+    // confirm via `POST /campaigns/split/confirm`.
+    200: {
+      description:
+        'The target hash list is mixed — split analysis ran and no campaign was created. Resolve the returned review groups and call POST /campaigns/split/confirm.',
+      content: { 'application/json': { schema: splitReviewGroupsSchema } },
+    },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    // Also covers HASH_LIST_SPLIT_EMPTY (issue #202 SU3): the target hash
+    // list is mixed-verdict but has zero crackable items to split.
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
       description: 'Inline attacks referenced a missing resource.',
@@ -242,44 +255,30 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
 
   const actor = { actorType: 'user' as const, actorId: userId }
 
-  // No attacks supplied → legacy single-row insert (backward compatible).
-  if (!data.attacks || data.attacks.length === 0) {
-    const campaign = await createCampaign(
-      {
-        name: data.name,
-        description: data.description,
-        hashListId: data.hashListId,
-        priority: data.priority,
-        projectId,
-        createdBy: userId,
-      },
-      actor
-    )
-    return c.json({ campaign, attacks: [] }, 201)
-  }
-
-  // Attacks supplied → single-transaction create + resource +
-  // DAG pre-check. Wrap in try/catch so a DB blip during the
-  // pre-check or the transaction surfaces as a typed 503 instead
-  // of bubbling to onError as a generic 500. The discriminated
-  // result handles the *expected* failure modes (dag_invalid,
-  // resource_missing); this catches the *unexpected* throws.
-  let result: Awaited<ReturnType<typeof createCampaignWithAttacks>>
+  // Single entry point regardless of whether inline attacks were supplied
+  // (issue #202 SU3) — `createCampaignOrSplit` reads the target hash
+  // list's `type_analysis.verdict` first and either passes through to the
+  // normal single-transaction create (unanalyzed/homogeneous list, or a
+  // mixed-verdict list whose split classifier degenerates to one group)
+  // or short-circuits into the split/review flow. Wrap in try/catch so a
+  // DB blip during the pre-check or the transaction surfaces as a typed
+  // 503 instead of bubbling to onError as a generic 500.
+  let result: Awaited<ReturnType<typeof createCampaignOrSplit>>
   try {
-    result = await createCampaignWithAttacks({
+    result = await createCampaignOrSplit({
       name: data.name,
       description: data.description,
       hashListId: data.hashListId,
       priority: data.priority,
       projectId,
       createdBy: userId,
-      attacks: data.attacks,
+      attacks: data.attacks ?? [],
       actor,
     })
   } catch (err) {
     logger.error(
-      { err, route: 'POST /campaigns (with attacks)', projectId, userId },
-      'createCampaignWithAttacks threw — surfacing as service unavailable'
+      { err, route: 'POST /campaigns', projectId, userId },
+      'createCampaignOrSplit threw — surfacing as service unavailable'
     )
     return c.json(
       {
@@ -341,7 +340,108 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'split_empty') {
+    return dashboardError(
+      c,
+      400,
+      'HASH_LIST_SPLIT_EMPTY',
+      'Hash list has no crackable items to split into a campaign'
+    )
+  }
+
+  if (result.kind === 'split_review') {
+    return c.json(
+      {
+        parentHashListId: result.parentHashListId,
+        confident: result.confident,
+        ambiguous: result.ambiguous,
+        unidentified: result.unidentified,
+      },
+      200
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
+})
+
+// ─── Split confirm (issue #202 SU3) ────────────────────────────────
+//
+// A dedicated two-segment path (`/split/confirm`) so it can never collide
+// with the `/{id}` detail route regardless of registration order — Hono
+// matches on path shape, and `split` is never a valid campaign id.
+const confirmSplitCampaignRoute = createRoute({
+  method: 'post',
+  path: '/split/confirm',
+  tags: ['Campaigns'],
+  summary:
+    'Confirm a mixed hash-list split: resolve ambiguous groups, then create the parent + sub-campaigns',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: confirmSplitCampaignRequestSchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Parent campaign and its resolved sub-campaigns created.',
+      content: { 'application/json': { schema: confirmSplitCampaignResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: {
+      description: "Parent hash list not found or outside the caller's project.",
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    409: {
+      description:
+        'Parent hash list has not been split yet, or an assignment is invalid (unknown sub-list, not ambiguous, or an out-of-candidate mode).',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
+
+campaignRoutes.openapi(confirmSplitCampaignRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { userId, projectId } = c.get('scopedUser')!
+  const actor = { actorType: 'user' as const, actorId: userId }
+
+  const result = await confirmSplitCampaign({
+    projectId,
+    parentHashListId: data.parentHashListId,
+    name: data.name,
+    description: data.description,
+    priority: data.priority,
+    createdBy: userId,
+    assignments: data.assignments,
+    actor,
+  })
+
+  switch (result.kind) {
+    case 'not_found':
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    case 'not_split':
+      return dashboardError(
+        c,
+        409,
+        'HASH_LIST_NOT_SPLIT',
+        'Hash list has not been split yet — POST /campaigns against it first'
+      )
+    case 'invalid_assignment':
+      return dashboardError(c, 409, 'SPLIT_ASSIGNMENT_INVALID', result.reason)
+    case 'confirmed':
+      return c.json(
+        {
+          parentCampaignId: result.parentCampaign.id,
+          parentHashListId: data.parentHashListId,
+          subCampaigns: result.subCampaigns,
+        },
+        201
+      )
+  }
 })
 
 const getCampaignRoute = createRoute({

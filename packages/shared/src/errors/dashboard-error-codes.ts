@@ -83,6 +83,18 @@ export const DASHBOARD_ERROR_CODES = [
   // create/update when the new mode differs from an existing non-terminal
   // sibling attack in the same campaign.
   'ATTACK_MODE_CONFLICT',
+  // ─── Campaign-wizard split + review flow (issue #202 SU3) ─────────
+  // The split classifier found no crackable items at all — there is
+  // nothing to build a campaign or a review flow around.
+  'HASH_LIST_SPLIT_EMPTY',
+  // `confirmSplitCampaign` was called against a hash list that has not
+  // been split yet (no children) — the caller must POST /campaigns
+  // first to trigger the split.
+  'HASH_LIST_NOT_SPLIT',
+  // A split-confirm assignment referenced a sub-list that isn't a child
+  // of the given parent, isn't an ambiguous group awaiting review, or
+  // picked a mode outside that group's candidate modes.
+  'SPLIT_ASSIGNMENT_INVALID',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

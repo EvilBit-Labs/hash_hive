@@ -282,6 +282,19 @@ export {
   hashListTypeAnalysisSchema,
 } from './hash-lists.js'
 
+// Campaign-wizard split + review flow wire shapes (issue #202 SU3). See
+// schemas/campaign-split.ts for the full flow description.
+export {
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
+  resolvedSubCampaignSchema,
+  splitAssignmentRequestSchema,
+  splitReviewAmbiguousGroupSchema,
+  splitReviewConfidentGroupSchema,
+  splitReviewGroupsSchema,
+  splitReviewUnidentifiedGroupSchema,
+} from './campaign-split.js'
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.

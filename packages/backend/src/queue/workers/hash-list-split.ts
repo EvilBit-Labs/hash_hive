@@ -38,6 +38,7 @@ import type { HashListSplitJob } from '../types.js'
 import { logger } from '../../config/logger.js'
 import { QUEUE_NAMES } from '../../config/queue.js'
 import { db } from '../../db/index.js'
+import { moveHashItemsToList } from '../../services/hash-items/move-items.js'
 import { planSplit } from '../../services/hash-items/split-analysis.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -271,13 +272,12 @@ export async function runSplitAnalysis(parentHashListId: number): Promise<SplitR
 
       const subListId = subList!.id
 
-      await tx
-        .update(hashItems)
-        .set({
-          hashListId: subListId,
-          ...(group.kind === 'confident' ? { detectedHashcatMode: group.mode } : {}),
-        })
-        .where(inArray(hashItems.id, group.itemIds))
+      await moveHashItemsToList(
+        tx,
+        group.itemIds,
+        subListId,
+        group.kind === 'confident' ? group.mode : undefined
+      )
 
       createdSubLists.push({
         id: subListId,

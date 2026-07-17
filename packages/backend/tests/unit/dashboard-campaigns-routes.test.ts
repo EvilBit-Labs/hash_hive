@@ -398,6 +398,43 @@ if (!IS_ISOLATED) {
     _deps: {},
   }))
 
+  // ─── Mock the Campaign-Split Service (issue #202 SU3) ───────────────
+  //
+  // The create route now routes through `createCampaignOrSplit` (the
+  // create-path entry point for the split/review flow) instead of calling
+  // `createCampaignWithAttacks` directly. Fully stubbed — like
+  // `createCampaignWithAttacks` above — rather than spreading the real
+  // module, since the real implementation does its own `db` calls
+  // (`for('update')` row locks, etc.) that the naive `db` mock above
+  // cannot satisfy.
+  type CampaignSplitService = typeof import('../../src/services/campaign-split.js')
+  type CreateOrSplitResult = Awaited<ReturnType<CampaignSplitService['createCampaignOrSplit']>>
+  type ConfirmSplitResult = Awaited<ReturnType<CampaignSplitService['confirmSplitCampaign']>>
+
+  const mockCreateCampaignOrSplit = mock<CampaignSplitService['createCampaignOrSplit']>(
+    async () =>
+      ({
+        kind: 'created',
+        campaign: makeCampaign(),
+        attacks: [],
+      }) satisfies CreateOrSplitResult
+  )
+  const mockConfirmSplitCampaign = mock<CampaignSplitService['confirmSplitCampaign']>(
+    async () => ({ kind: 'not_found' }) satisfies ConfirmSplitResult
+  )
+  const mockGetSplitReviewGroups = mock<CampaignSplitService['getSplitReviewGroups']>(async () => ({
+    parentHashListId: 0,
+    confident: [],
+    ambiguous: [],
+    unidentified: [],
+  }))
+
+  mock.module('../../src/services/campaign-split.js', () => ({
+    createCampaignOrSplit: mockCreateCampaignOrSplit,
+    confirmSplitCampaign: mockConfirmSplitCampaign,
+    getSplitReviewGroups: mockGetSplitReviewGroups,
+  }))
+
   // Archive/restore live in campaign-dashboard.js and the archive route imports
   // them directly (not via the campaigns.js facade), so mock that module too.
   // Spread the REAL module first so every other export (getCampaignTaskStats,
@@ -1047,28 +1084,29 @@ if (!IS_ISOLATED) {
       })
     }
 
-    it('without attacks: routes to legacy createCampaign and returns 201', async () => {
-      mockCreateCampaign.mockClear()
-      mockCreateCampaignWithAttacks.mockClear()
+    // Issue #202 SU3: the route now has a single entry point
+    // (`createCampaignOrSplit`) regardless of whether inline attacks were
+    // supplied — it internally decides whether to fast-path a zero-attack
+    // insert or run the full DAG/resource pipeline. The three tests below
+    // (no attacks / empty attacks[] / with attacks) now all assert against
+    // the same mock; only the resolved value and request body differ.
+    it('without attacks: routes through createCampaignOrSplit and returns 201', async () => {
+      mockCreateCampaignOrSplit.mockClear()
       const res = await postCampaign({ name: 'Legacy', hashListId: 1 })
       expect(res.status).toBe(201)
-      expect(mockCreateCampaign).toHaveBeenCalledTimes(1)
-      expect(mockCreateCampaignWithAttacks).toHaveBeenCalledTimes(0)
+      expect(mockCreateCampaignOrSplit).toHaveBeenCalledTimes(1)
     })
 
-    it('with empty attacks[]: still routes to legacy createCampaign', async () => {
-      mockCreateCampaign.mockClear()
-      mockCreateCampaignWithAttacks.mockClear()
+    it('with empty attacks[]: still routes through createCampaignOrSplit', async () => {
+      mockCreateCampaignOrSplit.mockClear()
       const res = await postCampaign({ name: 'Empty attacks', hashListId: 1, attacks: [] })
       expect(res.status).toBe(201)
-      expect(mockCreateCampaign).toHaveBeenCalledTimes(1)
-      expect(mockCreateCampaignWithAttacks).toHaveBeenCalledTimes(0)
+      expect(mockCreateCampaignOrSplit).toHaveBeenCalledTimes(1)
     })
 
-    it('with attacks: routes to createCampaignWithAttacks and returns 201', async () => {
-      mockCreateCampaign.mockClear()
-      mockCreateCampaignWithAttacks.mockClear()
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+    it('with attacks: routes through createCampaignOrSplit and returns 201', async () => {
+      mockCreateCampaignOrSplit.mockClear()
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'created',
         campaign: makeCampaign({ name: 'With attacks' }),
         attacks: [
@@ -1085,8 +1123,7 @@ if (!IS_ISOLATED) {
         ],
       })
       expect(res.status).toBe(201)
-      expect(mockCreateCampaignWithAttacks).toHaveBeenCalledTimes(1)
-      expect(mockCreateCampaign).toHaveBeenCalledTimes(0)
+      expect(mockCreateCampaignOrSplit).toHaveBeenCalledTimes(1)
       const body = (await res.json()) as {
         attacks?: Array<{ id?: number; dependencies?: number[] | null }>
       }
@@ -1095,7 +1132,7 @@ if (!IS_ISOLATED) {
     })
 
     it('with cycle in inline attacks: returns 400 DAG_INVALID', async () => {
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'dag_invalid',
         error: 'Circular dependency detected among attacks',
       })
@@ -1114,7 +1151,7 @@ if (!IS_ISOLATED) {
     })
 
     it('with out-of-range dependency index: surfaces DAG_INVALID', async () => {
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'dag_invalid',
         error: 'Attack 5 depends on non-existent attack 99',
       })
@@ -1143,7 +1180,7 @@ if (!IS_ISOLATED) {
     })
 
     it('returns 409 RESOURCE_MISSING when transactional create surfaces a cross-project ref', async () => {
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'resource_missing',
         missing: ['wordlist(42)'],
       })
@@ -1159,7 +1196,7 @@ if (!IS_ISOLATED) {
     })
 
     it('returns 422 ATTACK_MODE_CONFLICT when inline attacks mix hashcat modes (issue #100 R15/AS1)', async () => {
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'mode_conflict',
         modes: [0, 1000],
       })
@@ -1175,7 +1212,7 @@ if (!IS_ISOLATED) {
     })
 
     it('with attacks sharing one mode: succeeds (no mode conflict)', async () => {
-      mockCreateCampaignWithAttacks.mockResolvedValueOnce({
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'created',
         campaign: makeCampaign({ name: 'Same mode' }),
         attacks: [
@@ -1189,6 +1226,109 @@ if (!IS_ISOLATED) {
         attacks: [{ mode: 0 }, { mode: 0 }],
       })
       expect(res.status).toBe(201)
+    })
+
+    // Issue #202 SU3: split/review branch.
+    it('returns 400 HASH_LIST_SPLIT_EMPTY when the mixed list has no crackable items', async () => {
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({ kind: 'split_empty' })
+      const res = await postCampaign({ name: 'Empty mixed list', hashListId: 1 })
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('HASH_LIST_SPLIT_EMPTY')
+    })
+
+    it('returns 200 with review groups when the target hash list is mixed', async () => {
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
+        kind: 'split_review',
+        parentHashListId: 1,
+        confident: [{ id: 11, mode: 1800, itemCount: 2 }],
+        ambiguous: [{ id: 12, candidateModes: [0, 900, 1000, 3000], itemCount: 2 }],
+        unidentified: [{ id: 13, itemCount: 1 }],
+      })
+      const res = await postCampaign({ name: 'Mixed list', hashListId: 1 })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        parentHashListId?: number
+        confident?: unknown[]
+        ambiguous?: unknown[]
+        unidentified?: unknown[]
+      }
+      expect(body.parentHashListId).toBe(1)
+      expect(body.confident).toHaveLength(1)
+      expect(body.ambiguous).toHaveLength(1)
+      expect(body.unidentified).toHaveLength(1)
+    })
+  })
+
+  describe('POST /campaigns/split/confirm', () => {
+    function postConfirm(body: Record<string, unknown>) {
+      return app.request(`${DASH_CAMPAIGNS}/split/confirm`, {
+        method: 'POST',
+        headers: { ...makeHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    }
+
+    it('returns 201 with the parent campaign id and resolved sub-campaigns on success', async () => {
+      mockConfirmSplitCampaign.mockResolvedValueOnce({
+        kind: 'confirmed',
+        parentCampaign: makeCampaign({ id: 300, parentCampaignId: null }),
+        subCampaigns: [
+          { id: 301, hashListId: 11, mode: 1800, parentCampaignId: 300 },
+          { id: 302, hashListId: 12, mode: 1000, parentCampaignId: 300 },
+        ],
+      })
+      const res = await postConfirm({
+        parentHashListId: 1,
+        name: 'Mixed list',
+        assignments: [{ subListId: 12, mode: 1000 }],
+      })
+      expect(res.status).toBe(201)
+      const body = (await res.json()) as {
+        parentCampaignId?: number
+        subCampaigns?: unknown[]
+      }
+      expect(body.parentCampaignId).toBe(300)
+      expect(body.subCampaigns).toHaveLength(2)
+    })
+
+    it('returns 404 RESOURCE_NOT_FOUND when the parent hash list does not exist', async () => {
+      mockConfirmSplitCampaign.mockResolvedValueOnce({ kind: 'not_found' })
+      const res = await postConfirm({ parentHashListId: 999, name: 'x', assignments: [] })
+      expect(res.status).toBe(404)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('RESOURCE_NOT_FOUND')
+    })
+
+    it('returns 409 HASH_LIST_NOT_SPLIT when the parent has not been split yet', async () => {
+      mockConfirmSplitCampaign.mockResolvedValueOnce({ kind: 'not_split' })
+      const res = await postConfirm({ parentHashListId: 1, name: 'x', assignments: [] })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error?: { code?: string } }
+      expect(body.error?.code).toBe('HASH_LIST_NOT_SPLIT')
+    })
+
+    it('returns 409 SPLIT_ASSIGNMENT_INVALID when an assignment is invalid', async () => {
+      mockConfirmSplitCampaign.mockResolvedValueOnce({
+        kind: 'invalid_assignment',
+        reason: 'Mode 1000 is not a candidate for sub-list 12',
+      })
+      const res = await postConfirm({
+        parentHashListId: 1,
+        name: 'x',
+        assignments: [{ subListId: 12, mode: 1000 }],
+      })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('SPLIT_ASSIGNMENT_INVALID')
+      expect(body.error?.message).toContain('not a candidate')
+    })
+
+    it('registers /campaigns/split/confirm in the served openapi.json without a schema-registration error', async () => {
+      const res = await app.request('/api/v1/dashboard/openapi.json', { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const spec = (await res.json()) as { paths?: Record<string, unknown> }
+      expect(spec.paths?.['/campaigns/split/confirm']).toBeDefined()
     })
   })
 
@@ -1473,8 +1613,8 @@ if (!IS_ISOLATED) {
   })
 
   describe('POST /campaigns: transactional create error handling', () => {
-    it('returns 503 SERVICE_UNAVAILABLE when createCampaignWithAttacks throws', async () => {
-      mockCreateCampaignWithAttacks.mockRejectedValueOnce(new Error('ECONNRESET during txn'))
+    it('returns 503 SERVICE_UNAVAILABLE when createCampaignOrSplit throws', async () => {
+      mockCreateCampaignOrSplit.mockRejectedValueOnce(new Error('ECONNRESET during txn'))
       const res = await app.request(DASH_CAMPAIGNS, {
         method: 'POST',
         headers: { ...makeHeaders(), 'content-type': 'application/json' },

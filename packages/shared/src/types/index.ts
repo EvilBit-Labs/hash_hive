@@ -152,6 +152,15 @@ import type {
   hashListListResponseSchema,
   hashListSummarySchema,
   hashListTypeAnalysisSchema,
+  // Campaign-wizard split + review flow (issue #202 SU3)
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
+  resolvedSubCampaignSchema,
+  splitAssignmentRequestSchema,
+  splitReviewAmbiguousGroupSchema,
+  splitReviewConfidentGroupSchema,
+  splitReviewGroupsSchema,
+  splitReviewUnidentifiedGroupSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -391,6 +400,14 @@ export type HashListSummary = z.infer<typeof hashListSummarySchema>
 export type HashListListResponse = z.infer<typeof hashListListResponseSchema>
 export type HashListDetectedMode = z.infer<typeof hashListDetectedModeSchema>
 export type HashListTypeAnalysis = z.infer<typeof hashListTypeAnalysisSchema>
+export type SplitReviewConfidentGroup = z.infer<typeof splitReviewConfidentGroupSchema>
+export type SplitReviewAmbiguousGroup = z.infer<typeof splitReviewAmbiguousGroupSchema>
+export type SplitReviewUnidentifiedGroup = z.infer<typeof splitReviewUnidentifiedGroupSchema>
+export type SplitReviewGroups = z.infer<typeof splitReviewGroupsSchema>
+export type SplitAssignmentRequest = z.infer<typeof splitAssignmentRequestSchema>
+export type ConfirmSplitCampaignRequest = z.infer<typeof confirmSplitCampaignRequestSchema>
+export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
+export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
