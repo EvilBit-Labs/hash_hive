@@ -43,6 +43,7 @@ function mockHashListDetailResponse(options: HashListDetailFixtureOptions = {}) 
         crackedCount,
         crackRate: totalCount === 0 ? 0 : crackedCount / totalCount,
       },
+      typeAnalysis: null,
       createdAt: new Date().toISOString(),
     },
   }

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useParams } from 'react-router'
 
 import { HashImportModal } from '../components/features/hash-import-modal'
+import { HashTypeWarning } from '../components/features/hash-type-warning'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { CrackedStatsLine } from '../components/features/results/cracked-stats-line'
 import { ExportButton } from '../components/features/results/export-button'
@@ -190,6 +191,8 @@ export function HashListDetailPage() {
           options={VIEW_OPTIONS}
         />
       </div>
+
+      <HashTypeWarning typeAnalysis={hashList.typeAnalysis} />
 
       {/* Statistics cards (shared across views — the hash list summary
           is the same regardless of which tab is active). */}
