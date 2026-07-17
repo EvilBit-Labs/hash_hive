@@ -909,3 +909,138 @@ describe('CampaignCreatePage submit flow', () => {
     }
   })
 })
+
+describe('CampaignCreatePage split-review flow (issue #202 SU6)', () => {
+  let qc: QueryClient
+
+  beforeEach(() => {
+    setAdminWithProject()
+    qc = createTestQueryClient()
+    seedResourceQueries(qc)
+    useCampaignWizard.setState({
+      step: 2,
+      name: 'Mixed List Campaign',
+      description: '',
+      priority: 5,
+      hashListId: HASH_LIST_WITH_TYPE.id,
+      attacks: [],
+    })
+  })
+
+  it('renders the split review UI (not a created campaign) when POST /campaigns returns 200', async () => {
+    fetchMock = mockFetch({
+      ...defaultRoutes(),
+      '/dashboard/campaigns': {
+        POST: {
+          status: 200,
+          body: {
+            parentHashListId: 9,
+            confident: [{ id: 201, mode: 1000, itemCount: 500 }],
+            ambiguous: [{ id: 202, candidateModes: [0, 100], itemCount: 250 }],
+            unidentified: [{ id: 203, itemCount: 10 }],
+          },
+        },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('This hash list mixes more than one hash type.')).toBeDefined()
+    })
+    expect(screen.getByText('500 hashes')).toBeDefined()
+    expect(screen.getByText('250 hashes')).toBeDefined()
+    expect(screen.getByText(/10 hashes need a type/)).toBeDefined()
+  })
+
+  it('disables Confirm until the ambiguous group is assigned, then POSTs the resolved assignment and resets the wizard on success', async () => {
+    fetchMock = mockFetch({
+      ...defaultRoutes(),
+      // NOTE: mockFetch matches routes by `url.includes(path)` in insertion
+      // order — the more specific `/split/confirm` path MUST be registered
+      // before the bare `/dashboard/campaigns` path, or every confirm POST
+      // would be swallowed by the campaigns-create route (both strings are
+      // substrings of the confirm URL).
+      '/dashboard/campaigns/split/confirm': {
+        POST: {
+          status: 201,
+          body: {
+            parentCampaignId: 555,
+            parentHashListId: 9,
+            subCampaigns: [{ id: 556, hashListId: 202, mode: 0, parentCampaignId: 555 }],
+          },
+        },
+      },
+      '/dashboard/campaigns': {
+        POST: {
+          status: 200,
+          body: {
+            parentHashListId: 9,
+            confident: [],
+            ambiguous: [{ id: 202, candidateModes: [0, 100], itemCount: 250 }],
+            unidentified: [],
+          },
+        },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Confirm & Create' })).toBeDefined()
+    })
+
+    const confirmButton = screen.getByRole('button', {
+      name: 'Confirm & Create',
+    }) as HTMLButtonElement
+    expect(confirmButton.disabled).toBe(true)
+
+    // HASH_TYPE_MD5 (hashcatMode: 0) is one of the two candidate modes —
+    // picking it renders as a "MD5 (mode 0)" radio in the SegmentedControl.
+    fireEvent.click(screen.getByRole('radio', { name: 'MD5 (mode 0)' }))
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole('button', { name: 'Confirm & Create' }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm & Create' }))
+
+    await waitFor(() => {
+      const confirmCall = fetchMock.mock.calls.find((args) => {
+        const url = typeof args[0] === 'string' ? args[0] : ''
+        return url.includes('/dashboard/campaigns/split/confirm')
+      })
+      expect(confirmCall).toBeDefined()
+    })
+
+    const confirmCall = fetchMock.mock.calls.find((args) => {
+      const url = typeof args[0] === 'string' ? args[0] : ''
+      return url.includes('/dashboard/campaigns/split/confirm')
+    })
+    const init = confirmCall?.[1] as RequestInit | undefined
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
+    expect(body.parentHashListId).toBe(9)
+    expect(body.name).toBe('Mixed List Campaign')
+    expect(body.assignments).toEqual([{ subListId: 202, mode: 0 }])
+
+    // Successful confirm resets the wizard (step -> 0) and clears the
+    // review state — Step 0's Campaign Name field reappears in place of
+    // the review UI.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Campaign Name')).toBeDefined()
+    })
+  })
+})

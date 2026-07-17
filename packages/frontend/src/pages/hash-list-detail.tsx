@@ -8,6 +8,10 @@ import { CrackedStatsLine } from '../components/features/results/cracked-stats-l
 import { ExportButton } from '../components/features/results/export-button'
 import { LiveIndicator } from '../components/features/results/live-indicator'
 import { ResultsTable } from '../components/features/results/results-table'
+import {
+  NeedsTypeNotice,
+  SubCampaignProgressSummary,
+} from '../components/features/split-parent-progress'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
 import { EmptyState } from '../components/ui/empty-state'
@@ -193,6 +197,17 @@ export function HashListDetailPage() {
       </div>
 
       <HashTypeWarning typeAnalysis={hashList.typeAnalysis} />
+
+      {/* Split-parent aggregated view (issue #202 SU5/SU6). Both fields are
+          `optional()` on the wire and present ONLY for a split parent, so a
+          normal (never-split) list renders neither section — no change from
+          today. */}
+      {hashList.subCampaignProgress && (
+        <SubCampaignProgressSummary progress={hashList.subCampaignProgress} />
+      )}
+      {(hashList.needsTypeCount ?? 0) > 0 && (
+        <NeedsTypeNotice count={hashList.needsTypeCount ?? 0} />
+      )}
 
       {/* Statistics cards (shared across views — the hash list summary
           is the same regardless of which tab is active). */}

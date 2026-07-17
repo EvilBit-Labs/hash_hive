@@ -1,3 +1,4 @@
+import type { SplitReviewGroups } from '@hashhive/shared'
 import type { Edge, Node as FlowNode, OnConnect } from 'reactflow'
 
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -12,6 +13,7 @@ import {
   type BasicInfoForm,
   BasicInfoStep,
   basicInfoSchema,
+  SplitReviewStep,
   TemplatePickerOverlay,
 } from '../components/features/campaign-wizard'
 import { ResourceUploadModal } from '../components/features/resource-upload-modal'
@@ -23,7 +25,7 @@ import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { Select } from '../components/ui/select'
 import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates'
-import { useCreateCampaign } from '../hooks/use-campaigns'
+import { useConfirmSplitCampaign, useCreateCampaign } from '../hooks/use-campaigns'
 import { usePermissions } from '../hooks/use-permissions'
 import {
   useHashLists,
@@ -83,8 +85,17 @@ export function CampaignCreatePage() {
   const wizard = useCampaignWizard()
   const navigate = useNavigate()
   const createCampaign = useCreateCampaign()
+  const confirmSplit = useConfirmSplitCampaign()
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Set when `createCampaign` comes back 200 with SplitReviewGroups instead
+  // of 201 with a created campaign (issue #202 SU3/SU6) — the target hash
+  // list mixed more than one hash type. Non-null switches Step 2's UI from
+  // the normal summary/create button to the split-review flow.
+  const [splitReview, setSplitReview] = useState<SplitReviewGroups | null>(null)
+  // Operator's mode pick per ambiguous group, keyed by `SplitReviewAmbiguousGroup.id`
+  // (the sub-list id, which doubles as `SplitAssignmentRequest.subListId`).
+  const [splitAssignments, setSplitAssignments] = useState<Record<number, number>>({})
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [uploadModal, setUploadModal] = useState<{
@@ -370,6 +381,16 @@ export function CampaignCreatePage() {
         priority: wizard.priority,
         ...(wizard.description ? { description: wizard.description } : {}),
       })
+
+      // The target hash list is mixed — no campaign was created. Switch
+      // Step 2 into the split-review flow instead of the attack-creation
+      // loop below; `finally` still clears `submitting`.
+      if (result.kind === 'split_review') {
+        setSplitReview(result.review)
+        setSplitAssignments({})
+        return
+      }
+
       campaignId = result.campaign.id
 
       // Clone the attacks list. The store currently replaces the array
@@ -445,9 +466,52 @@ export function CampaignCreatePage() {
     }
   }
 
+  const handleSplitAssignmentChange = (subListId: number, mode: number) => {
+    setSplitAssignments((prev) => ({ ...prev, [subListId]: mode }))
+  }
+
+  const handleConfirmSplit = async () => {
+    if (!splitReview) return
+
+    // Build the assignment list from the ambiguous groups the operator has
+    // resolved. The Confirm button is disabled until every ambiguous group
+    // has a pick, but don't trust that alone — a stale render or a future
+    // regression in the disabled condition must not silently submit a
+    // partial assignment set.
+    const assignmentsPayload = splitReview.ambiguous
+      .map((group) => ({ subListId: group.id, mode: splitAssignments[group.id] }))
+      .filter((a): a is { subListId: number; mode: number } => a.mode != null)
+
+    if (assignmentsPayload.length !== splitReview.ambiguous.length) {
+      setError('Assign a hash type to every ambiguous group before confirming.')
+      return
+    }
+
+    setError(null)
+    try {
+      const result = await confirmSplit.mutateAsync({
+        parentHashListId: splitReview.parentHashListId,
+        name: wizard.name,
+        ...(wizard.description ? { description: wizard.description } : {}),
+        priority: wizard.priority,
+        assignments: assignmentsPayload,
+      })
+      wizard.reset()
+      setSplitReview(null)
+      setSplitAssignments({})
+      void navigate(`/campaigns/${result.parentCampaignId}`)
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else if (err instanceof Error) setError(err.message)
+      else setError('Unexpected error confirming the split campaign. Check console for details.')
+    }
+  }
+
   const handleCancel = () => setCancelOpen(true)
   const confirmCancel = () => {
     wizard.reset()
+    setSplitReview(null)
+    setSplitAssignments({})
     setCancelOpen(false)
     void navigate('/campaigns')
   }
@@ -721,7 +785,19 @@ export function CampaignCreatePage() {
         </div>
       )}
 
-      {wizard.step === 2 && (
+      {wizard.step === 2 && splitReview && (
+        <SplitReviewStep
+          reviewGroups={splitReview}
+          hashTypes={hashTypes}
+          assignments={splitAssignments}
+          onAssignmentChange={handleSplitAssignmentChange}
+          onConfirm={handleConfirmSplit}
+          onCancel={handleCancel}
+          isConfirming={confirmSplit.isPending}
+        />
+      )}
+
+      {wizard.step === 2 && !splitReview && (
         <div className="space-y-4">
           <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
             <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
