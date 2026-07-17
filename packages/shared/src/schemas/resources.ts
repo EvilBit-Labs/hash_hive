@@ -241,6 +241,52 @@ export const resourceWireSchema = z
   .openapi('ResourceWire')
 
 /**
+ * Live cracked/total rollup across a split parent's mode-bearing
+ * sub-campaigns only (issue #202, SU5). Deliberately excludes needs-type
+ * children (no sub-campaign targets them) so the denominator never
+ * includes hashes nobody has assigned a crackable type to yet - see
+ * `subCampaignProgressWireSchema`'s doc comment for the full contract.
+ */
+export const subCampaignHashProgressWireSchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    cracked: z.number().int().nonnegative(),
+    remaining: z.number().int().nonnegative(),
+    percentage: z.number().min(0).max(1),
+  })
+  .openapi('SubCampaignHashProgress')
+
+/**
+ * Aggregated progress across a split parent hash list's mode-bearing
+ * sub-campaigns (issue #202, SU5). A split parent campaign has no attacks
+ * or tasks of its own - all cracking happens on its children
+ * (`campaigns.parentCampaignId`) - so this is computed on READ by
+ * combining each sub-campaign's own already-computed `progress` JSONB
+ * (`getHashListSplitProgress` in
+ * `packages/backend/src/services/hash-items/split-progress.ts`), not
+ * derived from the parent campaign's row.
+ *
+ * `done` is true only when EVERY sub-campaign counted here has reached
+ * `completed` - needs-type children have no sub-campaign at all, so they
+ * are excluded from both `subCampaignCount` and `done` by construction,
+ * not by a separate filter. This is what lets an otherwise-complete
+ * parent read as done even while `HashListDetailWire.needsTypeCount` is
+ * still nonzero.
+ */
+export const subCampaignProgressWireSchema = z
+  .object({
+    subCampaignCount: z.number().int().nonnegative(),
+    completedSubCampaignCount: z.number().int().nonnegative(),
+    done: z.boolean(),
+    totalTasks: z.number().int().nonnegative(),
+    completedTasks: z.number().int().nonnegative(),
+    tasksFailed: z.number().int().nonnegative(),
+    overallProgress: z.number().min(0).max(1),
+    hashProgress: subCampaignHashProgressWireSchema.nullable(),
+  })
+  .openapi('SubCampaignProgress')
+
+/**
  * Wire shape of a hash list detail row returned from
  * `GET /dashboard/resources/hash-lists/{id}`. Extends the list shape
  * with the parsed statistics payload.
@@ -254,6 +300,19 @@ export const resourceWireSchema = z
  * full DB row onto the wire via spread, so this field requires no
  * additional route-level mapping - it rides along with `hashTypeId`
  * and `status`.
+ *
+ * `needsTypeCount` / `subCampaignProgress` (#202, SU5) are ONLY present
+ * for a split PARENT hash list (one with children via
+ * `hash_lists.parent_hash_list_id`) - both are `optional()` so a normal
+ * (never-split) list's response omits them entirely rather than sending
+ * `null`, keeping the existing wire shape byte-for-byte unchanged for the
+ * common case. `needsTypeCount` is the number of hash-item ENTRIES (not
+ * groups) sitting in children that still need a type assigned before they
+ * can crack (`type_analysis.verdict === 'needs-review'` and no
+ * sub-campaign targets them yet) - deliberately kept OUT of `statistics`
+ * and `subCampaignProgress` so a parent with unresolved needs-type
+ * children doesn't read as stalled once every mode-bearing sub-campaign
+ * has actually finished.
  */
 export const hashListDetailWireSchema = z
   .object({
@@ -264,6 +323,8 @@ export const hashListDetailWireSchema = z
     status: resourceStatusSchema,
     statistics: hashListStatisticsSchema,
     typeAnalysis: hashListTypeAnalysisSchema.nullable(),
+    needsTypeCount: z.number().int().nonnegative().optional(),
+    subCampaignProgress: subCampaignProgressWireSchema.nullable().optional(),
     createdAt: z.string(),
   })
   .openapi('HashListDetailWire')

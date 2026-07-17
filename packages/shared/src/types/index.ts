@@ -140,6 +140,8 @@ import type {
   selectWordListSchema,
   sessionUserSchema,
   setHashListTypeRequestSchema,
+  subCampaignHashProgressWireSchema,
+  subCampaignProgressWireSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
   userRoleSchema,
@@ -411,6 +413,8 @@ export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignRe
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
+export type SubCampaignHashProgress = z.infer<typeof subCampaignHashProgressWireSchema>
+export type SubCampaignProgress = z.infer<typeof subCampaignProgressWireSchema>
 export type HashItemWire = z.infer<typeof hashItemWireSchema>
 export type HashItemsPageWire = z.infer<typeof hashItemsPageWireSchema>
 export type SetHashListTypeRequest = z.infer<typeof setHashListTypeRequestSchema>

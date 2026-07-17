@@ -22,6 +22,7 @@ import {
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
+import { getHashListSplitProgress } from '../../services/hash-items/split-progress.js'
 import {
   createHashList,
   deleteHashList,
@@ -363,6 +364,12 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
   const lastUpdated =
     typeof persistedStats['lastUpdated'] === 'string' ? persistedStats['lastUpdated'] : undefined
 
+  // Only a split PARENT hash list (one with children via
+  // `parent_hash_list_id`) gets `needsTypeCount` / `subCampaignProgress` -
+  // `null` for a leaf list, spread away below so a normal list's response
+  // is byte-for-byte unchanged (#202, SU5).
+  const splitProgress = await getHashListSplitProgress(hashListId, projectId)
+
   return c.json(
     {
       hashList: {
@@ -371,6 +378,12 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
           ...liveStats,
           ...(lastUpdated ? { lastUpdated } : {}),
         },
+        ...(splitProgress
+          ? {
+              needsTypeCount: splitProgress.needsTypeCount,
+              subCampaignProgress: splitProgress.subCampaignProgress,
+            }
+          : {}),
       },
     },
     200

@@ -346,6 +346,20 @@ if (!IS_ISOLATED) {
     guessHashType: () => [],
   }))
 
+  // `getHashListSplitProgress` (issue #202, SU5) is imported directly by
+  // the route (not re-exported through `services/resources.js`), so it
+  // needs its own mock — otherwise GET /hash-lists/{id} would call the
+  // REAL implementation against the stubbed `db` below, whose chain only
+  // resolves at `.limit()` (this function's queries don't call `.limit()`)
+  // and would throw on `children.map` since `await` on that stub's
+  // non-promise `.where()` result isn't an array. `null` mirrors the real
+  // return for a non-split (leaf) list — every test in this file uses a
+  // leaf `makeHashList`, so this default keeps every test byte-for-byte
+  // unchanged.
+  mock.module('../../src/services/hash-items/split-progress.js', () => ({
+    getHashListSplitProgress: mock(async () => null),
+  }))
+
   // Stub db + ioredis to keep src/index.ts evaluation cheap.
   mock.module('../../src/db/index.js', () => ({
     db: {

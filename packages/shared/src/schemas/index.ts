@@ -258,6 +258,8 @@ export {
   resourceUpdateEventDataSchema,
   resourceWireSchema,
   setHashListTypeRequestSchema,
+  subCampaignHashProgressWireSchema,
+  subCampaignProgressWireSchema,
 } from './resources.js'
 
 // Results API wire shapes + hashcat attack-mode lookup live in
