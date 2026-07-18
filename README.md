@@ -137,7 +137,7 @@ Users issue and rotate Control API keys from the dashboard Account page (`/accou
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — system overview, tech stack, data model, API surfaces
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — code style, naming, git workflow, PR process
 - **[STRATEGY.md](./STRATEGY.md)** — target problem, the five key metrics, the four investment tracks
-- **[BACKLOG.md](./BACKLOG.md)** — authoritative status of remaining work
+- **[GitHub issues](https://github.com/EvilBit-Labs/hash_hive/issues/166)** — authoritative status of remaining work, tracked under super-epic #166
 - **[docs/development.md](./docs/development.md)** — environment, commands, infrastructure services, env vars
 - **[docs/testing.md](./docs/testing.md)** — test strategy, bun:test patterns, mocking patterns
 - **[GOTCHAS.md](./GOTCHAS.md)** — hard-won lessons (TypeScript strict, Hono, Drizzle, BetterAuth, bun:test, frontend JSX)
