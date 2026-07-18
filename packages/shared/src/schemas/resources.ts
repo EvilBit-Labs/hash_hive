@@ -321,10 +321,10 @@ export const subCampaignProgressWireSchema = z
  * predates the analysis feature or hasn't been (re-)ingested yet,
  * otherwise the persisted `HashListTypeAnalysis` computed during
  * ingestion. The route (`getHashListRoute` in
- * `packages/backend/src/routes/dashboard/resources.ts`) projects the
- * full DB row onto the wire via spread, so this field requires no
- * additional route-level mapping - it rides along with `hashTypeId`
- * and `status`.
+ * `packages/backend/src/routes/dashboard/resources.ts`) maps the DB
+ * row's fields onto this schema explicitly (the response is validated
+ * against `hashListDetailWireSchema`), so `typeAnalysis` is projected
+ * alongside `hashTypeId` and `status`.
  *
  * `needsTypeCount` / `subCampaignProgress` (#202, SU5) are ONLY present
  * for a split PARENT hash list (one with children via
