@@ -16,7 +16,7 @@ This file provides AI coding assistants with project context. Substantive docume
 ## Planning & Status
 
 - **[STRATEGY.md](./STRATEGY.md)** -- target problem, approach, primary persona, the five key metrics, and the four investment tracks. Read before proposing scope changes or new features.
-- **[BACKLOG.md](./BACKLOG.md)** -- authoritative status of remaining work. Phase 1 is the 11 unfinished `spec/tickets/`; Phase 2 is the open GitHub issue backlog (#97-#124, grouped under epics #117-#121). Do NOT infer ticket completion from matching commit titles or file existence -- BACKLOG.md is the source of truth.
+- **GitHub issues are the authoritative status of remaining work.** All work nests under super-epic **[#166 — Phase 1 Foundation](https://github.com/EvilBit-Labs/hash_hive/issues/166)**, which tracks both phases as nested children (data-flow + Phase 2 sub-epics #117-#121). Read the live issue/epic state via `gh issue view <n>` or the GitHub project board -- do NOT infer ticket completion from matching commit titles or file existence. A prior `BACKLOG.md` mirrored this tree in-repo but drifted out of date and was removed; the GitHub issues are now the single source of truth.
 
 ## Project Overview
 
