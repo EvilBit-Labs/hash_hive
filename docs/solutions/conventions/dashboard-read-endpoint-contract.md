@@ -115,7 +115,7 @@ This convention applies **strictly to `/api/v1/dashboard/*`** GET endpoints. The
 | Shared inferred type | `packages/shared/src/types/index.ts` (`DashboardStats`, `CampaignStatus`) |
 | Route (binds shared schema in `createRoute(...)` → published in `/api/v1/dashboard/openapi.json`) | `packages/backend/src/routes/dashboard/stats.ts` |
 | Integration test | `packages/backend/tests/unit/dashboard-stats-routes.test.ts` |
-| Frontend consumer | `packages/frontend/src/hooks/use-dashboard.ts` (`useDashboardStats`); freshness via `packages/frontend/src/lib/event-routing.ts:73-84` |
+| Frontend consumer | `packages/frontend/src/hooks/use-dashboard.ts` (`useDashboardStats`); freshness via the `projectInvalidationKeys` map in `packages/frontend/src/lib/event-routing.ts` |
 
 ## Existing endpoints predating this contract
 
