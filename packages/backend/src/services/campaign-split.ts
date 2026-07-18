@@ -7,9 +7,14 @@
  *
  *   1. `createCampaignOrSplit` — the create-path entry point. Reads the
  *      target hash list's persisted `type_analysis.verdict` and branches:
- *        - `null` (never analyzed) or `homogeneous`, OR the caller passed
- *          `skipSplit: true` -> the existing single-mode path, unchanged
- *          (`createCampaignWithAttacks`).
+ *        - `null` (never analyzed) or `homogeneous` -> the existing
+ *          single-mode path, unchanged (`createCampaignWithAttacks`).
+ *        - `mixed` / `needs-review` with the caller passing
+ *          `skipSplit: true` -> honored ONLY after `verifiesSingleGroup`
+ *          re-confirms the list currently resolves to one classification
+ *          group (see that function's doc comment); otherwise rejected as
+ *          `skip_split_rejected` rather than silently creating a
+ *          wrong-mode campaign (security fix — CodeRabbit).
  *        - `mixed` / `needs-review` with existing children (a prior call
  *          already split this parent) -> returns the review groups
  *          directly, same as before.
@@ -45,10 +50,14 @@
  *
  * A crash between steps can leave the merge committed with some/none of the
  * campaigns created. `confirmSplitCampaign` is self-healing across a
- * SEQUENTIAL retry of the same call (code review fix): `applyAssignmentsAndMerge`
- * tolerates re-submitting assignments a prior run already applied instead of
- * rejecting them as no-longer-ambiguous, and the parent-campaign lookup that
- * follows backfills any `mergeResult.groups` entry that doesn't already have
+ * SEQUENTIAL retry of the SAME call (code review fix): `applyAssignmentsAndMerge`
+ * tolerates re-submitting an assignment a prior run already applied — same
+ * subListId, now homogeneous, resolved to the EXACT mode requested — as a
+ * no-op instead of rejecting it as no-longer-ambiguous. Anything else
+ * (unknown subListId, or already resolved to a DIFFERENT mode) is rejected
+ * as `invalid_assignment`, not silently swallowed (follow-up code review
+ * fix — see `applyAssignmentsAndMerge`'s inline comment). The parent-campaign
+ * lookup that follows backfills any `mergeResult.groups` entry that doesn't already have
  * a linked sub-campaign — a fully-completed prior run backfills nothing, a
  * partial one completes. This does NOT cover genuinely CONCURRENT confirms
  * against the same parent racing each other past the parent-campaign
@@ -68,7 +77,7 @@ import type {
 } from '@hashhive/shared'
 
 import { campaigns, hashItems, hashLists } from '@hashhive/shared'
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { AuditActor } from './audit-log.js'
 import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campaigns.js'
@@ -76,7 +85,8 @@ import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campa
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
 import { createCampaign, createCampaignWithAttacks } from './campaigns.js'
-import { moveHashItemsToList } from './hash-items/move-items.js'
+import { MOVE_BATCH_SIZE, moveHashItemsToList } from './hash-items/move-items.js'
+import { planSplit } from './hash-items/split-analysis.js'
 
 // Dynamic-import seam so tests can stub the queue access without a live
 // Redis, mirroring `services/resources/line-count-trigger.ts`'s `_deps`
@@ -218,6 +228,37 @@ export type CreateCampaignOrSplitResult =
   // review fix: `split_pending` here would have the wizard poll forever
   // against a job that doesn't exist).
   | { kind: 'split_enqueue_failed'; hashListId: number }
+  // The caller passed `skipSplit: true` but the target list does NOT
+  // verifiably resolve to a single classification group — see
+  // `verifiesSingleGroup`'s doc comment. No campaign was created; the
+  // caller must resolve the list through the normal split/review flow
+  // instead of retrying with `skipSplit` (security fix — CodeRabbit).
+  | { kind: 'skip_split_rejected'; hashListId: number; reason: string }
+
+/**
+ * Re-verifies that a mixed-flagged parent with no split children genuinely
+ * resolves to a single classification group, before `createCampaignOrSplit`
+ * honors a client's `skipSplit: true` override (security fix — CodeRabbit).
+ *
+ * Re-runs the SAME pure classifier (`planSplit`) the async split job uses,
+ * against the list's CURRENT items, rather than trusting the parent's
+ * persisted `type_analysis.verdict` — that verdict is exactly what
+ * `skipSplit` is meant to override (it's stale-mixed after a
+ * `degenerate-single-group` job run, which never updates it), so re-reading
+ * it here would just re-trust the same flag the caller is trying to bypass.
+ * `plan.groups.length <= 1` covers both real degenerate outcomes
+ * (`single-group` and `empty`) as safe to honor — an empty list has nothing
+ * to crack under a wrong mode either way.
+ */
+async function verifiesSingleGroup(hashListId: number): Promise<boolean> {
+  const itemRows = await db
+    .select({ id: hashItems.id, hashValue: hashItems.hashValue })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId))
+
+  const plan = planSplit(itemRows)
+  return plan.groups.length <= 1
+}
 
 /**
  * Create-path entry point (issue #202 SU3/SU7). Same input shape as
@@ -269,15 +310,49 @@ export async function createCampaignOrSplit(input: {
     return createCampaignWithAttacks(input)
   }
 
-  if (input.skipSplit) {
-    return createCampaignWithAttacks(input)
-  }
-
   const existingChildren = await db
     .select({ id: hashLists.id })
     .from(hashLists)
     .where(eq(hashLists.parentHashListId, targetList.id))
     .limit(1)
+
+  if (input.skipSplit) {
+    // Security fix (CodeRabbit, Major): `skipSplit` used to be honored
+    // unconditionally on ANY mixed-verdict list, letting any client bypass
+    // the split and crack a genuinely mixed list under one guessed mode.
+    // `skipSplit` exists ONLY for the wizard's `single_group` fallback —
+    // the async split job classified the list as `degenerate-single-group`
+    // and created no children (see `queue/workers/hash-list-split.ts`), so
+    // the parent's persisted `type_analysis.verdict` stays a stale
+    // "mixed"/"needs-review" even though every item actually shares one
+    // hashcat mode. Both branches below verify that stale-verdict story is
+    // actually true before honoring the override, instead of trusting the
+    // client's flag.
+    if (existingChildren.length > 0) {
+      // Real split children already exist, meaning `planSplit` genuinely
+      // found 2+ groups when the async job ran (a single-group outcome
+      // never creates children). `skipSplit` can never legitimately apply
+      // here — reject rather than silently creating a wrong-mode campaign
+      // on the (now-empty-of-items) parent list.
+      return {
+        kind: 'skip_split_rejected',
+        hashListId: targetList.id,
+        reason:
+          'Hash list has already been split into multiple hash-type groups awaiting review; resolve them via the split review flow instead of skipSplit.',
+      }
+    }
+
+    if (!(await verifiesSingleGroup(targetList.id))) {
+      return {
+        kind: 'skip_split_rejected',
+        hashListId: targetList.id,
+        reason:
+          'Hash list still classifies into multiple hash-type groups; run the split flow instead of skipSplit.',
+      }
+    }
+
+    return createCampaignWithAttacks(input)
+  }
 
   if (existingChildren.length > 0) {
     // A prior call already split this parent — never create a campaign
@@ -370,6 +445,69 @@ async function recomputeResolvedSubList(tx: Tx, subListId: number, mode: number)
 }
 
 /**
+ * Max `hash_items` rows loaded into memory per page while moving one KTD6
+ * merge source's rows onto its target — mirrors `MOVE_BATCH_SIZE`
+ * (`hash-items/move-items.ts`, itself the per-UPDATE chunk size).
+ */
+const MERGE_PAGE_SIZE = MOVE_BATCH_SIZE
+
+/**
+ * Moves every `hash_items` row currently on `sourceHashListId` onto
+ * `targetHashListId`, stamping `detectedHashcatMode` to `mode` in the same
+ * UPDATE. Pages by id ascending in `MERGE_PAGE_SIZE`-sized chunks instead of
+ * SELECTing the whole source group's id list into memory before moving
+ * anything (code review fix — the prior implementation materialized every
+ * id of the group being merged in one query, defeating the point of
+ * `moveHashItemsToList`'s own internal batching for a large group).
+ *
+ * No cursor/offset bookkeeping needed: each iteration re-queries
+ * `WHERE hash_list_id = sourceHashListId ORDER BY id LIMIT MERGE_PAGE_SIZE`
+ * against Postgres's CURRENT state, and `moveHashItemsToList` reassigns
+ * every row in that page's `hash_list_id` away from `sourceHashListId`
+ * before the next page is fetched — so a moved row can never reappear in a
+ * later page, and the loop terminates in `ceil(rowCount / MERGE_PAGE_SIZE)`
+ * round trips regardless of source size.
+ *
+ * Collision safety (`(hash_list_id, hash_value)` unique index): a hash list
+ * can never contain a duplicate `hashValue` (ingestion's
+ * `onConflictDoNothing`), and every KTD6 merge's source/target pair are
+ * BOTH children of the same split parent — i.e. a strict partition of that
+ * parent's items (`hash-items/split-analysis.ts`'s `planSplit` assigns each
+ * parent item to exactly one group, deduping any same-`hashValue` collision
+ * within a single destination group at plan time). Two children of the same
+ * parent can therefore never share a `hashValue` with each other either, so
+ * this move can never violate that unique index — the same invariant
+ * `moveHashItemsToList`'s own doc comment already documents for this exact
+ * caller, re-stated here since this is the function that actually calls it.
+ */
+async function mergeGroupIntoTarget(
+  tx: Tx,
+  sourceHashListId: number,
+  targetHashListId: number,
+  mode: number
+): Promise<void> {
+  for (;;) {
+    const page = await tx
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, sourceHashListId))
+      .orderBy(asc(hashItems.id))
+      .limit(MERGE_PAGE_SIZE)
+
+    if (page.length === 0) break
+
+    await moveHashItemsToList(
+      tx,
+      page.map((r) => r.id),
+      targetHashListId,
+      mode
+    )
+
+    if (page.length < MERGE_PAGE_SIZE) break
+  }
+}
+
+/**
  * Applies the caller's assignments to the split parent's ambiguous
  * children, merges any resolved groups (confident-from-split OR
  * newly-assigned) that land on the same mode (KTD6), and returns the final
@@ -411,19 +549,33 @@ async function applyAssignmentsAndMerge(
 
   const childById = new Map(children.map((c) => [c.id, c]))
 
-  // Code review fix (self-healing retries): a subListId that is no longer
-  // an ambiguous child — because it was already resolved (or merged away)
-  // by a PRIOR run of this exact call — used to hard-fail validation here,
-  // turning a legitimate retry (client timeout after the server already
-  // committed, a crash between this transaction and the sequential
-  // campaign creates that follow it) into a PERMANENT 409: every retry
-  // re-submits the same assignments, and every retry fails the same way,
-  // with no way to ever complete. The two branches below (`continue`
-  // instead of erroring) make this validation pass idempotent: a request
-  // whose assignments were already fully or partially applied by a prior
-  // committed run of this call is treated as "already done" rather than
-  // "invalid". `confirmSplitCampaign`'s existing-parent-campaign check
-  // (below) then backfills whatever the prior run didn't finish creating.
+  // Code review fix (self-healing retries, tightened by a follow-up code
+  // review fix below): a subListId that is no longer an ambiguous child —
+  // because it was already resolved by a PRIOR run of this exact call —
+  // used to hard-fail validation here, turning a legitimate retry (client
+  // timeout after the server already committed, a crash between this
+  // transaction and the sequential campaign creates that follow it) into a
+  // PERMANENT 409: every retry re-submits the same assignments, and every
+  // retry fails the same way, with no way to ever complete.
+  //
+  // The ONLY safe idempotent-retry case is: the child still exists, is
+  // already homogeneous, and its resolved mode EXACTLY matches what this
+  // assignment requests — that is unambiguous evidence THIS assignment was
+  // already applied. Two things that look superficially similar are NOT
+  // safe to treat as a no-op, and must be rejected instead (follow-up code
+  // review fix — the original fix over-tolerated both):
+  //   - The child doesn't exist at all. The ONLY thing that ever deletes a
+  //     `hash_lists` child row is the KTD6 same-mode merge below, but a
+  //     merged-away source's mode always survives on its TARGET sibling
+  //     (which stays a valid, now-homogeneous child) — so a legitimate
+  //     merge-retry never needs to re-match a deleted row. A miss here is
+  //     therefore always a genuinely invalid subListId (client bug, stale
+  //     id, or a tampered request), not an idempotent replay.
+  //   - The child is already homogeneous but resolved to a DIFFERENT mode
+  //     than requested. Silently accepting this as a no-op would mean a
+  //     conflicting reassignment attempt is reported as success while
+  //     actually being ignored — the caller has no way to learn its
+  //     request didn't do what it asked.
   const seenSubListIds = new Set<number>()
   for (const assignment of input.assignments) {
     if (seenSubListIds.has(assignment.subListId)) {
@@ -436,27 +588,26 @@ async function applyAssignmentsAndMerge(
 
     const child = childById.get(assignment.subListId)
     if (!child) {
-      // The ONLY thing that ever deletes a `hash_lists` child row is the
-      // KTD6 same-mode merge below, and that only ever runs as part of
-      // THIS function. A missing child is therefore either a genuinely
-      // bogus id (the wizard only ever sources subListIds from a review
-      // groups response it fetched, so this would require a client bug)
-      // or one this exact assignment already merged away in a prior run —
-      // tolerate it as a no-op rather than erroring, since there is no
-      // durable way to tell the two apart and erroring breaks the retry.
-      continue
+      return {
+        kind: 'invalid_assignment',
+        reason: `Sub-list ${assignment.subListId} is not a child of hash list ${parent.id}`,
+      }
     }
 
     const typeAnalysis = child.typeAnalysis
     if (typeAnalysis?.verdict === 'homogeneous') {
-      // Already resolved — either originally confident (never needed this
-      // assignment) or resolved by a prior run of this same assignment.
-      // No re-validation against the (now-gone) ambiguous state; it is
-      // already picked up by the `resolved` collection loop below via its
-      // own stored mode, whether or not it matches `assignment.mode`
-      // (mode is immutable once resolved — this assignment can't "undo"
-      // a resolution to try a different one).
-      continue
+      const resolvedMode = typeAnalysis.detectedModes[0]?.hashcatMode
+      if (resolvedMode === assignment.mode) {
+        // Idempotent retry: this exact assignment was already applied by a
+        // prior committed run of this same call. Safe no-op — it is already
+        // picked up by the `resolved` collection loop below via its own
+        // stored mode.
+        continue
+      }
+      return {
+        kind: 'invalid_assignment',
+        reason: `Sub-list ${assignment.subListId} is already resolved to mode ${resolvedMode}, which conflicts with the requested mode ${assignment.mode}`,
+      }
     }
 
     const candidateModes = typeAnalysis?.detectedModes.map((d) => d.hashcatMode) ?? []
@@ -529,16 +680,7 @@ async function applyAssignmentsAndMerge(
 
     const [target, ...others] = [...group].sort((a, b) => a.id - b.id)
     for (const other of others) {
-      const otherItems = await tx
-        .select({ id: hashItems.id })
-        .from(hashItems)
-        .where(eq(hashItems.hashListId, other.id))
-      await moveHashItemsToList(
-        tx,
-        otherItems.map((r) => r.id),
-        target!.id,
-        mode
-      )
+      await mergeGroupIntoTarget(tx, other.id, target!.id, mode)
       await tx.delete(hashLists).where(eq(hashLists.id, other.id))
     }
     const mergedCount = await recomputeResolvedSubList(tx, target!.id, mode)

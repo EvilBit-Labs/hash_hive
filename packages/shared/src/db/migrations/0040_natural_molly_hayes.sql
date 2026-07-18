@@ -22,6 +22,10 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
-CREATE OR REPLACE TRIGGER hash_lists_parent_project_check_trg
+-- `CREATE OR REPLACE TRIGGER` is valid on PG14+ (this repo runs pg16), but
+-- the conventional idempotent DROP+CREATE form is more portable across
+-- Postgres versions and tooling that parses migration SQL statically.
+DROP TRIGGER IF EXISTS hash_lists_parent_project_check_trg ON hash_lists;--> statement-breakpoint
+CREATE TRIGGER hash_lists_parent_project_check_trg
   BEFORE INSERT OR UPDATE OF parent_hash_list_id, project_id ON hash_lists
   FOR EACH ROW EXECUTE FUNCTION hash_lists_parent_project_check();

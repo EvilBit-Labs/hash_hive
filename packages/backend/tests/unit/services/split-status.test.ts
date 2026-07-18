@@ -16,6 +16,7 @@ import type { QueueJobInfo } from '../../../src/queue/manager.js'
 
 import {
   deriveSplitStatus,
+  extractPersistedSplitOutcome,
   sanitizeSplitError,
 } from '../../../src/services/campaign-split-status.js'
 
@@ -58,7 +59,10 @@ describe('deriveSplitStatus', () => {
       jobInfo({ state: 'failed', failedReason: 'DB connection lost' })
     )
     expect(result.status).toBe('failed')
-    expect(result.message).toBe(sanitizeSplitError('DB connection lost'))
+    // Concrete literal, not `sanitizeSplitError(...)` — reusing the
+    // implementation under test here would make a regression in both
+    // `deriveSplitStatus` and `sanitizeSplitError` invisible to this test.
+    expect(result.message).toBe('Split analysis failed')
     expect(result.message).not.toBe('DB connection lost')
   })
 
@@ -115,6 +119,70 @@ describe('deriveSplitStatus', () => {
     expect(
       deriveSplitStatus(false, jobInfo({ state: 'completed', returnvalue: 'not-an-object' }))
     ).toEqual({ status: 'pending', message: null })
+  })
+
+  // Code review fix: a degenerate outcome's ONLY durable signal once the
+  // job is evicted (`jobInfo === null`) is the persisted
+  // `statistics.splitOutcome` marker — these cases mirror the job-based
+  // `empty` / `single_group` assertions above, but with no job info at all.
+  it('no children, no job info, persisted outcome "empty" -> empty with a message', () => {
+    expect(deriveSplitStatus(false, null, 'empty')).toEqual({
+      status: 'empty',
+      message: 'Hash list has no crackable items to split',
+    })
+  })
+
+  it('no children, no job info, persisted outcome "single_group" -> single_group, no message', () => {
+    expect(deriveSplitStatus(false, null, 'single_group')).toEqual({
+      status: 'single_group',
+      message: null,
+    })
+  })
+
+  it('no children, no job info, no persisted outcome -> pending (default param, backward compatible)', () => {
+    expect(deriveSplitStatus(false, null)).toEqual({ status: 'pending', message: null })
+    expect(deriveSplitStatus(false, null, null)).toEqual({ status: 'pending', message: null })
+  })
+
+  it('a live (non-evicted) job takes precedence over a persisted outcome — persistedOutcome is only consulted when jobInfo is null', () => {
+    // An active job with a stale/irrelevant persisted marker still reads as
+    // pending, not as whatever the marker says.
+    expect(deriveSplitStatus(false, jobInfo({ state: 'active' }), 'empty')).toEqual({
+      status: 'pending',
+      message: null,
+    })
+  })
+})
+
+describe('extractPersistedSplitOutcome', () => {
+  it('extracts "empty" off the {} column default plus the marker — the exact shape a full-schema-required parse would reject', () => {
+    expect(extractPersistedSplitOutcome({ splitOutcome: 'empty' })).toBe('empty')
+  })
+
+  it('extracts "single_group" alongside a full, previously-persisted statistics payload', () => {
+    expect(
+      extractPersistedSplitOutcome({
+        totalCount: 2,
+        crackedCount: 0,
+        crackRate: 0,
+        lastUpdated: '2025-01-01T00:00:00.000Z',
+        splitOutcome: 'single_group',
+      })
+    ).toBe('single_group')
+  })
+
+  it('no marker present -> null (the {} column default, or a normal never-split list)', () => {
+    expect(extractPersistedSplitOutcome({})).toBeNull()
+    expect(
+      extractPersistedSplitOutcome({ totalCount: 5, crackedCount: 1, crackRate: 0.2 })
+    ).toBeNull()
+  })
+
+  it('null / undefined / malformed statistics -> null, never throws', () => {
+    expect(extractPersistedSplitOutcome(null)).toBeNull()
+    expect(extractPersistedSplitOutcome(undefined)).toBeNull()
+    expect(extractPersistedSplitOutcome('not-an-object')).toBeNull()
+    expect(extractPersistedSplitOutcome({ splitOutcome: 'not-a-real-outcome' })).toBeNull()
   })
 })
 

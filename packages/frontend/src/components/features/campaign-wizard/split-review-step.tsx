@@ -49,7 +49,7 @@ export function SplitReviewStep({
       >
         <p className="font-medium">This hash list mixes more than one hash type.</p>
         <p className="mt-1 text-warning/90">
-          Resolve the groups below to split it into typed sub-campaigns — each sub-campaign cracks
+          Resolve the groups below to split it into typed sub-campaigns. Each sub-campaign cracks
           one hash type.
         </p>
       </div>
@@ -116,7 +116,7 @@ export function SplitReviewStep({
       {unidentified.length > 0 && (
         <section className="rounded-md border border-surface-0 bg-surface-0/40 px-4 py-3 text-sm text-muted-foreground">
           <p>
-            {unidentifiedCount.toLocaleString()} hashes need a type — no sub-campaign will run for
+            {unidentifiedCount.toLocaleString()} hashes need a type. No sub-campaign will run for
             them.
           </p>
         </section>

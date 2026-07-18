@@ -109,3 +109,14 @@ Security tooling: Dependabot, Renovate, Snyk, CodeQL, Trivy, Grype, Checkov, OSS
 > **Never commit secrets.** Use environment variables, secret managers, or secure vaults for credentials, and secure transport for anything sensitive.
 
 When a change touches authentication, data handling, API endpoints, or dependencies, proactively offer a security review of the affected code.
+
+<!-- dosu:mcp:start v1 -->
+## Dosu
+
+Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.
+
+- Before a task, and for any codebase or docs questions: pull context with `read_knowledge` before digging through source.
+- After a task: save durable learnings with `write_knowledge`.
+
+Missing these tools? Run `dosu setup --help` — it covers agent-assisted setup.
+<!-- dosu:mcp:end -->

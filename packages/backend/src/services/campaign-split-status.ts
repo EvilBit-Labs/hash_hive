@@ -5,24 +5,30 @@
  * `HASH_LIST_SPLIT` job and returns immediately instead of awaiting
  * `runSplitAnalysis` inline. The wizard polls
  * `GET /campaigns/split/status/{hashListId}` (backed by `getSplitStatus`
- * below) until the job resolves. Two signals are read, in this order:
+ * below) until the job resolves. Three signals are read, in this order:
  *
  *   1. Does the parent now have children? A real split (`runSplitAnalysis`
  *      outcome `split` / `already-split`) creates `hash_lists` rows with
  *      `parent_hash_list_id` set — this is checked first because it is the
  *      durable, authoritative signal and survives job eviction.
- *   2. Otherwise, the BullMQ job itself (`splitJobId(hashListId)`) is the
- *      only signal for the two degenerate outcomes, which leave no
- *      children row: `degenerate-empty` (`status: 'empty'`) and
- *      `degenerate-single-group` (`status: 'single_group'`), plus a
- *      genuine job failure (`status: 'failed'`). `deriveSplitStatus` is the
+ *   2. Otherwise, the BullMQ job itself (`splitJobId(hashListId)`) carries
+ *      a genuine job failure (`status: 'failed'`) and, while the job is
+ *      still live, the two degenerate outcomes too.
+ *   3. If the job has been evicted past its retention window (`getJobInfo`
+ *      returns `null`), the two degenerate outcomes — `degenerate-empty`
+ *      (`status: 'empty'`) and `degenerate-single-group`
+ *      (`status: 'single_group'`) — have NO children row and no live job
+ *      to read, so `hash-list-split.ts` persists a durable marker
+ *      (`splitOutcome`) into the parent's `statistics` jsonb on exactly
+ *      those two outcomes (code review fix). `extractPersistedSplitOutcome`
+ *      reads it back as the last-resort signal. `deriveSplitStatus` is the
  *      pure decision function — factored out so it's testable without a
  *      DB or a live Redis (see `tests/unit/services/split-status.test.ts`).
  */
 import type { SplitStatusResponse } from '@hashhive/shared'
 
-import { hashLists } from '@hashhive/shared'
-import { eq } from 'drizzle-orm'
+import { hashListStatisticsSchema, hashLists } from '@hashhive/shared'
+import { and, eq } from 'drizzle-orm'
 
 import type { QueueJobInfo } from '../queue/manager.js'
 import type { SplitOutcome } from '../queue/workers/hash-list-split.js'
@@ -88,6 +94,32 @@ export function sanitizeSplitError(failedReason: string | null): string {
   return 'Split analysis failed'
 }
 
+export type PersistedDegenerateOutcome = 'empty' | 'single_group'
+
+/**
+ * Reads the durable degenerate-outcome marker (code review fix) off a
+ * hash list's persisted `statistics` jsonb — `hash-list-split.ts` writes
+ * `splitOutcome` there for the two outcomes that create no children row
+ * (`degenerate-empty` / `degenerate-single-group`), so this survives the
+ * BullMQ job being evicted past its retention window (`getJobInfo`
+ * returning `null` forever otherwise).
+ *
+ * `.partial()` is deliberate: an `empty` parent's `statistics` is often
+ * still the DB column default `{}` (no items were ever parsed to compute
+ * `totalCount`/`crackedCount`/`crackRate`), so validating with the full
+ * (required-fields) `hashListStatisticsSchema` would fail on exactly the
+ * outcome this function exists to recover, and silently collapse back to
+ * "no signal" (`null`). Any malformed/legacy `statistics` value also
+ * degrades to `null` rather than throwing — this is a best-effort read on
+ * an untyped jsonb column, never a hard failure path.
+ */
+export function extractPersistedSplitOutcome(
+  statistics: unknown
+): PersistedDegenerateOutcome | null {
+  const parsed = hashListStatisticsSchema.partial().safeParse(statistics)
+  return parsed.success ? (parsed.data.splitOutcome ?? null) : null
+}
+
 function extractSplitOutcome(returnvalue: unknown): SplitOutcome | null {
   if (
     returnvalue !== null &&
@@ -111,11 +143,19 @@ function extractSplitOutcome(returnvalue: unknown): SplitOutcome | null {
 /**
  * Pure decision function — no DB, no Redis. `hasChildren` is the
  * caller's already-fetched, authoritative signal; `jobInfo` is only
- * consulted when `hasChildren` is false.
+ * consulted when `hasChildren` is false. `persistedOutcome` (code review
+ * fix) is the durable `statistics.splitOutcome` marker
+ * (`extractPersistedSplitOutcome`), consulted ONLY when `jobInfo` is
+ * `null` — a live (non-evicted) completed job already carries the
+ * outcome in `returnvalue`, and the persisted marker is written inside
+ * the same transaction that produces that terminal job result, so the
+ * two signals never disagree; there's no need to prefer one over the
+ * other when both are available.
  */
 export function deriveSplitStatus(
   hasChildren: boolean,
-  jobInfo: QueueJobInfo | null
+  jobInfo: QueueJobInfo | null,
+  persistedOutcome: PersistedDegenerateOutcome | null = null
 ): { status: SplitStatusLiteral; message: string | null } {
   if (hasChildren) {
     return { status: 'ready', message: null }
@@ -123,8 +163,16 @@ export function deriveSplitStatus(
 
   if (!jobInfo) {
     // Never enqueued yet, still queued, or already evicted past its
-    // retention window with no children to show for it — all read the
-    // same as "keep polling".
+    // retention window. A degenerate outcome (`empty` / `single_group`)
+    // leaves no children row, so its ONLY durable signal once the job is
+    // gone is the persisted marker — read that before falling back to
+    // "keep polling".
+    if (persistedOutcome === 'empty') {
+      return { status: 'empty', message: 'Hash list has no crackable items to split' }
+    }
+    if (persistedOutcome === 'single_group') {
+      return { status: 'single_group', message: null }
+    }
     return { status: 'pending', message: null }
   }
 
@@ -174,15 +222,22 @@ export async function getSplitStatus(
     return { kind: 'not_found' }
   }
 
+  // Project-scoped (code review fix, defense-in-depth): the DB trigger in
+  // migration 0040 already guarantees a child's `project_id` matches its
+  // parent's, so this can never actually cross tenants today — but the
+  // explicit filter means this query's correctness doesn't silently
+  // depend on that trigger staying in place, and matches the ownership
+  // check every other resources/results route applies.
   const children = await db
     .select({ id: hashLists.id })
     .from(hashLists)
-    .where(eq(hashLists.parentHashListId, hashListId))
+    .where(and(eq(hashLists.parentHashListId, hashListId), eq(hashLists.projectId, projectId)))
     .limit(1)
   const hasChildren = children.length > 0
 
   const jobInfo = hasChildren ? null : await getSplitJobInfo(hashListId)
-  const { status, message } = deriveSplitStatus(hasChildren, jobInfo)
+  const persistedOutcome = hasChildren ? null : extractPersistedSplitOutcome(target.statistics)
+  const { status, message } = deriveSplitStatus(hasChildren, jobInfo, persistedOutcome)
 
   if (jobInfo?.state === 'failed') {
     // Server-side-only log of the RAW failure reason (code review fix) —

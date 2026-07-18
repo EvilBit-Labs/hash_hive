@@ -29,6 +29,20 @@ export const hashCandidateSchema = z
  * Shape of the JSONB written to `hash_lists.statistics` by the
  * hash-list parser worker (and merged with live counts by the dashboard
  * GET /hash-lists/:id route).
+ *
+ * `splitOutcome` (issue #202, code review fix) is written ONLY on a split
+ * PARENT hash list, and only for the two degenerate `runSplitAnalysis`
+ * outcomes that create no `hash_lists` children row
+ * (`queue/workers/hash-list-split.ts`): `'empty'` (no crackable items) and
+ * `'single_group'` (every item classifies to one group, nothing to split).
+ * This is the durable signal `getSplitStatus`
+ * (`services/campaign-split-status.ts`) falls back to once the BullMQ job
+ * that produced the outcome is evicted past its retention window — without
+ * it, a degenerate outcome with an evicted job reads as `pending` forever,
+ * since neither signal `getSplitStatus` normally reads (children rows /
+ * live job state) exists for these two outcomes. Optional and absent on
+ * every non-split-parent list and on a split parent that hasn't run
+ * degenerate analysis.
  */
 export const hashListStatisticsSchema = z
   .object({
@@ -36,6 +50,7 @@ export const hashListStatisticsSchema = z
     crackedCount: z.number().int().nonnegative(),
     crackRate: z.number().min(0).max(1),
     lastUpdated: z.string().datetime().optional(),
+    splitOutcome: z.enum(['empty', 'single_group']).optional(),
   })
   .openapi('HashListStatistics')
 

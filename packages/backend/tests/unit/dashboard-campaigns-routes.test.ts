@@ -1281,6 +1281,24 @@ if (!IS_ISOLATED) {
       expect(mockCreateCampaignOrSplit.mock.calls[0]?.[0]).toMatchObject({ skipSplit: true })
     })
 
+    // Security fix (CodeRabbit, Major): `createCampaignOrSplit` now
+    // server-verifies `skipSplit` rather than honoring it unconditionally —
+    // this test only proves the ROUTE maps that typed rejection to a 409;
+    // the actual verification logic is covered by the real-DB service tests
+    // in `tests/db/campaign-split-create.db.test.ts`.
+    it('returns 409 SKIP_SPLIT_REJECTED when skipSplit does not verify to a single group', async () => {
+      mockCreateCampaignOrSplit.mockResolvedValueOnce({
+        kind: 'skip_split_rejected',
+        hashListId: 9,
+        reason: 'Hash list still classifies into multiple hash-type groups.',
+      })
+      const res = await postCampaign({ name: 'Bad skip split', hashListId: 9, skipSplit: true })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('SKIP_SPLIT_REJECTED')
+      expect(body.error?.message).toContain('multiple hash-type groups')
+    })
+
     it('returns 200 with review groups when the target hash list was already split', async () => {
       mockCreateCampaignOrSplit.mockResolvedValueOnce({
         kind: 'split_review',

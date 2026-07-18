@@ -1171,6 +1171,107 @@ describe('CampaignCreatePage async split-pending -> status polling (issue #202 S
     expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
   })
 
+  it('shows an error banner and stops the Analyzing panel when the status poll errors', async () => {
+    fetchMock = mockFetch({
+      ...defaultRoutes(),
+      '/dashboard/campaigns': {
+        POST: { status: 202, body: { splitPending: true, hashListId: 9 } },
+      },
+      '/dashboard/campaigns/split/status/9': {
+        GET: {
+          status: 500,
+          body: { error: { code: 'INTERNAL', message: 'split status lookup failed' } },
+        },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: qc })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+    // `qc` has retry disabled (see createTestQueryClient), so the query
+    // settles into an error state on the first failed fetch instead of
+    // retrying -- fast enough that the transient "Analyzing" panel isn't
+    // reliably observable here. The effect's `isError` branch should
+    // surface the banner and clear `splitPendingHashListId` (previously
+    // this branch didn't exist and the query error was silently ignored,
+    // leaving the Analyzing panel spinning forever).
+    await waitFor(() => {
+      expect(screen.getByText('split status lookup failed')).toBeDefined()
+    })
+    // The pending panel is gone -- the summary step is back so the operator
+    // can adjust and retry.
+    expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    expect(screen.queryByText('Analyzing mixed list...')).toBeNull()
+  })
+
+  it('does not act on a stale cached terminal status while the status query is still revalidating', async () => {
+    // Use a dedicated QueryClient with `gcTime: Infinity` (instead of the
+    // shared `qc` from beforeEach, which sets `gcTime: 0`) so the
+    // pre-seeded cache entry below survives the gap between `setQueryData`
+    // and the component mounting an observer for the same query key.
+    const staleClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: Number.POSITIVE_INFINITY },
+        mutations: { retry: false },
+      },
+    })
+    seedResourceQueries(staleClient)
+
+    // Pre-seed a stale `ready` result for hashListId 9, simulating a
+    // terminal status left over from a previous split job against the same
+    // hash list. TanStack Query serves this immediately on mount while it
+    // revalidates in the background (`isFetching: true`, staleTime
+    // defaults to 0). If the poll effect reacted to this cached data
+    // before the fetch settled, the UI would jump straight to the
+    // split-review screen using this *stale* (and unrelated) group instead
+    // of waiting for the fresh network response, which reports `pending`.
+    staleClient.setQueryData(['campaign-split-status', 9], {
+      status: 'ready',
+      reviewGroups: {
+        parentHashListId: 9,
+        confident: [{ id: 999, mode: 9999, itemCount: 1 }],
+        ambiguous: [],
+        unidentified: [],
+      },
+      message: null,
+    })
+
+    fetchMock = mockFetch({
+      ...defaultRoutes(),
+      '/dashboard/campaigns': {
+        POST: { status: 202, body: { splitPending: true, hashListId: 9 } },
+      },
+      '/dashboard/campaigns/split/status/9': {
+        GET: { status: 200, body: { status: 'pending', reviewGroups: null, message: null } },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />, { queryClient: staleClient })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Campaign' })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Campaign' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Analyzing mixed list...')).toBeDefined()
+    })
+
+    // Give the background revalidation (triggered by the stale cache being
+    // considered stale on mount) time to resolve against the mock, which
+    // reports `pending`. The Analyzing panel must still be showing -- the
+    // stale cached `ready` result must never have been processed, and the
+    // 1-hash group it carried must never have rendered.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(screen.getByText('Analyzing mixed list...')).toBeDefined()
+    expect(screen.queryByText('This hash list mixes more than one hash type.')).toBeNull()
+    expect(screen.queryByText('1 hashes')).toBeNull()
+  })
+
   it('single_group: auto-resubmits once with skipSplit and falls back to a plain campaign', async () => {
     let campaignPostCount = 0
     let statusPollCount = 0

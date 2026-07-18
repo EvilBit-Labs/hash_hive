@@ -130,26 +130,23 @@ export function parseHashLine(line: string, hashListId: number) {
  * Flush a batch of parsed hash items to the database.
  * Uses onConflictDoNothing for idempotency on (hashListId, hashValue).
  *
- * Returns the rows Postgres actually inserted (`RETURNING` on an
- * `ON CONFLICT DO NOTHING` insert only reports rows that didn't collide) so
- * the caller can run type detection against the DEDUPLICATED composition of
- * `hash_items` rather than every raw parsed line (issue #202 code review
- * fix — see `accumulateTypeDetection` below).
+ * Does NOT return the inserted rows: type detection no longer runs against
+ * Postgres's `RETURNING` output (see `recordHashValueForDetection` below for
+ * why that was a retry-safety bug) — it runs against every parsed line as it
+ * streams in, before insertion even happens. Nothing else consumes this
+ * function's return value, so it stays a fire-and-forget insert.
  */
 type HashItemInsert = NonNullable<ReturnType<typeof parseHashLine>>
 
-async function flushBatch(
-  batch: ReadonlyArray<HashItemInsert>
-): Promise<Array<{ hashValue: string }>> {
-  if (batch.length === 0) return []
-  return db
+async function flushBatch(batch: ReadonlyArray<HashItemInsert>): Promise<void> {
+  if (batch.length === 0) return
+  await db
     .insert(hashItems)
     .values([...batch])
     .onConflictDoNothing()
-    .returning({ hashValue: hashItems.hashValue })
 }
 
-/** Accumulated type-detection state threaded through `accumulateTypeDetection`. */
+/** Accumulated type-detection state threaded through `recordHashValueForDetection`. */
 interface TypeDetectionState {
   unidentifiedCount: number
   scannedCount: number
@@ -157,47 +154,55 @@ interface TypeDetectionState {
 }
 
 /**
- * Runs `guessTopHashType` against a batch of ACTUALLY-INSERTED (post-dedup)
- * hash values and folds the results into `typeHistogram` (mutated in place,
- * matching the existing `Map.set` accumulation style elsewhere in this
- * file) plus the returned `unidentifiedCount` / `scannedCount` / `sampled`
- * state.
+ * Runs `guessTopHashType` against a single PARSED hash value (before
+ * insertion) and folds the result into `typeHistogram` (mutated in place,
+ * matching the existing `Map.set` accumulation style elsewhere in this file)
+ * plus the returned `unidentifiedCount` / `scannedCount` / `sampled` state.
  *
- * Detection must run on deduplicated rows, not raw parsed lines: a
- * duplicate-heavy file would otherwise let a handful of repeated hash
- * values dominate the histogram before `flushBatch`'s
- * `onConflictDoNothing()` collapses them down to one `hash_items` row,
- * producing a `type_analysis.verdict` that disagrees with what's actually
- * in the table (e.g. a genuinely mixed list reading `homogeneous`, which
- * then wrongly skips the split flow at campaign create).
+ * Dedup is in-memory via `seenHashValues` (mutated in place — a fresh `Set`
+ * per `ingestHashListContent` call, same accumulator rationale as
+ * `typeHistogram`: copying it on every line would be O(n²)), NOT via
+ * Postgres `RETURNING` on the `ON CONFLICT DO NOTHING` insert. That's a
+ * deliberate fix (CodeRabbit, Major — retry-safety regression): BullMQ
+ * re-runs this whole function from scratch on a job retry, re-streaming
+ * every line, but `RETURNING` only reports rows that DIDN'T already exist —
+ * a prior attempt's inserted rows would come back empty on retry, so a
+ * histogram keyed off `RETURNING` silently drops them and can misclassify a
+ * genuinely mixed list as homogeneous (or empty) purely because of *when*
+ * the retry happens to land. Because `seenHashValues` is rebuilt from
+ * scratch on every call — including every retry, which re-streams the whole
+ * file — the histogram is always the FULL deduplicated composition of the
+ * file's hash values, independent of what already made it into the table.
  *
- * `TYPE_DETECTION_SCAN_CAP` still bounds the total number of hash values
- * scanned — now counted against inserted rows instead of raw lines — and
- * `sampled` still latches true once the cap is reached. No-ops (returns
- * the input state unchanged) once already sampled, so callers can skip
- * invoking this for later batches without extra bookkeeping.
+ * `TYPE_DETECTION_SCAN_CAP` bounds the number of DISTINCT hash values
+ * scanned (and therefore the size `seenHashValues` can grow to); `sampled`
+ * latches true once the cap is reached. No-ops (returns the input state
+ * unchanged) once already sampled, so callers can skip invoking this for
+ * later lines without extra bookkeeping. A value already in
+ * `seenHashValues` is skipped without touching `scannedCount` or the
+ * histogram — it was already counted once when first seen.
  */
-function accumulateTypeDetection(
-  insertedRows: ReadonlyArray<{ hashValue: string }>,
+function recordHashValueForDetection(
+  hashValue: string,
+  seenHashValues: Set<string>,
   typeHistogram: Map<number, number>,
   state: TypeDetectionState
 ): TypeDetectionState {
   if (state.sampled) return state
+  if (seenHashValues.has(hashValue)) return state
 
-  let { unidentifiedCount, scannedCount } = state
-  for (const row of insertedRows) {
-    if (scannedCount >= TYPE_DETECTION_SCAN_CAP) break
-    const guess = guessTopHashType(row.hashValue)
-    if (guess === null) {
-      unidentifiedCount++
-    } else {
-      typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
-    }
-    scannedCount++
+  seenHashValues.add(hashValue)
+  const guess = guessTopHashType(hashValue)
+  if (guess === null) {
+    const unidentifiedCount = state.unidentifiedCount + 1
+    const scannedCount = state.scannedCount + 1
+    return { unidentifiedCount, scannedCount, sampled: scannedCount >= TYPE_DETECTION_SCAN_CAP }
   }
 
+  typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
+  const scannedCount = state.scannedCount + 1
   return {
-    unidentifiedCount,
+    unidentifiedCount: state.unidentifiedCount,
     scannedCount,
     sampled: scannedCount >= TYPE_DETECTION_SCAN_CAP,
   }
@@ -214,9 +219,10 @@ export interface IngestHashListContentResult {
 
 /**
  * Parses `lines`, batches inserts into `hash_items`, runs type detection
- * against the actually-inserted (post-dedup) rows, recomputes statistics,
- * and performs the guarded `processing -> ready` flip carrying the computed
- * `type_analysis`.
+ * against every parsed line's hash value (deduplicated in-memory — see
+ * `recordHashValueForDetection`'s doc comment for why this replaced the
+ * earlier RETURNING-based approach), recomputes statistics, and performs the
+ * guarded `processing -> ready` flip carrying the computed `type_analysis`.
  *
  * Extracted from the worker processor closure — mirrors
  * `hash-import-worker.ts`'s `processImportPairs` — so the db test lane
@@ -226,6 +232,13 @@ export interface IngestHashListContentResult {
  * instead of a test-local reimplementation. `createHashListParserWorker`'s
  * processor below resolves the file reference and declared mode, delegates
  * here, then logs/emits off the returned result.
+ *
+ * Retry-safety: BullMQ re-runs this ENTIRE function from scratch on a job
+ * retry, re-streaming the whole file. `seenHashValues` (and therefore the
+ * histogram) is rebuilt fresh on every call, so a retry always computes the
+ * FULL deduplicated composition of the file regardless of which rows a
+ * prior attempt already inserted — detection correctness never depends on
+ * `hash_items`' pre-existing contents.
  *
  * `onBatchFlush` is an optional progress hook — the live worker wires
  * `job.updateProgress`; direct (test) callers typically omit it.
@@ -240,13 +253,15 @@ export async function ingestHashListContent(
   let linesProcessed = 0
   let skippedLines = 0
 
-  // Type-detection accumulators (issue #202, FU3). Detection runs against
-  // the extracted hash token (parsed.hashValue) of ACTUALLY-INSERTED
-  // (post-dedup) rows, not every raw parsed line — see
-  // `accumulateTypeDetection`'s doc comment. Detection stops once
-  // TYPE_DETECTION_SCAN_CAP inserted rows have been scanned (sampled=true),
-  // but row insertion is never gated by this cap.
+  // Type-detection accumulators (issue #202, FU3; retry-safety fix per
+  // CodeRabbit review). Detection runs against every PARSED line's hash
+  // value as it streams in, deduplicated via `seenHashValues` — not against
+  // Postgres's post-insert `RETURNING` output, which would go empty for
+  // already-inserted rows on a job retry. Detection stops once
+  // TYPE_DETECTION_SCAN_CAP distinct hash values have been scanned
+  // (sampled=true), but row insertion is never gated by this cap.
   const typeHistogram = new Map<number, number>()
+  const seenHashValues = new Set<string>()
   let detectionState: TypeDetectionState = {
     unidentifiedCount: 0,
     scannedCount: 0,
@@ -268,22 +283,26 @@ export async function ingestHashListContent(
       skippedLines++
       continue
     }
+    detectionState = recordHashValueForDetection(
+      parsed.hashValue,
+      seenHashValues,
+      typeHistogram,
+      detectionState
+    )
     batch.push(parsed)
 
     if (batch.length >= BATCH_SIZE) {
-      const insertedRows = await flushBatch(batch)
+      await flushBatch(batch)
       linesProcessed += batch.length
       batch = []
-      detectionState = accumulateTypeDetection(insertedRows, typeHistogram, detectionState)
       if (onBatchFlush) await onBatchFlush(linesProcessed)
     }
   }
 
   // Flush remaining batch
   if (batch.length > 0) {
-    const insertedRows = await flushBatch(batch)
+    await flushBatch(batch)
     linesProcessed += batch.length
-    detectionState = accumulateTypeDetection(insertedRows, typeHistogram, detectionState)
   }
 
   const { unidentifiedCount, scannedCount, sampled } = detectionState

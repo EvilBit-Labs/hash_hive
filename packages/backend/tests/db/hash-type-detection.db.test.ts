@@ -38,6 +38,18 @@
  * this file used to only document — rather than composing the same three
  * primitives a second time.
  *
+ * Retry-safety fix (CodeRabbit, Major): production detection no longer runs
+ * against Postgres's `RETURNING` output on `ON CONFLICT DO NOTHING` (which
+ * `ingestAndPersist` below still uses as a local stand-in — see its own
+ * docstring). `RETURNING` only reports non-colliding rows, so on a BullMQ
+ * job retry — which re-streams the entire file — rows a prior attempt
+ * already inserted would vanish from the histogram, silently misclassifying
+ * a genuinely mixed list. Production now dedupes in-memory via a `Set`
+ * (`recordHashValueForDetection` in the worker module) that is rebuilt fresh
+ * on every call, so a retry always sees the FULL deduplicated composition.
+ * The "ingestHashListContent — real worker core wiring" section's
+ * retry-safety test proves this directly against the real core.
+ *
  * Scale-cap (`TYPE_DETECTION_SCAN_CAP = 1_000_000`) is NOT exercised at its
  * real threshold here — seeding a million rows in a shared db-lane process
  * is not viable, and the constant isn't injectable. The pure `sampled`
@@ -109,12 +121,15 @@ function duplicateLines(value: string, n: number): string[] {
  * docstring for why this composes real exports rather than driving the
  * literal worker processor.
  *
- * Mirrors the real worker's `flushBatch` + `accumulateTypeDetection` seam
- * (issue #202 code review fix): detection runs on the rows Postgres
- * ACTUALLY inserted (`RETURNING` on an `ON CONFLICT DO NOTHING` insert only
- * reports non-colliding rows), not on every raw parsed line — a duplicate-
- * heavy fixture collapses to one `hash_items` row per distinct hash value,
- * and the histogram must reflect that deduplicated composition.
+ * Dedups via Postgres `RETURNING` on `ON CONFLICT DO NOTHING` — this is the
+ * PRE-FIX production mechanism (see the module docstring's "Retry-safety
+ * fix" note). For a single ingest pass with no pre-existing rows (which is
+ * all the describe blocks below exercise — they never pre-seed
+ * `hash_items`), RETURNING-based dedup and the real worker's in-memory
+ * Set-based dedup produce IDENTICAL results, so this helper stays valid for
+ * verdict/statistics assertions. It does NOT prove retry-safety — that
+ * requires driving the real `ingestHashListContent` core across two calls
+ * with pre-existing rows, which the dedicated retry-safety test below does.
  *
  * `scanLimit` lets a test simulate an early-stopped scan (the `sampled`
  * cap) without touching the real 1,000,000-line module constant — every
@@ -512,5 +527,67 @@ describe('ingestHashListContent — real worker core, real Postgres', () => {
       .from(hashItems)
       .where(eq(hashItems.hashListId, listId))
     expect(rows).toHaveLength(2)
+  })
+
+  it('retry-safety: a job retry re-streaming the FULL file computes the full deduplicated verdict, not just the not-yet-inserted rows (CodeRabbit, Major)', async () => {
+    // Same duplicate-heavy composition as the "duplicate-heavy list" block
+    // above: 990 copies of ONE SHA-512 value + 10 distinct NTLM values.
+    // Deduplicated, that's SHA-512:1 (9.1%) + NTLM:10 (90.9%) of scanned
+    // rows — both clear the 5% noise floor, so the correct verdict is
+    // `mixed`. Pre-fix (RETURNING-based dedup), a retry that found the
+    // SHA-512 row already inserted from a prior attempt would drop it from
+    // the histogram entirely, since RETURNING never reports rows that
+    // already existed.
+    const [dupValue] = sha512Lines(1)
+    const duplicateHeavy = duplicateLines(dupValue!, 990)
+    const ntlm = ntlmLines(10)
+    const allLines = [...duplicateHeavy, ...ntlm]
+    const listId = await createProcessingList('retry-safety-mixed')
+
+    // Simulate a retry: pre-insert a SUBSET of the list's rows as if a
+    // prior attempt got partway through before crashing — including the
+    // deduplicated SHA-512 value itself, so its RETURNING-based count on
+    // the "retry" pass would be zero.
+    const preInsertedLines = [dupValue!, ntlm[0]!, ntlm[1]!]
+    const preInsertedBatch = preInsertedLines
+      .map((line) => parseHashLine(line, listId))
+      .filter((v): v is NonNullable<typeof v> => v !== null)
+    await db.insert(hashItems).values(preInsertedBatch).onConflictDoNothing()
+
+    const preRows = await db
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, listId))
+    expect(preRows).toHaveLength(3)
+
+    // Now run the REAL worker core over the FULL original line set — this
+    // mirrors what BullMQ does on retry: re-stream the entire file from
+    // scratch, not just the lines that failed to insert last time.
+    const result = await ingestHashListContent(listId, allLines, null)
+
+    // All 11 distinct hash_items exist regardless of what was pre-seeded —
+    // onConflictDoNothing still dedupes correctly on the insert side.
+    const rows = await db
+      .select({ id: hashItems.id })
+      .from(hashItems)
+      .where(eq(hashItems.hashListId, listId))
+    expect(rows).toHaveLength(11)
+
+    // The verdict must reflect the FULL deduplicated composition — SHA-512:1,
+    // NTLM:10 — identical to a first-run (non-retry) parse of the same file,
+    // regardless of which 3 rows already existed in the DB going in.
+    expect(result.typeAnalysis.scannedCount).toBe(11)
+    const modes = new Map(result.typeAnalysis.detectedModes.map((m) => [m.hashcatMode, m.count]))
+    expect(modes.get(1700)).toBe(1) // SHA-512, deduplicated — must NOT be missing/0
+    expect(modes.get(1000)).toBe(10) // NTLM, all ten distinct values
+    expect(result.typeAnalysis.unidentifiedCount).toBe(0)
+    expect(result.typeAnalysis.verdict).toBe('mixed')
+
+    const [persisted] = await db
+      .select({ typeAnalysis: hashLists.typeAnalysis })
+      .from(hashLists)
+      .where(eq(hashLists.id, listId))
+    expect(persisted!.typeAnalysis?.verdict).toBe('mixed')
+    expect(persisted!.typeAnalysis?.scannedCount).toBe(11)
   })
 })

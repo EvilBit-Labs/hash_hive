@@ -357,12 +357,16 @@ if (!IS_ISOLATED) {
   // leaf `makeHashList`, so this default keeps every test byte-for-byte
   // unchanged. Declared as a named mock (rather than inline) so the FIX A
   // detail-response-schema test below can override it per-case.
-  const mockGetHashListSplitProgress = mock(
-    async () =>
-      null as null | {
-        needsTypeCount: number
-        subCampaignProgress: unknown
-      }
+  //
+  // Per the contract-test-mocks-mirror-service-not-schema convention: typed
+  // via `mock<SplitProgressService['getHashListSplitProgress']>(...)` (the
+  // dynamic-return pattern) rather than a hand-maintained `{ needsTypeCount,
+  // subCampaignProgress: unknown }` shape, so a signature drift in the real
+  // service surfaces here as a type-check failure instead of silently
+  // diverging from the wire contract.
+  type SplitProgressService = typeof import('../../src/services/hash-items/split-progress.js')
+  const mockGetHashListSplitProgress = mock<SplitProgressService['getHashListSplitProgress']>(
+    async () => null
   )
   mock.module('../../src/services/hash-items/split-progress.js', () => ({
     getHashListSplitProgress: mockGetHashListSplitProgress,

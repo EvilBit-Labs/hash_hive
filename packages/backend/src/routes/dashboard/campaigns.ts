@@ -248,7 +248,8 @@ const createCampaignRoute = createRoute({
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
-      description: 'Inline attacks referenced a missing resource.',
+      description:
+        'Inline attacks referenced a missing resource, or `skipSplit: true` was passed against a hash list that does not verifiably resolve to a single hash-type group (SKIP_SPLIT_REJECTED).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     422: {
@@ -366,6 +367,14 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
       'SPLIT_ENQUEUE_FAILED',
       'Unable to schedule split analysis for this hash list right now. Try again in a moment.'
     )
+  }
+
+  if (result.kind === 'skip_split_rejected') {
+    logger.warn(
+      { hashListId: result.hashListId, route: 'POST /campaigns', projectId, userId },
+      'skipSplit rejected — hash list does not verifiably resolve to a single group'
+    )
+    return dashboardError(c, 409, 'SKIP_SPLIT_REJECTED', result.reason)
   }
 
   if (result.kind === 'split_pending') {

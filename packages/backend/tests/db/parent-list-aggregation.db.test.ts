@@ -220,13 +220,14 @@ describe('getHashItems — parent aggregation', () => {
     )
   })
 
-  it('a PARENT dedupes the cracked-status total on hashValue (1, not 2 physical rows)', async () => {
+  it('a PARENT keeps the cracked-status total in sync with the physical rows returned (2, not deduped)', async () => {
     const result = await getHashItems(seed.parentId, seed.projectAId, { status: 'cracked' })
     expect(result).not.toBeNull()
-    // total is deduped...
-    expect(result!.total).toBe(1)
-    // ...but the returned rows are still the two distinct physical items
-    // (one per child) — SU4 dedupes counts, not the row listing itself.
+    // total counts the same physical rows `items` pages through — a
+    // paginated consumer breaks if total < items.length (PR review: items
+    // and total must share cardinality). Unlike getHashListStats.crackedCount
+    // (a display-only stat), this total is never deduped by hashValue.
+    expect(result!.total).toBe(2)
     expect(result!.items).toHaveLength(2)
     expect(result!.items.every((i) => i.hashValue === 'shared-hash')).toBe(true)
   })

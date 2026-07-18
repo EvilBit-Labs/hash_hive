@@ -83,12 +83,23 @@ afterAll(async () => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function createReadyHashList(name: string): Promise<number> {
+async function createReadyHashList(
+  name: string,
+  statistics?: Record<string, unknown>
+): Promise<number> {
   const [list] = await db
     .insert(hashLists)
-    .values({ projectId: projId, name, status: 'ready' })
+    .values({ projectId: projId, name, status: 'ready', ...(statistics ? { statistics } : {}) })
     .returning({ id: hashLists.id })
   return list!.id
+}
+
+async function statisticsOf(hashListId: number): Promise<unknown> {
+  const [row] = await db
+    .select({ statistics: hashLists.statistics })
+    .from(hashLists)
+    .where(eq(hashLists.id, hashListId))
+  return row?.statistics
 }
 
 async function insertHashValues(hashListId: number, values: readonly string[]): Promise<void> {
@@ -229,7 +240,7 @@ describe('runSplitAnalysis — real split (mixed confident + ambiguous + unident
 })
 
 describe('runSplitAnalysis — degenerate cases', () => {
-  it('does not create children for a homogeneous (single confident group) parent', async () => {
+  it('does not create children for a homogeneous (single confident group) parent, and persists a durable single_group marker', async () => {
     const parentId = await createReadyHashList('split-degenerate-single-group')
     await insertHashValues(parentId, [sha512Crypt('deg00001'), sha512Crypt('deg00002')])
 
@@ -241,9 +252,15 @@ describe('runSplitAnalysis — degenerate cases', () => {
     expect(children).toHaveLength(0)
     const parentItems = await itemsOf(parentId)
     expect(parentItems).toHaveLength(2)
+
+    // Code review fix: the parent's `statistics` jsonb carries a durable
+    // `splitOutcome` marker for this outcome — the only signal
+    // `getSplitStatus` has left once the BullMQ job that produced it is
+    // evicted (no children row is ever created for this outcome).
+    await expect(statisticsOf(parentId)).resolves.toMatchObject({ splitOutcome: 'single_group' })
   })
 
-  it('does not create children for an empty parent', async () => {
+  it('does not create children for an empty parent, and persists a durable empty marker even though statistics starts as the {} column default', async () => {
     const parentId = await createReadyHashList('split-degenerate-empty')
 
     const result = await runSplitAnalysis(parentId)
@@ -252,6 +269,34 @@ describe('runSplitAnalysis — degenerate cases', () => {
     expect(result.subLists).toEqual([])
     const children = await childrenOf(parentId)
     expect(children).toHaveLength(0)
+
+    // An `empty` parent's `statistics` was never touched by the parser
+    // worker (no items were ever parsed), so it's still the DB column
+    // default `{}` before this write — the case a full-schema-required
+    // read would fail to recover from (see
+    // `extractPersistedSplitOutcome`'s doc comment).
+    await expect(statisticsOf(parentId)).resolves.toMatchObject({ splitOutcome: 'empty' })
+  })
+
+  it('persists the degenerate marker WITHOUT clobbering pre-existing statistics fields', async () => {
+    const parentId = await createReadyHashList('split-degenerate-preserves-stats', {
+      totalCount: 2,
+      crackedCount: 1,
+      crackRate: 0.5,
+      lastUpdated: '2025-01-01T00:00:00.000Z',
+    })
+    await insertHashValues(parentId, [sha512Crypt('deg00003'), sha512Crypt('deg00004')])
+
+    const result = await runSplitAnalysis(parentId)
+    expect(result.outcome).toBe('degenerate-single-group')
+
+    await expect(statisticsOf(parentId)).resolves.toMatchObject({
+      totalCount: 2,
+      crackedCount: 1,
+      crackRate: 0.5,
+      lastUpdated: '2025-01-01T00:00:00.000Z',
+      splitOutcome: 'single_group',
+    })
   })
 
   it('throws for a non-existent parent', async () => {

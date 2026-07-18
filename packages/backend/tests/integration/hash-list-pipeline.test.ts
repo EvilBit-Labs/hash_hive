@@ -260,15 +260,16 @@ if (IS_ISOLATED) {
             }
             return Promise.resolve([])
           },
-          onConflictDoNothing: () => ({
-            // `flushBatch` (issue #202 code review fix) chains
-            // `.returning({ hashValue })` off `onConflictDoNothing()` so it
-            // can run type detection against only the rows Postgres
-            // actually inserted. Mirror real `ON CONFLICT DO NOTHING
-            // RETURNING` semantics here: only rows that DIDN'T collide with
-            // an existing (hashListId, hashValue) pair come back.
-            returning: () => {
-              if (table !== hashItemsRef || !Array.isArray(values)) return Promise.resolve([])
+          onConflictDoNothing: () => {
+            // `flushBatch` now `await`s `.onConflictDoNothing()` directly
+            // (retry-safety fix — type detection runs against parsed lines,
+            // deduped in-memory, not against Postgres's `RETURNING` output).
+            // Apply the insert-with-dedup side effect here so it fires
+            // whether the caller awaits this object directly (via `.then`)
+            // or chains `.returning()` explicitly — either path must only
+            // apply the insert ONCE, so both delegate to the same closure.
+            const applyInsert = (): Array<{ hashValue: string }> => {
+              if (table !== hashItemsRef || !Array.isArray(values)) return []
               const insertedRows: Array<{ hashValue: string }> = []
               for (const v of values) {
                 const list = state.hashItemsByList.get(v.hashListId) ?? []
@@ -278,9 +279,14 @@ if (IS_ISOLATED) {
                 }
                 state.hashItemsByList.set(v.hashListId, list)
               }
-              return Promise.resolve(insertedRows)
-            },
-          }),
+              return insertedRows
+            }
+            return {
+              returning: () => Promise.resolve(applyInsert()),
+              // oxlint-disable-next-line unicorn/no-thenable -- mock must satisfy a direct `await` (flushBatch no longer chains `.returning()`)
+              then: (resolve: (v: unknown) => unknown) => resolve(applyInsert()),
+            }
+          },
         }),
       }),
       update: (table: unknown) => ({

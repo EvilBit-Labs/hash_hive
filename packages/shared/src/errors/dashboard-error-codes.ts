@@ -101,6 +101,16 @@ export const DASHBOARD_ERROR_CODES = [
   // otherwise sit at `pending` forever with no way to recover (code
   // review fix; previously this failure was swallowed silently).
   'SPLIT_ENQUEUE_FAILED',
+  // The caller passed `skipSplit: true` against a hash list that does NOT
+  // actually resolve to a single classification group — either it already
+  // has real split children (2+ groups), or a fresh re-classification of
+  // its items still finds more than one group. `skipSplit` exists only for
+  // the wizard's `single_group` fallback (the async split job re-classified
+  // a "mixed"-flagged list down to exactly one group and created no
+  // children); honoring it on a genuinely mixed list would create a
+  // single-mode campaign that crackers would run under the wrong mode for
+  // part of the list (security fix — CodeRabbit).
+  'SKIP_SPLIT_REJECTED',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

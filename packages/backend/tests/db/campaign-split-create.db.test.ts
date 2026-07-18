@@ -26,7 +26,7 @@ import type { HashListTypeAnalysis } from '@hashhive/shared'
 
 import { campaigns, hashItems, hashLists, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { runSplitAnalysis } from '../../src/queue/workers/hash-list-split.js'
@@ -420,17 +420,22 @@ describe('createCampaignOrSplit — non-split regression + degenerate cases', ()
     expect(splitResult.outcome).toBe('degenerate-single-group')
     expect(await childrenOf(listId)).toHaveLength(0)
 
-    // The db lane has no queue manager, so the status lookup finds no job
-    // and can't observe the degenerate outcome the same way a live poll
-    // would (jobInfo is null -> `pending`). What matters for this test is
-    // the client-facing recovery path: the wizard's `single_group` handler
-    // re-submits with `skipSplit: true` regardless of how it learned the
-    // outcome, and that resubmit must fall back to a plain campaign with no
-    // scaffolding.
+    // The db lane has no queue manager, so `jobInfo` is null — the status
+    // lookup can't observe the degenerate outcome off the (nonexistent) job
+    // state. It reads `single_group` anyway (code review fix): the
+    // degenerate outcome is a durable marker
+    // (`hash_lists.statistics.splitOutcome`) `runSplitAnalysis` persists on
+    // the parent row in the same transaction that decides the outcome, so
+    // `getSplitStatus` recovers it even with zero queue signal available —
+    // proving the fix without needing to simulate job eviction. What
+    // matters for this test is the client-facing recovery path: the
+    // wizard's `single_group` handler re-submits with `skipSplit: true`
+    // regardless of how it learned the outcome, and that resubmit must fall
+    // back to a plain campaign with no scaffolding.
     const statusResult = await getSplitStatus(listId, projId)
     expect(statusResult.kind).toBe('ok')
     if (statusResult.kind !== 'ok') throw new Error('expected ok')
-    expect(statusResult.response.status).toBe('pending')
+    expect(statusResult.response.status).toBe('single_group')
 
     const skipSplitResult = await createCampaignOrSplit({
       projectId: projId,
@@ -469,6 +474,95 @@ describe('createCampaignOrSplit — non-split regression + degenerate cases', ()
     expect(rows).toHaveLength(0)
     const children = await childrenOf(listId)
     expect(children).toHaveLength(0)
+
+    // Code review fix: `degenerate-empty` leaves no children row and the db
+    // lane has no queue manager (jobInfo is always null here) — the ONLY
+    // signal `getSplitStatus` has left is the durable
+    // `statistics.splitOutcome` marker `runSplitAnalysis` persists on the
+    // parent. An `empty` parent's `statistics` is the DB column default
+    // `{}` (no items were ever parsed), which is exactly the shape that
+    // would defeat a naive full-schema-validated read — see
+    // `extractPersistedSplitOutcome`'s doc comment for why this case is
+    // singled out.
+    const statusResult = await getSplitStatus(listId, projId)
+    expect(statusResult.kind).toBe('ok')
+    if (statusResult.kind !== 'ok') throw new Error('expected ok')
+    expect(statusResult.response.status).toBe('empty')
+    expect(statusResult.response.message).not.toBeNull()
+  })
+})
+
+describe('createCampaignOrSplit — skipSplit is server-verified (security fix, CodeRabbit)', () => {
+  it('rejects skipSplit when the list has NOT been split but still classifies into 2+ groups', async () => {
+    const listId = await createHashList('split-confirm-skipsplit-still-mixed', mixedTypeAnalysis())
+    // One confident (SHA-512 Crypt) item and one ambiguous (32-hex) item —
+    // `planSplit` genuinely finds 2 groups here, unlike the degenerate
+    // single-group fixture above. `skipSplit` must NOT be able to bypass
+    // this: honoring it would create a single-mode campaign on a list that
+    // actually needs two different hashcat modes to crack.
+    await insertHashValues(listId, [sha512Crypt('skipsplit-still-mixed-1'), HEX32])
+
+    const result = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'skipsplit-still-mixed-campaign',
+      hashListId: listId,
+      attacks: [],
+      skipSplit: true,
+    })
+
+    expect(result.kind).toBe('skip_split_rejected')
+    if (result.kind !== 'skip_split_rejected') throw new Error('expected skip_split_rejected')
+    expect(result.hashListId).toBe(listId)
+
+    // No campaign, no children — the request was refused, not silently
+    // downgraded to a wrong-mode create.
+    expect(await childrenOf(listId)).toHaveLength(0)
+    expect(await campaignsOn(listId)).toHaveLength(0)
+  })
+
+  it('rejects skipSplit when the list has already been split into real (2+) children', async () => {
+    const parentId = await createHashList(
+      'split-confirm-skipsplit-already-split-parent',
+      mixedTypeAnalysis()
+    )
+    const confidentChildId = await createHashList(
+      'split-confirm-skipsplit-already-split-child-confident',
+      mixedTypeAnalysis({
+        verdict: 'homogeneous',
+        detectedModes: [{ hashcatMode: SHA512_CRYPT_MODE, count: 1 }],
+      }),
+      parentId
+    )
+    const ambiguousChildId = await createHashList(
+      'split-confirm-skipsplit-already-split-child-ambiguous',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: HEX32_SIGNATURE.map((hashcatMode) => ({ hashcatMode, count: 1 })),
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(confidentChildId, [sha512Crypt('skipsplit-already-split-1')])
+    await insertHashValues(ambiguousChildId, [HEX32])
+
+    // A malicious (or buggy) client sets skipSplit on a parent that a prior
+    // call already split into real, still-unresolved children — this must
+    // never bypass the review flow, regardless of how many groups exist.
+    const result = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'skipsplit-already-split-campaign',
+      hashListId: parentId,
+      attacks: [],
+      skipSplit: true,
+    })
+
+    expect(result.kind).toBe('skip_split_rejected')
+    if (result.kind !== 'skip_split_rejected') throw new Error('expected skip_split_rejected')
+    expect(result.hashListId).toBe(parentId)
+
+    // Neither child was touched, and no campaign was created on the parent.
+    expect(await childrenOf(parentId)).toHaveLength(2)
+    expect(await campaignsOn(parentId)).toHaveLength(0)
   })
 })
 
@@ -505,6 +599,49 @@ describe('getSplitStatus — degenerate outcomes read through a stubbed QueueMan
       expect(result.response.message).not.toBeNull()
     } finally {
       _campaignSplitDeps.getQueueContext = originalGetQueueContext
+    }
+  })
+})
+
+describe('getSplitStatus — child lookup is project-scoped (code review fix, defense-in-depth)', () => {
+  it('never reads a same-parent-id row from a DIFFERENT project as a "child", even if it slipped past the migration-0040 trigger', async () => {
+    const parentId = await createHashList('split-status-scope-parent', mixedTypeAnalysis())
+    const otherSlug = 'split-status-scope-other-proj'
+    await db.delete(projects).where(eq(projects.slug, otherSlug))
+    const [otherProject] = await db
+      .insert(projects)
+      .values({ name: otherSlug, slug: otherSlug })
+      .returning({ id: projects.id })
+    const otherProjectId = otherProject!.id
+
+    try {
+      // The DB trigger (migration 0040) enforces that a `parent_hash_list_id`
+      // child shares its parent's `project_id` — that's exactly what this
+      // test needs to bypass to exercise the code-level filter at all.
+      // `SET LOCAL` is transaction-scoped: it reverts automatically at
+      // commit and never leaks to another connection/test, so this can't
+      // make the DB lane flaky for anything else running concurrently.
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL session_replication_role = replica`)
+        await tx.insert(hashLists).values({
+          projectId: otherProjectId,
+          parentHashListId: parentId,
+          name: 'cross-tenant-child',
+          status: 'ready',
+        })
+      })
+
+      // Without the FIX 2 filter, `getSplitStatus`'s children lookup would
+      // find this row by `parentHashListId` alone and read `ready` — the
+      // explicit `eq(hashLists.projectId, projectId)` must exclude it, so
+      // the parent (which has ZERO real children) still reads `pending`.
+      const result = await getSplitStatus(parentId, projId)
+      expect(result.kind).toBe('ok')
+      if (result.kind !== 'ok') throw new Error('expected ok')
+      expect(result.response.status).not.toBe('ready')
+      expect(result.response.status).toBe('pending')
+    } finally {
+      await db.delete(projects).where(eq(projects.id, otherProjectId))
     }
   })
 })
@@ -707,5 +844,143 @@ describe('confirmSplitCampaign — self-healing retries (code review fix)', () =
       .from(campaigns)
       .where(eq(campaigns.parentCampaignId, retryResult.parentCampaign.id))
     expect(allSubs).toHaveLength(2)
+  })
+})
+
+describe('confirmSplitCampaign — invalid-assignment validation (code review fix)', () => {
+  const IDEMPOTENT_MODE = 9_999_601
+  const IDEMPOTENT_OTHER_MODE = 9_999_602
+  const NONEXISTENT_MODE = 9_999_801
+  const CONFLICT_ORIGINAL_MODE = 9_999_701
+  const CONFLICT_REQUESTED_MODE = 9_999_702
+
+  it('a same-mode retry against an already-resolved sub-list is an idempotent no-op, not invalid_assignment', async () => {
+    const parentId = await createHashList('split-confirm-idempotent-retry-parent')
+    const childId = await createHashList(
+      'split-confirm-idempotent-retry-child',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: IDEMPOTENT_MODE, count: 1 },
+          { hashcatMode: IDEMPOTENT_OTHER_MODE, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(childId, ['idempotent-retry-1'])
+
+    const firstResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'idempotent-retry-campaign',
+      assignments: [{ subListId: childId, mode: IDEMPOTENT_MODE }],
+    })
+    expect(firstResult.kind).toBe('confirmed')
+    if (firstResult.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(firstResult.subCampaigns).toHaveLength(1)
+
+    // Retry with the EXACT same assignment — the child is now homogeneous
+    // at IDEMPOTENT_MODE, which matches what this assignment requests, so
+    // this must be treated as an idempotent no-op.
+    const retryResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'idempotent-retry-campaign',
+      assignments: [{ subListId: childId, mode: IDEMPOTENT_MODE }],
+    })
+    expect(retryResult.kind).toBe('confirmed')
+    if (retryResult.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(retryResult.parentCampaign.id).toBe(firstResult.parentCampaign.id)
+    expect(retryResult.subCampaigns).toHaveLength(1)
+    expect(retryResult.subCampaigns[0]?.id).toBe(firstResult.subCampaigns[0]?.id)
+
+    // DB-level: no duplicate sub-campaign was created.
+    expect(await campaignsOn(childId)).toHaveLength(1)
+  })
+
+  it('rejects an assignment referencing a subListId that is not a child of the parent', async () => {
+    const parentId = await createHashList('split-confirm-nonexistent-parent')
+    const childId = await createHashList(
+      'split-confirm-nonexistent-child',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: NONEXISTENT_MODE, count: 1 },
+          { hashcatMode: NONEXISTENT_MODE + 1, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(childId, ['nonexistent-1'])
+
+    // A real hash-list row, but NOT a child of this parent — mirrors a
+    // stale/tampered subListId rather than a plain typo.
+    const unrelatedListId = await createHashList('split-confirm-nonexistent-unrelated')
+
+    const result = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'nonexistent-campaign',
+      assignments: [{ subListId: unrelatedListId, mode: NONEXISTENT_MODE }],
+    })
+
+    expect(result.kind).toBe('invalid_assignment')
+    if (result.kind !== 'invalid_assignment') throw new Error('expected invalid_assignment')
+    expect(result.reason).toContain(String(unrelatedListId))
+
+    // Nothing was created or mutated — the genuinely ambiguous child is
+    // untouched, and no campaign exists for this parent.
+    expect(await campaignsOn(parentId)).toHaveLength(0)
+    const [child] = await db.select().from(hashLists).where(eq(hashLists.id, childId))
+    expect(child!.typeAnalysis?.verdict).toBe('needs-review')
+  })
+
+  it('rejects a conflicting-mode reassignment against an already-resolved sub-list', async () => {
+    const parentId = await createHashList('split-confirm-conflict-parent')
+    const childId = await createHashList(
+      'split-confirm-conflict-child',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: CONFLICT_ORIGINAL_MODE, count: 1 },
+          { hashcatMode: CONFLICT_REQUESTED_MODE, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(childId, ['conflict-1'])
+
+    const firstResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'conflict-campaign',
+      assignments: [{ subListId: childId, mode: CONFLICT_ORIGINAL_MODE }],
+    })
+    expect(firstResult.kind).toBe('confirmed')
+
+    // Re-run with a DIFFERENT mode against the same now-resolved sub-list —
+    // a conflicting reassignment attempt must be rejected, not silently
+    // ignored as if it were a matching retry.
+    const conflictResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'conflict-campaign',
+      assignments: [{ subListId: childId, mode: CONFLICT_REQUESTED_MODE }],
+    })
+    expect(conflictResult.kind).toBe('invalid_assignment')
+    if (conflictResult.kind !== 'invalid_assignment') {
+      throw new Error('expected invalid_assignment')
+    }
+    expect(conflictResult.reason).toContain(String(CONFLICT_ORIGINAL_MODE))
+    expect(conflictResult.reason).toContain(String(CONFLICT_REQUESTED_MODE))
+
+    // DB-level: still resolved to the ORIGINAL mode — the conflicting
+    // request did not silently change it, and no second sub-campaign exists.
+    const [child] = await db.select().from(hashLists).where(eq(hashLists.id, childId))
+    expect(child!.typeAnalysis?.detectedModes[0]?.hashcatMode).toBe(CONFLICT_ORIGINAL_MODE)
+    expect(await campaignsOn(childId)).toHaveLength(1)
   })
 })

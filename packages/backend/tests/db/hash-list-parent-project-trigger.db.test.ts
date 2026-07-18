@@ -13,11 +13,13 @@
  * parent/child pairs, so none of them actually exercise the trigger's
  * reject path — this file does, directly, on both INSERT and UPDATE.
  *
- * The migration was changed from `CREATE TRIGGER` to
- * `CREATE OR REPLACE TRIGGER` (Postgres 14+, this repo runs pg16) as part
- * of the same code-review fix so a raw replay of the migration file is
- * safe — that change has no independent runtime behavior to test on its
- * own, it only affects re-running the DDL.
+ * The migration creates the trigger with `DROP TRIGGER IF EXISTS` followed
+ * by a plain `CREATE TRIGGER` (code review fix), rather than
+ * `CREATE OR REPLACE TRIGGER` — both are valid on this repo's pg16, but the
+ * DROP+CREATE form is the more portable idempotent-migration convention.
+ * That's a DDL-syntax choice only; it has no independent runtime behavior
+ * to test on its own (the resulting trigger's INSERT/UPDATE enforcement,
+ * exercised below, is identical either way).
  *
  * Runs under `just test-db` (preload: tests/preload-db.ts). Uses the shared
  * drizzle client from `../../src/db/index.js`.

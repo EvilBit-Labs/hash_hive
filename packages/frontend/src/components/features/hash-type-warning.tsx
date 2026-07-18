@@ -70,7 +70,7 @@ export function HashTypeWarning({ typeAnalysis, className }: HashTypeWarningProp
 
         {sampled && (
           <p className="text-xs text-warning/70">
-            Based on a sample of the first {scannedCount.toLocaleString()} entries — this is a large
+            Based on a sample of the first {scannedCount.toLocaleString()} entries. This is a large
             list, so we didn&apos;t scan every row.
           </p>
         )}

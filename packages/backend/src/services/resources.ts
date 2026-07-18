@@ -768,19 +768,18 @@ export async function getHashItems(
 
   const whereClause = and(...conditions)
 
-  // A parent scope's children can each hold a row for the same hashValue
-  // (propagateCrack marks a hashValue as cracked everywhere it appears,
-  // not just in one list — #202 SU4). For a leaf scope hashValue is
-  // already unique within the single list (see
-  // `hash_items_hash_list_id_hash_value_idx`), so `count(distinct ...)`
-  // is a no-op there and only changes behavior for a multi-id parent
-  // scope. Only the 'cracked' total is deduped — 'all'/'uncracked' counts
-  // are unaffected, matching the pre-SU4 row-count semantics.
-  const totalCountExpr =
-    opts.status === 'cracked'
-      ? sql<number>`count(distinct ${hashItems.hashValue})`
-      : sql<number>`count(*)`
-
+  // `total` MUST count the same physical rows `items` pages through — a
+  // paginated consumer (`hasNext = offset + limit < total`, "Showing X-Y of
+  // Z" in hash-list-detail.tsx) breaks if `total` is smaller than the rows
+  // it can actually page to. A parent scope's children can each hold a row
+  // for the same hashValue (propagateCrack marks a hashValue as cracked
+  // everywhere it appears, not just in one list — #202 SU4), so deduping by
+  // hashValue here would make `total` undercount `items` for a split-
+  // parent's cracked view (PR review: paginated items and total must share
+  // cardinality). That distinct-hashValue dedup is still correct for
+  // `getHashListStats`'s `crackedCount` — a display-only stat with no
+  // paired `items` array a client pages through — but not for this
+  // items-list pagination total, which always counts physical rows.
   const [items, countResult] = await Promise.all([
     db
       .select()
@@ -789,7 +788,7 @@ export async function getHashItems(
       .limit(limit)
       .offset(offset)
       .orderBy(hashItems.id),
-    db.select({ count: totalCountExpr }).from(hashItems).where(whereClause),
+    db.select({ count: count() }).from(hashItems).where(whereClause),
   ])
 
   return { items, total: Number(countResult[0]?.count ?? 0), limit, offset }

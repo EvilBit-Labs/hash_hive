@@ -493,9 +493,32 @@ export function CampaignCreatePage() {
   // `splitPendingHashListId == null` so a stale/cached query result can't
   // re-fire this after the pending state has already been cleared (e.g.
   // by cancel, or by a prior run of this same effect).
+  //
+  // Also guarded on `!splitStatusQuery.isFetching` (code review fix):
+  // TanStack Query can surface a cached terminal status — e.g. a stale
+  // `ready` left over from a previous poll of the same hashListId — while
+  // a background revalidation is still in flight. Waiting for the fetch to
+  // settle before branching on `data.status` means every branch below only
+  // ever runs on a fresh result, so a stale cached terminal status from a
+  // prior render is never double-processed. `isError` is handled
+  // explicitly too (code review fix) — a query error was previously
+  // ignored, which left the "Analyzing..." spinner running forever on a
+  // network failure instead of surfacing a banner.
   useEffect(() => {
+    if (splitPendingHashListId == null) return
+    if (splitStatusQuery.isFetching) return
+
+    if (splitStatusQuery.isError) {
+      const err = splitStatusQuery.error
+      if (err instanceof ApiError) setError(err.message)
+      else if (err instanceof Error) setError(err.message)
+      else setError('Failed to check split status. Try again.')
+      setSplitPendingHashListId(null)
+      return
+    }
+
+    if (!splitStatusQuery.isSuccess) return
     const data = splitStatusQuery.data
-    if (!data || splitPendingHashListId == null) return
 
     if (data.status === 'ready') {
       // `SplitStatusResponse` is a discriminated union keyed on `status`
@@ -523,7 +546,14 @@ export function CampaignCreatePage() {
       void handleSubmit(true)
     }
     // oxlint-disable-next-line react/exhaustive-deps -- handleSubmit intentionally omitted (mirrors the file's other effects, e.g. the hash-type prefill effect above)
-  }, [splitStatusQuery.data, splitPendingHashListId])
+  }, [
+    splitStatusQuery.isFetching,
+    splitStatusQuery.isError,
+    splitStatusQuery.isSuccess,
+    splitStatusQuery.data,
+    splitStatusQuery.error,
+    splitPendingHashListId,
+  ])
 
   const handleSplitAssignmentChange = (subListId: number, mode: number) => {
     setSplitAssignments((prev) => ({ ...prev, [subListId]: mode }))
@@ -850,7 +880,7 @@ export function CampaignCreatePage() {
           <output className="block rounded-md border border-surface-0 bg-surface-0/40 p-6 text-center text-sm text-muted-foreground">
             <p className="font-medium text-foreground">Analyzing mixed list...</p>
             <p className="mt-1">
-              This hash list mixes more than one hash type — checking for the split.
+              This hash list mixes more than one hash type. Checking for the split.
             </p>
           </output>
           <div className="flex gap-2">
