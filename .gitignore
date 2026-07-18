@@ -81,3 +81,4 @@ todos/
 .vscode/mise-tools/node
 .playwright-mcp/
 /.impeccable/
+.dosu/
