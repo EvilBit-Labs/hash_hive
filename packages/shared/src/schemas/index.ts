@@ -575,7 +575,7 @@ export const agentHeartbeatSchema = z.object({
  * directly into its `createRoute(...)` definition, so the generated
  * OpenAPI document (served at `GET /api/v1/agent/openapi.json`) reflects
  * this shape automatically — there is no separate YAML to keep in sync.
- * The contract test in `tests/unit/agent-api-contract.test.ts` parses real
+ * The contract test in `packages/backend/tests/unit/agent-api-contract.test.ts` parses real
  * route responses through this schema to prove the route response matches
  * the shared shape. `.strict()` rejects unknown keys at parse time (Zod
  * otherwise strips them) and emits an explicitly closed object

@@ -87,7 +87,7 @@ const projectInvalidationKeys = {
 }
 ```
 
-The brainstorm that produced this convention initially proposed a new `dashboard_stats_changed` event. Doc review found that the `projectInvalidationKeys` map in `event-routing.ts` already invalidates `['dashboard-stats']` on `agent_status`, `campaign_status`, `task_update`, and `crack_result` — adding a new event type would have produced redundant double-invalidations at every publisher site with no behavioral payoff. Future endpoint authors must not repeat this mistake. If the publisher-coupling concern grows enough that the routing map becomes hard to maintain, take it as a separate refactor — not as a per-endpoint pattern.
+The brainstorm that produced this convention initially proposed a new `dashboard_stats_changed` event. Doc review found that the `projectInvalidationKeys` map in `packages/frontend/src/lib/event-routing.ts` already invalidates `['dashboard-stats']` on `agent_status`, `campaign_status`, `task_update`, and `crack_result` — adding a new event type would have produced redundant double-invalidations at every publisher site with no behavioral payoff. Future endpoint authors must not repeat this mistake. If the publisher-coupling concern grows enough that the routing map becomes hard to maintain, take it as a separate refactor — not as a per-endpoint pattern.
 
 ## Compile-time vs. runtime enforcement boundary
 
