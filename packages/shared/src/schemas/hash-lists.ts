@@ -77,7 +77,7 @@ export const hashListTypeAnalysisSchema = z
     scannedCount: z.number().int().nonnegative(),
     sampled: z.boolean(),
     declaredMode: z.number().int().nonnegative().nullable(),
-    analyzedAt: z.string(),
+    analyzedAt: z.string().datetime(),
   })
   .strict()
   .refine((a) => a.unidentifiedCount <= a.scannedCount, {
