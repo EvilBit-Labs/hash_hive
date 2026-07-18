@@ -227,6 +227,35 @@ function referencesColumn(predicate: Predicate, column: unknown): boolean {
   return walk(predicate)
 }
 
+/**
+ * Returns true when `column` appears in a `queryChunks` array alongside
+ * literal SQL text containing "is null" — i.e. the predicate applies
+ * `column IS NULL`, not merely a predicate that happens to touch the
+ * column. `referencesColumn` alone can't distinguish `isNull(col)` from
+ * `eq(col, x)` or `isNotNull(col)`, since both put the column object
+ * directly into `queryChunks`; this walks the same tree but additionally
+ * inspects the sibling `StringChunk` text in the column's own SQL node.
+ */
+function referencesIsNullOnColumn(predicate: Predicate, column: unknown): boolean {
+  function chunkText(chunk: unknown): string {
+    if (chunk === null || typeof chunk !== 'object') return ''
+    const value = (chunk as Record<string, unknown>)['value']
+    return Array.isArray(value) && typeof value[0] === 'string' ? value.join('') : ''
+  }
+  function walk(chunk: unknown): boolean {
+    if (chunk === null || chunk === undefined || typeof chunk !== 'object') return false
+    const c = chunk as Record<string, unknown>
+    if (!Array.isArray(c['queryChunks'])) return false
+    const chunks = c['queryChunks'] as unknown[]
+    if (chunks.includes(column)) {
+      const text = chunks.map(chunkText).join('')
+      if (/is null/i.test(text)) return true
+    }
+    return chunks.some((inner) => walk(inner))
+  }
+  return walk(predicate)
+}
+
 function discriminate(table: unknown): 'agents' | 'campaigns' | 'tasks' | 'cracked' | 'unknown' {
   if (table === agents) return 'agents'
   if (table === campaigns) return 'campaigns'
@@ -375,6 +404,19 @@ describe('Dashboard stats route — project-scoped query construction', () => {
     const predicate = queryRows.whereCalls.campaigns[0]!
     expect(referencesColumn(predicate, campaigns.projectId)).toBe(true)
     expect(paramValuesOf(predicate)).toEqual([1])
+  })
+
+  it('campaigns query: where(...) also excludes split sub-campaigns (parentCampaignId IS NOT NULL)', async () => {
+    // A split campaign (issue #202 second half) is 1 parent + N sub-campaigns
+    // sharing the same status — without this filter the status breakdown
+    // would count a single split campaign N+1 times.
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.whereCalls.campaigns.length).toBe(1)
+    const predicate = queryRows.whereCalls.campaigns[0]!
+    // `referencesColumn` alone would pass even if a regression swapped
+    // `isNull` for `isNotNull`/`eq` — assert the actual `IS NULL` operator.
+    expect(referencesIsNullOnColumn(predicate, campaigns.parentCampaignId)).toBe(true)
   })
 
   it('tasks query: joins through campaigns and filters where campaigns.projectId === session.projectId', async () => {

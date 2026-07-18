@@ -17,6 +17,8 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 
+import type { HashListTypeAnalysis } from '../schemas/hash-lists.js'
+
 // Resource lifecycle status union - duplicated from
 // `../schemas/resources.ts`'s `resourceStatusSchema` to avoid a
 // circular import (schemas/index.ts already imports from this file).
@@ -499,6 +501,10 @@ export const hashLists = pgTable(
     source: varchar('source', { length: 50 }).notNull().default('upload'),
     fileRef: jsonb('file_ref').default({}),
     statistics: jsonb('statistics').default({}),
+    // Per-list hash-type analysis accumulated at ingestion (foundation toward
+    // #202). Nullable: null = not yet analyzed / legacy list. Shape defined and
+    // validated by hashListTypeAnalysisSchema in @hashhive/shared.
+    typeAnalysis: jsonb('type_analysis').$type<HashListTypeAnalysis>(),
     status: varchar('status', { length: 20 })
       .$type<ResourceStatusLiteral>()
       .notNull()
@@ -510,12 +516,24 @@ export const hashLists = pgTable(
     // Set when a permanent hash list is archived (hidden from active views),
     // cleared on restore. NULL = not archived. See ADR-0019.
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    // Parent hash list for a mixed-type SPLIT sub-list (foundation #202 second
+    // half). NULL = a normal/top-level list. When set, this row is a per-type
+    // sub-list whose items were moved out of the parent. `onDelete: cascade`
+    // is the v1 lifecycle decision: deleting a parent removes its sub-lists.
+    // AnyPgColumn callback is required for the self-reference (breaks the TS
+    // inference cycle, mirroring users.lastProjectId). A DB trigger (added in
+    // the migration) enforces that a sub-list shares its parent's project_id,
+    // so the parent->children scope expansion can never cross tenants.
+    parentHashListId: integer('parent_hash_list_id').references((): AnyPgColumn => hashLists.id, {
+      onDelete: 'cascade',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('hash_lists_project_id_idx').on(table.projectId),
     index('hash_lists_status_idx').on(table.status),
+    index('hash_lists_parent_hash_list_id_idx').on(table.parentHashListId),
     // A row may only carry archived_at when it is permanent and in the `ready`
     // terminal state (a resource is only referenceable — hence permanent — once
     // ready). Closes off illegal combinations (archived draft/in-flight).
@@ -540,6 +558,15 @@ export const hashItems = pgTable(
     attackId: integer('attack_id').references(() => attacks.id, { onDelete: 'set null' }),
     taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    // Resolved hashcat mode for this item, persisted during the mixed-list
+    // split pass (#202) for downstream visibility/audit (e.g. confirming
+    // which mode a moved item was classified under). Write-only today — no
+    // read site recomputes from it. Split idempotency is NOT derived from
+    // this column; it is enforced separately by `runSplitAnalysis`'s
+    // row-locked parent + children-existence check (see
+    // `queue/workers/hash-list-split.ts`). NULL for items that were never
+    // split-analyzed (the common case).
+    detectedHashcatMode: integer('detected_hashcat_mode'),
     metadata: jsonb('metadata').default({}),
     username: varchar('username', { length: 255 }),
     source: varchar('source', { length: 32 }),
@@ -744,11 +771,20 @@ export const campaigns = pgTable(
     // app-level `checkSingleHashModePerCampaign` pre-check cannot close on
     // its own. NULL only for campaigns with no attacks yet.
     hashcatMode: integer('hashcat_mode'),
+    // Parent campaign for a SPLIT sub-campaign (#202 second half). NULL = a
+    // normal/top-level campaign. When set, this is a single-mode sub-campaign
+    // cracking one per-type sub-list under the parent; the parent aggregates
+    // child progress. `onDelete: cascade` so deleting the parent removes its
+    // sub-campaigns. AnyPgColumn callback required for the self-reference.
+    parentCampaignId: integer('parent_campaign_id').references((): AnyPgColumn => campaigns.id, {
+      onDelete: 'cascade',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('campaigns_project_id_status_idx').on(table.projectId, table.status),
+    index('campaigns_parent_campaign_id_idx').on(table.parentCampaignId),
     // Couple the archive markers to the lifecycle at the DB level (ADR-0019):
     // a row may only carry archived_at when it is permanent AND in a done
     // state. Closes off illegal combinations (archived draft, archived

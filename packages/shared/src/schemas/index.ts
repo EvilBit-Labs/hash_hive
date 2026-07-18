@@ -196,6 +196,14 @@ export const createCampaignRequestSchema = insertCampaignSchema
      * single-row insert path.
      */
     attacks: z.array(inlineAttackRequestSchema).optional(),
+    /**
+     * Issue #202 SU7: force the plain single-mode create path even when the
+     * target hash list's `type_analysis.verdict` is mixed/needs-review.
+     * Used by the campaign wizard's `single_group` fallback — the async
+     * split job ran and found nothing to split, so the client re-submits
+     * with this set to skip re-triggering the split analysis.
+     */
+    skipSplit: z.boolean().optional(),
   })
   .openapi('CreateCampaignRequest')
 
@@ -258,6 +266,8 @@ export {
   resourceUpdateEventDataSchema,
   resourceWireSchema,
   setHashListTypeRequestSchema,
+  subCampaignHashProgressWireSchema,
+  subCampaignProgressWireSchema,
 } from './resources.js'
 
 // Results API wire shapes + hashcat attack-mode lookup live in
@@ -275,7 +285,28 @@ export type { AttackModeName } from './results.js'
 // Results page's hash-list filter dropdown and the hash list detail
 // stats card. Re-exported from the barrel so consumers keep importing
 // from `@hashhive/shared` unchanged.
-export { hashListListResponseSchema, hashListSummarySchema } from './hash-lists.js'
+export {
+  hashListDetectedModeSchema,
+  hashListListResponseSchema,
+  hashListSummarySchema,
+  hashListTypeAnalysisSchema,
+} from './hash-lists.js'
+
+// Campaign-wizard split + review flow wire shapes (issue #202 SU3). See
+// schemas/campaign-split.ts for the full flow description.
+export {
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
+  resolvedSubCampaignSchema,
+  splitAssignmentRequestSchema,
+  splitPendingResponseSchema,
+  splitReviewAmbiguousGroupSchema,
+  splitReviewConfidentGroupSchema,
+  splitReviewGroupsSchema,
+  splitReviewUnidentifiedGroupSchema,
+  splitStatusLiteralSchema,
+  splitStatusResponseSchema,
+} from './campaign-split.js'
 
 /**
  * Canonical agent status values matching the persisted `agents.status` column.

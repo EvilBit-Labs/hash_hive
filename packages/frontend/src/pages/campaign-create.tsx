@@ -1,3 +1,4 @@
+import type { SplitReviewGroups } from '@hashhive/shared'
 import type { Edge, Node as FlowNode, OnConnect } from 'reactflow'
 
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -12,6 +13,7 @@ import {
   type BasicInfoForm,
   BasicInfoStep,
   basicInfoSchema,
+  SplitReviewStep,
   TemplatePickerOverlay,
 } from '../components/features/campaign-wizard'
 import { ResourceUploadModal } from '../components/features/resource-upload-modal'
@@ -23,7 +25,7 @@ import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
 import { Select } from '../components/ui/select'
 import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates'
-import { useCreateCampaign } from '../hooks/use-campaigns'
+import { useConfirmSplitCampaign, useCreateCampaign, useSplitStatus } from '../hooks/use-campaigns'
 import { usePermissions } from '../hooks/use-permissions'
 import {
   useHashLists,
@@ -83,8 +85,28 @@ export function CampaignCreatePage() {
   const wizard = useCampaignWizard()
   const navigate = useNavigate()
   const createCampaign = useCreateCampaign()
+  const confirmSplit = useConfirmSplitCampaign()
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Set when `createCampaign` comes back 200 with SplitReviewGroups instead
+  // of 201 with a created campaign (issue #202 SU3/SU6) — the target hash
+  // list was already split by a prior call. Non-null switches Step 2's UI
+  // from the normal summary/create button to the split-review flow.
+  const [splitReview, setSplitReview] = useState<SplitReviewGroups | null>(null)
+  // Operator's mode pick per ambiguous group, keyed by `SplitReviewAmbiguousGroup.id`
+  // (the sub-list id, which doubles as `SplitAssignmentRequest.subListId`).
+  const [splitAssignments, setSplitAssignments] = useState<Record<number, number>>({})
+  // Set when `createCampaign` comes back 202 (issue #202 SU7) — the target
+  // hash list is mixed and the async split job was enqueued but hasn't
+  // resolved yet. Non-null switches Step 2's UI to an "Analyzing..."
+  // progress state and drives `useSplitStatus`'s polling.
+  const [splitPendingHashListId, setSplitPendingHashListId] = useState<number | null>(null)
+  const splitStatusQuery = useSplitStatus(splitPendingHashListId)
+  // Guards the `single_group` auto-resubmit against firing twice for the
+  // same pending job (e.g. React Strict Mode's double-invoke of effects) —
+  // a second resubmit would create a duplicate campaign, which is worse
+  // than a moment of extra "Analyzing..." UI.
+  const singleGroupResubmittedRef = useRef(false)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [uploadModal, setUploadModal] = useState<{
@@ -340,7 +362,7 @@ export function CampaignCreatePage() {
     }
   }
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (skipSplit = false) => {
     setError(null)
 
     // Pre-flight: refuse to start the submit if a cycle exists OR if a
@@ -369,7 +391,28 @@ export function CampaignCreatePage() {
         hashListId,
         priority: wizard.priority,
         ...(wizard.description ? { description: wizard.description } : {}),
+        ...(skipSplit ? { skipSplit: true } : {}),
       })
+
+      // The target hash list is mixed and hasn't been split yet — the
+      // async split job was enqueued (issue #202 SU7). Switch Step 2 into
+      // the "Analyzing..." progress state; the polling effect below reacts
+      // once `useSplitStatus` resolves. `finally` still clears `submitting`.
+      if (result.kind === 'split_pending') {
+        singleGroupResubmittedRef.current = false
+        setSplitPendingHashListId(result.hashListId)
+        return
+      }
+
+      // The target hash list was already split by a prior call — no
+      // campaign was created. Switch Step 2 into the split-review flow
+      // instead of the attack-creation loop below.
+      if (result.kind === 'split_review') {
+        setSplitReview(result.review)
+        setSplitAssignments({})
+        return
+      }
+
       campaignId = result.campaign.id
 
       // Clone the attacks list. The store currently replaces the array
@@ -445,9 +488,120 @@ export function CampaignCreatePage() {
     }
   }
 
+  // Reacts to `useSplitStatus` polling results (issue #202 SU7) while a
+  // split job is pending for `splitPendingHashListId`. Guarded on
+  // `splitPendingHashListId == null` so a stale/cached query result can't
+  // re-fire this after the pending state has already been cleared (e.g.
+  // by cancel, or by a prior run of this same effect).
+  //
+  // Also guarded on `!splitStatusQuery.isFetching` (code review fix):
+  // TanStack Query can surface a cached terminal status — e.g. a stale
+  // `ready` left over from a previous poll of the same hashListId — while
+  // a background revalidation is still in flight. Waiting for the fetch to
+  // settle before branching on `data.status` means every branch below only
+  // ever runs on a fresh result, so a stale cached terminal status from a
+  // prior render is never double-processed. `isError` is handled
+  // explicitly too (code review fix) — a query error was previously
+  // ignored, which left the "Analyzing..." spinner running forever on a
+  // network failure instead of surfacing a banner.
+  useEffect(() => {
+    if (splitPendingHashListId == null) return
+    if (splitStatusQuery.isFetching) return
+
+    if (splitStatusQuery.isError) {
+      const err = splitStatusQuery.error
+      if (err instanceof ApiError) setError(err.message)
+      else if (err instanceof Error) setError(err.message)
+      else setError('Failed to check split status. Try again.')
+      setSplitPendingHashListId(null)
+      return
+    }
+
+    if (!splitStatusQuery.isSuccess) return
+    const data = splitStatusQuery.data
+
+    if (data.status === 'ready') {
+      // `SplitStatusResponse` is a discriminated union keyed on `status`
+      // (code review fix) — `reviewGroups` is required and non-null on the
+      // `ready` branch, so the old `&& data.reviewGroups` defensive check
+      // is no longer needed; the type system now guarantees it.
+      setSplitReview(data.reviewGroups)
+      setSplitAssignments({})
+      setSplitPendingHashListId(null)
+    } else if (data.status === 'failed') {
+      setError(data.message ?? 'Split analysis failed.')
+      setSplitPendingHashListId(null)
+    } else if (data.status === 'empty') {
+      setError(data.message ?? 'Hash list has no crackable items to split into a campaign.')
+      setSplitPendingHashListId(null)
+    } else if (data.status === 'single_group') {
+      // The classifier found nothing to split despite the mixed verdict —
+      // fall back to a plain single-mode campaign on the original list.
+      // Guarded by the ref (not just clearing splitPendingHashListId) so a
+      // Strict Mode double-invoke of this effect can't fire the resubmit
+      // twice and create a duplicate campaign.
+      if (singleGroupResubmittedRef.current) return
+      singleGroupResubmittedRef.current = true
+      setSplitPendingHashListId(null)
+      void handleSubmit(true)
+    }
+    // oxlint-disable-next-line react/exhaustive-deps -- handleSubmit intentionally omitted (mirrors the file's other effects, e.g. the hash-type prefill effect above)
+  }, [
+    splitStatusQuery.isFetching,
+    splitStatusQuery.isError,
+    splitStatusQuery.isSuccess,
+    splitStatusQuery.data,
+    splitStatusQuery.error,
+    splitPendingHashListId,
+  ])
+
+  const handleSplitAssignmentChange = (subListId: number, mode: number) => {
+    setSplitAssignments((prev) => ({ ...prev, [subListId]: mode }))
+  }
+
+  const handleConfirmSplit = async () => {
+    if (!splitReview) return
+
+    // Build the assignment list from the ambiguous groups the operator has
+    // resolved. The Confirm button is disabled until every ambiguous group
+    // has a pick, but don't trust that alone — a stale render or a future
+    // regression in the disabled condition must not silently submit a
+    // partial assignment set.
+    const assignmentsPayload = splitReview.ambiguous
+      .map((group) => ({ subListId: group.id, mode: splitAssignments[group.id] }))
+      .filter((a): a is { subListId: number; mode: number } => a.mode != null)
+
+    if (assignmentsPayload.length !== splitReview.ambiguous.length) {
+      setError('Assign a hash type to every ambiguous group before confirming.')
+      return
+    }
+
+    setError(null)
+    try {
+      const result = await confirmSplit.mutateAsync({
+        parentHashListId: splitReview.parentHashListId,
+        name: wizard.name,
+        ...(wizard.description ? { description: wizard.description } : {}),
+        priority: wizard.priority,
+        assignments: assignmentsPayload,
+      })
+      wizard.reset()
+      setSplitReview(null)
+      setSplitAssignments({})
+      void navigate(`/campaigns/${result.parentCampaignId}`)
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else if (err instanceof Error) setError(err.message)
+      else setError('Unexpected error confirming the split campaign. Check console for details.')
+    }
+  }
+
   const handleCancel = () => setCancelOpen(true)
   const confirmCancel = () => {
     wizard.reset()
+    setSplitReview(null)
+    setSplitAssignments({})
+    setSplitPendingHashListId(null)
     setCancelOpen(false)
     void navigate('/campaigns')
   }
@@ -721,7 +875,35 @@ export function CampaignCreatePage() {
         </div>
       )}
 
-      {wizard.step === 2 && (
+      {wizard.step === 2 && splitPendingHashListId != null && (
+        <div className="space-y-4">
+          <output className="block rounded-md border border-surface-0 bg-surface-0/40 p-6 text-center text-sm text-muted-foreground">
+            <p className="font-medium text-foreground">Analyzing mixed list...</p>
+            <p className="mt-1">
+              This hash list mixes more than one hash type. Checking for the split.
+            </p>
+          </output>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={handleCancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {wizard.step === 2 && splitReview && (
+        <SplitReviewStep
+          reviewGroups={splitReview}
+          hashTypes={hashTypes}
+          assignments={splitAssignments}
+          onAssignmentChange={handleSplitAssignmentChange}
+          onConfirm={handleConfirmSplit}
+          onCancel={handleCancel}
+          isConfirming={confirmSplit.isPending}
+        />
+      )}
+
+      {wizard.step === 2 && !splitReview && splitPendingHashListId == null && (
         <div className="space-y-4">
           <div className="rounded-md border border-surface-0 bg-surface-0/40 p-4">
             <h3 className="mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase">
@@ -779,7 +961,7 @@ export function CampaignCreatePage() {
             <Button variant="secondary" onClick={() => wizard.setStep(1)}>
               Back
             </Button>
-            <Button onClick={handleSubmit} disabled={submitting}>
+            <Button onClick={() => void handleSubmit()} disabled={submitting}>
               {submitting ? 'Creating...' : 'Create Campaign'}
             </Button>
             <Button variant="secondary" onClick={handleCancel} disabled={submitting}>

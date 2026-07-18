@@ -16,6 +16,21 @@ export interface QueueHealth {
   queues: Record<string, { waiting: number; active: number; failed: number }>
 }
 
+/** Mirrors BullMQ's `JobsOptions['removeOnComplete'|'removeOnFail']` shape. */
+type JobRetention = boolean | number | { age: number; count?: number }
+
+/**
+ * Terminal-job info read back by `getJobInfo` — the only signal available
+ * for outcomes that leave no other row to read (e.g. a degenerate split
+ * that created no `hash_lists` children). `returnvalue` is `unknown`
+ * because BullMQ round-trips it through Redis as JSON with no static type.
+ */
+export interface QueueJobInfo {
+  state: string
+  returnvalue: unknown
+  failedReason: string | null
+}
+
 /**
  * Heartbeat-monitor scheduler cadence. Must stay strictly shorter than the
  * 5-minute offline threshold in `queue/workers/heartbeat-monitor.ts` and
@@ -130,7 +145,19 @@ export class QueueManager {
   async enqueue<T extends QueueName>(
     queueName: T,
     data: QueueJobMap[T],
-    opts?: { priority?: number; jobId?: string }
+    opts?: {
+      priority?: number
+      jobId?: string
+      // Override the default immediate eviction for a deduped jobId.
+      // Default (when `jobId` is set and these are omitted) is `true` —
+      // remove the job the instant it settles. Pass `{ age: <seconds> }`
+      // when a caller needs to read the terminal job's `returnvalue` /
+      // `failedReason` after it settles (e.g. status-polling an outcome
+      // that leaves no other row to read) — BullMQ's `age` unit is
+      // SECONDS, unlike the rest of this file's ms-based durations.
+      removeOnComplete?: JobRetention
+      removeOnFail?: JobRetention
+    }
   ): Promise<boolean> {
     const queue = this.queues.get(queueName)
     if (!queue) {
@@ -148,7 +175,13 @@ export class QueueManager {
       // per project then silently never again).
       await queue.add(queueName, data, {
         ...(opts?.priority ? { priority: opts.priority } : {}),
-        ...(opts?.jobId ? { jobId: opts.jobId, removeOnComplete: true, removeOnFail: true } : {}),
+        ...(opts?.jobId
+          ? {
+              jobId: opts.jobId,
+              removeOnComplete: opts.removeOnComplete ?? true,
+              removeOnFail: opts.removeOnFail ?? true,
+            }
+          : {}),
         attempts: DEFAULT_JOB_ATTEMPTS,
         backoff: { type: 'exponential', delay: 5_000 },
       })
@@ -156,6 +189,28 @@ export class QueueManager {
     } catch (err) {
       logger.error({ err, queueName }, 'Failed to enqueue job')
       return false
+    }
+  }
+
+  /**
+   * Reads back a job's terminal state for status-polling callers (issue
+   * #202 SU7). Returns `null` when the queue isn't available, the job
+   * doesn't exist (never enqueued, or already evicted past its retention
+   * window), or the lookup throws — callers treat all three the same way
+   * (no signal to report yet).
+   */
+  async getJobInfo(queueName: QueueName, jobId: string): Promise<QueueJobInfo | null> {
+    const queue = this.queues.get(queueName)
+    if (!queue) return null
+
+    try {
+      const job = await queue.getJob(jobId)
+      if (!job) return null
+      const state = await job.getState()
+      return { state, returnvalue: job.returnvalue, failedReason: job.failedReason ?? null }
+    } catch (err) {
+      logger.warn({ err, queueName, jobId }, 'Failed to read job state')
+      return null
     }
   }
 

@@ -1,12 +1,20 @@
 import type {
   CampaignLifecycleAction,
+  ConfirmSplitCampaignRequest,
+  ConfirmSplitCampaignResponse,
   CreateAttackRequest,
   CreateCampaignRequest,
+  SplitPendingResponse,
+  SplitReviewGroups,
+  SplitStatusResponse,
 } from '@hashhive/shared'
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
+
+/** Poll cadence for `useSplitStatus` while the async split job is pending. */
+const SPLIT_STATUS_POLL_INTERVAL_MS = 1500
 
 // Re-export for callers that want the lifecycle action type alongside
 // the mutation hooks.
@@ -26,14 +34,89 @@ interface Attack {
   mode: number
 }
 
+// Discriminated result of `POST /dashboard/campaigns`. The route returns
+// 201 with the created campaign for the normal (unanalyzed/homogeneous
+// hash list) path; 200 with `SplitReviewGroups` when the target hash
+// list was already split by a prior call (issue #202 SU3/SU6) — no
+// campaign was created, and the caller must resolve the ambiguous groups
+// and confirm via `useConfirmSplitCampaign`; and 202 with
+// `SplitPendingResponse` when the target hash list is mixed and has not
+// been split yet (issue #202 SU7) — the async split job was enqueued, and
+// the caller must poll `useSplitStatus` for the outcome. The mutation
+// branches on the response's HTTP status, never on body shape, since
+// guessing from shape alone is exactly the kind of contract drift this
+// discriminated union exists to prevent.
+export type CreateCampaignResult =
+  | { kind: 'created'; campaign: Campaign }
+  | { kind: 'split_review'; review: SplitReviewGroups }
+  | { kind: 'split_pending'; hashListId: number }
+
 export function useCreateCampaign() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data: CreateCampaignRequest) =>
-      api.post<{ campaign: Campaign }>('/dashboard/campaigns', data),
-    onSuccess: () => {
+    mutationFn: async (data: CreateCampaignRequest): Promise<CreateCampaignResult> => {
+      const { status, data: body } = await api.postWithStatus<
+        { campaign: Campaign } | SplitReviewGroups | SplitPendingResponse
+      >('/dashboard/campaigns', data)
+
+      if (status === 202) {
+        return { kind: 'split_pending', hashListId: (body as SplitPendingResponse).hashListId }
+      }
+      if (status === 200) {
+        return { kind: 'split_review', review: body as SplitReviewGroups }
+      }
+      return { kind: 'created', campaign: (body as { campaign: Campaign }).campaign }
+    },
+    onSuccess: (result) => {
+      // Nothing was created on the split-review / split-pending branches —
+      // no list to invalidate yet. The confirm mutation invalidates once
+      // the parent campaign actually exists.
+      if (result.kind === 'created') {
+        void queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      }
+    },
+  })
+}
+
+/**
+ * Polls `GET /campaigns/split/status/{hashListId}` (issue #202 SU7) while
+ * the async split job is pending. `hashListId` is `null` when there is no
+ * outstanding split to poll — the query is disabled in that case. Stops
+ * polling as soon as the last-fetched status leaves `pending` (`ready`,
+ * `failed`, `empty`, `single_group`), including the very first response —
+ * `refetchInterval` reads back the query's own cached `data`, not the
+ * in-flight response, so a request already resolves before the next
+ * interval is scheduled.
+ */
+export function useSplitStatus(hashListId: number | null) {
+  return useQuery<SplitStatusResponse>({
+    queryKey: ['campaign-split-status', hashListId],
+    queryFn: () => api.get<SplitStatusResponse>(`/dashboard/campaigns/split/status/${hashListId}`),
+    enabled: hashListId != null,
+    refetchInterval: (query) =>
+      query.state.data?.status === 'pending' ? SPLIT_STATUS_POLL_INTERVAL_MS : false,
+  })
+}
+
+/**
+ * Confirms a mixed-hash-list split review (issue #202 SU6): resolves the
+ * caller's per-ambiguous-group mode assignments and creates the parent
+ * campaign plus one single-mode sub-campaign per resolved sub-list. Always
+ * 201 — this endpoint has no split-review branch of its own.
+ */
+export function useConfirmSplitCampaign() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: ConfirmSplitCampaignRequest) =>
+      api.post<ConfirmSplitCampaignResponse>('/dashboard/campaigns/split/confirm', data),
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['hash-list-detail', result.parentHashListId],
+      })
+      void queryClient.invalidateQueries({ queryKey: ['hash-lists'] })
     },
   })
 }

@@ -11,6 +11,8 @@
  * `resources-delete.test.ts` and `hash-list-pipeline.test.ts` rely on.
  * Mirrors the dashboard-campaigns-routes isolation pattern.
  */
+import type { HashListTypeAnalysis } from '@hashhive/shared'
+
 import { describe, expect, it, mock } from 'bun:test'
 
 const IS_ISOLATED = process.env['RESOURCES_ROUTES_TEST_ISOLATED'] === '1'
@@ -86,6 +88,12 @@ if (!IS_ISOLATED) {
 
   // ─── Mock the Resources Service Layer ───────────────────────────────
 
+  // `typeAnalysis` mirrors the real `getHashListById` return shape -
+  // the `hashLists` Drizzle row carries a nullable
+  // `typeAnalysis: HashListTypeAnalysis | null` jsonb column
+  // (`packages/shared/src/db/schema.ts`). `null` is the legacy /
+  // not-yet-analyzed default so existing tests that don't set it keep
+  // exercising that branch.
   type HashListRow = {
     id: number
     projectId: number
@@ -94,6 +102,7 @@ if (!IS_ISOLATED) {
     status: string
     fileRef: Record<string, unknown> | null
     statistics: Record<string, unknown> | null
+    typeAnalysis: HashListTypeAnalysis | null
     createdAt: Date
     updatedAt: Date
   }
@@ -106,6 +115,7 @@ if (!IS_ISOLATED) {
     status: 'processing',
     fileRef: { bucket: 'hashhive', key: '1/hash-lists/42-test.txt' },
     statistics: null,
+    typeAnalysis: null,
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,
@@ -334,6 +344,32 @@ if (!IS_ISOLATED) {
   // detect-hash-type endpoint. Kept inert so the static import resolves.
   mock.module('../../src/services/hash-analysis.js', () => ({
     guessHashType: () => [],
+  }))
+
+  // `getHashListSplitProgress` (issue #202, SU5) is imported directly by
+  // the route (not re-exported through `services/resources.js`), so it
+  // needs its own mock — otherwise GET /hash-lists/{id} would call the
+  // REAL implementation against the stubbed `db` below, whose chain only
+  // resolves at `.limit()` (this function's queries don't call `.limit()`)
+  // and would throw on `children.map` since `await` on that stub's
+  // non-promise `.where()` result isn't an array. `null` mirrors the real
+  // return for a non-split (leaf) list — every test in this file uses a
+  // leaf `makeHashList`, so this default keeps every test byte-for-byte
+  // unchanged. Declared as a named mock (rather than inline) so the FIX A
+  // detail-response-schema test below can override it per-case.
+  //
+  // Per the contract-test-mocks-mirror-service-not-schema convention: typed
+  // via `mock<SplitProgressService['getHashListSplitProgress']>(...)` (the
+  // dynamic-return pattern) rather than a hand-maintained `{ needsTypeCount,
+  // subCampaignProgress: unknown }` shape, so a signature drift in the real
+  // service surfaces here as a type-check failure instead of silently
+  // diverging from the wire contract.
+  type SplitProgressService = typeof import('../../src/services/hash-items/split-progress.js')
+  const mockGetHashListSplitProgress = mock<SplitProgressService['getHashListSplitProgress']>(
+    async () => null
+  )
+  mock.module('../../src/services/hash-items/split-progress.js', () => ({
+    getHashListSplitProgress: mockGetHashListSplitProgress,
   }))
 
   // Stub db + ioredis to keep src/index.ts evaluation cheap.
@@ -1118,6 +1154,131 @@ if (!IS_ISOLATED) {
       // Tighter than "not 400" - a regression that returns 200 with
       // an empty body would have escaped the original assertion.
       expect(res.status).toBeGreaterThanOrEqual(500)
+    })
+  })
+
+  describe('GET /hash-lists/{id} - detail with typeAnalysis (issue #202 FU4)', () => {
+    const DETAIL_URL = '/api/v1/dashboard/resources/hash-lists/42'
+
+    it('returns the persisted typeAnalysis object for a mixed-hash-type list', async () => {
+      const mixedAnalysis = {
+        verdict: 'mixed',
+        detectedModes: [
+          { hashcatMode: 0, count: 40 },
+          { hashcatMode: 1000, count: 10 },
+        ],
+        unidentifiedCount: 0,
+        scannedCount: 50,
+        sampled: false,
+        declaredMode: null,
+        analyzedAt: '2026-07-15T00:00:00.000Z',
+      } satisfies HashListTypeAnalysis
+
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) =>
+        makeHashList({ id, typeAnalysis: mixedAnalysis })
+      )
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: { typeAnalysis?: unknown } }
+      expect(json.hashList?.typeAnalysis).toEqual(mixedAnalysis)
+    })
+
+    it('returns typeAnalysis: null for a legacy list that predates analysis persistence', async () => {
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) =>
+        makeHashList({ id, typeAnalysis: null })
+      )
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: { typeAnalysis?: unknown } }
+      // Explicit null, not absent - a legacy/unanalyzed row is a
+      // known, expected state, not an error.
+      expect(json.hashList).toHaveProperty('typeAnalysis')
+      expect(json.hashList?.typeAnalysis).toBeNull()
+    })
+
+    it('conforms to hashListDetailWireSchema — DB-only fields (fileRef, source, isPermanent, archivedAt, parentHashListId, updatedAt) are not on the wire', async () => {
+      // The route is now bound to `hashListDetailWireSchema` (P2 code
+      // review fix) instead of `z.unknown()`. `makeHashList` carries a
+      // `fileRef` (and, on the real DB row, `source` /`isPermanent` /
+      // `archivedAt` / `parentHashListId` / `updatedAt`) that the schema
+      // deliberately omits — this pins that the handler projects onto the
+      // schema's field set instead of spreading the raw row.
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) => makeHashList({ id }))
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { hashList?: Record<string, unknown> }
+      expect(json.hashList).toBeDefined()
+      const keys = Object.keys(json.hashList!).sort()
+      expect(keys).toEqual(
+        [
+          'id',
+          'name',
+          'projectId',
+          'hashTypeId',
+          'status',
+          'statistics',
+          'typeAnalysis',
+          'createdAt',
+        ].sort()
+      )
+      expect(json.hashList).not.toHaveProperty('fileRef')
+      expect(json.hashList).not.toHaveProperty('source')
+      expect(json.hashList).not.toHaveProperty('isPermanent')
+      expect(json.hashList).not.toHaveProperty('archivedAt')
+      expect(json.hashList).not.toHaveProperty('parentHashListId')
+      expect(json.hashList).not.toHaveProperty('updatedAt')
+      // createdAt is projected as an ISO string, not a raw Date.
+      expect(typeof json.hashList!['createdAt']).toBe('string')
+    })
+
+    it('surfaces needsTypeCount / subCampaignProgress (including pendingSubCampaignCount) for a split parent', async () => {
+      mockGetHashListById.mockReset()
+      mockGetHashListById.mockImplementation(async (id: number) => makeHashList({ id }))
+      mockGetHashListSplitProgress.mockReset()
+      mockGetHashListSplitProgress.mockImplementation(async () => ({
+        needsTypeCount: 4,
+        subCampaignProgress: {
+          subCampaignCount: 1,
+          completedSubCampaignCount: 1,
+          done: false,
+          totalTasks: 2,
+          completedTasks: 2,
+          tasksFailed: 0,
+          overallProgress: 1,
+          hashProgress: null,
+          // The stranded-child fix (#202 code review P2): a resolved child
+          // with no linked campaign forces `done: false` even though every
+          // REAL sub-campaign has completed.
+          pendingSubCampaignCount: 1,
+        },
+      }))
+
+      const res = await app.request(DETAIL_URL, { headers: makeHeaders() })
+
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as {
+        hashList?: { needsTypeCount?: number; subCampaignProgress?: Record<string, unknown> }
+      }
+      expect(json.hashList?.needsTypeCount).toBe(4)
+      expect(json.hashList?.subCampaignProgress).toMatchObject({
+        subCampaignCount: 1,
+        done: false,
+        pendingSubCampaignCount: 1,
+      })
+
+      // Reset back to the file-wide default (null / non-split) so later
+      // tests in this describe block aren't affected by this override.
+      mockGetHashListSplitProgress.mockReset()
+      mockGetHashListSplitProgress.mockImplementation(async () => null)
     })
   })
 } // end IS_ISOLATED

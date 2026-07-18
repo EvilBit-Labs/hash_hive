@@ -43,6 +43,7 @@ function mockHashListDetailResponse(options: HashListDetailFixtureOptions = {}) 
         crackedCount,
         crackRate: totalCount === 0 ? 0 : crackedCount / totalCount,
       },
+      typeAnalysis: null,
       createdAt: new Date().toISOString(),
     },
   }
@@ -273,5 +274,96 @@ describe('HashListDetailPage', () => {
 
     const exportButton = screen.getByRole('button', { name: 'Export CSV' }) as HTMLButtonElement
     expect(exportButton.disabled).toBe(false)
+  })
+})
+
+describe('HashListDetailPage split-parent aggregated view (issue #202 SU5/SU6)', () => {
+  it('renders nothing new for a normal (never-split) list — no subCampaignProgress, no needsTypeCount', async () => {
+    fetchMock = defaultMocks()
+    selectProject()
+    renderWithRouter([{ path: '/hash-lists/:id', element: <HashListDetailPage /> }], {
+      initialRoute: '/hash-lists/9',
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('NTLM Sample')).toBeDefined()
+    })
+
+    expect(screen.queryByText('Sub-Campaign Progress')).toBeNull()
+    expect(screen.queryByText(/still need a type/)).toBeNull()
+  })
+
+  it('renders the aggregated progress summary when subCampaignProgress is present', async () => {
+    fetchMock = defaultMocks({
+      '/dashboard/resources/hash-lists/9': {
+        status: 200,
+        body: {
+          hashList: {
+            ...mockHashListDetailResponse({ id: 9, totalCount: 1000, crackedCount: 250 }).hashList,
+            subCampaignProgress: {
+              subCampaignCount: 3,
+              completedSubCampaignCount: 2,
+              done: false,
+              totalTasks: 10,
+              completedTasks: 7,
+              tasksFailed: 1,
+              overallProgress: 0.7,
+              hashProgress: { total: 900, cracked: 600, remaining: 300, percentage: 0.667 },
+              pendingSubCampaignCount: 0,
+            },
+          },
+        },
+      },
+    })
+    selectProject()
+    renderWithRouter([{ path: '/hash-lists/:id', element: <HashListDetailPage /> }], {
+      initialRoute: '/hash-lists/9',
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Sub-Campaign Progress')).toBeDefined()
+    })
+    expect(screen.getByText('2/3')).toBeDefined()
+    expect(screen.getByText('7/10')).toBeDefined()
+    expect(screen.getByText('600/900')).toBeDefined()
+    // Not done — no needs-type notice was configured, and status reads "running".
+    expect(screen.queryByText(/still need a type/)).toBeNull()
+  })
+
+  it('renders a distinct needs-type notice when needsTypeCount > 0, even alongside a done summary', async () => {
+    fetchMock = defaultMocks({
+      '/dashboard/resources/hash-lists/9': {
+        status: 200,
+        body: {
+          hashList: {
+            ...mockHashListDetailResponse({ id: 9, totalCount: 1000, crackedCount: 900 }).hashList,
+            needsTypeCount: 42,
+            subCampaignProgress: {
+              subCampaignCount: 2,
+              completedSubCampaignCount: 2,
+              done: true,
+              totalTasks: 4,
+              completedTasks: 4,
+              tasksFailed: 0,
+              overallProgress: 1,
+              hashProgress: { total: 900, cracked: 900, remaining: 0, percentage: 1 },
+              pendingSubCampaignCount: 0,
+            },
+          },
+        },
+      },
+    })
+    selectProject()
+    renderWithRouter([{ path: '/hash-lists/:id', element: <HashListDetailPage /> }], {
+      initialRoute: '/hash-lists/9',
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Sub-Campaign Progress')).toBeDefined()
+    })
+    // Both sections render together — a done parent with unresolved
+    // needs-type children must not read as either "fully done" (hiding the
+    // pending work) or "stalled" (contradicting the completed sub-campaigns).
+    expect(screen.getByText(/42 hashes still need a type/)).toBeDefined()
   })
 })

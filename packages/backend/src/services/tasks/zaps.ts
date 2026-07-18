@@ -84,6 +84,15 @@ export async function getZapsForTask(
     return { zaps: [], nextCursor: null }
   }
 
+  // A task's campaign always targets a leaf hash list: a split sub-campaign
+  // cracks a per-type sub-list (itself a leaf), and a split PARENT campaign is
+  // attackless so never has tasks (#202 SU3/SU4). So there is no parent to
+  // expand here — filter directly on the task's own hashListId. This keeps the
+  // agent's hot polling path free of an extra hash_lists round trip per zap
+  // fetch. Ownership is already enforced by the campaigns.projectId join above.
+  // (If a future campaign type ever targets a parent directly, route this
+  // through resolveHashListScope like the dashboard read paths.)
+
   // Build conditions for cracked hash items. Typed to allow the
   // `or(...)` (which is `SQL | undefined`) without a non-null assertion —
   // `and(...conditions)` filters undefined itself, matching the pattern

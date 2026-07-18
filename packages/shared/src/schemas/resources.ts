@@ -14,6 +14,8 @@
 import '../openapi-extension.js'
 import { z } from 'zod'
 
+import { hashListTypeAnalysisSchema } from './hash-lists.js'
+
 export const hashCandidateSchema = z
   .object({
     name: z.string(),
@@ -27,6 +29,20 @@ export const hashCandidateSchema = z
  * Shape of the JSONB written to `hash_lists.statistics` by the
  * hash-list parser worker (and merged with live counts by the dashboard
  * GET /hash-lists/:id route).
+ *
+ * `splitOutcome` (issue #202, code review fix) is written ONLY on a split
+ * PARENT hash list, and only for the two degenerate `runSplitAnalysis`
+ * outcomes that create no `hash_lists` children row
+ * (`queue/workers/hash-list-split.ts`): `'empty'` (no crackable items) and
+ * `'single_group'` (every item classifies to one group, nothing to split).
+ * This is the durable signal `getSplitStatus`
+ * (`services/campaign-split-status.ts`) falls back to once the BullMQ job
+ * that produced the outcome is evicted past its retention window — without
+ * it, a degenerate outcome with an evicted job reads as `pending` forever,
+ * since neither signal `getSplitStatus` normally reads (children rows /
+ * live job state) exists for these two outcomes. Optional and absent on
+ * every non-split-parent list and on a split parent that hasn't run
+ * degenerate analysis.
  */
 export const hashListStatisticsSchema = z
   .object({
@@ -34,6 +50,7 @@ export const hashListStatisticsSchema = z
     crackedCount: z.number().int().nonnegative(),
     crackRate: z.number().min(0).max(1),
     lastUpdated: z.string().datetime().optional(),
+    splitOutcome: z.enum(['empty', 'single_group']).optional(),
   })
   .openapi('HashListStatistics')
 
@@ -239,9 +256,88 @@ export const resourceWireSchema = z
   .openapi('ResourceWire')
 
 /**
+ * Live cracked/total rollup across a split parent's mode-bearing
+ * sub-campaigns only (issue #202, SU5). Deliberately excludes needs-type
+ * children (no sub-campaign targets them) so the denominator never
+ * includes hashes nobody has assigned a crackable type to yet - see
+ * `subCampaignProgressWireSchema`'s doc comment for the full contract.
+ */
+export const subCampaignHashProgressWireSchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    cracked: z.number().int().nonnegative(),
+    remaining: z.number().int().nonnegative(),
+    percentage: z.number().min(0).max(1),
+  })
+  .openapi('SubCampaignHashProgress')
+
+/**
+ * Aggregated progress across a split parent hash list's mode-bearing
+ * sub-campaigns (issue #202, SU5). A split parent campaign has no attacks
+ * or tasks of its own - all cracking happens on its children
+ * (`campaigns.parentCampaignId`) - so this is computed on READ by
+ * combining each sub-campaign's own already-computed `progress` JSONB
+ * (`getHashListSplitProgress` in
+ * `packages/backend/src/services/hash-items/split-progress.ts`), not
+ * derived from the parent campaign's row.
+ *
+ * `done` is true only when EVERY sub-campaign counted here has reached
+ * `completed` AND `pendingSubCampaignCount` is zero - needs-type children
+ * have no sub-campaign at all, so they are excluded from both
+ * `subCampaignCount` and `done` by construction, not by a separate filter.
+ * This is what lets an otherwise-complete parent read as done even while
+ * `HashListDetailWire.needsTypeCount` is still nonzero.
+ *
+ * `pendingSubCampaignCount` (code review fix, #202) counts mode-bearing
+ * (resolved, `verdict: 'homogeneous'`) children that have NO sub-campaign
+ * linked yet - the signature of a `confirmSplitCampaign` crash between
+ * flipping a child's `type_analysis` to `homogeneous` and creating its
+ * sub-campaign (that flow is not a single atomic transaction). A nonzero
+ * value here forces `done` to `false` even when every sub-campaign that
+ * DOES exist has completed, so a partially-confirmed split can't read as
+ * finished.
+ */
+export const subCampaignProgressWireSchema = z
+  .object({
+    subCampaignCount: z.number().int().nonnegative(),
+    completedSubCampaignCount: z.number().int().nonnegative(),
+    done: z.boolean(),
+    totalTasks: z.number().int().nonnegative(),
+    completedTasks: z.number().int().nonnegative(),
+    tasksFailed: z.number().int().nonnegative(),
+    overallProgress: z.number().min(0).max(1),
+    hashProgress: subCampaignHashProgressWireSchema.nullable(),
+    pendingSubCampaignCount: z.number().int().nonnegative(),
+  })
+  .openapi('SubCampaignProgress')
+
+/**
  * Wire shape of a hash list detail row returned from
  * `GET /dashboard/resources/hash-lists/{id}`. Extends the list shape
  * with the parsed statistics payload.
+ *
+ * `typeAnalysis` mirrors the nullable `hash_lists.type_analysis` jsonb
+ * column (foundation toward #202): `null` for a legacy list that
+ * predates the analysis feature or hasn't been (re-)ingested yet,
+ * otherwise the persisted `HashListTypeAnalysis` computed during
+ * ingestion. The route (`getHashListRoute` in
+ * `packages/backend/src/routes/dashboard/resources.ts`) maps the DB
+ * row's fields onto this schema explicitly (the response is validated
+ * against `hashListDetailWireSchema`), so `typeAnalysis` is projected
+ * alongside `hashTypeId` and `status`.
+ *
+ * `needsTypeCount` / `subCampaignProgress` (#202, SU5) are ONLY present
+ * for a split PARENT hash list (one with children via
+ * `hash_lists.parent_hash_list_id`) - both are `optional()` so a normal
+ * (never-split) list's response omits them entirely rather than sending
+ * `null`, keeping the existing wire shape byte-for-byte unchanged for the
+ * common case. `needsTypeCount` is the number of hash-item ENTRIES (not
+ * groups) sitting in children that still need a type assigned before they
+ * can crack (`type_analysis.verdict === 'needs-review'` and no
+ * sub-campaign targets them yet) - deliberately kept OUT of `statistics`
+ * and `subCampaignProgress` so a parent with unresolved needs-type
+ * children doesn't read as stalled once every mode-bearing sub-campaign
+ * has actually finished.
  */
 export const hashListDetailWireSchema = z
   .object({
@@ -251,6 +347,9 @@ export const hashListDetailWireSchema = z
     hashTypeId: z.number().int().positive().nullable(),
     status: resourceStatusSchema,
     statistics: hashListStatisticsSchema,
+    typeAnalysis: hashListTypeAnalysisSchema.nullable(),
+    needsTypeCount: z.number().int().nonnegative().optional(),
+    subCampaignProgress: subCampaignProgressWireSchema.nullable().optional(),
     createdAt: z.string(),
   })
   .openapi('HashListDetailWire')

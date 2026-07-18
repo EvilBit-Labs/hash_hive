@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
-import { guessHashType, validateHashFormat } from '../../src/services/hash-analysis.js'
+import {
+  guessHashType,
+  guessTopHashType,
+  validateHashFormat,
+} from '../../src/services/hash-analysis.js'
 
 describe('guessHashType', () => {
   test('should identify MD5 hash', () => {
@@ -80,6 +84,55 @@ describe('guessHashType', () => {
     expect(guessHashType('')).toEqual([])
     expect(guessHashType('not-a-hash!')).toEqual([])
     expect(guessHashType('zzz')).toEqual([])
+  })
+})
+
+describe('guessTopHashType', () => {
+  test('returns a structured format at 0.95 before scanning raw-hex patterns', () => {
+    const guess = guessTopHashType('$2b$12$WApznUPhDubN0oeveSXHp.Ux5KijMo/Hkb3Gf/.GfCVyhPMHO2G.6')
+    expect(guess).not.toBeNull()
+    expect(guess!.hashcatMode).toBe(3200)
+    expect(guess!.confidence).toBe(0.95)
+  })
+
+  test('returns the top popularity-ordered raw-hex mode for 32-hex', () => {
+    // 32-hex matches NTLM (mode 1000) first in popularity order — same as guessHashType's top.
+    const guess = guessTopHashType('5d41402abc4b2a76b9719d911017c592')
+    expect(guess).not.toBeNull()
+    expect(guess!.hashcatMode).toBe(1000)
+    expect(guess!.confidence).toBe(0.7)
+  })
+
+  test('identifies a structured SHA-512 Crypt sample', () => {
+    const guess = guessTopHashType(
+      '$6$rounds=5000$salt$IxDD3jSAdZ8mH8m.g8k3lM.WQ9tD0eXfDf1z1L3PRr5rq0aQ0K6xk0f7c9r0Rk8cRj0k2Yk2Yk2Yk2Yk2Yk2Y1'
+    )
+    expect(guess).not.toBeNull()
+    expect(guess!.hashcatMode).toBe(1800)
+    expect(guess!.confidence).toBe(0.95)
+  })
+
+  test('returns null for empty and unrecognized input', () => {
+    expect(guessTopHashType('')).toBeNull()
+    expect(guessTopHashType('   ')).toBeNull()
+    expect(guessTopHashType('not-a-hash!')).toBeNull()
+    expect(guessTopHashType('zzz')).toBeNull()
+  })
+
+  test('agrees with guessHashType top candidate across a representative sample', () => {
+    const samples = [
+      '5d41402abc4b2a76b9719d911017c592', // 32-hex -> NTLM
+      'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d', // 40-hex -> SHA-1
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824', // 64-hex
+      '$2b$12$WApznUPhDubN0oeveSXHp.Ux5KijMo/Hkb3Gf/.GfCVyhPMHO2G.6', // bcrypt
+      '$1$salt1234$mdOnJkrqjR9gYMW7HMJgk.', // MD5 Crypt
+      '*6C8989366EAF6BCBBAA855D6DA0A81E8D9D47382', // MySQL 4.1+
+      '', // empty
+      'garbage', // unrecognized
+    ]
+    for (const sample of samples) {
+      expect(guessTopHashType(sample)?.hashcatMode).toBe(guessHashType(sample)[0]?.hashcatMode)
+    }
   })
 })
 

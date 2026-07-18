@@ -132,10 +132,38 @@ async function requestRaw(path: string, init?: RequestInit): Promise<Response> {
   return res
 }
 
+/**
+ * Like `request`, but also returns the HTTP status code alongside the
+ * parsed body. Needed for endpoints where the status code itself carries
+ * meaning distinct from the body shape — e.g. `POST /campaigns` returns
+ * 201 with the created campaign normally, but 200 with `SplitReviewGroups`
+ * when the target hash list is mixed (issue #202 SU3/SU6). `request<T>`
+ * collapses that distinction because both are `res.ok`; callers that need
+ * to branch on status must use this instead of guessing from body shape.
+ * Reuses `requestRaw`'s fetch/timeout/401/error handling so the two
+ * functions don't duplicate that logic — only JSON parsing is added here.
+ */
+async function requestWithStatus<T>(
+  path: string,
+  init?: RequestInit
+): Promise<{ status: number; data: T }> {
+  const res = await requestRaw(path, init)
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return { status: res.status, data: undefined as T }
+  }
+  return { status: res.status, data: (await res.json()) as T }
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, data?: unknown) =>
     request<T>(path, { method: 'POST', ...(data ? { body: JSON.stringify(data) } : {}) }),
+  postWithStatus: <T>(path: string, data?: unknown) =>
+    requestWithStatus<T>(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(data ? { body: JSON.stringify(data) } : {}),
+    }),
   patch: <T>(path: string, data: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),

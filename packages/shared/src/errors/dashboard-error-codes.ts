@@ -83,6 +83,34 @@ export const DASHBOARD_ERROR_CODES = [
   // create/update when the new mode differs from an existing non-terminal
   // sibling attack in the same campaign.
   'ATTACK_MODE_CONFLICT',
+  // ─── Campaign-wizard split + review flow (issue #202 SU3) ─────────
+  // The split classifier found no crackable items at all — there is
+  // nothing to build a campaign or a review flow around.
+  'HASH_LIST_SPLIT_EMPTY',
+  // `confirmSplitCampaign` was called against a hash list that has not
+  // been split yet (no children) — the caller must POST /campaigns
+  // first to trigger the split.
+  'HASH_LIST_NOT_SPLIT',
+  // A split-confirm assignment referenced a sub-list that isn't a child
+  // of the given parent, isn't an ambiguous group awaiting review, or
+  // picked a mode outside that group's candidate modes.
+  'SPLIT_ASSIGNMENT_INVALID',
+  // The async split-analysis job could not be enqueued (queue manager
+  // unavailable, or the enqueue call itself failed) — no campaign was
+  // created and no job is running, so the wizard's status poll would
+  // otherwise sit at `pending` forever with no way to recover (code
+  // review fix; previously this failure was swallowed silently).
+  'SPLIT_ENQUEUE_FAILED',
+  // The caller passed `skipSplit: true` against a hash list that does NOT
+  // actually resolve to a single classification group — either it already
+  // has real split children (2+ groups), or a fresh re-classification of
+  // its items still finds more than one group. `skipSplit` exists only for
+  // the wizard's `single_group` fallback (the async split job re-classified
+  // a "mixed"-flagged list down to exactly one group and created no
+  // children); honoring it on a genuinely mixed list would create a
+  // single-mode campaign that crackers would run under the wrong mode for
+  // part of the list (security fix — CodeRabbit).
+  'SKIP_SPLIT_REJECTED',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

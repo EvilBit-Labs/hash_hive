@@ -65,6 +65,7 @@ async function insertCampaign(
     startedAt?: Date | null
     projectId?: number
     hashListId?: number
+    parentCampaignId?: number | null
   } = {}
 ): Promise<number> {
   const [campaign] = await db
@@ -78,6 +79,7 @@ async function insertCampaign(
       isPermanent: overrides.isPermanent ?? false,
       archivedAt: overrides.archivedAt ?? null,
       startedAt: overrides.startedAt ?? null,
+      parentCampaignId: overrides.parentCampaignId ?? null,
     })
     .returning({ id: campaigns.id })
   return campaign!.id
@@ -304,6 +306,53 @@ describe('list show-archived filter (U6, R10)', () => {
 
       const all = await listCampaigns({ projectId, showArchived: true })
       expect(all.total).toBe(2)
+    } finally {
+      await db.delete(projects).where(eq(projects.id, projectId))
+    }
+  })
+})
+
+// ─── listCampaigns excludes split sub-campaigns (issue #202 second half) ─────
+
+describe('list excludes split sub-campaigns', () => {
+  const SPLIT_TEST_SLUG = 'campaigns-archive-split-list-test'
+
+  it('excludes a sub-campaign (parentCampaignId set) from the flat listing, even with showArchived', async () => {
+    // Isolated project so totals are deterministic, mirroring the
+    // show-archived test above.
+    await db.delete(projects).where(eq(projects.slug, SPLIT_TEST_SLUG))
+    const [proj] = await db
+      .insert(projects)
+      .values({ name: SPLIT_TEST_SLUG, slug: SPLIT_TEST_SLUG })
+      .returning({ id: projects.id })
+    const projectId = proj!.id
+    try {
+      const [list] = await db
+        .insert(hashLists)
+        .values({
+          projectId,
+          name: 'split-list-test-list',
+          hashTypeId: ctx.hashTypeId,
+          status: 'ready',
+        })
+        .returning({ id: hashLists.id })
+      const hashListId = list!.id
+
+      const parentId = await insertCampaign({ projectId, hashListId })
+      await insertCampaign({ projectId, hashListId, parentCampaignId: parentId })
+
+      const { listCampaigns } = await import('../../src/services/campaigns.js')
+
+      const result = await listCampaigns({ projectId })
+      expect(result.total).toBe(1)
+      expect(result.campaigns.map((c) => c.id)).toEqual([parentId])
+
+      // Sub-campaigns stay excluded even when the caller asks for archived
+      // rows too — parentCampaignId filtering is independent of the
+      // showArchived toggle.
+      const withArchived = await listCampaigns({ projectId, showArchived: true })
+      expect(withArchived.total).toBe(1)
+      expect(withArchived.campaigns.map((c) => c.id)).toEqual([parentId])
     } finally {
       await db.delete(projects).where(eq(projects.id, projectId))
     }

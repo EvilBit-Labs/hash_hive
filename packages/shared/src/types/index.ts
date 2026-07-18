@@ -140,6 +140,8 @@ import type {
   selectWordListSchema,
   sessionUserSchema,
   setHashListTypeRequestSchema,
+  subCampaignHashProgressWireSchema,
+  subCampaignProgressWireSchema,
   updateCrackerBinaryRequestSchema,
   useCampaignsOptionsSchema,
   userRoleSchema,
@@ -148,8 +150,21 @@ import type {
   crackedResultRowSchema,
   listResultsResponseSchema,
   // Hash-lists listing schemas (issue #165 / U2)
+  hashListDetectedModeSchema,
   hashListListResponseSchema,
   hashListSummarySchema,
+  hashListTypeAnalysisSchema,
+  // Campaign-wizard split + review flow (issue #202 SU3)
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
+  resolvedSubCampaignSchema,
+  splitAssignmentRequestSchema,
+  splitPendingResponseSchema,
+  splitReviewAmbiguousGroupSchema,
+  splitReviewConfidentGroupSchema,
+  splitReviewGroupsSchema,
+  splitReviewUnidentifiedGroupSchema,
+  splitStatusResponseSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -387,9 +402,23 @@ export type CrackedResultRow = z.infer<typeof crackedResultRowSchema>
 export type ListResultsResponse = z.infer<typeof listResultsResponseSchema>
 export type HashListSummary = z.infer<typeof hashListSummarySchema>
 export type HashListListResponse = z.infer<typeof hashListListResponseSchema>
+export type HashListDetectedMode = z.infer<typeof hashListDetectedModeSchema>
+export type HashListTypeAnalysis = z.infer<typeof hashListTypeAnalysisSchema>
+export type SplitReviewConfidentGroup = z.infer<typeof splitReviewConfidentGroupSchema>
+export type SplitReviewAmbiguousGroup = z.infer<typeof splitReviewAmbiguousGroupSchema>
+export type SplitReviewUnidentifiedGroup = z.infer<typeof splitReviewUnidentifiedGroupSchema>
+export type SplitReviewGroups = z.infer<typeof splitReviewGroupsSchema>
+export type SplitAssignmentRequest = z.infer<typeof splitAssignmentRequestSchema>
+export type ConfirmSplitCampaignRequest = z.infer<typeof confirmSplitCampaignRequestSchema>
+export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
+export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
+export type SplitPendingResponse = z.infer<typeof splitPendingResponseSchema>
+export type SplitStatusResponse = z.infer<typeof splitStatusResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
+export type SubCampaignHashProgress = z.infer<typeof subCampaignHashProgressWireSchema>
+export type SubCampaignProgress = z.infer<typeof subCampaignProgressWireSchema>
 export type HashItemWire = z.infer<typeof hashItemWireSchema>
 export type HashItemsPageWire = z.infer<typeof hashItemsPageWireSchema>
 export type SetHashListTypeRequest = z.infer<typeof setHashListTypeRequestSchema>

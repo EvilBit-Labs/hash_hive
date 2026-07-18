@@ -11,7 +11,7 @@ import {
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, eq, isNotNull, ne, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -122,7 +122,12 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
         count: sql<number>`count(*)`,
       })
       .from(campaigns)
-      .where(eq(campaigns.projectId, projectId))
+      // Split sub-campaigns (issue #202 second half) are children of a
+      // parent campaign; without this filter a split campaign would count
+      // as 1 parent + N sub-campaigns in the status breakdown instead of
+      // once. Matches `listCampaigns`' flat-list exclusion in
+      // `services/campaigns.ts`.
+      .where(and(eq(campaigns.projectId, projectId), isNull(campaigns.parentCampaignId)))
       .groupBy(campaigns.status),
 
     db
@@ -145,9 +150,18 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
     // non-null `crackedAt` across the project's hash lists"). The
     // `hash_items_hash_list_cracked_idx` composite index on
     // `(hashListId, crackedAt)` is purpose-built for this access path.
+    //
+    // `count(distinct hashValue)` (#202 SU4): `propagateCrack` marks a
+    // hashValue cracked everywhere it appears, across every hash list —
+    // so a hashValue that exists as a separate row under two sibling
+    // split sub-lists (or, pre-existing this feature, two independently
+    // uploaded lists that happen to share a hash) must count as ONE
+    // cracked target, not once per row. No-op for a project with no
+    // duplicate hashValues across its lists — the overwhelmingly common
+    // case.
     db
       .select({
-        count: sql<number>`count(*)`,
+        count: sql<number>`count(distinct ${hashItems.hashValue})`,
       })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))

@@ -300,6 +300,14 @@ export async function listCampaigns(filters: {
   if (!filters.showArchived) {
     conditions.push(isNull(campaigns.archivedAt))
   }
+  // Split sub-campaigns (issue #202 second half) are children created behind
+  // a parent campaign — the operator interacts with the parent, not the
+  // sub-campaigns directly, so they must never appear as standalone rows in
+  // the flat campaign listing (mirrors `isNull(hashLists.parentHashListId)`
+  // in `routes/dashboard/hash-lists.ts` for the hash-list side of the same
+  // feature). Applies to both the data and count queries since they share
+  // this conditions array.
+  conditions.push(isNull(campaigns.parentCampaignId))
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
   }
@@ -341,6 +349,21 @@ export async function createCampaign(
     hashListId: number
     priority?: number | undefined
     createdBy?: number | undefined
+    // Split-confirm sub-campaign fields (issue #202 SU3). Both default to
+    // null/unset, preserving the plain-campaign behavior every existing
+    // caller relies on.
+    //
+    // `hashcatMode`: pre-latches the campaign's single-hash-mode-per-campaign
+    // backstop (issue #100) directly, bypassing the normal
+    // set-from-first-attack path — a split sub-campaign is created with zero
+    // attacks (the user adds them afterward via the standard attack routes),
+    // so there is no `attacks[0].mode` to derive from. Any attack added
+    // later must match this mode (`checkSingleHashModePerCampaign` / the
+    // composite FK enforce it).
+    // `parentCampaignId`: links a split sub-campaign back to its parent
+    // (`campaigns.parentCampaignId`, #202 second half).
+    hashcatMode?: number | null | undefined
+    parentCampaignId?: number | null | undefined
   },
   actor: AuditActor = {
     actorType: 'system',
@@ -358,6 +381,8 @@ export async function createCampaign(
         priority: data.priority ?? 5,
         createdBy: data.createdBy ?? null,
         status: 'draft',
+        hashcatMode: data.hashcatMode ?? null,
+        parentCampaignId: data.parentCampaignId ?? null,
       })
       .returning()
 
