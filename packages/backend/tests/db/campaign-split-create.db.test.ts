@@ -984,3 +984,209 @@ describe('confirmSplitCampaign — invalid-assignment validation (code review fi
     expect(await campaignsOn(childId)).toHaveLength(1)
   })
 })
+
+describe('sole ambiguous/unidentified group is NOT degenerate single-group (bug fix — CodeRabbit, Major correctness)', () => {
+  it('a list that is entirely AMBIGUOUS (all 32-hex) rejects skipSplit and goes through the real split/review path, never a plain campaign', async () => {
+    const listId = await createHashList('split-confirm-sole-ambiguous', mixedTypeAnalysis())
+    // Every item is a 32-hex string — all classify to the SAME ambiguous
+    // signature, so `planSplit` collapses to exactly one group. That group
+    // is NOT confidently resolved, so it must never be treated the same as
+    // the genuine single-confident-group fallback above.
+    const ambiguousValues = [HEX32, 'd'.repeat(32)]
+    await insertHashValues(listId, ambiguousValues)
+
+    // skipSplit must be rejected: `verifiesSingleGroup` now checks the sole
+    // group's kind, not just its count.
+    const skipSplitResult = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'sole-ambiguous-campaign',
+      hashListId: listId,
+      attacks: [],
+      skipSplit: true,
+    })
+    expect(skipSplitResult.kind).toBe('skip_split_rejected')
+    expect(await campaignsOn(listId)).toHaveLength(0)
+    expect(await childrenOf(listId)).toHaveLength(0)
+
+    // The normal (non-skipSplit) path enqueues the split job — no plain
+    // campaign is silently created for an unresolved ambiguous list.
+    const pendingResult = await withFakeSuccessfulEnqueue(() =>
+      createCampaignOrSplit({
+        projectId: projId,
+        name: 'sole-ambiguous-campaign',
+        hashListId: listId,
+        attacks: [],
+      })
+    )
+    expect(pendingResult.kind).toBe('split_pending')
+
+    // The worker must NOT collapse this to `degenerate-single-group` — it
+    // creates a real (one-child) split so the ambiguous group is presented
+    // for review/assignment instead of vanishing into a wrong-mode campaign.
+    const splitResult = await runSplitAnalysis(listId)
+    expect(splitResult.outcome).toBe('split')
+    expect(splitResult.subLists).toHaveLength(1)
+    expect(splitResult.subLists[0]?.kind).toBe('ambiguous')
+    expect(splitResult.subLists[0]?.itemCount).toBe(ambiguousValues.length)
+
+    const children = await childrenOf(listId)
+    expect(children).toHaveLength(1)
+    expect(children[0]?.typeAnalysis?.verdict).toBe('needs-review')
+    expect(children[0]?.typeAnalysis?.detectedModes.map((d) => d.hashcatMode)).toEqual(
+      HEX32_SIGNATURE
+    )
+
+    // Still no plain campaign was created on the original (now-shell) list.
+    expect(await campaignsOn(listId)).toHaveLength(0)
+  })
+
+  it('a list that is entirely UNIDENTIFIED rejects skipSplit and goes through the real split/review path, never a plain campaign', async () => {
+    const listId = await createHashList('split-confirm-sole-unidentified', mixedTypeAnalysis())
+    const unidentifiedValues = [garbage(100), garbage(101)]
+    await insertHashValues(listId, unidentifiedValues)
+
+    const skipSplitResult = await createCampaignOrSplit({
+      projectId: projId,
+      name: 'sole-unidentified-campaign',
+      hashListId: listId,
+      attacks: [],
+      skipSplit: true,
+    })
+    expect(skipSplitResult.kind).toBe('skip_split_rejected')
+    expect(await campaignsOn(listId)).toHaveLength(0)
+    expect(await childrenOf(listId)).toHaveLength(0)
+
+    const pendingResult = await withFakeSuccessfulEnqueue(() =>
+      createCampaignOrSplit({
+        projectId: projId,
+        name: 'sole-unidentified-campaign',
+        hashListId: listId,
+        attacks: [],
+      })
+    )
+    expect(pendingResult.kind).toBe('split_pending')
+
+    const splitResult = await runSplitAnalysis(listId)
+    expect(splitResult.outcome).toBe('split')
+    expect(splitResult.subLists).toHaveLength(1)
+    expect(splitResult.subLists[0]?.kind).toBe('unidentified')
+    expect(splitResult.subLists[0]?.itemCount).toBe(unidentifiedValues.length)
+
+    const children = await childrenOf(listId)
+    expect(children).toHaveLength(1)
+    expect(children[0]?.typeAnalysis?.verdict).toBe('needs-review')
+    expect(children[0]?.typeAnalysis?.unidentifiedCount).toBe(unidentifiedValues.length)
+
+    expect(await campaignsOn(listId)).toHaveLength(0)
+  })
+})
+
+describe('confirmSplitCampaign — rejects an unassigned ambiguous child (bug fix — CodeRabbit, Major correctness)', () => {
+  const UNASSIGNED_MODE_A = 9_999_901
+  const UNASSIGNED_MODE_B = 9_999_902
+  const ASSIGNED_ONLY_MODE = 9_999_903
+  const ASSIGNED_ONLY_OTHER_MODE = 9_999_904
+  const NOOP_AMBIGUOUS_MODE = 9_999_905
+  const NOOP_AMBIGUOUS_OTHER_MODE = 9_999_906
+
+  it('rejects confirmation when one ambiguous child has no assignment, and mutates neither child', async () => {
+    const parentId = await createHashList('split-confirm-unresolved-ambiguous-parent')
+    const assignedChildId = await createHashList(
+      'split-confirm-unresolved-ambiguous-child-assigned',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: ASSIGNED_ONLY_MODE, count: 1 },
+          { hashcatMode: ASSIGNED_ONLY_OTHER_MODE, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    const unassignedChildId = await createHashList(
+      'split-confirm-unresolved-ambiguous-child-unassigned',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: UNASSIGNED_MODE_A, count: 1 },
+          { hashcatMode: UNASSIGNED_MODE_B, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(assignedChildId, ['unresolved-ambiguous-assigned-1'])
+    await insertHashValues(unassignedChildId, ['unresolved-ambiguous-unassigned-1'])
+
+    const result = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'unresolved-ambiguous-campaign',
+      // Only assigns the first child — the second is left ambiguous.
+      assignments: [{ subListId: assignedChildId, mode: ASSIGNED_ONLY_MODE }],
+    })
+
+    expect(result.kind).toBe('invalid_assignment')
+    if (result.kind !== 'invalid_assignment') throw new Error('expected invalid_assignment')
+    expect(result.reason).toContain(String(unassignedChildId))
+
+    // Nothing was created or mutated — including the child that WAS given a
+    // valid assignment; validation runs entirely before any mutation, so a
+    // rejected confirm can never partially apply.
+    expect(await campaignsOn(parentId)).toHaveLength(0)
+    const [assignedChild] = await db
+      .select()
+      .from(hashLists)
+      .where(eq(hashLists.id, assignedChildId))
+    expect(assignedChild!.typeAnalysis?.verdict).toBe('needs-review')
+    const [unassignedChild] = await db
+      .select()
+      .from(hashLists)
+      .where(eq(hashLists.id, unassignedChildId))
+    expect(unassignedChild!.typeAnalysis?.verdict).toBe('needs-review')
+  })
+
+  it('does NOT reject when the unassigned sibling is UNIDENTIFIED (needs-type), not ambiguous — that legitimately has no sub-campaign', async () => {
+    const parentId = await createHashList('split-confirm-unidentified-noop-parent')
+    const ambiguousChildId = await createHashList(
+      'split-confirm-unidentified-noop-child-ambiguous',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [
+          { hashcatMode: NOOP_AMBIGUOUS_MODE, count: 1 },
+          { hashcatMode: NOOP_AMBIGUOUS_OTHER_MODE, count: 1 },
+        ],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    const unidentifiedChildId = await createHashList(
+      'split-confirm-unidentified-noop-child-unidentified',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [],
+        unidentifiedCount: 1,
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(ambiguousChildId, ['unidentified-noop-ambiguous-1'])
+    await insertHashValues(unidentifiedChildId, ['unidentified-noop-unidentified-1'])
+
+    const result = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: 'unidentified-noop-campaign',
+      assignments: [{ subListId: ambiguousChildId, mode: NOOP_AMBIGUOUS_MODE }],
+    })
+
+    expect(result.kind).toBe('confirmed')
+    if (result.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(result.subCampaigns).toHaveLength(1)
+    expect(result.subCampaigns[0]?.hashListId).toBe(ambiguousChildId)
+
+    // The unidentified sibling legitimately has no sub-campaign — it was
+    // never assigned a mode and never could be.
+    expect(await campaignsOn(unidentifiedChildId)).toHaveLength(0)
+  })
+})

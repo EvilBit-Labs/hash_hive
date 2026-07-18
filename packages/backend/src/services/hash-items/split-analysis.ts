@@ -28,10 +28,18 @@
  *     already enforces that at insert time).
  *   - `degenerate: 'empty'` when there are no items to classify;
  *     `degenerate: 'single-group'` when classification collapses to exactly
- *     one group (all-confident-same-mode, or every entry unidentified, or
- *     any other case where there is nothing to split). The caller must NOT
- *     create sub-lists in either degenerate case — a zero-child or
- *     single-child parent is never valid.
+ *     one CONFIDENT group (every item resolves to the same single hashcat
+ *     mode, so there is genuinely nothing to split — a legitimate single-mode
+ *     campaign is safe). A sole AMBIGUOUS or UNIDENTIFIED group is NEVER
+ *     degenerate, even though it is also just one group (bug fix —
+ *     CodeRabbit, Major correctness): those hashes are not actually resolved
+ *     to a mode yet, so collapsing them into "nothing to split" would let a
+ *     caller fall back to a plain campaign under a wrong/no mode instead of
+ *     routing them through the split/review path where the user assigns (or
+ *     is shown as needing) a type. The caller must NOT create sub-lists only
+ *     in the two genuinely-degenerate cases (empty, or a sole confident
+ *     group) — a sole ambiguous/unidentified group still gets a one-child
+ *     split.
  */
 
 import { guessHashType } from '../hash-analysis.js'
@@ -205,8 +213,16 @@ export function planSplit(items: readonly SplitItem[]): SplitPlan {
     })
     .sort(compareGroups)
 
+  // Bug fix (CodeRabbit, Major correctness): a sole group is only
+  // "single-group" degenerate when it is CONFIDENT — a genuine single hash
+  // type with nothing left to resolve. A sole AMBIGUOUS or UNIDENTIFIED
+  // group still needs the split/review path (mode assignment, or surfacing
+  // as needs-type) even though there's nothing to partition it further into.
+  const isSingleConfidentGroup =
+    orderedGroups.length === SINGLE_GROUP_COUNT && orderedGroups[0]?.kind === 'confident'
+
   return {
     groups: orderedGroups,
-    degenerate: orderedGroups.length === SINGLE_GROUP_COUNT ? 'single-group' : null,
+    degenerate: isSingleConfidentGroup ? 'single-group' : null,
   }
 }

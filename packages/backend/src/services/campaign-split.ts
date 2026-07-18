@@ -33,8 +33,12 @@
  *      null) plus one single-mode sub-campaign per resolved sub-list
  *      (`parentCampaignId` = the parent's id). Confident sub-lists (already
  *      resolved by the original split) get a sub-campaign too, with no
- *      assignment needed. Still-ambiguous (unassigned) and unidentified
- *      sub-lists get no sub-campaign.
+ *      assignment needed. An unidentified (needs-type) sub-list legitimately
+ *      gets no sub-campaign. A still-ambiguous (unassigned) sub-list is
+ *      REJECTED (`invalid_assignment`) rather than silently skipped (bug fix
+ *      — CodeRabbit, Major correctness): omitting it used to return
+ *      `confirmed` while those hashes were left genuinely unresolved with no
+ *      sub-campaign and no signal to the caller.
  *   3. `getSplitReviewGroups` — shared by the create path (already-split
  *      case) and the status endpoint's `ready` case.
  *
@@ -237,8 +241,9 @@ export type CreateCampaignOrSplitResult =
 
 /**
  * Re-verifies that a mixed-flagged parent with no split children genuinely
- * resolves to a single classification group, before `createCampaignOrSplit`
- * honors a client's `skipSplit: true` override (security fix — CodeRabbit).
+ * resolves to a single CONFIDENT classification group, before
+ * `createCampaignOrSplit` honors a client's `skipSplit: true` override
+ * (security fix — CodeRabbit).
  *
  * Re-runs the SAME pure classifier (`planSplit`) the async split job uses,
  * against the list's CURRENT items, rather than trusting the parent's
@@ -246,9 +251,17 @@ export type CreateCampaignOrSplitResult =
  * `skipSplit` is meant to override (it's stale-mixed after a
  * `degenerate-single-group` job run, which never updates it), so re-reading
  * it here would just re-trust the same flag the caller is trying to bypass.
- * `plan.groups.length <= 1` covers both real degenerate outcomes
- * (`single-group` and `empty`) as safe to honor — an empty list has nothing
- * to crack under a wrong mode either way.
+ *
+ * An empty list (zero groups) is safe to honor — there is nothing to crack
+ * under a wrong mode either way. A sole group is safe ONLY when it is
+ * CONFIDENT (bug fix — CodeRabbit, Major correctness): a sole AMBIGUOUS or
+ * UNIDENTIFIED group also collapses `planSplit` to exactly one group, but
+ * those hashes are NOT resolved to a mode — honoring `skipSplit` for them
+ * would create a plain single-mode campaign over hashes that either need a
+ * type declared (unidentified) or could be cracked under the wrong mode
+ * (ambiguous). Both must be rejected and routed through the normal
+ * split/review flow instead, even though there's technically "only one
+ * group" to look at.
  */
 async function verifiesSingleGroup(hashListId: number): Promise<boolean> {
   const itemRows = await db
@@ -257,7 +270,8 @@ async function verifiesSingleGroup(hashListId: number): Promise<boolean> {
     .where(eq(hashItems.hashListId, hashListId))
 
   const plan = planSplit(itemRows)
-  return plan.groups.length <= 1
+  if (plan.groups.length === 0) return true
+  return plan.groups.length === 1 && plan.groups[0]?.kind === 'confident'
 }
 
 /**
@@ -628,6 +642,37 @@ async function applyAssignmentsAndMerge(
 
   const assignmentBySubListId = new Map(input.assignments.map((a) => [a.subListId, a.mode]))
 
+  // Bug fix (CodeRabbit, Major correctness): reject the confirm outright
+  // when any AMBIGUOUS child was left unassigned, instead of silently
+  // omitting it from `resolved` below and returning `confirmed` anyway. The
+  // omit-and-succeed behavior left those hashes with no sub-campaign and no
+  // signal to the caller that they were never resolved — the user believed
+  // the split was fully handled when a genuinely ambiguous group still
+  // needed a mode. This check runs BEFORE any mutation below, so a rejected
+  // confirm leaves every child's `type_analysis` untouched (this callback
+  // still commits its transaction on a non-throw return, so validation must
+  // finish before the first write).
+  //
+  // Scoped to `kind === 'ambiguous'` only: an UNIDENTIFIED (needs-type)
+  // child legitimately has no sub-campaign — there is no mode to assign,
+  // only a hash-type declaration outside this flow — so it is fine for it
+  // to fall through unassigned.
+  const unresolvedAmbiguousIds: number[] = []
+  for (const child of children) {
+    const typeAnalysis = child.typeAnalysis
+    if (typeAnalysis?.verdict !== 'needs-review') continue
+    const isAmbiguous = typeAnalysis.detectedModes.length > 0
+    if (isAmbiguous && !assignmentBySubListId.has(child.id)) {
+      unresolvedAmbiguousIds.push(child.id)
+    }
+  }
+  if (unresolvedAmbiguousIds.length > 0) {
+    return {
+      kind: 'invalid_assignment',
+      reason: `Ambiguous sub-list(s) ${unresolvedAmbiguousIds.join(', ')} require a mode assignment before the split can be confirmed`,
+    }
+  }
+
   // Apply each assignment: stamp `detected_hashcat_mode` on its items and
   // flip the sub-list's `type_analysis` to homogeneous, then collect every
   // now-resolved sub-list (confident-from-split OR just-assigned) for the
@@ -646,7 +691,8 @@ async function applyAssignmentsAndMerge(
 
     const assignedMode = assignmentBySubListId.get(child.id)
     if (assignedMode === undefined) {
-      // Still-ambiguous (unassigned) or unidentified — no sub-campaign.
+      // Only an unidentified (needs-type) child can reach here — a still-
+      // ambiguous unassigned child was already rejected above.
       continue
     }
 

@@ -334,11 +334,29 @@ async function classifyParentItems(parentHashListId: number): Promise<Classifica
   return { totalCount, groups, crackedById }
 }
 
-/** Mirrors `planSplit`'s degenerate-outcome rule, computed over the FULL
- * (merged, cross-chunk) partition rather than any single chunk. */
+/**
+ * Mirrors `planSplit`'s degenerate-outcome rule, computed over the FULL
+ * (merged, cross-chunk) partition rather than any single chunk.
+ *
+ * Bug fix (CodeRabbit, Major correctness): a sole group used to be treated
+ * as `single-group` regardless of its `kind`. A list that is entirely
+ * AMBIGUOUS (e.g. every item is a 32-hex string — NTLM/MD5/LM/MD4 all
+ * collide) or entirely UNIDENTIFIED also collapses to exactly one group, but
+ * that group is NOT confidently resolved to a mode — collapsing it to
+ * "nothing to split" let `createCampaignOrSplit`'s `skipSplit` fallback
+ * create a plain single-mode campaign under a wrong/no mode instead of
+ * routing the list through the split/review flow. Only a sole CONFIDENT
+ * group (every item genuinely shares one hashcat mode) is a legitimate
+ * degenerate single-group fallback; a sole ambiguous/unidentified group
+ * falls through to `null` here so the normal split path below creates a
+ * one-child sub-list the review flow can present for assignment.
+ */
 function degenerateOutcomeFor(classification: ClassificationResult): SplitDegenerateReason {
   if (classification.totalCount === 0) return 'empty'
-  if (classification.groups.size === 1) return 'single-group'
+  if (classification.groups.size === 1) {
+    const [soleGroup] = classification.groups.values()
+    if (soleGroup?.kind === 'confident') return 'single-group'
+  }
   return null
 }
 

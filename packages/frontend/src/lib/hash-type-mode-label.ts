@@ -8,10 +8,11 @@
  * the split-review UI must never fail to render because a lookup missed.
  */
 
-interface HashTypeLookupEntry {
-  hashcatMode: number
-  name: string
-}
+import type { HashTypeWire } from '@hashhive/shared'
+
+// The catalog fields this lookup needs. Derived from the shared wire type so
+// it stays aligned if HashTypeWire's shape changes (per AGENTS.md).
+type HashTypeLookupEntry = Pick<HashTypeWire, 'name' | 'hashcatMode'>
 
 export function hashTypeModeLabel(mode: number, hashTypes: readonly HashTypeLookupEntry[]): string {
   const match = hashTypes.find((ht) => ht.hashcatMode === mode)

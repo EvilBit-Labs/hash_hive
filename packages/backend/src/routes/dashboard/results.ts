@@ -226,17 +226,16 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
       .orderBy(desc(hashItems.crackedAt))
       .limit(limit)
       .offset(offset),
-    // Deduped on hashValue (#202 SU4): a hashValue that exists as a
-    // separate row under two sibling sub-lists (propagateCrack marks a
-    // hashValue cracked everywhere it appears) must not inflate the
-    // reported total. No-op for any single un-split hash list — hashValue
-    // is already unique within one list — and for the unfiltered
-    // project-wide view, since two un-related leaf lists sharing a
-    // hashValue is the pre-existing documented behavior (see
-    // `services/hash-items/search.ts`) this endpoint's `total` already
-    // didn't dedupe across; SU4 only closes the parent/child gap.
+    // `total` counts physical rows (`count(*)`), matching the per-`hash_items`-row
+    // SELECT above (each result row carries its own `id`, so `results` is not
+    // deduped on hashValue). Counting `distinct hashValue` here would undercount
+    // whenever one hashValue exists as separate rows under sibling sub-lists (or
+    // two unrelated leaf lists), making `results.length` exceed `total` across
+    // pages and breaking pagination. A parent's cracked hashValue appearing once
+    // per sub-list is consistent with the pre-existing per-row behavior for
+    // unrelated leaf lists that share a value.
     db
-      .select({ count: sql<number>`count(distinct ${hashItems.hashValue})` })
+      .select({ count: sql<number>`count(*)` })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
       .where(and(...conditions)),

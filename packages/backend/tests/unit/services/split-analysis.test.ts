@@ -72,7 +72,12 @@ describe('planSplit', () => {
     expect(plan.groups).toEqual([{ kind: 'confident', mode: SHA512_CRYPT_MODE, itemIds: [1, 2] }])
   })
 
-  it('returns degenerate "single-group" for an all-unidentified list', () => {
+  it('does NOT return degenerate "single-group" for an all-unidentified list (bug fix — CodeRabbit, Major correctness)', () => {
+    // A sole group is only degenerate when it is CONFIDENT — an
+    // all-unidentified list still collapses to one group, but those hashes
+    // are not resolved to any mode, so it must fall through to the normal
+    // split/review path (a one-child split) rather than being treated as
+    // "nothing to split".
     const items = [
       { id: 1, hashValue: garbage(0) },
       { id: 2, hashValue: garbage(1) },
@@ -80,8 +85,26 @@ describe('planSplit', () => {
 
     const plan = planSplit(items)
 
-    expect(plan.degenerate).toBe('single-group')
+    expect(plan.degenerate).toBeNull()
     expect(plan.groups).toEqual([{ kind: 'unidentified', itemIds: [1, 2] }])
+  })
+
+  it('does NOT return degenerate "single-group" for an all-ambiguous list (bug fix — CodeRabbit, Major correctness)', () => {
+    // Same reasoning as the all-unidentified case above: every item is a
+    // 32-hex string that collides across NTLM/MD5/LM/MD4, collapsing to one
+    // AMBIGUOUS group — but that group is not confidently resolved, so it
+    // must not be treated as degenerate either.
+    const items = [
+      { id: 1, hashValue: HEX32 },
+      { id: 2, hashValue: 'd'.repeat(32) },
+    ]
+
+    const plan = planSplit(items)
+
+    expect(plan.degenerate).toBeNull()
+    expect(plan.groups).toEqual([
+      { kind: 'ambiguous', candidateModes: HEX32_SIGNATURE, itemIds: [1, 2] },
+    ])
   })
 
   it('partitions a mixed confident + ambiguous list into two groups, confident first', () => {
