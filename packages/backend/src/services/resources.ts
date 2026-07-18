@@ -753,6 +753,13 @@ export async function getHashItems(
   // filter); a split parent resolves to `[hashListId, ...childIds]` since
   // its own hash_items were moved to its sub-lists (#202 SU4).
   const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. `hl` above already confirmed ownership, so this is
+    // unreachable in practice — but short-circuit explicitly rather than
+    // relying on Drizzle compiling `inArray(col, [])` to a false predicate.
+    return { items: [], total: 0, limit, offset }
+  }
   const conditions: SQL[] = [inArray(hashItems.hashListId, scopeIds)]
 
   if (opts.status === 'cracked') {
@@ -831,6 +838,14 @@ export async function getHashListStats(
   crackRate: number
 }> {
   const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. Short-circuit explicitly rather than relying on
+    // Drizzle compiling `inArray(col, [])` to a false predicate — an
+    // aggregate query with no rows already returns these zeroed values, so
+    // this is behavior-preserving, not a change.
+    return { totalCount: 0, crackedCount: 0, crackRate: 0 }
+  }
   const [stats] = await db
     .select({
       total: count(),
@@ -883,6 +898,14 @@ export async function getHashListStats(
  */
 export async function computeHashListEtag(hashListId: number, projectId: number): Promise<string> {
   const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. Short-circuit explicitly rather than relying on
+    // Drizzle compiling `inArray(col, [])` to a false predicate — matches
+    // the same epoch-0/count-0 shape a real, never-cracked list already
+    // produces below, so this is behavior-preserving, not a change.
+    return `W/"hl-${hashListId}-0-0"`
+  }
   const [row] = await db
     .select({
       lastCrackedAt: max(hashItems.crackedAt),

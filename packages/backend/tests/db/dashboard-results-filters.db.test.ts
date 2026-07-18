@@ -116,6 +116,10 @@ async function runFilter(
   }
 ): Promise<number[]> {
   const conditions = await buildResultFilters(projectId, filters)
+  // `null` means `hashListId` resolved to an empty scope (IDOR guard) —
+  // the route returns its empty shape directly without querying, so mirror
+  // that here instead of calling `and(...null)`.
+  if (conditions === null) return []
   const rows = await db
     .select({ id: hashItems.id })
     .from(hashItems)
@@ -321,6 +325,15 @@ describe('Results filters: campaign / hash-list narrowing (R4)', () => {
     expect(await runFilter(seed.projectAId, { hashListId: seed.listA2Id })).toEqual([
       seed.ids['r8'],
     ])
+  })
+
+  it('IDOR guard: a hashListId belonging to a different project returns zero rows without querying', async () => {
+    // seed.listAId belongs to project A; resolving it under project B's
+    // projectId makes resolveHashListScope return [], and buildResultFilters
+    // must short-circuit to `null` rather than building `inArray(col, [])`.
+    const conditions = await buildResultFilters(seed.projectBId, { hashListId: seed.listAId })
+    expect(conditions).toBeNull()
+    expect(await runFilter(seed.projectBId, { hashListId: seed.listAId })).toEqual([])
   })
 })
 

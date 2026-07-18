@@ -31,6 +31,7 @@ import {
   lte,
   not,
   or,
+  type SQL,
   sql,
 } from 'drizzle-orm'
 
@@ -290,25 +291,36 @@ export type ExportOverrides = {
 
 const DEFAULT_BATCH_SIZE = 1_000
 
+/**
+ * Builds the WHERE conditions for the cracked-rows export queries (batch
+ * fetcher + skip counter).
+ *
+ * Returns `null` when the requested scope resolves to an empty set —
+ * currently only possible for `scope: 'hash-list'`, where
+ * `resolveHashListScopeForExport` returns `[]` for a cross-project or
+ * nonexistent hash list id (IDOR guard). Callers must treat `null` as "zero
+ * rows can match" and short-circuit before running a query, rather than
+ * relying on Drizzle compiling `inArray(col, [])` to a false predicate.
+ */
 async function buildCrackedBaseConditions(
   db: Db,
   params: ExportScopeParams,
   filters?: ExportFilters
-) {
+): Promise<SQL[] | null> {
   const base = [eq(hashLists.projectId, params.projectId), isNotNull(hashItems.crackedAt)]
 
-  const withScope =
-    params.scope === 'hash-list'
-      ? [
-          ...base,
-          inArray(
-            hashItems.hashListId,
-            await resolveHashListScopeForExport(db, params.hashListId, params.projectId)
-          ),
-        ]
-      : params.scope === 'campaign'
-        ? [...base, eq(hashItems.campaignId, params.campaignId)]
-        : base
+  let withScope: SQL[]
+  if (params.scope === 'hash-list') {
+    const scopeIds = await resolveHashListScopeForExport(db, params.hashListId, params.projectId)
+    if (scopeIds.length === 0) {
+      return null
+    }
+    withScope = [...base, inArray(hashItems.hashListId, scopeIds)]
+  } else if (params.scope === 'campaign') {
+    withScope = [...base, eq(hashItems.campaignId, params.campaignId)]
+  } else {
+    withScope = base
+  }
 
   const { q, startDate, endDate } = filters ?? {}
   const escapedQ = q != null ? escapeLikeForExport(q) : null
@@ -332,6 +344,11 @@ async function createDefaultCrackedFetcher(
   filters?: ExportFilters
 ): Promise<CrackedBatchFetcher> {
   const baseConditions = await buildCrackedBaseConditions(db, params, filters)
+  if (baseConditions === null) {
+    // IDOR guard: empty hash-list scope — no rows can match, return an
+    // empty batch on every call without touching the database.
+    return async () => []
+  }
 
   return async (cursor) => {
     const conditions = [
@@ -388,6 +405,14 @@ async function createDefaultUncrackedFetcher(
     params.scope === 'hash-list'
       ? await resolveHashListScopeForExport(db, params.hashListId, params.projectId)
       : null
+
+  if (params.scope === 'hash-list' && hashListScopeIds !== null && hashListScopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScopeForExport` returns `[]` for a
+    // cross-project or nonexistent hash list id. Short-circuit explicitly
+    // rather than relying on Drizzle compiling `inArray(col, [])` to a
+    // false predicate.
+    return async () => []
+  }
 
   return async (cursor) => {
     const baseConds = [
@@ -460,7 +485,13 @@ function createDefaultSkippedCounter(
             isNull(hashItems.plaintext)
           )
 
-    const conditions = [...(await buildCrackedBaseConditions(db, params, filters)), modeFilter]
+    const baseConditions = await buildCrackedBaseConditions(db, params, filters)
+    if (baseConditions === null) {
+      // IDOR guard: empty hash-list scope — no rows can match, so nothing
+      // can be skipped either.
+      return 0
+    }
+    const conditions = [...baseConditions, modeFilter]
 
     const [row] = await db
       .select({ n: count(hashItems.id) })

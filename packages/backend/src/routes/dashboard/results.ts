@@ -11,7 +11,7 @@ import {
   resolveAttackModeName,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, type SQL, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -107,7 +107,19 @@ type ResultsFilterInput = {
   endDate: string | undefined
 }
 
-async function buildResultFilters(projectId: number, filters: ResultsFilterInput) {
+/**
+ * Builds the WHERE conditions for the Results list/export queries.
+ *
+ * Returns `null` when a `hashListId` filter resolves to an empty scope —
+ * `resolveHashListScope` returns `[]` for a cross-project or nonexistent
+ * hash list id (IDOR guard). Callers must treat `null` as "zero rows can
+ * match" and return their empty-result shape directly, rather than relying
+ * on Drizzle compiling `inArray(col, [])` to a false predicate.
+ */
+async function buildResultFilters(
+  projectId: number,
+  filters: ResultsFilterInput
+): Promise<SQL[] | null> {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
 
   // Scope via `hashLists.projectId`, NOT `campaigns.projectId`:
@@ -127,6 +139,9 @@ async function buildResultFilters(projectId: number, filters: ResultsFilterInput
     // `[hashListId, ...childIds]` since its own hash_items were moved to
     // its sub-lists (#202 SU4).
     const scopeIds = await resolveHashListScope(hashListId, projectId)
+    if (scopeIds.length === 0) {
+      return null
+    }
     conditions.push(inArray(hashItems.hashListId, scopeIds))
   }
   if (search) {
@@ -199,6 +214,13 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
     startDate,
     endDate,
   })
+
+  if (conditions === null) {
+    // IDOR guard: hashListId resolved to an empty scope (cross-project or
+    // nonexistent id). Return the empty page shape directly rather than
+    // running a query.
+    return c.json({ results: [], total: 0, limit, offset }, 200)
+  }
 
   const [rawResults, countResult] = await Promise.all([
     db
@@ -307,7 +329,7 @@ const exportResultsRoute = createRoute({
  *   `crackedAt < cursor.crackedAt OR (crackedAt = cursor.crackedAt AND id < cursor.id)`.
  */
 async function fetchCsvBatch(
-  baseConditions: Awaited<ReturnType<typeof buildResultFilters>>,
+  baseConditions: SQL[],
   cursor: { crackedAt: Date; id: number } | null
 ) {
   const cursorPredicate = cursor
@@ -459,6 +481,26 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   // Build conditions once at handler entry — each pull only composes the
   // cursor predicate on top.
   const baseConditions = await buildResultFilters(projectId, filters)
+
+  if (baseConditions === null) {
+    // IDOR guard: hashListId resolved to an empty scope (cross-project or
+    // nonexistent id). Return the same header-only CSV a zero-row filter
+    // already produces, without running a query.
+    logger.info(
+      { projectId, filters },
+      'results/export: hash list scope resolved to empty (cross-project or nonexistent id) — returning header-only CSV'
+    )
+    const emptyTimestamp = buildExportTimestamp()
+    return new Response(CSV_HEADER_LINE, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="results-${emptyTimestamp}.csv"`,
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
 
   const encoder = new TextEncoder()
   // `pull` is contractually single-threaded by the ReadableStream

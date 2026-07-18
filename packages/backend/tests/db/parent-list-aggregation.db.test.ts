@@ -237,3 +237,20 @@ describe('getHashItems — parent aggregation', () => {
     expect(result).toBeNull()
   })
 })
+
+// `getHashListStats` and `computeHashListEtag` have no `getHashListById`
+// pre-check of their own (unlike `getHashItems`) — they go straight from
+// `hashListId` to `resolveHashListScope`. These tests drive that path
+// directly to prove the empty-scope guard added in each function returns a
+// zeroed/empty-shape result instead of ever building `inArray(col, [])`.
+describe('getHashListStats / computeHashListEtag — IDOR guard (empty scope short-circuit)', () => {
+  it('getHashListStats returns zeroed stats for a hash list id that does not belong to the given project', async () => {
+    const stats = await getHashListStats(seed.parentId, seed.projectBId)
+    expect(stats).toEqual({ totalCount: 0, crackedCount: 0, crackRate: 0 })
+  })
+
+  it('computeHashListEtag returns the empty-list etag shape for a cross-project hash list id', async () => {
+    const etag = await computeHashListEtag(seed.parentId, seed.projectBId)
+    expect(etag).toBe(`W/"hl-${seed.parentId}-0-0"`)
+  })
+})
