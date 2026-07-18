@@ -47,13 +47,19 @@ await queue.add(queueName, data, {
   ...(opts?.priority ? { priority: opts.priority } : {}),
   // CRITICAL: a deduped job MUST evict its id on terminal, else the first
   // run permanently blocks every future re-add of the same jobId.
-  ...(opts?.jobId ? { jobId: opts.jobId, removeOnComplete: true, removeOnFail: true } : {}),
+  ...(opts?.jobId
+    ? {
+        jobId: opts.jobId,
+        removeOnComplete: opts.removeOnComplete ?? true,
+        removeOnFail: opts.removeOnFail ?? true,
+      }
+    : {}),
   attempts: DEFAULT_JOB_ATTEMPTS,
   backoff: { type: 'exponential', delay: 5_000 },
 })
 ```
 
-Coupling the two (jobId implies eviction) at the manager level means no individual caller can forget it.
+Coupling the two (jobId implies eviction) at the manager level means no individual caller can forget it. The `?? true` default keeps immediate eviction as the safe baseline while leaving an override escape hatch: a caller that needs to read a terminal job's `returnvalue`/`failedReason` before it disappears (e.g. status-polling an outcome that leaves no other row to read, issue #202 SU7) can pass `removeOnComplete: { age: <seconds> }`. See the override test in `packages/backend/tests/unit/queue-manager.test.ts`.
 
 ## Why This Works
 

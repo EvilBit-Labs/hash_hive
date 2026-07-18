@@ -87,7 +87,7 @@ const projectInvalidationKeys = {
 }
 ```
 
-The brainstorm that produced this convention initially proposed a new `dashboard_stats_changed` event. Doc review found that `event-routing.ts:73-84` already invalidates `['dashboard-stats']` on `agent_status`, `campaign_status`, `task_update`, and `crack_result` — adding a new event type would have produced redundant double-invalidations at every publisher site with no behavioral payoff. Future endpoint authors must not repeat this mistake. If the publisher-coupling concern grows enough that the routing map becomes hard to maintain, take it as a separate refactor — not as a per-endpoint pattern.
+The brainstorm that produced this convention initially proposed a new `dashboard_stats_changed` event. Doc review found that the `projectInvalidationKeys` map in `event-routing.ts` already invalidates `['dashboard-stats']` on `agent_status`, `campaign_status`, `task_update`, and `crack_result` — adding a new event type would have produced redundant double-invalidations at every publisher site with no behavioral payoff. Future endpoint authors must not repeat this mistake. If the publisher-coupling concern grows enough that the routing map becomes hard to maintain, take it as a separate refactor — not as a per-endpoint pattern.
 
 ## Compile-time vs. runtime enforcement boundary
 
@@ -142,4 +142,4 @@ The same opportunistic-backfill rule applies to inline-declared response interfa
 - **AGENTS.md** — "Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas" and "All three surfaces are route-as-spec via `@hono/zod-openapi`."
 - [`docs/solutions/conventions/shared-zod-openapi-wire-contract-mirror-2026-05-25.md`](./shared-zod-openapi-wire-contract-mirror-2026-05-25.md) — the parent triple-sync convention, now superseded by the route-as-spec migration.
 - **Issue #161 / PR landing this convention** — closes the original DoD gaps on `/stats` and ships `/stats` as the worked example.
-- **`packages/frontend/src/lib/event-routing.ts:73-84`** — the central invalidation map. Read this before proposing any new event type for a dashboard freshness story.
+- **`packages/frontend/src/lib/event-routing.ts`** (the `projectInvalidationKeys` map) — the central invalidation map. Read this before proposing any new event type for a dashboard freshness story.

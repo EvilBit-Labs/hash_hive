@@ -30,7 +30,7 @@ related_components:
 Two refactors in `packages/backend/src/services` independently hit the same constraints and converged on the same shape:
 
 - **U7** split `services/agents.ts` by extracting `services/agents/heartbeat.ts` while keeping `services/agents.ts` in place as both the slimmed primary file and the barrel.
-- **U9** split `services/tasks.ts` (1286 LOC, over the 800-line file budget from `~/.claude/rules/coding-style.md`) into `services/tasks/retry.ts`, `services/tasks/zaps.ts`, `services/tasks/agent-projection.ts`, plus a small `services/tasks/_internals.ts` for shared helpers -- and kept the parent at `services/tasks.ts` (now 751 LOC).
+- **U9** split `services/tasks.ts` (1286 LOC, over the 800-line file budget from `~/.claude/rules/coding-style.md`) into `services/tasks/retry.ts`, `services/tasks/zaps.ts`, `services/tasks/agent-projection.ts`, plus a small `services/tasks/_internals.ts` for shared helpers -- and kept the parent at `services/tasks.ts` (751 LOC right after the split; the pattern has since accreted more submodules and the parent has grown past the budget again as new task logic landed -- a later split is warranted).
 
 Both refactors had to preserve a fragile set of caller assumptions: seven test files mock the parent path with `mock.module('../../src/services/tasks.js', ...)`, `services/agents/heartbeat.ts` does `await import('../tasks.js')` to break a circular dep, and call sites across `routes/` and other services import the parent directly. Renaming the parent to `services/tasks/index.ts` would have silently no-op'd the mock registrations and forced churn across dozens of files. The convention below is what survives those constraints.
 
@@ -146,17 +146,19 @@ Atomic commits on `refactor/tasks-service-split` (PR #181):
 - `fb77ee4` -- extract zap endpoint to `services/tasks/zaps.ts`
 - `ea1029e` -- alphabetize re-export statements by source file
 
-Final tree:
+Tree right after the U9 split (`_internals` + three extracted submodules, parent as barrel at tail):
 
 ```text
 packages/backend/src/services/
-├── tasks.ts                              # 751 LOC, barrel at tail
+├── tasks.ts                              # barrel at tail
 └── tasks/
-    ├── _internals.ts                     # jsonSafeBigint, ~30 LOC
-    ├── agent-projection.ts               # listTasksByAgent + projectAgentTaskRows, ~99 LOC
-    ├── retry.ts                          # handleTaskFailure + reassignStaleTasks + MAX_RETRIES, ~420 LOC
-    └── zaps.ts                           # getZapsForTask, ~71 LOC
+    ├── _internals.ts                     # jsonSafeBigint
+    ├── agent-projection.ts               # listTasksByAgent + projectAgentTaskRows
+    ├── retry.ts                          # handleTaskFailure + reassignStaleTasks + MAX_RETRIES
+    └── zaps.ts                           # getZapsForTask
 ```
+
+The pattern kept accreting the same way as more task logic landed: `services/tasks/` has since gained `preemption.ts`, `task-events.ts`, `task-resources.ts`, and `zap-cursor.ts`. Each extraction followed the identical barrel-plus-subdir shape without touching caller imports -- the point of the convention.
 
 Caller code unchanged across the refactor:
 

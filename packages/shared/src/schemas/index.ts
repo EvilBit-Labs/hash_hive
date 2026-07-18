@@ -571,12 +571,14 @@ export const agentHeartbeatSchema = z.object({
  * available — agents must treat absence as "no priority signal" rather
  * than receive an explicit negative.
  *
- * This is the shared wire contract; the OpenAPI spec at
- * `packages/openapi/agent-api.yaml` mirrors this shape, and the contract
- * test in `tests/unit/agent-api-contract.test.ts` parses real route
- * responses through this schema to prove the route ↔ shared ↔ OpenAPI
- * triple stays in sync. `.strict()` matches the OpenAPI default of
- * closed objects — extra fields fail parse rather than slip through.
+ * This is the shared wire contract; the agent route binds this schema
+ * directly into its `createRoute(...)` definition, so the generated
+ * OpenAPI document (served at `GET /api/v1/agent/openapi.json`) reflects
+ * this shape automatically — there is no separate YAML to keep in sync.
+ * The contract test in `tests/unit/agent-api-contract.test.ts` parses real
+ * route responses through this schema to prove the route response matches
+ * the shared shape. `.strict()` matches the OpenAPI default of closed
+ * objects — extra fields fail parse rather than slip through.
  */
 export const agentHeartbeatResponseSchema = z
   .object({
