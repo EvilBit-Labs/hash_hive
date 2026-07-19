@@ -164,7 +164,7 @@ The matrix lives in the PR's `docs/issues/<n>-ac-traceability-matrix.md` so revi
 
 ## Related
 
-- **AGENTS.md** — "Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas" and "Keep the OpenAPI spec in sync with shared types."
+- **AGENTS.md (text as of 2026-05-25, since revised)** — "Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas" and "Keep the OpenAPI spec in sync with shared types." The second clause no longer reflects current guidance: post route-as-spec migration (ADR-0013), AGENTS.md states there is no separate YAML to keep in sync. The first clause still holds.
 - **PR #169** — first PR to land this triple-sync pattern; closed issue #155.
 - **Issue #170** — follow-up for the heartbeat error envelope (separate pattern: error-envelope per-surface, not response-shape mirror).
 - `docs/solutions/conventions/form-submit-payload-null-checks-2026-05-19.md` — sibling convention on explicit checks across the wire boundary.
