@@ -17,6 +17,9 @@ A named collection of hashes to be cracked, provided by a user and targeted by C
 ### Hash Item
 A single hash within a Hash List, carrying its recovered plaintext and the time it was cracked once solved, and unsolved otherwise.
 
+### SuperHashlist
+A virtual Hash List whose contents are the live union of several independent Hash Lists (its members), which may be of differing hash types. A Campaign can target a SuperHashlist as if it were an ordinary Hash List; hashes are deduplicated per hash type across members, and a crack propagates to every member the value appears in, so each unique hash is cracked once. A Hash List belongs to at most one SuperHashlist and remains independently targetable while a member.
+
 ### Campaign
 A cracking effort directed at one Hash List, composed of one or more Attacks and the Tasks that execute them.
 
