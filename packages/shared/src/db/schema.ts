@@ -589,6 +589,68 @@ export const hashItems = pgTable(
   ]
 )
 
+// Maintained per-project cracked-set (SuperHashlists Layer one, KTD1). One row
+// per distinct cracked `(projectId, hashcatMode, hashValue)`. This is the single
+// source for project-wide crack-once: the widened agent zap lookup (KTD4,
+// services/tasks/zaps.ts) and read-time crack-state resolution (KTD8,
+// services/hash-items/crack-resolution.ts) both resolve against it. The
+// dedup key is `(mode, value)` — NOT value alone — because a 32-hex string can
+// be raw-MD5 or NTLM with unrelated plaintexts (AE1).
+export const projectCrackedHashes = pgTable(
+  'project_cracked_hashes',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    hashcatMode: integer('hashcat_mode').notNull(),
+    hashValue: varchar('hash_value', { length: 1024 }).notNull(),
+    plaintext: text('plaintext'),
+    // INSERT-MONOTONIC keyset column (KTD2). The widened zap keyset orders on
+    // this; the exactly-once cursor contract requires that no row is ever
+    // inserted BEHIND an active cursor's position. So this is ALWAYS stamped
+    // `new Date()` at insert time — for live cracks AND for backfilled/reconciled
+    // rows (U12) — never the historical crack time and never a DB-side
+    // now()/defaultNow()/trigger. On conflict, `plaintext` updates in place and
+    // this column is NOT moved. See composite-keyset-cursor-pagination-index-scan.md.
+    // DO NOT switch this to defaultNow() — it silently breaks zap exactly-once.
+    crackedAt: timestamp('cracked_at', { withTimezone: true }).notNull(),
+    // True first-crack provenance for display/audit. The keyset NEVER reads this,
+    // so it may carry a historical time (e.g. a backfilled row's original crack).
+    originalCrackedAt: timestamp('original_cracked_at', { withTimezone: true }),
+    // Row-local match reference (R17): the list whose crack first populated this
+    // `(mode, value)`. NEVER serialized to any sub-admin read endpoint — plaintext
+    // and crack state only cross the boundary, never the source list's identity.
+    sourceHashListId: integer('source_hash_list_id').references(() => hashLists.id, {
+      onDelete: 'set null',
+    }),
+    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Dedup key: at most one cracked row per (project, mode, value). The write
+    // path (U2) upserts on this; the constraint is what makes crack-once hold.
+    uniqueIndex('project_cracked_hashes_project_mode_value_idx').on(
+      table.projectId,
+      table.hashcatMode,
+      table.hashValue
+    ),
+    // Keyset index serving the widened zap scan (KTD4): the zap query filters
+    // `projectId = ? AND hashcatMode = ?` then walks `(crackedAt, id)` ASC. The
+    // leading (projectId, hashcatMode) equality columns + trailing (crackedAt, id)
+    // sort columns let the planner satisfy both the range bound and ORDER BY from
+    // one index seek (Index Cond, not Seq Scan) — the redundant `gte(crackedAt)`
+    // bound in zaps.ts relies on this index existing.
+    index('project_cracked_hashes_keyset_idx').on(
+      table.projectId,
+      table.hashcatMode,
+      table.crackedAt,
+      table.id
+    ),
+  ]
+)
+
 export const wordLists = pgTable(
   'word_lists',
   {
