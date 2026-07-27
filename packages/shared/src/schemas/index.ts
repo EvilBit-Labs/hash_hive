@@ -308,6 +308,18 @@ export {
   splitStatusResponseSchema,
 } from './campaign-split.js'
 
+// SuperHashlist management wire shapes (issue #101 / U7). Request/response
+// contracts for the dashboard (U8) + control (U9) super management surfaces.
+export {
+  addSuperMemberRequestSchema,
+  createSuperRequestSchema,
+  renameSuperRequestSchema,
+  SUPER_NAME_MAX_LEN,
+  superHashListDetailWireSchema,
+  superHashListListResponseSchema,
+  superHashListWireSchema,
+} from './super-hash-lists.js'
+
 /**
  * Canonical agent status values matching the persisted `agents.status` column.
  * Use this schema wherever the full agent status vocabulary is validated.

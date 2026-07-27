@@ -165,6 +165,13 @@ import type {
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
   splitStatusResponseSchema,
+  // SuperHashlist management (issue #101 / U7)
+  addSuperMemberRequestSchema,
+  createSuperRequestSchema,
+  renameSuperRequestSchema,
+  superHashListDetailWireSchema,
+  superHashListListResponseSchema,
+  superHashListWireSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -414,6 +421,14 @@ export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
 export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
 export type SplitPendingResponse = z.infer<typeof splitPendingResponseSchema>
 export type SplitStatusResponse = z.infer<typeof splitStatusResponseSchema>
+
+// ─── SuperHashlist Management (issue #101 / U7) ─────────────────────
+export type SuperHashListWire = z.infer<typeof superHashListWireSchema>
+export type SuperHashListDetailWire = z.infer<typeof superHashListDetailWireSchema>
+export type CreateSuperRequest = z.infer<typeof createSuperRequestSchema>
+export type RenameSuperRequest = z.infer<typeof renameSuperRequestSchema>
+export type AddSuperMemberRequest = z.infer<typeof addSuperMemberRequestSchema>
+export type SuperHashListListResponse = z.infer<typeof superHashListListResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>
