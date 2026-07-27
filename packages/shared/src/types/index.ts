@@ -169,8 +169,10 @@ import type {
   addSuperMemberRequestSchema,
   createSuperRequestSchema,
   renameSuperRequestSchema,
+  superHashListDetailResponseSchema,
   superHashListDetailWireSchema,
   superHashListListResponseSchema,
+  superHashListResponseSchema,
   superHashListWireSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
@@ -429,6 +431,8 @@ export type CreateSuperRequest = z.infer<typeof createSuperRequestSchema>
 export type RenameSuperRequest = z.infer<typeof renameSuperRequestSchema>
 export type AddSuperMemberRequest = z.infer<typeof addSuperMemberRequestSchema>
 export type SuperHashListListResponse = z.infer<typeof superHashListListResponseSchema>
+export type SuperHashListResponse = z.infer<typeof superHashListResponseSchema>
+export type SuperHashListDetailResponse = z.infer<typeof superHashListDetailResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>

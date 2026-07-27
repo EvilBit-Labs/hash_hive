@@ -315,8 +315,10 @@ export {
   createSuperRequestSchema,
   renameSuperRequestSchema,
   SUPER_NAME_MAX_LEN,
+  superHashListDetailResponseSchema,
   superHashListDetailWireSchema,
   superHashListListResponseSchema,
+  superHashListResponseSchema,
   superHashListWireSchema,
 } from './super-hash-lists.js'
 

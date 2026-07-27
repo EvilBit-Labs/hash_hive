@@ -80,12 +80,42 @@ export const addSuperMemberRequestSchema = z
   .openapi('AddSuperHashListMemberRequest')
 
 /**
- * Dashboard list envelope (`GET /super-hash-lists`). The control surface wraps
- * the same rows in its own offset/limit pagination envelope at the route
- * layer.
+ * Dashboard list envelope (`GET /super-hash-lists`). Carries `limit`/`offset`
+ * pagination per the dashboard surface's pagination contract; `total` is the
+ * full matching count regardless of the page window. The control surface (U9)
+ * wraps the same `superHashListWireSchema` rows in its own offset/limit
+ * envelope at the route layer.
  */
 export const superHashListListResponseSchema = z
   .object({
     superHashLists: z.array(superHashListWireSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
   })
   .openapi('SuperHashListListResponse')
+
+/**
+ * Single-entity envelope for the mutations whose service call returns a bare
+ * `super_hash_lists` row without membership — rename (`PATCH /{id}`) and
+ * archive (`POST /{id}/archive`). Deliberately NOT the detail shape: those
+ * service functions do not read the join table, so promising `memberIds` here
+ * would mean the route derives a field the service never produced.
+ */
+export const superHashListResponseSchema = z
+  .object({
+    superHashList: superHashListWireSchema,
+  })
+  .openapi('SuperHashListResponse')
+
+/**
+ * Single-entity envelope carrying membership — returned by create
+ * (`POST /`), detail (`GET /{id}`), and the membership mutations
+ * (`POST /{id}/members`, `DELETE /{id}/members/{listId}`), all of which are
+ * backed by service functions that return `SuperHashListWithMembers`.
+ */
+export const superHashListDetailResponseSchema = z
+  .object({
+    superHashList: superHashListDetailWireSchema,
+  })
+  .openapi('SuperHashListDetailResponse')

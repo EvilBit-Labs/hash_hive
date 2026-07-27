@@ -111,6 +111,17 @@ export const DASHBOARD_ERROR_CODES = [
   // single-mode campaign that crackers would run under the wrong mode for
   // part of the list (security fix — CodeRabbit).
   'SKIP_SPLIT_REJECTED',
+  // ─── SuperHashlist membership (issue #101 / U8, U9) ───────────────
+  // R5: a proposed member hash list does not belong to the super's project
+  // (or does not exist). Mapped from the service's
+  // `SuperMemberProjectMismatchError` so the DB tenant trigger's
+  // `check_violation` never surfaces as a 500.
+  'SUPER_MEMBER_PROJECT_MISMATCH',
+  // R3: a hash list belongs to at most one super. Mapped from the service's
+  // `SuperMemberAlreadyInSuperError` (which also covers a duplicate add of a
+  // member the super already has) so the `UNIQUE(member_hash_list_id)`
+  // violation never surfaces as a 500.
+  'SUPER_MEMBER_ALREADY_IN_SUPER',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',
