@@ -27,9 +27,18 @@
  * NOTE: Do NOT self-skip — the test-db lane always has Postgres available.
  */
 
-import { agents, attacks, campaigns, hashItems, hashLists, projects, tasks } from '@hashhive/shared'
+import {
+  agents,
+  attacks,
+  campaigns,
+  hashItems,
+  hashLists,
+  projectCrackedHashes,
+  projects,
+  tasks,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { propagateCrack } from '../../src/services/hash-items/propagation.js'
@@ -291,7 +300,13 @@ describe('propagateCrack — project-scoped propagation', () => {
 })
 
 describe('propagateCrack — zap integration', () => {
-  it('propagated hash appears in getZapsForTask for the campaign hash list', async () => {
+  it('a propagateCrack (hash_items only) is NOT a zap; the value zaps once it is in the project cracked-set (U3)', async () => {
+    // U3 widened getZapsForTask to resolve from the maintained per-project
+    // cracked-set (project_cracked_hashes) at project+mode scope, NOT from
+    // cracked hash_items rows. propagateCrack fills hash_items (list-local
+    // display crack) but deliberately does not touch the cracked-set — so it
+    // no longer makes a value a zap on its own. The zap appears only once the
+    // crack is recorded in the cracked-set (the U2 write path's artifact).
     const hashValue = 'hash-prop-zap-integ-v1'
 
     // Insert the hash UNCRACKED into the campaign's hash list.
@@ -301,25 +316,48 @@ describe('propagateCrack — zap integration', () => {
       .returning({ id: hashItems.id })
 
     try {
-      // Before propagation: hash must NOT appear in zaps.
+      // Before anything: hash must NOT appear in zaps.
       const before = await getZapsForTask(zapTaskId, zapAgentId, zapProjId)
       if ('error' in before) {
         throw new Error(`getZapsForTask returned error before propagation: ${before.error}`)
       }
       expect(before.zaps).not.toContain(hashValue)
 
-      // Propagate the crack.
+      // Propagate the crack into hash_items — this is list-local display state,
+      // not a cracked-set entry, so it must NOT surface as a zap under U3.
       const { updated } = await propagateCrack(hashValue, 'zap-plaintext', zapProjId)
       expect(updated).toBe(1)
-
-      // After propagation: crackedAt is now set, so zap query picks it up.
-      const after = await getZapsForTask(zapTaskId, zapAgentId, zapProjId)
-      if ('error' in after) {
-        throw new Error(`getZapsForTask returned error after propagation: ${after.error}`)
+      const afterPropagate = await getZapsForTask(zapTaskId, zapAgentId, zapProjId)
+      if ('error' in afterPropagate) {
+        throw new Error(`getZapsForTask returned error after propagation: ${afterPropagate.error}`)
       }
-      expect(after.zaps).toContain(hashValue)
+      expect(afterPropagate.zaps).not.toContain(hashValue)
+
+      // Record the crack in the cracked-set at (project, mode 0) — this is what
+      // the widened zap scan reads. Now the value must surface as a zap.
+      await db.insert(projectCrackedHashes).values({
+        projectId: zapProjId,
+        hashcatMode: 0,
+        hashValue,
+        plaintext: 'zap-plaintext',
+        crackedAt: new Date(),
+        originalCrackedAt: new Date(),
+      })
+      const afterCrackedSet = await getZapsForTask(zapTaskId, zapAgentId, zapProjId)
+      if ('error' in afterCrackedSet) {
+        throw new Error(`getZapsForTask returned error after cracked-set: ${afterCrackedSet.error}`)
+      }
+      expect(afterCrackedSet.zaps).toContain(hashValue)
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, item!.id))
+      await db
+        .delete(projectCrackedHashes)
+        .where(
+          and(
+            eq(projectCrackedHashes.projectId, zapProjId),
+            eq(projectCrackedHashes.hashValue, hashValue)
+          )
+        )
     }
   })
 })

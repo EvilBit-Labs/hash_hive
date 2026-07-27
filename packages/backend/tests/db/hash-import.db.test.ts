@@ -34,6 +34,7 @@ import {
   campaigns,
   hashItems,
   hashLists,
+  projectCrackedHashes,
   projects,
   tasks,
 } from '@hashhive/shared'
@@ -385,7 +386,13 @@ describe('processImportPairs — project-scoped propagation (R11 / KTD3 / securi
 })
 
 describe('processImportPairs — zap integration (scenario 4)', () => {
-  it('propagated hash appears in getZapsForTask for the campaign hash list', async () => {
+  it('an import cracks hash_items but is NOT a zap; the value zaps once it is in the project cracked-set (U3)', async () => {
+    // U3 widened getZapsForTask to resolve from the maintained per-project
+    // cracked-set (project_cracked_hashes) at project+mode scope, NOT from
+    // cracked hash_items rows. The import path (processImportPairs Phase 3 ->
+    // propagateCrack) fills hash_items only — it does not (yet) populate the
+    // cracked-set — so an import alone no longer surfaces as a zap. The zap
+    // appears once the crack is recorded in the cracked-set.
     const hashValue = 'hash-import-zap-integ-v1'
     const plaintext = 'zapImportPass'
 
@@ -411,14 +418,40 @@ describe('processImportPairs — zap integration (scenario 4)', () => {
         'staging-key-zap-v1'
       )
 
-      // After import: hash is cracked, so the zap query picks it up
-      const after = await getZapsForTask(targetTaskId, targetAgentId, targetProjId)
-      if ('error' in after) {
-        throw new Error(`getZapsForTask error after import: ${after.error}`)
+      // After import: hash_items is cracked, but the widened zap scan reads the
+      // cracked-set — which the import path does not populate — so it must NOT
+      // surface as a zap yet.
+      const afterImport = await getZapsForTask(targetTaskId, targetAgentId, targetProjId)
+      if ('error' in afterImport) {
+        throw new Error(`getZapsForTask error after import: ${afterImport.error}`)
       }
-      expect(after.zaps).toContain(hashValue)
+      expect(afterImport.zaps).not.toContain(hashValue)
+
+      // Record the crack in the cracked-set at (project, mode 0) — the source
+      // the widened scan reads. Now the value must surface as a zap.
+      await db.insert(projectCrackedHashes).values({
+        projectId: targetProjId,
+        hashcatMode: 0,
+        hashValue,
+        plaintext,
+        crackedAt: new Date(),
+        originalCrackedAt: new Date(),
+      })
+      const afterCrackedSet = await getZapsForTask(targetTaskId, targetAgentId, targetProjId)
+      if ('error' in afterCrackedSet) {
+        throw new Error(`getZapsForTask error after cracked-set: ${afterCrackedSet.error}`)
+      }
+      expect(afterCrackedSet.zaps).toContain(hashValue)
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, item!.id))
+      await db
+        .delete(projectCrackedHashes)
+        .where(
+          and(
+            eq(projectCrackedHashes.projectId, targetProjId),
+            eq(projectCrackedHashes.hashValue, hashValue)
+          )
+        )
       await db
         .delete(auditLogs)
         .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
