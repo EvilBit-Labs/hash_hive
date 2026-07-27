@@ -392,7 +392,16 @@ export async function createCampaign(
     // referenced the moment a campaign is created against it, regardless of
     // the campaign's own draft/permanent state. One-way and idempotent — see
     // latchResourcePermanent.
-    await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+    //
+    // `campaigns.hashListId` is nullable since #101 U6 (a super-targeting
+    // parent campaign carries `superHashListId` instead — exactly one of the
+    // two is set, per `campaigns_exactly_one_target_chk`). This path always
+    // supplies a `hashListId`, so the null branch is unreachable today; the
+    // guard is what keeps it type-honest for the super fan-out (U10), which
+    // latches the resolved leaf lists on its sub-campaigns instead.
+    if (campaign.hashListId !== null) {
+      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+    }
 
     await recordAuditEvent(
       {
@@ -567,8 +576,11 @@ export async function createCampaignWithAttacks(input: {
         throw new Error('Campaign insert returned no row')
       }
 
-      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign.
-      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign,
+      // including why the nullable `hashListId` guard is unreachable here.
+      if (campaign.hashListId !== null) {
+        await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+      }
 
       await recordAuditEvent(
         {

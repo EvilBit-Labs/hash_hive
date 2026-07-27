@@ -651,6 +651,67 @@ export const projectCrackedHashes = pgTable(
   ]
 )
 
+// ─── SuperHashlists (#101) ──────────────────────────────────────────
+
+/**
+ * A SuperHashlist is a named union over several member hash lists (KTD5).
+ * It deliberately owns NO hash items (R10) — there are no `fileRef`,
+ * `statistics`, `hashTypeId` or item columns here, and nothing ever inserts
+ * a `hash_items` row against a super. Membership is a read-time union
+ * resolved through `super_hash_list_members`; a hash is never duplicated
+ * into a materialized union list.
+ *
+ * Modeled as a dedicated entity rather than reusing `hashLists.parentHashListId`
+ * because that self-FK already carries the #202 split parent→child link and a
+ * super member may itself be a #202 split parent.
+ */
+export const superHashLists = pgTable(
+  'super_hash_lists',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    // Lifecycle parity with hash lists (ADR-0019): set when the super is
+    // archived (hidden from active views), cleared on restore. NULL = active.
+    // A super carries no upload/processing status, so unlike `hash_lists`
+    // there is no archive-consistency CHECK to couple this to.
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('super_hash_lists_project_id_idx').on(table.projectId)]
+)
+
+/**
+ * Membership join between a super and the hash lists it unions.
+ *
+ * `UNIQUE(member_hash_list_id)` enforces R3: a hash list belongs to at most
+ * one super (while remaining independently targetable on its own). A
+ * hand-written `super_member_project_check` trigger (migration 0042) enforces
+ * R5 — a member must live in the super's project — because a CHECK constraint
+ * cannot contain the required subquery.
+ */
+export const superHashListMembers = pgTable(
+  'super_hash_list_members',
+  {
+    id: serial('id').primaryKey(),
+    superHashListId: integer('super_hash_list_id')
+      .notNull()
+      .references(() => superHashLists.id, { onDelete: 'cascade' }),
+    memberHashListId: integer('member_hash_list_id')
+      .notNull()
+      .references(() => hashLists.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('super_hash_list_members_super_hash_list_id_idx').on(table.superHashListId),
+    // R3: at most one super per hash list.
+    uniqueIndex('super_hash_list_members_member_hash_list_id_idx').on(table.memberHashListId),
+  ]
+)
+
 export const wordLists = pgTable(
   'word_lists',
   {
@@ -803,9 +864,20 @@ export const campaigns = pgTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
-    hashListId: integer('hash_list_id')
-      .notNull()
-      .references(() => hashLists.id, { onDelete: 'restrict' }),
+    // Exactly one of `hashListId` / `superHashListId` is set — enforced by
+    // `campaigns_exactly_one_target_chk` below (KTD6). Nullable at the column
+    // level only so a super-targeting campaign can leave this empty; every
+    // leaf-cracking campaign (including every super sub-campaign) still
+    // carries it, so tasks and zaps always resolve to one physical list and
+    // the agent hot path is unchanged.
+    hashListId: integer('hash_list_id').references(() => hashLists.id, { onDelete: 'restrict' }),
+    // Set only on the PARENT campaign of a super fan-out (KTD6). Its
+    // sub-campaigns carry `hashListId` pointing at typed leaf lists.
+    // `onDelete: 'restrict'` mirrors `hashListId`: a super referenced by a
+    // campaign cannot be deleted out from under it.
+    superHashListId: integer('super_hash_list_id').references(() => superHashLists.id, {
+      onDelete: 'restrict',
+    }),
     status: varchar('status', { length: 20 }).notNull().default('draft'),
     // Latches true the first time a campaign leaves `draft` (see
     // services/campaigns.ts transitionCampaign) and is never cleared. Governs
@@ -861,6 +933,15 @@ export const campaigns = pgTable(
     // index exists purely to make `(id, hashcat_mode)` satisfy that
     // requirement.
     uniqueIndex('campaigns_id_hashcat_mode_idx').on(table.id, table.hashcatMode),
+    // KTD6: a campaign targets EXACTLY ONE node — either a single hash list or
+    // a SuperHashlist, never both and never neither. Replaces the former
+    // `hash_list_id NOT NULL`. Validates clean on existing rows (every legacy
+    // campaign has a non-null hash_list_id and a null super_hash_list_id).
+    check(
+      'campaigns_exactly_one_target_chk',
+      sql`num_nonnulls(${table.hashListId}, ${table.superHashListId}) = 1`
+    ),
+    index('campaigns_super_hash_list_id_idx').on(table.superHashListId),
   ]
 )
 
