@@ -93,6 +93,11 @@ if (IS_ISOLATED) {
     // (the keyspace fan-out), which references the attacks table.
     attacks: Symbol('attacks'),
     campaigns: Symbol('campaigns'),
+    // `services/resources.ts` now routes crack state through
+    // `services/hash-items/crack-resolution.ts` (U4), which references the
+    // project-wide cracked-set table. Present so the whole-module mock keeps
+    // the barrel's export surface complete.
+    projectCrackedHashes: Symbol('project_cracked_hashes'),
   }))
 
   // Shared `select` factory: both the top-level `db.select` AND the

@@ -308,17 +308,26 @@ describe('getZapsForTask — project+mode cracked-set resolution (U3 / KTD4)', (
     for (let i = 0; i < 50; i++) {
       await seedCracked(MODE, `explain-${i}`, new Date(1_760_600_000_000 + i * 1000))
     }
-    const plan = await db.execute(sql`
-      EXPLAIN
-      SELECT hash_value, id, cracked_at
-      FROM project_cracked_hashes
-      WHERE project_id = ${projectId} AND hashcat_mode = ${MODE} AND cracked_at IS NOT NULL
-      ORDER BY cracked_at ASC, id ASC
-      LIMIT 100
-    `)
-    const planText = (plan as unknown as Array<Record<string, string>>)
-      .map((r) => Object.values(r).join(' '))
-      .join('\n')
+    // `enable_seqscan = off` (transaction-local) makes this deterministic:
+    // on a small table the planner would otherwise prefer a Seq Scan on
+    // row-count cost alone, making a bare EXPLAIN assertion flaky. Disabling
+    // seq scan proves the load-bearing property KTD4 promises — the keyset
+    // index is APPLICABLE to this query shape as an Index Cond seek (what the
+    // redundant `gte` bound in zaps.ts relies on).
+    const planText = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`)
+      const plan = await tx.execute(sql`
+        EXPLAIN
+        SELECT hash_value, id, cracked_at
+        FROM project_cracked_hashes
+        WHERE project_id = ${projectId} AND hashcat_mode = ${MODE} AND cracked_at IS NOT NULL
+        ORDER BY cracked_at ASC, id ASC
+        LIMIT 100
+      `)
+      return (plan as unknown as Array<Record<string, string>>)
+        .map((r) => Object.values(r).join(' '))
+        .join('\n')
+    })
     expect(planText).toContain('project_cracked_hashes_keyset_idx')
     expect(planText).not.toContain('Seq Scan')
   })

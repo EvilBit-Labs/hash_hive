@@ -137,21 +137,31 @@ describe('project_cracked_hashes schema (U1)', () => {
     expect(byMode.get(MODE_NTLM)).toBe('ntlm-plaintext')
   })
 
-  it('uses the keyset index for the widened project+mode zap scan (Index Cond seek, not Seq Scan)', async () => {
+  it('the keyset index is usable for the widened project+mode zap scan (Index Cond seek)', async () => {
     // EXPLAIN the exact shape services/tasks/zaps.ts will run (KTD4): filter on
-    // (project_id, hashcat_mode) then walk (cracked_at, id) ASC. The planner
-    // must satisfy this from project_cracked_hashes_keyset_idx.
-    const plan = await db.execute(sql`
-      EXPLAIN
-      SELECT hash_value, id, cracked_at
-      FROM project_cracked_hashes
-      WHERE project_id = ${ctx.projectId} AND hashcat_mode = ${MODE_MD5}
-      ORDER BY cracked_at ASC, id ASC
-      LIMIT 100
-    `)
-    const planText = (plan as unknown as Array<Record<string, string>>)
-      .map((r) => Object.values(r).join(' '))
-      .join('\n')
+    // (project_id, hashcat_mode) then walk (cracked_at, id) ASC. We assert the
+    // planner CAN satisfy this from project_cracked_hashes_keyset_idx as a seek.
+    //
+    // `enable_seqscan = off` (transaction-local) makes this deterministic: on a
+    // near-empty table the planner would otherwise prefer a Seq Scan purely on
+    // row-count cost, which makes a bare EXPLAIN assertion flaky. Disabling seq
+    // scan proves what the plan actually promises — the index EXISTS and is
+    // APPLICABLE to this query shape (an Index Cond seek, not a filter) — which
+    // is the load-bearing property behind the redundant `gte` bound in zaps.ts.
+    const planText = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`)
+      const plan = await tx.execute(sql`
+        EXPLAIN
+        SELECT hash_value, id, cracked_at
+        FROM project_cracked_hashes
+        WHERE project_id = ${ctx.projectId} AND hashcat_mode = ${MODE_MD5}
+        ORDER BY cracked_at ASC, id ASC
+        LIMIT 100
+      `)
+      return (plan as unknown as Array<Record<string, string>>)
+        .map((r) => Object.values(r).join(' '))
+        .join('\n')
+    })
     expect(planText).toContain('project_cracked_hashes_keyset_idx')
     expect(planText).not.toContain('Seq Scan')
   })

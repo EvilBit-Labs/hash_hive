@@ -13,13 +13,14 @@ import {
   dashboardStatsSchema,
   hashItems,
   hashLists,
+  projectCrackedHashes,
   TASK_DB_TO_BUCKET,
   type TaskBucket,
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -29,6 +30,10 @@ import {
   controlOpenApiHonoOptions,
   sharedControlResponse,
 } from '../../openapi/components.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_VALUE,
+} from '../../services/hash-items/crack-resolution.js'
 import { controlErrorResponse, requireProjectMembership } from './helpers.js'
 
 export const controlStatsRoutes = new OpenAPIHono<AppEnv>(controlOpenApiHonoOptions)
@@ -106,11 +111,14 @@ controlStatsRoutes.openapi(getStatsRoute, async (c) => {
       // hashValue)` (#202 SU4): see the matching comment in
       // `routes/dashboard/stats.ts` — dedupes a hashValue shared across
       // sibling split sub-lists (or any two lists) to ONE cracked target.
+      // U4/R15: the cracked predicate resolves through the per-project
+      // cracked-set — see the matching block in `routes/dashboard/stats.ts`.
       db
-        .select({ count: sql<number>`count(distinct ${hashItems.hashValue})` })
+        .select({ count: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})` })
         .from(hashItems)
         .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-        .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
+        .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
+        .where(eq(hashLists.projectId, projectId)),
     ])
 
     const taskBuckets: Record<TaskBucket, number> = {

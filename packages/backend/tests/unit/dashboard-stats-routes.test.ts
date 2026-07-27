@@ -27,6 +27,7 @@ import {
   dashboardStatsSchema,
   hashItems,
   hashLists,
+  projectCrackedHashes,
   tasks,
 } from '@hashhive/shared'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
@@ -163,6 +164,12 @@ const queryRows: {
     tasks: Array<{ table: unknown; predicate: Predicate }>
     cracked: Array<{ table: unknown; predicate: Predicate }>
   }
+  leftJoinCalls: {
+    agents: Array<{ table: unknown; predicate: Predicate }>
+    campaigns: Array<{ table: unknown; predicate: Predicate }>
+    tasks: Array<{ table: unknown; predicate: Predicate }>
+    cracked: Array<{ table: unknown; predicate: Predicate }>
+  }
 } = {
   agents: [],
   campaigns: [],
@@ -170,6 +177,7 @@ const queryRows: {
   cracked: [],
   whereCalls: { agents: [], campaigns: [], tasks: [], cracked: [] },
   innerJoinCalls: { agents: [], campaigns: [], tasks: [], cracked: [] },
+  leftJoinCalls: { agents: [], campaigns: [], tasks: [], cracked: [] },
 }
 
 beforeEach(() => {
@@ -179,6 +187,7 @@ beforeEach(() => {
   queryRows.cracked = []
   queryRows.whereCalls = { agents: [], campaigns: [], tasks: [], cracked: [] }
   queryRows.innerJoinCalls = { agents: [], campaigns: [], tasks: [], cracked: [] }
+  queryRows.leftJoinCalls = { agents: [], campaigns: [], tasks: [], cracked: [] }
 })
 
 /**
@@ -284,6 +293,7 @@ mock.module('../../src/db/index.js', () => ({
           where: (predicate: Predicate) => ReturnType<typeof makeChain>
           groupBy: () => Promise<unknown[]>
           innerJoin: (table: unknown, predicate: Predicate) => ReturnType<typeof makeChain>
+          leftJoin: (table: unknown, predicate: Predicate) => ReturnType<typeof makeChain>
           then: (
             onFulfilled: (value: unknown[]) => unknown,
             onRejected?: (reason: unknown) => unknown
@@ -300,6 +310,14 @@ mock.module('../../src/db/index.js', () => ({
             innerJoin(joinTable: unknown, predicate: Predicate) {
               if (target !== 'unknown') {
                 queryRows.innerJoinCalls[target].push({ table: joinTable, predicate })
+              }
+              return chain
+            },
+            // U4/R15: the cracked-hash aggregate LEFT JOINs the per-project
+            // cracked-set so crack state resolves across sibling hash lists.
+            leftJoin(joinTable: unknown, predicate: Predicate) {
+              if (target !== 'unknown') {
+                queryRows.leftJoinCalls[target].push({ table: joinTable, predicate })
               }
               return chain
             },
@@ -430,7 +448,7 @@ describe('Dashboard stats route — project-scoped query construction', () => {
     expect(paramValuesOf(wherePredicate)).toEqual([1])
   })
 
-  it('cracked query: scopes by hash-list ownership (innerJoin hashLists, where hashLists.projectId === session.projectId AND crackedAt IS NOT NULL)', async () => {
+  it('cracked query: scopes by hash-list ownership (innerJoin hashLists, where hashLists.projectId === session.projectId)', async () => {
     // The cracked query intentionally joins through `hashLists` rather
     // than `campaigns` because `hashItems.campaignId` is nullable
     // (ON DELETE SET NULL — see packages/shared/src/db/schema.ts). The
@@ -445,13 +463,34 @@ describe('Dashboard stats route — project-scoped query construction', () => {
     expect(join.table).toBe(hashLists)
     expect(referencesColumn(join.predicate, hashItems.hashListId)).toBe(true)
     expect(referencesColumn(join.predicate, hashLists.id)).toBe(true)
-    // The terminal .where(...) filters both on hashLists.projectId and
-    // hashItems.crackedAt IS NOT NULL.
+    // U4/R15: the terminal .where(...) now scopes on hashLists.projectId
+    // ALONE. The `crackedAt IS NOT NULL` filter moved into the counted
+    // expression (`count(distinct RESOLVED_CRACKED_VALUE)`), which resolves
+    // through the cracked-set — filtering it in the WHERE would drop the very
+    // rows this unit exists to include (uncracked in their own row, cracked in
+    // a sibling list).
     expect(queryRows.whereCalls.cracked.length).toBe(1)
     const wherePred = queryRows.whereCalls.cracked[0]!
     expect(referencesColumn(wherePred, hashLists.projectId)).toBe(true)
     expect(paramValuesOf(wherePred)).toContain(1)
-    expect(referencesColumn(wherePred, hashItems.crackedAt)).toBe(true)
+    expect(referencesColumn(wherePred, hashItems.crackedAt)).toBe(false)
+  })
+
+  it('cracked query: LEFT JOINs the per-project cracked-set on (projectId, detectedHashcatMode, hashValue) — U4/R15', async () => {
+    const res = await app.request(STATS_URL, { headers: commonHeaders(ADMIN_COOKIE) })
+    expect(res.status).toBe(200)
+    expect(queryRows.leftJoinCalls.cracked.length).toBe(1)
+    const join = queryRows.leftJoinCalls.cracked[0]!
+    expect(join.table).toBe(projectCrackedHashes)
+    // KTD3: the mode side of the key is the ONE authoritative column the write
+    // path stamps — never a campaign-latched or re-detected mode.
+    expect(referencesColumn(join.predicate, hashItems.detectedHashcatMode)).toBe(true)
+    expect(referencesColumn(join.predicate, projectCrackedHashes.hashcatMode)).toBe(true)
+    expect(referencesColumn(join.predicate, hashItems.hashValue)).toBe(true)
+    expect(referencesColumn(join.predicate, projectCrackedHashes.hashValue)).toBe(true)
+    // Project-scoped: a cracked-set row from another project can never match.
+    expect(referencesColumn(join.predicate, projectCrackedHashes.projectId)).toBe(true)
+    expect(paramValuesOf(join.predicate)).toContain(1)
   })
 })
 

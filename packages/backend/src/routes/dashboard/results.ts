@@ -8,6 +8,7 @@ import {
   hashLists,
   isPotfileVariantConflict,
   listResultsResponseSchema,
+  projectCrackedHashes,
   resolveAttackModeName,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
@@ -29,6 +30,12 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { getCampaignById } from '../../services/campaigns.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_AT,
+  RESOLVED_IS_CRACKED,
+  RESOLVED_PLAINTEXT,
+} from '../../services/hash-items/crack-resolution.js'
 import { resolveHashListScope } from '../../services/hash-items/list-scope.js'
 import { escapeLike, getHashListById } from '../../services/resources.js'
 import {
@@ -115,12 +122,29 @@ type ResultsFilterInput = {
  * hash list id (IDOR guard). Callers must treat `null` as "zero rows can
  * match" and return their empty-result shape directly, rather than relying
  * on Drizzle compiling `inArray(col, [])` to a false predicate.
+ *
+ * `mode` selects which crack-state source the cracked / q / date predicates
+ * read (U4 / R15):
+ *
+ *   - `'resolved'` — read through the per-project cracked-set. The caller MUST
+ *     `LEFT JOIN projectCrackedHashes ON crackedSetJoinOn(projectId)`, or the
+ *     predicates reference an absent relation and the query fails to compile.
+ *     This is the user-facing semantic: a hash uncracked in its own row but
+ *     cracked elsewhere in the project (same hashcat mode) is a result.
+ *   - `'own-row'` — the pre-U4 semantic, reading `hash_items` alone and needing
+ *     no join. Retained for the legacy CSV export path in this file, which is
+ *     export machinery and migrates with the rest of export in U14.
  */
 async function buildResultFilters(
   projectId: number,
-  filters: ResultsFilterInput
+  filters: ResultsFilterInput,
+  mode: 'resolved' | 'own-row' = 'resolved'
 ): Promise<SQL[] | null> {
   const { campaignId, hashListId, q: search, startDate, endDate } = filters
+
+  const resolved = mode === 'resolved'
+  const crackedPredicate = resolved ? RESOLVED_IS_CRACKED : isNotNull(hashItems.crackedAt)
+  const plaintextExpr = resolved ? RESOLVED_PLAINTEXT : hashItems.plaintext
 
   // Scope via `hashLists.projectId`, NOT `campaigns.projectId`:
   // `hash_items.campaign_id` is nullable (FK uses ON DELETE SET NULL),
@@ -128,7 +152,7 @@ async function buildResultFilters(
   // campaign has been deleted. `hashItems.hashListId` is NOT NULL and
   // `hashLists.projectId` is NOT NULL — same rationale as
   // `dashboard/stats.ts`.
-  const conditions = [eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt)]
+  const conditions = [eq(hashLists.projectId, projectId), crackedPredicate]
 
   if (campaignId) {
     conditions.push(eq(hashItems.campaignId, campaignId))
@@ -147,14 +171,35 @@ async function buildResultFilters(
   if (search) {
     const escaped = escapeLike(search)
     conditions.push(
-      sql`(${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\' OR ${hashItems.plaintext} ILIKE ${`%${escaped}%`} ESCAPE '\\')`
+      sql`(${hashItems.hashValue} ILIKE ${`%${escaped}%`} ESCAPE '\\' OR ${plaintextExpr} ILIKE ${`%${escaped}%`} ESCAPE '\\')`
     )
   }
+  // Date filters compare against the SAME expression the row projects and sorts
+  // on, so a cross-list-resolved result cannot fall outside a range that
+  // contains its displayed `crackedAt`.
+  // The ternaries stay un-hoisted: `gte`/`lte` are overloaded per operand kind,
+  // so a `PgColumn | SQL` union does not satisfy any single overload.
+  //
+  // `sql.param(date, hashItems.crackedAt)` is load-bearing on the resolved
+  // branch: comparing against a raw SQL expression gives Drizzle no column to
+  // borrow an encoder from, so a bare `Date` reaches postgres-js unserialized
+  // and throws `ERR_INVALID_ARG_TYPE`. Naming the timestamp column supplies the
+  // same encoder the `'own-row'` branch gets for free.
   if (startDate) {
-    conditions.push(gte(hashItems.crackedAt, new Date(startDate)))
+    const from = new Date(startDate)
+    conditions.push(
+      resolved
+        ? gte(RESOLVED_CRACKED_AT, sql.param(from, hashItems.crackedAt))
+        : gte(hashItems.crackedAt, from)
+    )
   }
   if (endDate) {
-    conditions.push(lte(hashItems.crackedAt, new Date(endDate)))
+    const to = new Date(endDate)
+    conditions.push(
+      resolved
+        ? lte(RESOLVED_CRACKED_AT, sql.param(to, hashItems.crackedAt))
+        : lte(hashItems.crackedAt, to)
+    )
   }
 
   return conditions
@@ -222,13 +267,20 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
     return c.json({ results: [], total: 0, limit, offset }, 200)
   }
 
+  // U4/R15: `plaintext` and `crackedAt` are projected through the per-project
+  // cracked-set, and the `crackedPredicate` in `conditions` admits rows this
+  // list has not cracked itself. The row's OWN attribution columns
+  // (`campaignId`/`attackId`/`agentId`) stay as-is and are NULL for a
+  // cross-list-resolved row — R17 forbids substituting the source list's
+  // attribution, so an unattributed result is the correct rendering: the
+  // operator sees the plaintext, never which sibling list produced it.
   const [rawResults, countResult] = await Promise.all([
     db
       .select({
         id: hashItems.id,
         hashValue: hashItems.hashValue,
-        plaintext: hashItems.plaintext,
-        crackedAt: hashItems.crackedAt,
+        plaintext: RESOLVED_PLAINTEXT,
+        crackedAt: RESOLVED_CRACKED_AT,
         hashListId: hashItems.hashListId,
         hashListName: hashLists.name,
         campaignId: hashItems.campaignId,
@@ -244,8 +296,9 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
       // fields rather than being silently filtered out.
       .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
       .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(and(...conditions))
-      .orderBy(desc(hashItems.crackedAt))
+      .orderBy(desc(RESOLVED_CRACKED_AT))
       .limit(limit)
       .offset(offset),
     // `total` counts physical rows (`count(*)`), matching the per-`hash_items`-row
@@ -260,6 +313,10 @@ resultsRoutes.openapi(listResultsRoute, async (c) => {
       .select({ count: sql<number>`count(*)` })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      // Same LEFT JOIN as the page query — the shared `conditions` reference
+      // the cracked-set, and the join is 1:1 at most so `count(*)` still
+      // matches the page's cardinality.
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(and(...conditions)),
   ])
 
@@ -480,7 +537,14 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   const filters: ResultsFilterInput = { campaignId, hashListId, q, startDate, endDate }
   // Build conditions once at handler entry — each pull only composes the
   // cursor predicate on top.
-  const baseConditions = await buildResultFilters(projectId, filters)
+  //
+  // `'own-row'` (U4/R15 GAP, tracked to U14): this legacy CSV stream is export
+  // machinery, and its `(crackedAt, id)` DESC keyset cursor is defined over
+  // `hash_items.cracked_at` — resolving crack state here would need the cursor
+  // rebuilt over the coalesced expression, which is exactly the work U14 does
+  // for every export path at once. Until then this stream reports the pre-U4
+  // semantic: a hash cracked only in a sibling list is omitted.
+  const baseConditions = await buildResultFilters(projectId, filters, 'own-row')
 
   if (baseConditions === null) {
     // IDOR guard: hashListId resolved to an empty scope (cross-project or
