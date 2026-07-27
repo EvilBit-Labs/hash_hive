@@ -10,6 +10,7 @@ import {
   splitPendingResponseSchema,
   splitReviewGroupsSchema,
   splitStatusResponseSchema,
+  superCampaignFanoutResponseSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -26,7 +27,11 @@ import {
   sharedDashboardResponse,
 } from '../../openapi/components.js'
 import { getSplitStatus } from '../../services/campaign-split-status.js'
-import { confirmSplitCampaign, createCampaignOrSplit } from '../../services/campaign-split.js'
+import {
+  confirmSplitCampaign,
+  createCampaignOrSplit,
+  createSuperCampaign,
+} from '../../services/campaign-split.js'
 import {
   deleteCampaign,
   changeRunningCampaignPriority,
@@ -196,18 +201,27 @@ campaignRoutes.openapi(listCampaignsRoute, async (c) => {
 // dependency field `dependencyIndices` to make the index-vs-id
 // semantic explicit at the wire level (the standalone POST
 // /:id/attacks path uses `dependencies` for real attack IDs).
-const createCampaignSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(2000).optional(),
-  hashListId: z.number().int().positive(),
-  priority: z.number().int().min(1).max(10).optional(),
-  attacks: z.array(inlineAttackRequestSchema).optional(),
-  // Issue #202 SU7: force the plain single-mode create path even when the
-  // target hash list is mixed/needs-review. Used by the wizard's
-  // `single_group` fallback after the async split job found nothing to
-  // split (see `createCampaignOrSplit` in services/campaign-split.ts).
-  skipSplit: z.boolean().optional(),
-})
+const createCampaignSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    // Exactly one of `hashListId` / `superHashListId` must be set — the wire
+    // mirror of the DB `campaigns_exactly_one_target_chk` (KTD6). Targeting a
+    // super (#101 U10) fans out typed sub-campaigns; targeting a plain hash
+    // list runs the #202 single/split create path.
+    hashListId: z.number().int().positive().optional(),
+    superHashListId: z.number().int().positive().optional(),
+    priority: z.number().int().min(1).max(10).optional(),
+    attacks: z.array(inlineAttackRequestSchema).optional(),
+    // Issue #202 SU7: force the plain single-mode create path even when the
+    // target hash list is mixed/needs-review. Used by the wizard's
+    // `single_group` fallback after the async split job found nothing to
+    // split (see `createCampaignOrSplit` in services/campaign-split.ts).
+    skipSplit: z.boolean().optional(),
+  })
+  .refine((d) => (d.hashListId !== undefined) !== (d.superHashListId !== undefined), {
+    message: 'Exactly one of hashListId or superHashListId must be set',
+  })
 
 const createCampaignRoute = createRoute({
   method: 'post',
@@ -225,8 +239,13 @@ const createCampaignRoute = createRoute({
   },
   responses: {
     201: {
-      description: 'Campaign (and any inline attacks) created.',
-      content: { 'application/json': { schema: createCampaignResponseSchema } },
+      description:
+        'Campaign created. For a plain hash-list target: the campaign and any inline attacks. For a super target (#101 U10): the parent campaign id and one typed sub-campaign per resolved leaf.',
+      content: {
+        'application/json': {
+          schema: z.union([createCampaignResponseSchema, superCampaignFanoutResponseSchema]),
+        },
+      },
     },
     // Issue #202 SU3: a PRIOR call already split this parent — no new
     // campaign is created. The caller must resolve the `ambiguous` groups'
@@ -270,6 +289,83 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
 
   const actor = { actorType: 'user' as const, actorId: userId }
 
+  // Super target (#101 U10): auto-confirm fan-out into one typed sub-campaign
+  // per resolved leaf. The `createCampaignSchema` refine guarantees exactly
+  // one of hashListId/superHashListId is set, so this branch owns the super
+  // case and the code below owns the plain hash-list case.
+  if (data.superHashListId !== undefined) {
+    let superResult: Awaited<ReturnType<typeof createSuperCampaign>>
+    try {
+      superResult = await createSuperCampaign({
+        name: data.name,
+        description: data.description,
+        superHashListId: data.superHashListId,
+        priority: data.priority,
+        projectId,
+        createdBy: userId,
+        actor,
+      })
+    } catch (err) {
+      logger.error(
+        { err, route: 'POST /campaigns', projectId, userId },
+        'createSuperCampaign threw — surfacing as service unavailable'
+      )
+      return c.json(
+        {
+          error: { code: 'SERVICE_UNAVAILABLE', message: 'Unable to create campaign right now' },
+        },
+        503
+      )
+    }
+
+    switch (superResult.kind) {
+      case 'super_not_found':
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Super hash list not found')
+      case 'super_archived':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_ARCHIVED',
+          'Super hash list is archived and cannot be targeted by a campaign'
+        )
+      case 'super_too_few_members':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_TOO_FEW_MEMBERS',
+          `Super hash list must have at least 2 members before it can be targeted (has ${superResult.memberCount})`
+        )
+      case 'no_typed_leaves':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_NO_TYPED_LEAVES',
+          'Super hash list has no typed member lists to launch sub-campaigns for'
+        )
+      case 'created':
+        return c.json(
+          {
+            parentCampaignId: superResult.parentCampaign.id,
+            superHashListId: data.superHashListId,
+            subCampaigns: superResult.subCampaigns,
+          },
+          201
+        )
+    }
+  }
+
+  // From here on the plain hash-list path — `hashListId` is guaranteed present
+  // by the schema refine (exactly-one-target), but narrow defensively.
+  if (data.hashListId === undefined) {
+    return dashboardError(
+      c,
+      400,
+      'VALIDATION_ERROR',
+      'Exactly one of hashListId or superHashListId must be set'
+    )
+  }
+  const hashListId = data.hashListId
+
   // Single entry point regardless of whether inline attacks were supplied
   // (issue #202 SU3) — `createCampaignOrSplit` reads the target hash
   // list's `type_analysis.verdict` first and either passes through to the
@@ -283,7 +379,7 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     result = await createCampaignOrSplit({
       name: data.name,
       description: data.description,
-      hashListId: data.hashListId,
+      hashListId,
       priority: data.priority,
       projectId,
       createdBy: userId,

@@ -346,7 +346,13 @@ export async function createCampaign(
     projectId: number
     name: string
     description?: string | undefined
-    hashListId: number
+    // Exactly one of `hashListId` / `superHashListId` must be supplied
+    // (`campaigns_exactly_one_target_chk`, KTD6). A leaf-cracking campaign —
+    // including every super sub-campaign — passes `hashListId`; the PARENT
+    // campaign of a super fan-out (U10) passes `superHashListId` and leaves
+    // `hashListId` unset. `undefined`/omitted → NULL in the insert.
+    hashListId?: number | undefined
+    superHashListId?: number | null | undefined
     priority?: number | undefined
     createdBy?: number | undefined
     // Split-confirm sub-campaign fields (issue #202 SU3). Both default to
@@ -377,7 +383,8 @@ export async function createCampaign(
         projectId: data.projectId,
         name: data.name,
         description: data.description ?? null,
-        hashListId: data.hashListId,
+        hashListId: data.hashListId ?? null,
+        superHashListId: data.superHashListId ?? null,
         priority: data.priority ?? 5,
         createdBy: data.createdBy ?? null,
         status: 'draft',

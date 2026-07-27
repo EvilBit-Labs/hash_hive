@@ -304,6 +304,7 @@ export {
   splitReviewConfidentGroupSchema,
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
+  superCampaignFanoutResponseSchema,
   splitStatusLiteralSchema,
   splitStatusResponseSchema,
 } from './campaign-split.js'

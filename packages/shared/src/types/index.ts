@@ -165,6 +165,7 @@ import type {
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
   splitStatusResponseSchema,
+  superCampaignFanoutResponseSchema,
   // SuperHashlist management (issue #101 / U7)
   addSuperMemberRequestSchema,
   createSuperRequestSchema,
@@ -423,6 +424,7 @@ export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
 export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
 export type SplitPendingResponse = z.infer<typeof splitPendingResponseSchema>
 export type SplitStatusResponse = z.infer<typeof splitStatusResponseSchema>
+export type SuperCampaignFanoutResponse = z.infer<typeof superCampaignFanoutResponseSchema>
 
 // ─── SuperHashlist Management (issue #101 / U7) ─────────────────────
 export type SuperHashListWire = z.infer<typeof superHashListWireSchema>

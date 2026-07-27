@@ -429,10 +429,19 @@ if (!IS_ISOLATED) {
     unidentified: [],
   }))
 
+  // `createSuperCampaign` (#101 U10) is stubbed here too so the wholesale
+  // module mock covers every symbol the create route imports — no existing
+  // test hits the super branch (they all post `hashListId`), but leaving the
+  // export undefined would throw if one ever did.
+  const mockCreateSuperCampaign = mock<CampaignSplitService['createSuperCampaign']>(async () => ({
+    kind: 'super_not_found',
+  }))
+
   mock.module('../../src/services/campaign-split.js', () => ({
     createCampaignOrSplit: mockCreateCampaignOrSplit,
     confirmSplitCampaign: mockConfirmSplitCampaign,
     getSplitReviewGroups: mockGetSplitReviewGroups,
+    createSuperCampaign: mockCreateSuperCampaign,
   }))
 
   // ─── Mock the Split-Status Service (issue #202 SU7) ─────────────────

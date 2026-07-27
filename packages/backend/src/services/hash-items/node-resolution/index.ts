@@ -24,8 +24,8 @@
  *     needs, and no ESM cycle forms.
  */
 
-import { hashLists } from '@hashhive/shared'
-import { and, eq } from 'drizzle-orm'
+import { hashLists, superHashListMembers, superHashLists } from '@hashhive/shared'
+import { and, eq, inArray } from 'drizzle-orm'
 
 import { db } from '../../../db/index.js'
 
@@ -47,33 +47,37 @@ export {
  * the super case (U10) is a purely additive new variant — the type is the
  * extension point.
  *
- * U5 defines exactly one variant, the #202 split parent. U10 will add:
- *
- * ```ts
- *   | { kind: 'super'; superHashListId: number; projectId: number }
- * ```
- *
- * and a matching `case 'super':` in `resolveNodeToLeaves` that resolves the
- * super's members and expands each one FURTHER level (a #202-parent member →
- * its children). Nothing about the #202 path below has to change for that —
- * that is the whole point of routing #202 through this seam now.
+ *   - `split-parent` (U5): a #202 split PARENT hash list.
+ *   - `super` (U10): a SuperHashlist — its leaves are its members, each
+ *     resolved one FURTHER level so a member that is itself a #202 split
+ *     parent expands to its physical per-mode children.
  */
-export type NodeDescriptor = {
-  /** A #202 split PARENT hash list — a list that has been partitioned into
-   * per-type children via `hash_lists.parent_hash_list_id`. */
-  kind: 'split-parent'
-  hashListId: number
-  projectId: number
-}
+export type NodeDescriptor =
+  | {
+      /** A #202 split PARENT hash list — a list that has been partitioned into
+       * per-type children via `hash_lists.parent_hash_list_id`. */
+      kind: 'split-parent'
+      hashListId: number
+      projectId: number
+    }
+  | {
+      /** A SuperHashlist (KTD5) — a read-time union over its member hash
+       * lists. Its typed leaves are the members, each expanded one further
+       * level (a #202-parent member → its physical children). */
+      kind: 'super'
+      superHashListId: number
+      projectId: number
+    }
 
 /**
  * Injectable DB seam so `resolveNodeToLeaves` is unit-testable without a
  * live Postgres connection (mirrors `_campaignSplitDeps` in
  * `services/campaign-split.ts`). Production uses the default that queries
- * the shared pooled `db`; tests override `fetchSplitParentLeaves`.
+ * the shared pooled `db`; tests override the fetchers.
  */
 export const _nodeResolutionDeps = {
   fetchSplitParentLeaves: defaultFetchSplitParentLeaves,
+  fetchSuperMemberLeaves: defaultFetchSuperMemberLeaves,
 }
 
 /**
@@ -101,24 +105,98 @@ async function defaultFetchSplitParentLeaves(
 }
 
 /**
+ * Resolves a SuperHashlist to its typed leaf `hash_list.id`s (U10 / KTD6a).
+ *
+ * A super's leaves are its members expanded ONE FURTHER LEVEL than a
+ * split-parent: for each member hash list, if that member is itself a #202
+ * split parent (i.e. other lists reference it via `parent_hash_list_id`), its
+ * physical per-type children are the leaves; otherwise the homogeneous member
+ * IS its own leaf. This is the "resolve each member one more level" rule the
+ * KTD6a diagram labels — a member that is a #202 parent → its children.
+ *
+ * The per-mode union is deliberately NOT materialized (Approach B rejected):
+ * the caller fans out one sub-campaign per leaf returned here, and cross-member
+ * `(mode, value)` duplicates collapse at run time via Layer one's project-wide
+ * zap dedup (U3). Every id returned is a physical list a campaign can target,
+ * so tasks and zaps still resolve to one leaf `hashListId` (agent hot path
+ * unchanged).
+ *
+ * Project-scoped throughout (the `super_hash_lists.project_id = $2` join and
+ * the children query's `project_id = $2` predicate are the IDOR guards): a
+ * super id from another project — or a nonexistent id — resolves to `[]`.
+ * Order is deterministic (members by `member_hash_list_id` asc, each member's
+ * children by id asc) so repeated resolutions produce a stable leaf sequence.
+ */
+async function defaultFetchSuperMemberLeaves(
+  superHashListId: number,
+  projectId: number
+): Promise<number[]> {
+  const memberRows = await db
+    .select({ memberHashListId: superHashListMembers.memberHashListId })
+    .from(superHashListMembers)
+    .innerJoin(superHashLists, eq(superHashListMembers.superHashListId, superHashLists.id))
+    .where(
+      and(
+        eq(superHashListMembers.superHashListId, superHashListId),
+        eq(superHashLists.projectId, projectId)
+      )
+    )
+    .orderBy(superHashListMembers.memberHashListId)
+  const memberIds = memberRows.map((r) => r.memberHashListId)
+  if (memberIds.length === 0) return []
+
+  // Expand each member one further level: a member that is a #202 split parent
+  // contributes its physical children as leaves instead of itself.
+  const childRows = await db
+    .select({ id: hashLists.id, parentHashListId: hashLists.parentHashListId })
+    .from(hashLists)
+    .where(and(inArray(hashLists.parentHashListId, memberIds), eq(hashLists.projectId, projectId)))
+  const childrenByParent = new Map<number, number[]>()
+  for (const child of childRows) {
+    if (child.parentHashListId === null) continue
+    const bucket = childrenByParent.get(child.parentHashListId)
+    if (bucket) {
+      bucket.push(child.id)
+    } else {
+      childrenByParent.set(child.parentHashListId, [child.id])
+    }
+  }
+
+  const leaves: number[] = []
+  for (const memberId of memberIds) {
+    const children = childrenByParent.get(memberId)
+    if (children && children.length > 0) {
+      // Spread first so the sort does not mutate the map's stored array.
+      leaves.push(...[...children].sort((a, b) => a - b))
+    } else {
+      leaves.push(memberId)
+    }
+  }
+  return leaves
+}
+
+/**
  * Resolves a node to its typed leaf hash-list ids — the set a caller reads
  * `hash_items` from and groups (via `groupItemsByMode`) to fan out one typed
- * sub-campaign per mode.
+ * sub-campaign per leaf.
  *
- * U5: only the `split-parent` variant. When the super variant lands (U10),
- * add its `case` here; every existing caller keeps working unchanged.
+ * Two variants: the #202 `split-parent` (U5) and the `super` (U10). Adding a
+ * further node kind is purely additive — the exhaustiveness guard below turns
+ * a missing `case` into a compile error.
  */
 export async function resolveNodeToLeaves(node: NodeDescriptor): Promise<number[]> {
   switch (node.kind) {
     case 'split-parent':
       return _nodeResolutionDeps.fetchSplitParentLeaves(node.hashListId, node.projectId)
+    case 'super':
+      return _nodeResolutionDeps.fetchSuperMemberLeaves(node.superHashListId, node.projectId)
     default: {
-      // Exhaustiveness guard: when U10 adds the `super` variant to
-      // `NodeDescriptor`, this line stops type-checking until a matching
-      // `case 'super':` is added above — a compile-time nudge, not a runtime
-      // landmine (unreachable for every valid `NodeDescriptor` today).
-      const exhaustiveCheck: never = node.kind
-      throw new Error(`resolveNodeToLeaves: unhandled node kind ${String(exhaustiveCheck)}`)
+      // Exhaustiveness guard: a future `NodeDescriptor` variant added without
+      // a matching `case` above stops type-checking here — a compile-time
+      // nudge, not a runtime landmine (unreachable for every valid
+      // `NodeDescriptor` today).
+      const exhaustiveCheck: never = node
+      throw new Error(`resolveNodeToLeaves: unhandled node ${JSON.stringify(exhaustiveCheck)}`)
     }
   }
 }
