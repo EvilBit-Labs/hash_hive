@@ -15,7 +15,7 @@
  * target rows too, and the subsequent upsert's `crackedAt IS NULL` guard
  * then silently skips them — so provenance would never be written.
  */
-import { hashItems } from '@hashhive/shared'
+import { hashItems, hashLists } from '@hashhive/shared'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 
 import { logger } from '../../config/logger.js'
@@ -33,12 +33,19 @@ const PROPAGATION_BATCH_SIZE = 1_000
 
 /**
  * Propagate a newly-cracked plaintext to every uncracked row that shares
- * `hashValue`, across all hash lists and projects.
+ * `hashValue`, scoped to a single project (KTD3 / security F2).
+ *
+ * `hash_items` has no `projectId` column — it references `hashListId` only —
+ * so project scope is enforced by filtering candidates to
+ * `hashListId IN (SELECT id FROM hash_lists WHERE project_id = $projectId)`.
+ * This closes the pre-existing cross-project plaintext leak: `propagateCrack`
+ * used to fill matching rows across ALL projects, exposing one tenant's
+ * plaintext to another. Callers must thread the owning project through.
  *
  * Algorithm (SELECT + UPDATE to work around PostgreSQL's lack of
  * UPDATE...LIMIT):
  * 1. SELECT up to PROPAGATION_BATCH_SIZE candidate IDs where
- *    `hash_value = $h AND cracked_at IS NULL`.
+ *    `hash_value = $h AND cracked_at IS NULL AND hash_list_id IN (project's lists)`.
  * 2. UPDATE those specific IDs — re-checks `cracked_at IS NULL` so a
  *    concurrent agent crack cannot race us into overwriting its
  *    attribution.
@@ -49,20 +56,35 @@ const PROPAGATION_BATCH_SIZE = 1_000
  *
  * @param hashValue - The hash to match (verbatim, case-sensitive).
  * @param plaintext - The cracked plaintext to write.
+ * @param projectId - The owning project; propagation never crosses it.
  * @returns Total rows updated.  Use for logging only (KTD7).
  */
 export async function propagateCrack(
   hashValue: string,
-  plaintext: string
+  plaintext: string,
+  projectId: number
 ): Promise<{ updated: number }> {
   let totalUpdated = 0
   const crackedAt = new Date()
+
+  // Project scope: hash_items has no projectId, so restrict to the project's
+  // own hash lists (security F2 — never propagate across tenants).
+  const projectHashLists = db
+    .select({ id: hashLists.id })
+    .from(hashLists)
+    .where(eq(hashLists.projectId, projectId))
 
   while (true) {
     const candidates = await db
       .select({ id: hashItems.id })
       .from(hashItems)
-      .where(and(eq(hashItems.hashValue, hashValue), isNull(hashItems.crackedAt)))
+      .where(
+        and(
+          eq(hashItems.hashValue, hashValue),
+          isNull(hashItems.crackedAt),
+          inArray(hashItems.hashListId, projectHashLists)
+        )
+      )
       .limit(PROPAGATION_BATCH_SIZE)
 
     if (candidates.length === 0) {

@@ -16,6 +16,7 @@ import {
 } from './campaigns.js'
 import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
+import { upsertCrackedSet } from './hash-items/cracked-set.js'
 import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
 import { MAX_RETRIES } from './tasks/retry.js'
 import { appendTaskTelemetry } from './telemetry.js'
@@ -757,32 +758,67 @@ export async function updateTaskProgress(
   }
 
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
+    // Capture non-null locals so the transaction closure sees narrowed types.
+    const hashListId = taskRow.hashListId
+    const { campaignId, attackId, hashcatMode } = taskRow
+    const results = data.results
     try {
-      await db
-        .insert(hashItems)
-        .values(
-          data.results.map((r) => ({
-            hashListId: taskRow.hashListId,
-            hashValue: r.hashValue,
-            plaintext: r.plaintext,
-            crackedAt: new Date(),
-            campaignId: taskRow.campaignId,
-            attackId: taskRow.attackId,
-            taskId,
-            agentId,
-          }))
-        )
-        .onConflictDoUpdate({
-          target: [hashItems.hashListId, hashItems.hashValue],
-          set: {
-            plaintext: sql`EXCLUDED.plaintext`,
-            crackedAt: sql`EXCLUDED.cracked_at`,
-            campaignId: sql`EXCLUDED.campaign_id`,
-            attackId: sql`EXCLUDED.attack_id`,
-            taskId: sql`EXCLUDED.task_id`,
-            agentId: sql`EXCLUDED.agent_id`,
-          },
-        })
+      // U2 (feasibility F5): the per-list `hash_items` upsert and the
+      // project-wide cracked-set upsert must land atomically — a crack must
+      // never be visible in one but not the other. Both run in a single
+      // transaction, still ABOVE the paused-task guard so a dying/paused agent
+      // never drops a plaintext (persist-first, KTD9 discipline).
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(hashItems)
+          .values(
+            results.map((r) => ({
+              hashListId,
+              hashValue: r.hashValue,
+              plaintext: r.plaintext,
+              crackedAt: new Date(),
+              // KTD3: stamp the campaign's resolved hashcat mode onto the crack
+              // so write/read/zap all read ONE authoritative mode column. Null
+              // when the campaign has no resolved mode (leaves it untouched via
+              // COALESCE on conflict below).
+              detectedHashcatMode: hashcatMode,
+              campaignId,
+              attackId,
+              taskId,
+              agentId,
+            }))
+          )
+          .onConflictDoUpdate({
+            target: [hashItems.hashListId, hashItems.hashValue],
+            set: {
+              plaintext: sql`EXCLUDED.plaintext`,
+              crackedAt: sql`EXCLUDED.cracked_at`,
+              // Preserve any previously-stamped mode when this crack carries
+              // none, but adopt the resolved mode when it does (KTD3).
+              detectedHashcatMode: sql`COALESCE(EXCLUDED.detected_hashcat_mode, ${hashItems.detectedHashcatMode})`,
+              campaignId: sql`EXCLUDED.campaign_id`,
+              attackId: sql`EXCLUDED.attack_id`,
+              taskId: sql`EXCLUDED.task_id`,
+              agentId: sql`EXCLUDED.agent_id`,
+            },
+          })
+
+        // KTD3: only maintain the cracked-set when the campaign's mode resolved.
+        // Results with no mode stay list-local and never cross-list dedup.
+        if (hashcatMode != null) {
+          for (const r of results) {
+            await upsertCrackedSet(tx, {
+              projectId: taskRow.projectId,
+              hashcatMode,
+              hashValue: r.hashValue,
+              plaintext: r.plaintext,
+              sourceHashListId: hashListId,
+              taskId,
+              agentId,
+            })
+          }
+        }
+      })
     } catch (err) {
       logger.error(
         {

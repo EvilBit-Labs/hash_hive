@@ -11,8 +11,10 @@
  *   1. Uncracked hash → cracked with import provenance (source='import', username set).
  *   2. Already-cracked hash → plaintext, crackedAt, campaignId/attackId/taskId/agentId
  *      all preserved (setWhere guard KTD2).
- *   3. Same hash in another project's list → propagated (plaintext set) but NO
- *      source/username (propagateCrack does not write provenance — R11).
+ *   3. Same hash in a SAME-PROJECT sibling list → propagated (plaintext set) but
+ *      NO source/username (propagateCrack does not write provenance — R11); a
+ *      same-value row in ANOTHER project is NOT touched (project scope — KTD3 /
+ *      security F2 closes the prior cross-tenant plaintext leak).
  *   4. Zap integration: propagated hash appears in getZapsForTask for the campaign.
  *   5. Audit event recorded exactly once at hash_list scope with correct actor.
  *   6. buildHashImportJobId returns a stable, non-empty string (proves the jobId
@@ -293,15 +295,26 @@ describe('processImportPairs — setWhere guard (KTD2)', () => {
   })
 })
 
-describe('processImportPairs — cross-project propagation (R11)', () => {
-  it('propagates plaintext to other-project list WITHOUT source/username (scenario 3)', async () => {
+describe('processImportPairs — project-scoped propagation (R11 / KTD3 / security F2)', () => {
+  it('propagates plaintext to a SAME-PROJECT sibling list (no source/username) but NOT to another project (scenario 3)', async () => {
     const hashValue = 'hash-import-cross-proj-v1'
     const plaintext = 'crossProjectPass'
 
-    // Insert uncracked in target list AND uncracked in other-project list
+    // A second list in the TARGET project to receive within-project propagation.
+    const [siblingList] = await db
+      .insert(hashLists)
+      .values({ projectId: targetProjId, name: 'import-sibling-list', status: 'ready' })
+      .returning({ id: hashLists.id })
+
+    // Insert uncracked in target list, uncracked in a same-project sibling list,
+    // and uncracked in an OTHER-project list.
     const [rowTarget] = await db
       .insert(hashItems)
       .values({ hashListId: targetListId, hashValue })
+      .returning({ id: hashItems.id })
+    const [rowSibling] = await db
+      .insert(hashItems)
+      .values({ hashListId: siblingList!.id, hashValue })
       .returning({ id: hashItems.id })
     const [rowOther] = await db
       .insert(hashItems)
@@ -333,8 +346,8 @@ describe('processImportPairs — cross-project propagation (R11)', () => {
       expect(afterTarget!.crackedAt).toBeInstanceOf(Date)
       expect(afterTarget!.source).toBe('import')
 
-      // Other-project row: propagated plaintext only — NO source/username (R11)
-      const [afterOther] = await db
+      // Same-project sibling row: propagated plaintext only — NO source/username (R11)
+      const [afterSibling] = await db
         .select({
           plaintext: hashItems.plaintext,
           crackedAt: hashItems.crackedAt,
@@ -342,16 +355,28 @@ describe('processImportPairs — cross-project propagation (R11)', () => {
           username: hashItems.username,
         })
         .from(hashItems)
+        .where(eq(hashItems.id, rowSibling!.id))
+
+      expect(afterSibling!.plaintext).toBe(plaintext)
+      expect(afterSibling!.crackedAt).toBeInstanceOf(Date)
+      // propagateCrack deliberately does not set source or username (KTD2)
+      expect(afterSibling!.source).toBeNull()
+      expect(afterSibling!.username).toBeNull()
+
+      // Other-project row: MUST stay uncracked — propagation never crosses the
+      // project boundary (KTD3 / security F2 closes the prior cross-tenant leak).
+      const [afterOther] = await db
+        .select({ plaintext: hashItems.plaintext, crackedAt: hashItems.crackedAt })
+        .from(hashItems)
         .where(eq(hashItems.id, rowOther!.id))
 
-      expect(afterOther!.plaintext).toBe(plaintext)
-      expect(afterOther!.crackedAt).toBeInstanceOf(Date)
-      // propagateCrack deliberately does not set source or username (KTD2)
-      expect(afterOther!.source).toBeNull()
-      expect(afterOther!.username).toBeNull()
+      expect(afterOther!.plaintext).toBeNull()
+      expect(afterOther!.crackedAt).toBeNull()
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, rowTarget!.id))
+      await db.delete(hashItems).where(eq(hashItems.id, rowSibling!.id))
       await db.delete(hashItems).where(eq(hashItems.id, rowOther!.id))
+      await db.delete(hashLists).where(eq(hashLists.id, siblingList!.id))
       await db
         .delete(auditLogs)
         .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))

@@ -1,15 +1,18 @@
 /**
  * Real-DB tests for U2: propagateCrack — match-by-value propagation primitive.
  *
- * propagateCrack(hashValue, plaintext) fills plaintext + crackedAt onto every
- * uncracked hash item sharing that hash value, across all lists and projects.
- * It does NOT touch username/source/attribution FKs (campaignId/attackId/
- * taskId/agentId) on propagated rows — only uncracked rows are updated, and
- * already-cracked rows are left unchanged (KTD2).
+ * propagateCrack(hashValue, plaintext, projectId) fills plaintext + crackedAt
+ * onto every uncracked hash item sharing that hash value WITHIN THE OWNING
+ * PROJECT (SuperHashlists KTD3 / security F2 — the prior cross-project behavior
+ * leaked one tenant's plaintext into another and is now closed). It does NOT
+ * touch username/source/attribution FKs (campaignId/attackId/taskId/agentId) on
+ * propagated rows — only uncracked rows are updated, and already-cracked rows
+ * are left unchanged (KTD2).
  *
  * Test scenarios:
- * 1. Same hash in list A (project 1) and list B (project 2), both uncracked:
- *    both get plaintext + crackedAt; attribution FKs remain NULL.
+ * 1. Same hash in two lists of project A + one list of project B, all uncracked:
+ *    only the project-A rows get plaintext + crackedAt (project scope); the
+ *    project-B row stays uncracked; attribution FKs remain NULL.
  * 2. Already-cracked row left unchanged — both plaintext and crackedAt are
  *    identical to the original seed values (proves KTD2 guard blocks overwrite).
  * 3. No matching rows: returns { updated: 0 }, no error.
@@ -40,6 +43,7 @@ const SLUG_ZAP = 'hash-prop-proj-zap'
 
 let projAId: number
 let listAId: number
+let listA2Id: number
 let projBId: number
 let listBId: number
 let zapProjId: number
@@ -74,6 +78,13 @@ beforeAll(async () => {
     .values({ projectId: projAId, name: 'list-a', status: 'ready' })
     .returning({ id: hashLists.id })
   listAId = lA!.id
+  // A second list in project A so within-project cross-list propagation can be
+  // exercised (project scope is proven against list B in project B).
+  const [lA2] = await db
+    .insert(hashLists)
+    .values({ projectId: projAId, name: 'list-a2', status: 'ready' })
+    .returning({ id: hashLists.id })
+  listA2Id = lA2!.id
 
   // Project B + hash list B
   const [pB] = await db
@@ -155,15 +166,20 @@ afterAll(async () => {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('propagateCrack — cross-project propagation', () => {
-  it('sets plaintext + crackedAt on uncracked rows in both lists; attribution FKs stay NULL (KTD2)', async () => {
+describe('propagateCrack — project-scoped propagation', () => {
+  it('fills uncracked rows in the OWNING project only; a same-value row in another project stays uncracked; attribution FKs stay NULL (KTD2/KTD3)', async () => {
     // Each test uses a distinct hashValue to avoid cross-test pollution.
     const hashValue = 'hash-prop-cross-project-v1'
     const plaintext = 'password123'
 
+    // Two rows in project A (across two of its lists) + one row in project B.
     const [rowA] = await db
       .insert(hashItems)
       .values({ hashListId: listAId, hashValue })
+      .returning({ id: hashItems.id })
+    const [rowA2] = await db
+      .insert(hashItems)
+      .values({ hashListId: listA2Id, hashValue })
       .returning({ id: hashItems.id })
     const [rowB] = await db
       .insert(hashItems)
@@ -171,59 +187,48 @@ describe('propagateCrack — cross-project propagation', () => {
       .returning({ id: hashItems.id })
 
     try {
-      const result = await propagateCrack(hashValue, plaintext)
+      const result = await propagateCrack(hashValue, plaintext, projAId)
+      // Only project A's two rows — project B is a different tenant.
       expect(result.updated).toBe(2)
 
-      // Verify list A row
-      const [updatedA] = await db
-        .select({
-          plaintext: hashItems.plaintext,
-          crackedAt: hashItems.crackedAt,
-          campaignId: hashItems.campaignId,
-          attackId: hashItems.attackId,
-          taskId: hashItems.taskId,
-          agentId: hashItems.agentId,
-          username: hashItems.username,
-          source: hashItems.source,
-        })
-        .from(hashItems)
-        .where(eq(hashItems.id, rowA!.id))
+      // Verify both project-A rows got the plaintext with NULL attribution.
+      for (const id of [rowA!.id, rowA2!.id]) {
+        const [updated] = await db
+          .select({
+            plaintext: hashItems.plaintext,
+            crackedAt: hashItems.crackedAt,
+            campaignId: hashItems.campaignId,
+            attackId: hashItems.attackId,
+            taskId: hashItems.taskId,
+            agentId: hashItems.agentId,
+            username: hashItems.username,
+            source: hashItems.source,
+          })
+          .from(hashItems)
+          .where(eq(hashItems.id, id))
 
-      expect(updatedA!.plaintext).toBe(plaintext)
-      expect(updatedA!.crackedAt).toBeInstanceOf(Date)
-      // KTD2: attribution FKs and identity columns must NOT be written
-      expect(updatedA!.campaignId).toBeNull()
-      expect(updatedA!.attackId).toBeNull()
-      expect(updatedA!.taskId).toBeNull()
-      expect(updatedA!.agentId).toBeNull()
-      expect(updatedA!.username).toBeNull()
-      expect(updatedA!.source).toBeNull()
+        expect(updated!.plaintext).toBe(plaintext)
+        expect(updated!.crackedAt).toBeInstanceOf(Date)
+        // KTD2: attribution FKs and identity columns must NOT be written
+        expect(updated!.campaignId).toBeNull()
+        expect(updated!.attackId).toBeNull()
+        expect(updated!.taskId).toBeNull()
+        expect(updated!.agentId).toBeNull()
+        expect(updated!.username).toBeNull()
+        expect(updated!.source).toBeNull()
+      }
 
-      // Verify list B row
+      // Project B's row must remain untouched — no cross-tenant leak (security F2).
       const [updatedB] = await db
-        .select({
-          plaintext: hashItems.plaintext,
-          crackedAt: hashItems.crackedAt,
-          campaignId: hashItems.campaignId,
-          attackId: hashItems.attackId,
-          taskId: hashItems.taskId,
-          agentId: hashItems.agentId,
-          username: hashItems.username,
-          source: hashItems.source,
-        })
+        .select({ plaintext: hashItems.plaintext, crackedAt: hashItems.crackedAt })
         .from(hashItems)
         .where(eq(hashItems.id, rowB!.id))
 
-      expect(updatedB!.plaintext).toBe(plaintext)
-      expect(updatedB!.crackedAt).toBeInstanceOf(Date)
-      expect(updatedB!.campaignId).toBeNull()
-      expect(updatedB!.attackId).toBeNull()
-      expect(updatedB!.taskId).toBeNull()
-      expect(updatedB!.agentId).toBeNull()
-      expect(updatedB!.username).toBeNull()
-      expect(updatedB!.source).toBeNull()
+      expect(updatedB!.plaintext).toBeNull()
+      expect(updatedB!.crackedAt).toBeNull()
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, rowA!.id))
+      await db.delete(hashItems).where(eq(hashItems.id, rowA2!.id))
       await db.delete(hashItems).where(eq(hashItems.id, rowB!.id))
     }
   })
@@ -244,14 +249,14 @@ describe('propagateCrack — cross-project propagation', () => {
       })
       .returning({ id: hashItems.id })
 
-    // Seed one uncracked row in the other list.
+    // Seed one uncracked row in a SECOND list of the SAME project (project A).
     const [uncracked] = await db
       .insert(hashItems)
-      .values({ hashListId: listBId, hashValue })
+      .values({ hashListId: listA2Id, hashValue })
       .returning({ id: hashItems.id })
 
     try {
-      const result = await propagateCrack(hashValue, 'new-password')
+      const result = await propagateCrack(hashValue, 'new-password', projAId)
       // Only the uncracked row should have been updated.
       expect(result.updated).toBe(1)
 
@@ -280,7 +285,7 @@ describe('propagateCrack — cross-project propagation', () => {
   })
 
   it('returns { updated: 0 } when no rows match the hash value', async () => {
-    const result = await propagateCrack('hash-prop-no-matches-v1-xxxxxxxx', 'anything')
+    const result = await propagateCrack('hash-prop-no-matches-v1-xxxxxxxx', 'anything', projAId)
     expect(result).toStrictEqual({ updated: 0 })
   })
 })
@@ -304,7 +309,7 @@ describe('propagateCrack — zap integration', () => {
       expect(before.zaps).not.toContain(hashValue)
 
       // Propagate the crack.
-      const { updated } = await propagateCrack(hashValue, 'zap-plaintext')
+      const { updated } = await propagateCrack(hashValue, 'zap-plaintext', zapProjId)
       expect(updated).toBe(1)
 
       // After propagation: crackedAt is now set, so zap query picks it up.

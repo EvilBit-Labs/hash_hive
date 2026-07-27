@@ -4,7 +4,7 @@
  * Reads staged ParsedImportPair[] from the object store (KTD3: no cleartext
  * in Redis), upserts target-list rows with provenance and a setWhere guard
  * (KTD2), records one audit event at the target hash-list scope (KTD9), then
- * propagates each plaintext system-wide via propagateCrack (U2).
+ * propagates each plaintext within the owning project via propagateCrack (U2).
  *
  * Operation order (CRITICAL — see NOTE in propagation.ts):
  *   1. Upsert all target-list rows — FIRST
@@ -212,11 +212,12 @@ async function recordImportAudit(
 }
 
 /**
- * Phase 3: Propagate cracked plaintexts system-wide via propagateCrack.
+ * Phase 3: Propagate cracked plaintexts within the owning project via propagateCrack.
  *
  * Runs AFTER the target-list upsert. The target row's crackedAt is now set,
  * so propagateCrack's own `crackedAt IS NULL` guard will not overwrite it —
- * only rows in OTHER lists (and other projects) will receive the plaintext.
+ * only uncracked rows in OTHER lists OF THE SAME PROJECT receive the plaintext
+ * (project scope closes the pre-existing cross-tenant leak, security F2).
  *
  * Precheck first: after Phase 1 every imported hash's target-list row is
  * cracked, so any hashValue that still has an uncracked row must live in
@@ -226,7 +227,10 @@ async function recordImportAudit(
  * ceil(N / IMPORT_BATCH_SIZE) queries. propagateCrack's own guard still
  * protects correctness if a concurrent crack lands between precheck and call.
  */
-async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promise<void> {
+async function propagateImportedCracks(
+  dedupedPairs: ParsedImportPair[],
+  projectId: number
+): Promise<void> {
   const hashesToPropagate = new Set<string>()
   for (let i = 0; i < dedupedPairs.length; i += IMPORT_BATCH_SIZE) {
     const chunk = dedupedPairs.slice(i, i + IMPORT_BATCH_SIZE).map((p) => p.hashValue)
@@ -239,7 +243,7 @@ async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promis
 
   for (const pair of dedupedPairs) {
     if (!hashesToPropagate.has(pair.hashValue)) continue
-    const { updated } = await propagateCrack(pair.hashValue, pair.plaintext)
+    const { updated } = await propagateCrack(pair.hashValue, pair.plaintext, projectId)
     if (updated > 0) {
       logger.debug({ updated }, 'hash-import-worker: propagated crack to other lists')
     }
@@ -299,8 +303,8 @@ export async function processImportPairs(
     stagingKey
   )
 
-  // Phase 3: system-wide propagation
-  await propagateImportedCracks(dedupedPairs)
+  // Phase 3: project-scoped propagation (security F2 — never crosses tenants)
+  await propagateImportedCracks(dedupedPairs, projectId)
 
   return {
     matchedInList: totalMatched,
