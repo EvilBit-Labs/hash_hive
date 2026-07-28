@@ -648,27 +648,16 @@ async function loadSuperResolvers() {
 async function createSuperCrackedFetcher(
   db: Db,
   params: SuperScopeParams,
+  leaves: number[],
   batchSize: number,
   filters?: ExportFilters
 ): Promise<SuperCrackedFetcher> {
-  const {
-    resolveNodeToLeaves,
-    crackedSetJoinOn,
-    RESOLVED_IS_CRACKED,
-    RESOLVED_CRACKED_AT,
-    RESOLVED_PLAINTEXT,
-  } = await loadSuperResolvers()
+  // `leaves` is resolved once by `createSuperExport` and threaded in (an empty
+  // set is the IDOR guard — a cross-project/nonexistent super — so no query runs).
+  if (leaves.length === 0) return async () => []
 
-  const leaves = await resolveNodeToLeaves({
-    kind: 'super',
-    superHashListId: params.superHashListId,
-    projectId: params.projectId,
-  })
-  if (leaves.length === 0) {
-    // IDOR guard: a cross-project or nonexistent super resolves to no leaves —
-    // no rows can match, so return an empty batch without touching the DB.
-    return async () => []
-  }
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED, RESOLVED_CRACKED_AT, RESOLVED_PLAINTEXT } =
+    await loadSuperResolvers()
 
   const filterConds = superCrackedFilterConds(filters, RESOLVED_PLAINTEXT, RESOLVED_CRACKED_AT)
   const coalescedMode = sql<number>`${SUPER_COALESCED_MODE_SQL}`.mapWith(Number)
@@ -711,19 +700,13 @@ async function createSuperCrackedFetcher(
 async function createSuperUncrackedFetcher(
   db: Db,
   params: SuperScopeParams,
+  leaves: number[],
   batchSize: number,
   filters?: ExportFilters
 ): Promise<SuperUncrackedFetcher> {
-  const { resolveNodeToLeaves, crackedSetJoinOn, RESOLVED_IS_CRACKED } = await loadSuperResolvers()
+  if (leaves.length === 0) return async () => []
 
-  const leaves = await resolveNodeToLeaves({
-    kind: 'super',
-    superHashListId: params.superHashListId,
-    projectId: params.projectId,
-  })
-  if (leaves.length === 0) {
-    return async () => []
-  }
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED } = await loadSuperResolvers()
 
   // A value cracked ANYWHERE in the project resolves cracked (U4) and is thus
   // excluded from the uncracked union. Date filters are omitted — crackedAt is
@@ -764,25 +747,14 @@ async function createSuperUncrackedFetcher(
 async function countSuperSkipped(
   db: Db,
   params: SuperScopeParams,
+  leaves: number[],
   format: ExportFormat,
   filters?: ExportFilters
 ): Promise<number> {
-  if (format === 'csv') return 0
+  if (format === 'csv' || leaves.length === 0) return 0
 
-  const {
-    resolveNodeToLeaves,
-    crackedSetJoinOn,
-    RESOLVED_IS_CRACKED,
-    RESOLVED_CRACKED_AT,
-    RESOLVED_PLAINTEXT,
-  } = await loadSuperResolvers()
-
-  const leaves = await resolveNodeToLeaves({
-    kind: 'super',
-    superHashListId: params.superHashListId,
-    projectId: params.projectId,
-  })
-  if (leaves.length === 0) return 0
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED, RESOLVED_CRACKED_AT, RESOLVED_PLAINTEXT } =
+    await loadSuperResolvers()
 
   const filterConds = superCrackedFilterConds(filters, RESOLVED_PLAINTEXT, RESOLVED_CRACKED_AT)
 
@@ -859,11 +831,23 @@ async function createSuperExport(
   filters: ExportFilters | undefined,
   batchSize: number
 ): Promise<ExportResult> {
+  // Resolve the super's leaf union ONCE here and thread it into the skip-counter
+  // and the fetcher, rather than each of them re-resolving it from the DB (an
+  // empty set is the IDOR guard, handled by each callee).
+  const { resolveNodeToLeaves } = await loadSuperResolvers()
+  const leaves = await resolveNodeToLeaves({
+    kind: 'super',
+    superHashListId: params.superHashListId,
+    projectId: params.projectId,
+  })
+
   const needsSkipCount = variant !== 'uncracked' && format !== 'csv'
-  const skippedCount = needsSkipCount ? await countSuperSkipped(db, params, format, filters) : 0
+  const skippedCount = needsSkipCount
+    ? await countSuperSkipped(db, params, leaves, format, filters)
+    : 0
 
   if (variant === 'uncracked') {
-    const fetchBatch = await createSuperUncrackedFetcher(db, params, batchSize, filters)
+    const fetchBatch = await createSuperUncrackedFetcher(db, params, leaves, batchSize, filters)
     async function* uncrackedStream(): AsyncGenerator<string> {
       yield EXPORT_CSV_HEADERS.uncracked
       yield* streamSuperUncrackedRows(fetchBatch)
@@ -871,7 +855,7 @@ async function createSuperExport(
     return { skippedCount, rows: uncrackedStream() }
   }
 
-  const fetchBatch = await createSuperCrackedFetcher(db, params, batchSize, filters)
+  const fetchBatch = await createSuperCrackedFetcher(db, params, leaves, batchSize, filters)
   async function* crackedStream(): AsyncGenerator<string> {
     if (format === 'csv') yield EXPORT_CSV_HEADERS[variant]
     yield* streamSuperCrackedRows(fetchBatch, variant, format)

@@ -672,12 +672,23 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds] = await Promise.all([
-    getCampaignAttacksWithRuntime(id),
-    getCampaignTaskStats(id),
-    listActiveAgentsByCampaign(id),
-    getArchivedAttackIds(id),
-  ])
+  // The super-progress rollup (U11) depends only on `campaign`, not on any of
+  // the four reads below, so it rides along in the same parallel batch for a
+  // super parent (and resolves to null for every ordinary / #202-split campaign).
+  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds, superProgress] =
+    await Promise.all([
+      getCampaignAttacksWithRuntime(id),
+      getCampaignTaskStats(id),
+      listActiveAgentsByCampaign(id),
+      getArchivedAttackIds(id),
+      campaign.superHashListId != null
+        ? getSuperCampaignProgress({
+            parentCampaignId: campaign.id,
+            superHashListId: campaign.superHashListId,
+            projectId,
+          })
+        : Promise.resolve(null),
+    ])
 
   // Issue #100 U2: compute the campaign-level ETA from the attack runtimes
   // and active-agent list already fetched above rather than calling
@@ -701,19 +712,11 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
 
   // Super PARENT campaign (issue #101 U11): it owns no attacks of its own, so
   // the `eta` computed above is a vacuous `complete` over an empty attack set.
-  // Replace it with the read-time rollup across its sub-campaigns — cracked
-  // count deduped over the leaf union (via the U4 resolver) and ETA as the
-  // critical-path MAX (never an average). `superProgress` is omitted entirely
-  // for ordinary / #202-split campaigns.
-  //
-  // Nullish (not strict `!== null`): `superHashListId` is a nullable column, so
-  // "has a super target" is `!= null` — a plain campaign leaves it null/unset.
-  if (campaign.superHashListId != null) {
-    const superProgress = await getSuperCampaignProgress({
-      parentCampaignId: campaign.id,
-      superHashListId: campaign.superHashListId,
-      projectId,
-    })
+  // Replace it with the read-time rollup across its sub-campaigns (resolved in
+  // the parallel batch above) — cracked count deduped over the leaf union (via
+  // the U4 resolver) and ETA as the critical-path MAX (never an average).
+  // `superProgress` is null for every ordinary / #202-split campaign.
+  if (superProgress != null) {
     return c.json(
       {
         campaign,

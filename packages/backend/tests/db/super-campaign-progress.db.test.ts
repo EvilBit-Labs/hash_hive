@@ -197,6 +197,36 @@ describe('getSuperCampaignProgress — axis (a): deduplicated cracked-count over
     expect(progress.hashProgress!.percentage).toBeCloseTo(0.5, 10)
   })
 
+  it('the SAME value cracked under TWO different modes counts as TWO cracked, not one (AE1 / mixed-mode super)', async () => {
+    // A mixed-mode super: one NTLM member, one sha512crypt member, both holding
+    // the SAME 32/hex-ish string but cracked under DIFFERENT modes. These are two
+    // genuinely distinct cracks — the dedup key is (mode, value), never value
+    // alone — so cracked must be 2, matching the U14 export's (mode,value) dedup.
+    const ntlmList = await createList('mixmode-ntlm', homogeneous(NTLM_MODE))
+    const shaList = await createList('mixmode-sha', homogeneous(SHA_MODE))
+    const value = 'f'.repeat(32)
+    await insertItem(ntlmList, value, NTLM_MODE)
+    await insertItem(shaList, value, SHA_MODE)
+    await recordCrack(NTLM_MODE, value, ntlmList)
+    await recordCrack(SHA_MODE, value, shaList)
+
+    const superId = await createSuper('mixmode-super', [ntlmList, shaList])
+    const parentId = await createSuperParent('mixmode-parent', superId)
+
+    const progress = await getSuperCampaignProgress({
+      parentCampaignId: parentId,
+      superHashListId: superId,
+      projectId: projId,
+    })
+
+    expect(progress.hashProgress).not.toBeNull()
+    expect(progress.hashProgress!.total).toBe(2)
+    // Both distinct (mode, value) cracks count — a value-only dedup would wrongly
+    // collapse these to 1.
+    expect(progress.hashProgress!.cracked).toBe(2)
+    expect(progress.hashProgress!.remaining).toBe(0)
+  })
+
   it('hashProgress is null when the leaf union has no items yet', async () => {
     const empty1 = await createList('empty-1', homogeneous(SHA_MODE))
     const empty2 = await createList('empty-2', homogeneous(SHA_MODE))

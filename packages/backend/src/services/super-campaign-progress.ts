@@ -44,7 +44,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { jsonSafeBigint } from './attacks/_internals.js'
 import { getCampaignEtasBatch } from './campaign-eta-rollup.js'
-import { crackedSetJoinOn, RESOLVED_CRACKED_VALUE } from './hash-items/crack-resolution.js'
+import { crackedSetJoinOn, RESOLVED_IS_CRACKED } from './hash-items/crack-resolution.js'
 import { resolveNodeToLeaves } from './hash-items/node-resolution/index.js'
 
 /**
@@ -113,9 +113,15 @@ export function computeSuperCriticalPathEta(subEtas: readonly CampaignEta[]): Ca
  * (`(projectId, detectedHashcatMode, hashValue)`), so:
  *   - `total` is the raw union row count (mirrors `getHashListStats.totalCount`
  *     — never deduped), and
- *   - `cracked` is `count(distinct …)` of the resolved-cracked `hashValue`s, so
- *     a value cracked once — in its own member OR cross-list in a sibling —
- *     counts exactly once (the double-count concern R12 names).
+ *   - `cracked` is `count(distinct …)` of the resolved-cracked `(mode, value)`
+ *     composite, so a value cracked once — in its own member OR cross-list in a
+ *     sibling — counts exactly once (the double-count concern R12 names). The
+ *     dedup key is `(coalesce(detectedHashcatMode, -1), hashValue)`, NOT
+ *     `hashValue` alone: a super's leaf union is deliberately mixed-mode, so a
+ *     32-hex value cracked as raw-MD5 in one member and NTLM in another (AE1) is
+ *     TWO distinct cracks and must count as two — matching the `(mode, value)`
+ *     dedup the U14 super export uses (`SUPER_COALESCED_MODE_SQL`), so progress
+ *     and export of the same super never disagree.
  *
  * Returns `null` when the union has no items yet (parity with the leaf
  * `hashProgress` field, which `updateCampaignProgress` only writes when
@@ -130,7 +136,9 @@ async function computeDedupedUnionHashProgress(
   const [row] = await db
     .select({
       total: sql<number>`count(*)`.mapWith(Number),
-      cracked: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`.mapWith(Number),
+      cracked: sql<number>`count(distinct case when ${RESOLVED_IS_CRACKED} then coalesce(${hashItems.detectedHashcatMode}, -1)::text || ':' || ${hashItems.hashValue} end)`.mapWith(
+        Number
+      ),
     })
     .from(hashItems)
     .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
@@ -170,15 +178,24 @@ export async function getSuperCampaignProgress(input: {
   superHashListId: number
   projectId: number
 }): Promise<SuperCampaignProgress> {
-  const subCampaignRows = await db
-    .select({ id: campaigns.id, status: campaigns.status })
-    .from(campaigns)
-    .where(
-      and(
-        eq(campaigns.parentCampaignId, input.parentCampaignId),
-        eq(campaigns.projectId, input.projectId)
-      )
-    )
+  // The sub-campaign rows (keyed on parentCampaignId) and the leaf union
+  // (keyed on superHashListId) are independent reads — issue them together.
+  const [subCampaignRows, leafIds] = await Promise.all([
+    db
+      .select({ id: campaigns.id, status: campaigns.status })
+      .from(campaigns)
+      .where(
+        and(
+          eq(campaigns.parentCampaignId, input.parentCampaignId),
+          eq(campaigns.projectId, input.projectId)
+        )
+      ),
+    resolveNodeToLeaves({
+      kind: 'super',
+      superHashListId: input.superHashListId,
+      projectId: input.projectId,
+    }),
+  ])
 
   const subCampaignCount = subCampaignRows.length
   const completedSubCampaignCount = subCampaignRows.filter(
@@ -188,11 +205,6 @@ export async function getSuperCampaignProgress(input: {
 
   // (a) Deduped cracked-count / results over the leaf union (via the U4 resolver)
   // and (b) critical-path MAX ETA over sub-campaigns — issued together.
-  const leafIds = await resolveNodeToLeaves({
-    kind: 'super',
-    superHashListId: input.superHashListId,
-    projectId: input.projectId,
-  })
   const [hashProgress, etaByCampaign] = await Promise.all([
     computeDedupedUnionHashProgress(leafIds, input.projectId),
     getCampaignEtasBatch(subCampaignRows.map((row) => row.id)),

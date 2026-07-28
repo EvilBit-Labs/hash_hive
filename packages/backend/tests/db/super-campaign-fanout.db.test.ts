@@ -256,6 +256,43 @@ describe('createSuperCampaign — a member that is a #202 split parent resolves 
     expect(modeByLeaf.get(childNtlm)).toBe(NTLM_MODE)
     expect(modeByLeaf.get(childNet)).toBe(NETWORK_DEVICE_MODE)
   })
+
+  it('a super naming BOTH a split parent and one of its children yields that child leaf ONCE (no duplicate sub-campaign)', async () => {
+    // Pathological membership: the split PARENT and one of its physical children
+    // are both added as members. Resolution would otherwise surface that child
+    // twice (as itself and via the parent's expansion) — double-fanning its
+    // sub-campaign. The leaf set must be deduplicated to exactly one.
+    const splitParent = await createHashList('dupe-split-parent', {
+      verdict: 'mixed',
+      detectedModes: [],
+      unidentifiedCount: 0,
+      scannedCount: 0,
+      sampled: false,
+      declaredMode: null,
+      analyzedAt: new Date().toISOString(),
+    })
+    const childA = await createHashList('dupe-child-a', homogeneous(NTLM_MODE), splitParent)
+    const childB = await createHashList('dupe-child-b', homogeneous(SHA512_CRYPT_MODE), splitParent)
+    await insertHashValues(childA, ['1'.repeat(32)])
+    await insertHashValues(childB, ['$6$s$' + 'C'.repeat(86)])
+
+    // Members: the parent AND childA (a child of the parent) — the overlap.
+    const superId = await createSuper('dupe-super', [splitParent, childA])
+
+    const result = await createSuperCampaign({
+      projectId: projId,
+      name: 'dupe-campaign',
+      superHashListId: superId,
+    })
+    expect(result.kind).toBe('created')
+    if (result.kind !== 'created') throw new Error('expected created')
+
+    // childA appears exactly once; childB (only reachable via the parent) once.
+    const targeted = result.subCampaigns.map((s) => s.hashListId)
+    expect(targeted.filter((id) => id === childA)).toHaveLength(1)
+    expect(new Set(targeted).size).toBe(targeted.length)
+    expect(targeted.toSorted((a, b) => a - b)).toEqual([childA, childB].toSorted((a, b) => a - b))
+  })
 })
 
 describe('createSuperCampaign — target-time guards', () => {

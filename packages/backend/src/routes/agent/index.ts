@@ -205,7 +205,10 @@ const taskReportRequestSchema = z
 
 // Mirrors `getZapsForTask`'s runtime return shape (see
 // `services/tasks/zaps.ts`). `zaps` is the list of already-cracked hash
-// values for the task's hash list. `nextCursor` is an opaque
+// values the task should skip — resolved project-wide for the task's
+// resolved hashcat mode against the maintained cracked-set (issue #101 U3),
+// not only the task's own hash list, so a value cracked anywhere in the
+// project for the same mode is zapped once. `nextCursor` is an opaque
 // continuation token: the agent echoes it back as the `cursor` query
 // param to fetch the next page, and it is ALWAYS present — a base64url
 // string when more rows remain, and explicit `null` (never an absent
@@ -582,7 +585,7 @@ const zapsRoute = createRoute({
   tags: ['Tasks'],
   summary: 'Retrieve cracked hash values for a task',
   description:
-    "Returns hash values that have been cracked from the same hash list as the given task. Agents use this to build a 'zap list' so they can skip already-cracked hashes during processing. Pagination is an opaque composite cursor: pass the `cursor` from a prior response's `nextCursor` to continue; omit it to start from the beginning; stop when `nextCursor` is `null`. BREAKING CHANGE (#182): the former `since` timestamp query param was removed in favor of `cursor`/`nextCursor`, which paginate correctly even when more cracked rows share one `crackedAt` timestamp than fit in `limit` — a case `since` could not handle without skipping or replaying rows.",
+    "Returns hash values already cracked anywhere in the task's project for the task's resolved hashcat mode (issue #101 U3 — project-wide crack-once, not limited to the task's own hash list). Agents use this to build a 'zap list' so they can skip already-cracked hashes during processing. Pagination is an opaque composite cursor: pass the `cursor` from a prior response's `nextCursor` to continue; omit it to start from the beginning; stop when `nextCursor` is `null`. BREAKING CHANGE (#182): the former `since` timestamp query param was removed in favor of `cursor`/`nextCursor`, which paginate correctly even when more cracked rows share one `crackedAt` timestamp than fit in `limit` — a case `since` could not handle without skipping or replaying rows.",
   security: [{ AgentBearer: [] }],
   request: {
     params: taskIdParamSchema,

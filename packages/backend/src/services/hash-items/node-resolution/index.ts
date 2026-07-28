@@ -163,13 +163,25 @@ async function defaultFetchSuperMemberLeaves(
   }
 
   const leaves: number[] = []
+  // Dedup while preserving first-seen order: a pathological membership can name
+  // BOTH a #202 split parent AND one of its physical children as separate
+  // members, which would otherwise surface that child leaf twice — double-fanning
+  // its sub-campaign (U10) and double-counting it in progress/export. A `Set`
+  // collapses it to one deterministic leaf.
+  const seen = new Set<number>()
+  const push = (id: number): void => {
+    if (!seen.has(id)) {
+      seen.add(id)
+      leaves.push(id)
+    }
+  }
   for (const memberId of memberIds) {
     const children = childrenByParent.get(memberId)
     if (children && children.length > 0) {
       // Spread first so the sort does not mutate the map's stored array.
-      leaves.push(...[...children].sort((a, b) => a - b))
+      for (const child of [...children].sort((a, b) => a - b)) push(child)
     } else {
-      leaves.push(memberId)
+      push(memberId)
     }
   }
   return leaves

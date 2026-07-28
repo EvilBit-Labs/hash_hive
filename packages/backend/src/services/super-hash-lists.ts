@@ -455,8 +455,10 @@ export async function removeMember(
   // Resolve the leaves BEFORE detaching (the super resolver still counts the
   // leaving member): source = the removed member's leaves; destination = every
   // OTHER current member's leaves.
-  const allLeaves = await resolveNodeToLeaves({ kind: 'super', superHashListId: superId, projectId })
-  const sourceLeaves = await resolveMemberLeaves(db, hashListId, projectId)
+  const [allLeaves, sourceLeaves] = await Promise.all([
+    resolveNodeToLeaves({ kind: 'super', superHashListId: superId, projectId }),
+    resolveMemberLeaves(db, hashListId, projectId),
+  ])
   const sourceSet = new Set(sourceLeaves)
   const destLeaves = allLeaves.filter((id) => !sourceSet.has(id))
 
