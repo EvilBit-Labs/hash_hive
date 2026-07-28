@@ -32,6 +32,7 @@ import { hashLists, superHashListMembers, superHashLists } from '@hashhive/share
 import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
+import { backfillCrackedSetFromMember } from './hash-items/cracked-set.js'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -360,10 +361,19 @@ export async function addMember(
   if (!superRow) return null
 
   try {
-    await assertMembersEligible(db, projectId, [hashListId])
-    await db
-      .insert(superHashListMembers)
-      .values({ superHashListId: superId, memberHashListId: hashListId })
+    // Membership insert + retroactive cracked-set backfill (U12/R9) are one
+    // transaction: a new member's already-cracked hashes are reconciled into
+    // the project cracked-set atomically with the join, so a sibling member's
+    // uncracked duplicate resolves cracked (U4) the instant the add commits —
+    // never a window where the row is a member but its cracks are not yet
+    // dedup-visible.
+    await db.transaction(async (tx) => {
+      await assertMembersEligible(tx, projectId, [hashListId])
+      await tx
+        .insert(superHashListMembers)
+        .values({ superHashListId: superId, memberHashListId: hashListId })
+      await backfillCrackedSetFromMember(tx, projectId, hashListId)
+    })
   } catch (err) {
     if (
       err instanceof SuperMemberProjectMismatchError ||

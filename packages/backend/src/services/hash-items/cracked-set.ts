@@ -19,7 +19,7 @@
  * enter the cracked-set and does not cross-list dedup; `upsertCrackedSet` no-ops
  * in that case so the caller can pass results uniformly.
  */
-import { projectCrackedHashes } from '@hashhive/shared'
+import { hashItems, projectCrackedHashes } from '@hashhive/shared'
 import { sql } from 'drizzle-orm'
 
 import type { db } from '../../db/index.js'
@@ -86,4 +86,60 @@ export async function upsertCrackedSet(tx: Tx, input: UpsertCrackedSetInput): Pr
         plaintext: sql`EXCLUDED.plaintext`,
       },
     })
+}
+
+/**
+ * U12 — Retroactive backfill of a hash list's already-cracked hashes into the
+ * project cracked-set, run when the list is added as a super member (R9, AE3).
+ *
+ * Every `(mode, value)` the list already cracked in its OWN `hash_items`
+ * (`crackedAt IS NOT NULL`, with a resolved mode and plaintext) that is not yet
+ * in the set is inserted, so an uncracked duplicate of that value in a sibling
+ * member immediately resolves cracked at read time (U4) with no re-attack. A
+ * single `INSERT … SELECT … ON CONFLICT DO NOTHING` lets Postgres do the whole
+ * set operation server-side (no round-tripping rows), and is naturally
+ * idempotent — re-running it inserts nothing new and never moves an existing
+ * `crackedAt`.
+ *
+ * KTD2 / adversarial F1 (the load-bearing subtlety): the keyset column
+ * `crackedAt` is stamped with the CURRENT time (`now`), NOT the member's
+ * historical crack time — a backfilled row must sort AHEAD of, never behind,
+ * live agent zap cursors, or the project would silently skip re-emitting it and
+ * fail to cross-list dedup. The member's true first-crack time is preserved in
+ * `originalCrackedAt` (which the keyset never reads), so provenance is intact.
+ *
+ * KTD3: rows with no resolved `detectedHashcatMode` are excluded — they never
+ * cross-list dedup. Because `hash_items` is UNIQUE on `(hashListId, hashValue)`,
+ * a single member yields at most one row per `(mode, value)`, so no in-statement
+ * conflict handling beyond `DO NOTHING` is needed.
+ */
+export async function backfillCrackedSetFromMember(
+  tx: Tx,
+  projectId: number,
+  hashListId: number
+): Promise<void> {
+  // App-controlled stamp (KTD2 — not a DB-side now()). Bound as an ISO string
+  // with an explicit cast: in a SELECT constant position postgres-js has no
+  // column type to infer from, so a raw `Date` param fails to serialize —
+  // a `text`→`timestamptz` cast binds cleanly while keeping the app's clock.
+  const now = new Date().toISOString()
+
+  await tx.execute(sql`
+    INSERT INTO ${projectCrackedHashes}
+      (project_id, hashcat_mode, hash_value, plaintext, cracked_at, original_cracked_at, source_hash_list_id)
+    SELECT
+      ${projectId},
+      ${hashItems.detectedHashcatMode},
+      ${hashItems.hashValue},
+      ${hashItems.plaintext},
+      ${now}::timestamptz,
+      ${hashItems.crackedAt},
+      ${hashItems.hashListId}
+    FROM ${hashItems}
+    WHERE ${hashItems.hashListId} = ${hashListId}
+      AND ${hashItems.crackedAt} IS NOT NULL
+      AND ${hashItems.detectedHashcatMode} IS NOT NULL
+      AND ${hashItems.plaintext} IS NOT NULL
+    ON CONFLICT (project_id, hashcat_mode, hash_value) DO NOTHING
+  `)
 }
