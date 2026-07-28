@@ -56,20 +56,22 @@ import { makeAwaitableChain } from '../helpers/db-mock.js'
 mock.module('../../src/db/index.js', () => ({
   db: {
     select: mock(() => ({
-      from: mock(() => // For validateCampaignResources lookups (no further chain), where()
-      // is awaited directly and should resolve to [{ id: 1 }] so the
-      // hashListId=1 reference is treated as existing. For the legacy
-      // campaign/attack chains, the `.limit` / `.orderBy` methods are
-      // attached to the same returned object.
-      ({
-        where: mock(() =>
-          makeAwaitableChain([{ id: 1 }], {
-            limit: mock(() => Promise.resolve([makeCampaignRow(campaignOverrides)])),
-            orderBy: mock(() => Promise.resolve(mockAttacks)),
-          })
-        ),
-        orderBy: mock(() => Promise.resolve(mockAttacks)),
-      })),
+      from: mock(() =>
+        // For validateCampaignResources lookups (no further chain), where()
+        // is awaited directly and should resolve to [{ id: 1 }] so the
+        // hashListId=1 reference is treated as existing. For the legacy
+        // campaign/attack chains, the `.limit` / `.orderBy` methods are
+        // attached to the same returned object.
+        ({
+          where: mock(() =>
+            makeAwaitableChain([{ id: 1 }], {
+              limit: mock(() => Promise.resolve([makeCampaignRow(campaignOverrides)])),
+              orderBy: mock(() => Promise.resolve(mockAttacks)),
+            })
+          ),
+          orderBy: mock(() => Promise.resolve(mockAttacks)),
+        })
+      ),
     })),
     update: mock(() => ({
       set: mock((payload: Record<string, unknown>) => ({
