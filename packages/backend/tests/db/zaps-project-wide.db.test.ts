@@ -47,7 +47,7 @@ import {
   tasks,
 } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { and, eq, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { decodeZapCursor, type ZapCursor } from '../../src/services/tasks/zap-cursor.js'
