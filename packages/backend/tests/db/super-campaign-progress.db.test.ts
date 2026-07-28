@@ -89,7 +89,11 @@ async function insertItem(hashListId: number, hashValue: string, mode: number): 
 }
 
 /** Record a crack in the project cracked-set (as the U2 write path would). */
-async function recordCrack(mode: number, hashValue: string, sourceHashListId: number): Promise<void> {
+async function recordCrack(
+  mode: number,
+  hashValue: string,
+  sourceHashListId: number
+): Promise<void> {
   await db.insert(projectCrackedHashes).values({
     projectId: projId,
     hashcatMode: mode,

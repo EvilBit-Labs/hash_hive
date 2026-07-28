@@ -29,13 +29,19 @@
  * NOTE: Do NOT self-skip — the test-db lane always has Postgres available.
  */
 
-import { hashItems, hashLists, projectCrackedHashes, projects, superHashLists } from '@hashhive/shared'
+import {
+  hashItems,
+  hashLists,
+  projectCrackedHashes,
+  projects,
+  superHashLists,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { backfillCrackedSetFromMember } from '../../src/services/hash-items/cracked-set.js'
 import { resolveCrackState } from '../../src/services/hash-items/crack-resolution.js'
+import { backfillCrackedSetFromMember } from '../../src/services/hash-items/cracked-set.js'
 import { addMember } from '../../src/services/super-hash-lists.js'
 
 const SLUG = 'super-add-member-reconcile-proj'
@@ -134,7 +140,10 @@ describe('addMember reconciliation — AE3: added member marks siblings cracked'
     const superId = await createSuperWithMember('ae3-super', listA)
 
     // Before the add: A's H is not resolvable (B is not yet reconciled).
-    const before = await resolveCrackState([{ hashValue: H, detectedHashcatMode: MODE_A, crackedAt: null }], projId)
+    const before = await resolveCrackState(
+      [{ hashValue: H, detectedHashcatMode: MODE_A, crackedAt: null }],
+      projId
+    )
     expect(before[0]?.cracked).toBe(false)
 
     // Add B — its historical crack backfills into the project cracked-set.
@@ -238,7 +247,9 @@ describe('addMember reconciliation — mode discrimination + exclusions', () => 
     const anyNoMode = await db
       .select()
       .from(projectCrackedHashes)
-      .where(and(eq(projectCrackedHashes.projectId, projId), eq(projectCrackedHashes.hashValue, noMode)))
+      .where(
+        and(eq(projectCrackedHashes.projectId, projId), eq(projectCrackedHashes.hashValue, noMode))
+      )
     expect(anyNoMode).toHaveLength(0)
   })
 })

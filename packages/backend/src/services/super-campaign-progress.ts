@@ -136,9 +136,10 @@ async function computeDedupedUnionHashProgress(
   const [row] = await db
     .select({
       total: sql<number>`count(*)`.mapWith(Number),
-      cracked: sql<number>`count(distinct case when ${RESOLVED_IS_CRACKED} then coalesce(${hashItems.detectedHashcatMode}, -1)::text || ':' || ${hashItems.hashValue} end)`.mapWith(
-        Number
-      ),
+      cracked:
+        sql<number>`count(distinct case when ${RESOLVED_IS_CRACKED} then coalesce(${hashItems.detectedHashcatMode}, -1)::text || ':' || ${hashItems.hashValue} end)`.mapWith(
+          Number
+        ),
     })
     .from(hashItems)
     .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))

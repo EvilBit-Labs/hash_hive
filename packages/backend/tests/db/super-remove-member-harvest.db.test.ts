@@ -34,13 +34,19 @@
  * NOTE: Do NOT self-skip — the test-db lane always has Postgres available.
  */
 
-import { hashItems, hashLists, projectCrackedHashes, projects, superHashLists } from '@hashhive/shared'
+import {
+  hashItems,
+  hashLists,
+  projectCrackedHashes,
+  projects,
+  superHashLists,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
-import { upsertCrackedSet } from '../../src/services/hash-items/cracked-set.js'
 import { resolveCrackState } from '../../src/services/hash-items/crack-resolution.js'
+import { upsertCrackedSet } from '../../src/services/hash-items/cracked-set.js'
 import { addMember, removeMember } from '../../src/services/super-hash-lists.js'
 
 const SLUG = 'super-remove-member-harvest-proj'
