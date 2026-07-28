@@ -119,7 +119,11 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText('OS')).toBeDefined()
     expect(screen.getByText('Linux')).toBeDefined()
     expect(screen.getByText('CPU')).toBeDefined()
-    expect(screen.getByText('RTX 4090')).toBeDefined()
+    // The GPU model renders in TWO places by design — the HardwareProfileCard
+    // ("Model: RTX 4090") and the AgentConfigSection device picker (which labels
+    // each detected device by its model) — so assert on all matches rather than
+    // a single one.
+    expect(screen.getAllByText('RTX 4090').length).toBeGreaterThan(0)
   })
 
   it('renders error log section with severity badges', async () => {
