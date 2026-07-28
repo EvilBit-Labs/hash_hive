@@ -140,6 +140,12 @@ if (!IS_ISOLATED) {
     status: 'draft',
     name: 'Test Campaign',
     hashListId: 1,
+    // Super-target / #202-split fields the row actually carries (issue #101 U6,
+    // #202): a plain campaign leaves them null. Present so the fixture mirrors
+    // the `getCampaignById` ReturnType rather than a stale subset.
+    superHashListId: null,
+    parentCampaignId: null,
+    hashcatMode: null,
     priority: 5,
     description: null,
     progress: {},
@@ -158,6 +164,10 @@ if (!IS_ISOLATED) {
     if (id === 100) return makeCampaign()
     if (id === 101) return makeCampaign({ id: 101, status: 'running' })
     if (id === 102) return makeCampaign({ id: 102 })
+    // Super PARENT campaign (issue #101 U11): carries superHashListId, no
+    // hashListId — the detail route replaces eta with the super rollup.
+    if (id === 150)
+      return makeCampaign({ id: 150, status: 'running', hashListId: null, superHashListId: 77 })
     if (id === 200) return makeCampaign({ id: 200, projectId: 999 })
     return null
   })
@@ -444,6 +454,23 @@ if (!IS_ISOLATED) {
     createSuperCampaign: mockCreateSuperCampaign,
   }))
 
+  // ─── Mock the Super-Campaign Progress Service (issue #101 U11) ──────
+  // The detail route calls this ONLY for a super PARENT (superHashListId set);
+  // the mock lets the super branch be contract-tested without a live DB.
+  type SuperProgressService = typeof import('../../src/services/super-campaign-progress.js')
+  const mockGetSuperCampaignProgress = mock<SuperProgressService['getSuperCampaignProgress']>(
+    async () => ({
+      subCampaignCount: 2,
+      completedSubCampaignCount: 1,
+      done: false,
+      hashProgress: { total: 4, cracked: 2, remaining: 2, percentage: 0.5 },
+      eta: { state: 'ready', seconds: 3600 },
+    })
+  )
+  mock.module('../../src/services/super-campaign-progress.js', () => ({
+    getSuperCampaignProgress: mockGetSuperCampaignProgress,
+  }))
+
   // ─── Mock the Split-Status Service (issue #202 SU7) ─────────────────
   type CampaignSplitStatusService = typeof import('../../src/services/campaign-split-status.js')
   type GetSplitStatusResult = Awaited<ReturnType<CampaignSplitStatusService['getSplitStatus']>>
@@ -695,6 +722,39 @@ if (!IS_ISOLATED) {
       })
       expect(body.activeAgents).toHaveLength(1)
       expect(body.activeAgents[0]?.agentName).toBe('Rig One')
+    })
+
+    it('super PARENT detail carries superProgress and replaces eta with the rollup (issue #101 U11)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/150`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        campaign: { id: number; superHashListId: number | null }
+        eta: { state: string; seconds?: number }
+        superProgress?: {
+          subCampaignCount: number
+          completedSubCampaignCount: number
+          done: boolean
+          hashProgress: { total: number; cracked: number } | null
+          eta: { state: string; seconds?: number }
+        }
+      }
+      expect(body.campaign.id).toBe(150)
+      expect(body.campaign.superHashListId).toBe(77)
+      // superProgress present, and the top-level eta IS the super rollup (not the
+      // parent's own — empty — attack set).
+      expect(body.superProgress).toBeDefined()
+      expect(body.superProgress?.subCampaignCount).toBe(2)
+      expect(body.superProgress?.hashProgress?.cracked).toBe(2)
+      expect(body.eta).toEqual(body.superProgress!.eta)
+      expect(body.eta.state).toBe('ready')
+      expect(mockGetSuperCampaignProgress).toHaveBeenCalled()
+    })
+
+    it('ordinary campaign detail omits superProgress (issue #101 U11)', async () => {
+      const res = await app.request(`${DASH_CAMPAIGNS}/100`, { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { superProgress?: unknown }
+      expect(body.superProgress).toBeUndefined()
     })
 
     it('returns 400 on non-integer id', async () => {

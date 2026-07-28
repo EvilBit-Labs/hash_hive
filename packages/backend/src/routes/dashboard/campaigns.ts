@@ -46,6 +46,7 @@ import {
   updateCampaign,
   validateCampaignDAG,
 } from '../../services/campaigns.js'
+import { getSuperCampaignProgress } from '../../services/super-campaign-progress.js'
 import { registerCampaignArchiveRoutes } from './campaigns-archive.js'
 import { registerCampaignAttackArchiveRoutes } from './campaigns-attacks-archive.js'
 import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
@@ -697,6 +698,34 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     hasActiveAgents: activeAgents.length > 0,
     attacks: campaignAttacks.filter((attack) => !archivedAttackIds.has(attack.id)),
   })
+
+  // Super PARENT campaign (issue #101 U11): it owns no attacks of its own, so
+  // the `eta` computed above is a vacuous `complete` over an empty attack set.
+  // Replace it with the read-time rollup across its sub-campaigns — cracked
+  // count deduped over the leaf union (via the U4 resolver) and ETA as the
+  // critical-path MAX (never an average). `superProgress` is omitted entirely
+  // for ordinary / #202-split campaigns.
+  //
+  // Nullish (not strict `!== null`): `superHashListId` is a nullable column, so
+  // "has a super target" is `!= null` — a plain campaign leaves it null/unset.
+  if (campaign.superHashListId != null) {
+    const superProgress = await getSuperCampaignProgress({
+      parentCampaignId: campaign.id,
+      superHashListId: campaign.superHashListId,
+      projectId,
+    })
+    return c.json(
+      {
+        campaign,
+        attacks: campaignAttacks,
+        taskStats,
+        activeAgents,
+        eta: superProgress.eta,
+        superProgress,
+      },
+      200
+    )
+  }
 
   return c.json(
     {

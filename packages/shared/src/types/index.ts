@@ -166,6 +166,8 @@ import type {
   splitReviewUnidentifiedGroupSchema,
   splitStatusResponseSchema,
   superCampaignFanoutResponseSchema,
+  // Super-targeted campaign progress/ETA rollup (issue #101 / U11)
+  superCampaignProgressSchema,
   // SuperHashlist management (issue #101 / U7)
   addSuperMemberRequestSchema,
   createSuperRequestSchema,
@@ -305,6 +307,7 @@ export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignEta = z.infer<typeof campaignEtaSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>
+export type SuperCampaignProgress = z.infer<typeof superCampaignProgressSchema>
 export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js'
 
 // ─── Cracker Binaries ───────────────────────────────────────────────

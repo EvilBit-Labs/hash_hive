@@ -33,6 +33,9 @@ import {
   users,
   wordLists,
 } from '../db/schema.js'
+// Value import (not just the re-export below) so `superCampaignProgressSchema`
+// can compose the sub-campaign hash-progress shape defined in `./resources.js`.
+import { subCampaignHashProgressWireSchema } from './resources.js'
 
 // ─── Users ──────────────────────────────────────────────────────────
 
@@ -1390,9 +1393,53 @@ export const campaignEtaSchema = z.discriminatedUnion('state', [
 ])
 
 /**
+ * Aggregated progress/results for a SUPER-targeted campaign (issue #101 U11,
+ * R12/R1). A super PARENT campaign carries `superHashListId`, owns no
+ * attacks/tasks of its own, and fans out to one single-mode sub-campaign per
+ * typed leaf (via `parentCampaignId`, U10). Its progress is therefore an
+ * aggregate over those sub-campaigns, computed READ-TIME (never cached on the
+ * parent row).
+ *
+ * The two axes are deliberately DIFFERENT aggregation functions (adversarial
+ * F6), because a mixed-type super's modes have wildly different keyspaces and
+ * crack rates:
+ *
+ * - `hashProgress` — the **deduplicated union**: cracked targets are deduped
+ *   across members via the U4 project cracked-set resolver, so a value cracked
+ *   once (whether in its own member or cross-list in a sibling) counts ONCE,
+ *   never twice. `total` is the raw union row count (mirrors
+ *   `getHashListStats`); `cracked` is deduped. `null` when the union has no
+ *   items yet.
+ * - `eta` — the **critical path (MAX)** over the sub-campaigns' ETAs, bounded by
+ *   the slowest mode. Deliberately NOT an average or sum of sub-campaign
+ *   keyspace progress: a 90%-done NTLM sub-campaign plus a 10%-done
+ *   sha512crypt sub-campaign is not "50%" — wall-clock is dominated by the slow
+ *   mode. See `campaignEtaSchema` for the state semantics.
+ *
+ * `done`/counts are factual sub-campaign tallies; there is deliberately NO
+ * keyspace-averaged "overallProgress" field — that is the misleading average
+ * the ETA replaces.
+ */
+export const superCampaignProgressSchema = z
+  .object({
+    subCampaignCount: z.number().int().nonnegative(),
+    completedSubCampaignCount: z.number().int().nonnegative(),
+    done: z.boolean(),
+    hashProgress: subCampaignHashProgressWireSchema.nullable(),
+    eta: campaignEtaSchema,
+  })
+  .openapi('SuperCampaignProgress')
+
+/**
  * Full response shape of `GET /dashboard/campaigns/:id`. Single
  * authoritative contract that both the route handler and the
  * `useCampaignDetail` hook validate against.
+ *
+ * `superProgress` is present (non-null) ONLY when the campaign is a super
+ * PARENT (`campaign.superHashListId` is set): for a super parent the top-level
+ * `eta` is the critical-path rollup (identical to `superProgress.eta`) rather
+ * than the parent's own — empty — attack set. It is absent/omitted for every
+ * ordinary or #202-split campaign (issue #101 U11).
  */
 export const campaignDetailPayloadSchema = z.object({
   campaign: selectCampaignSchema,
@@ -1400,6 +1447,7 @@ export const campaignDetailPayloadSchema = z.object({
   taskStats: campaignTaskStatsSchema,
   activeAgents: z.array(campaignActiveAgentSchema),
   eta: campaignEtaSchema,
+  superProgress: superCampaignProgressSchema.nullable().optional(),
 })
 
 // ─── Realtime / WebSocket connection ────────────────────────────────
