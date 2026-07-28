@@ -24,7 +24,9 @@ export const exportFormatSchema = z
   .enum(['csv', 'hashcat-potfile', 'john-potfile'])
   .openapi('ExportFormat')
 
-export const exportScopeSchema = z.enum(['hash-list', 'campaign', 'project']).openapi('ExportScope')
+export const exportScopeSchema = z
+  .enum(['hash-list', 'campaign', 'project', 'super'])
+  .openapi('ExportScope')
 
 /**
  * Returns true when the combination of format and variant is invalid for

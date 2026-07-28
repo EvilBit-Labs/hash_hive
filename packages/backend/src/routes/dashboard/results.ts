@@ -46,6 +46,7 @@ import {
   getExportMimeType,
 } from '../../services/results/export-format.js'
 import { createExport, escapeCsv } from '../../services/results/export.js'
+import { getSuperById } from '../../services/super-hash-lists.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const resultsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -97,6 +98,9 @@ const listResultsQuerySchema = z.object({
 // for whichever axes are missing.
 const exportResultsQuerySchema = z.object({
   ...resultsFilterShape,
+  // Required only when scope is 'super' (U14). Kept out of resultsFilterShape
+  // because the list-results endpoint has no super scope.
+  superHashListId: coercedOptionalPositiveIntegerQuery(),
   scope: exportScopeSchema.optional(),
   variant: exportVariantSchema.optional(),
   format: exportFormatSchema.optional(),
@@ -448,7 +452,7 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
   }
   const { projectId } = scopeResult
 
-  const { campaignId, hashListId, q, startDate, endDate, scope, variant, format } =
+  const { campaignId, hashListId, superHashListId, q, startDate, endDate, scope, variant, format } =
     c.req.valid('query')
 
   // When any of the new axes are provided, delegate to the U3 export service.
@@ -490,10 +494,30 @@ resultsRoutes.openapi(exportResultsRoute, async (c) => {
         return c.json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Campaign not found' } }, 404)
       }
     }
+    if (resolvedScope === 'super' && superHashListId != null) {
+      const superList = await getSuperById(superHashListId, projectId)
+      if (!superList) {
+        return c.json(
+          { error: { code: 'RESOURCE_NOT_FOUND', message: 'Super hash list not found' } },
+          404
+        )
+      }
+    }
 
-    const scopeParams = buildExportScopeParams(resolvedScope, projectId, hashListId, campaignId)
+    const scopeParams = buildExportScopeParams(
+      resolvedScope,
+      projectId,
+      hashListId,
+      campaignId,
+      superHashListId
+    )
     if (scopeParams === null) {
-      const missing = resolvedScope === 'hash-list' ? 'hashListId' : 'campaignId'
+      const missing =
+        resolvedScope === 'hash-list'
+          ? 'hashListId'
+          : resolvedScope === 'super'
+            ? 'superHashListId'
+            : 'campaignId'
       return c.json(
         {
           error: {
