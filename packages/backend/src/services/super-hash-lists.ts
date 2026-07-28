@@ -28,11 +28,12 @@
  * `services/resources-archive.ts` (archive as an `archivedAt` stamp).
  */
 
-import { hashLists, superHashListMembers, superHashLists } from '@hashhive/shared'
-import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { hashItems, hashLists, superHashListMembers, superHashLists } from '@hashhive/shared'
+import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { backfillCrackedSetFromMember } from './hash-items/cracked-set.js'
+import { resolveNodeToLeaves } from './hash-items/node-resolution/index.js'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -388,19 +389,56 @@ export async function addMember(
 }
 
 /**
- * Remove a hash list from a super's membership. Project-scoped: returns `null`
- * if the super does not exist in `projectId`.
+ * Resolve a single super member to its physical typed-leaf hash-list ids
+ * (U13 harvest). Mirrors the super resolver's per-member expansion: a member
+ * that is a #202 split PARENT contributes its physical children; a homogeneous
+ * member IS its own leaf. Project-scoped (IDOR guard).
+ */
+async function resolveMemberLeaves(
+  runner: DbRunner,
+  memberHashListId: number,
+  projectId: number
+): Promise<number[]> {
+  const children = await runner
+    .select({ id: hashLists.id })
+    .from(hashLists)
+    .where(
+      and(eq(hashLists.parentHashListId, memberHashListId), eq(hashLists.projectId, projectId))
+    )
+  return children.length > 0 ? children.map((c) => c.id) : [memberHashListId]
+}
+
+/**
+ * Remove a hash list from a super's membership (U13, R14/R17).
  *
- * TODO(U13): this is a STUB. The full remove-member flow — drain in-flight
- * tasks, harvest member-only plaintext to the remaining members under a
- * `FOR UPDATE` lock, record the audited match reference, then detach — lands
- * in U13 (R14/R17). Here it is a plain membership-row delete. Correctness of
- * project-wide crack-once does not depend on the harvest: every crack is
- * written to the project cracked-set regardless of membership (U2) and is
- * never pruned on removal, so remaining members still resolve the value
- * cracked via the U4 read-time resolver. The removed hash list remains
- * independently targetable by its own campaigns (R3) — nothing here touches
- * its own campaign paths.
+ * Project-scoped: returns `null` if the super does not exist in `projectId`.
+ *
+ * Ordering (KTD9 / adversarial F4) — correctness rests on the project-wide
+ * cracked-set, NOT on any drain:
+ *
+ *   0. Dispatch-stop (deliberately deferred). A poll-based agent model cannot
+ *      recall an already-dispatched chunk, and it does not need to: every crack
+ *      an in-flight chunk submits is written to the project cracked-set (U2)
+ *      regardless of membership and is never pruned on removal, so a remaining
+ *      member still resolves the `(mode, value)` cracked via the U4 read-time
+ *      resolver whether or not a harvest ran. Actively pausing the super's
+ *      sub-campaign dispatch for the leaving leaf is a best-effort optimization
+ *      that would touch campaign lifecycle (and risk R3 — the list stays
+ *      independently targetable); it is intentionally NOT done here.
+ *   1. Harvest (the sole write-back). Under a `FOR UPDATE` lock covering the
+ *      SOURCE snapshot rows — the removed member's cracked `hash_items`, not
+ *      just the destinations — so a concurrent re-crack cannot make the harvest
+ *      persist a stale plaintext. A single atomic `UPDATE … FROM` copies each
+ *      cracked `(mode, value)` plaintext onto the remaining members' UNCRACKED
+ *      rows sharing that value. This exists only for surfaces still reading
+ *      `hash_items` directly per the R15 inventory (U4); its scope shrinks as
+ *      that inventory is completed. The match reference (R17) is the cracked-set
+ *      row's own `sourceHashListId` — the harvest writes only plaintext +
+ *      crackedAt to the destination, never the removed member's identity.
+ *   2. Detach the membership row.
+ *
+ * If the removed member was the last making a `(mode, value)` present, its
+ * cracked-set entry remains — project-wide crack-once is not undone by removal.
  */
 export async function removeMember(
   superId: number,
@@ -414,14 +452,76 @@ export async function removeMember(
     .limit(1)
   if (!superRow) return null
 
-  await db
-    .delete(superHashListMembers)
-    .where(
-      and(
-        eq(superHashListMembers.superHashListId, superId),
-        eq(superHashListMembers.memberHashListId, hashListId)
+  // Resolve the leaves BEFORE detaching (the super resolver still counts the
+  // leaving member): source = the removed member's leaves; destination = every
+  // OTHER current member's leaves.
+  const allLeaves = await resolveNodeToLeaves({ kind: 'super', superHashListId: superId, projectId })
+  const sourceLeaves = await resolveMemberLeaves(db, hashListId, projectId)
+  const sourceSet = new Set(sourceLeaves)
+  const destLeaves = allLeaves.filter((id) => !sourceSet.has(id))
+
+  await db.transaction(async (tx) => {
+    // (1) Harvest — skipped only when there is genuinely nothing to move
+    // (no source leaves, or no remaining members to harvest into).
+    if (sourceLeaves.length > 0 && destLeaves.length > 0) {
+      // Lock the SOURCE snapshot rows (the removed member's cracked items) so a
+      // concurrent re-crack cannot change their plaintext mid-harvest (security).
+      await tx
+        .select({ id: hashItems.id })
+        .from(hashItems)
+        .where(
+          and(
+            inArray(hashItems.hashListId, sourceLeaves),
+            isNotNull(hashItems.crackedAt),
+            isNotNull(hashItems.detectedHashcatMode)
+          )
+        )
+        .for('update')
+
+      // Postgres array literals for the leaf-id lists. These are integer PKs
+      // read from our own DB (never user text), and `Number()`-coerced, so
+      // inlining them is injection-safe — and it sidesteps postgres-js failing
+      // to type an array parameter passed to `ANY(...)` in a raw statement.
+      const srcLeafArray = sql.raw(`ARRAY[${sourceLeaves.map(Number).join(',')}]::int[]`)
+      const destLeafArray = sql.raw(`ARRAY[${destLeaves.map(Number).join(',')}]::int[]`)
+
+      // Single-statement atomic write-back: each source-cracked (mode, value)
+      // fills the remaining members' UNCRACKED matching rows. DISTINCT ON keeps
+      // one source row per (mode, value) — its earliest crack — so a value
+      // present twice in the source cannot make the join ambiguous.
+      await tx.execute(sql`
+        UPDATE ${hashItems} AS dest
+        SET plaintext = src.plaintext, cracked_at = src.cracked_at
+        FROM (
+          SELECT DISTINCT ON (${hashItems.detectedHashcatMode}, ${hashItems.hashValue})
+            ${hashItems.detectedHashcatMode} AS detected_hashcat_mode,
+            ${hashItems.hashValue} AS hash_value,
+            ${hashItems.plaintext} AS plaintext,
+            ${hashItems.crackedAt} AS cracked_at
+          FROM ${hashItems}
+          WHERE ${hashItems.hashListId} = ANY(${srcLeafArray})
+            AND ${hashItems.crackedAt} IS NOT NULL
+            AND ${hashItems.detectedHashcatMode} IS NOT NULL
+            AND ${hashItems.plaintext} IS NOT NULL
+          ORDER BY ${hashItems.detectedHashcatMode}, ${hashItems.hashValue}, ${hashItems.crackedAt} ASC
+        ) AS src
+        WHERE dest.hash_list_id = ANY(${destLeafArray})
+          AND dest.cracked_at IS NULL
+          AND dest.detected_hashcat_mode = src.detected_hashcat_mode
+          AND dest.hash_value = src.hash_value
+      `)
+    }
+
+    // (2) Detach the membership row.
+    await tx
+      .delete(superHashListMembers)
+      .where(
+        and(
+          eq(superHashListMembers.superHashListId, superId),
+          eq(superHashListMembers.memberHashListId, hashListId)
+        )
       )
-    )
+  })
 
   return getSuperById(superId, projectId)
 }
