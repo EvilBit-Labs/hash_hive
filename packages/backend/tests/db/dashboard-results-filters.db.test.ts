@@ -10,12 +10,21 @@
  * every file in the lane.
  */
 
-import { attacks, campaigns, hashItems, hashLists, hashTypes, projects } from '@hashhive/shared'
+import {
+  attacks,
+  campaigns,
+  hashItems,
+  hashLists,
+  hashTypes,
+  projectCrackedHashes,
+  projects,
+} from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, asc, eq } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { buildResultFilters } from '../../src/routes/dashboard/results.js'
+import { crackedSetJoinOn } from '../../src/services/hash-items/crack-resolution.js'
 
 const TEST_SLUG_A = 'results-filters-test-proj-a'
 const TEST_SLUG_B = 'results-filters-test-proj-b'
@@ -113,9 +122,10 @@ async function runFilter(
     q?: string
     startDate?: string
     endDate?: string
-  }
+  },
+  mode: 'resolved' | 'own-row' = 'resolved'
 ): Promise<number[]> {
-  const conditions = await buildResultFilters(projectId, filters)
+  const conditions = await buildResultFilters(projectId, filters, mode)
   // `null` means `hashListId` resolved to an empty scope (IDOR guard) —
   // the route returns its empty shape directly without querying, so mirror
   // that here instead of calling `and(...null)`.
@@ -126,6 +136,11 @@ async function runFilter(
     .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
     .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
     .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
+    // U4/R15: the `'resolved'` predicates reference the project cracked-set, so
+    // the join must be present exactly as the route's list query has it. It is
+    // 1:1 at most (UNIQUE `(projectId, mode, value)`), so adding it to the
+    // `'own-row'` runs too cannot change their row sets.
+    .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
     .where(and(...conditions))
     // Deterministic order so single-row toEqual assertions stay order-stable.
     .orderBy(asc(hashItems.id))
@@ -346,5 +361,74 @@ describe('Results filters: combined predicates', () => {
       q: 'secret',
     })
     expect(got).toEqual([seed.ids['r1']])
+  })
+})
+
+describe('Results filters: cross-list crack resolution (U4 / R15)', () => {
+  // Distinct from HASHCAT_MODE so the fixture cannot collide with the
+  // seed rows above (which carry a NULL `detectedHashcatMode` and are
+  // therefore never resolvable — KTD3).
+  const RESOLVE_MODE = 9_999_848
+  const VALUE = 'results-filters-crossmode-000001'
+
+  let crossItemId = 0
+
+  beforeAll(async () => {
+    const [ht] = await db
+      .select({ id: hashTypes.id })
+      .from(hashTypes)
+      .where(eq(hashTypes.hashcatMode, HASHCAT_MODE))
+    const listId = await insertList(seed.projectAId, 'list-a-crossmode', ht!.id)
+    const [row] = await db
+      .insert(hashItems)
+      .values({
+        hashListId: listId,
+        hashValue: VALUE,
+        // Uncracked in its own row, but mode-stamped by the U2 write path.
+        detectedHashcatMode: RESOLVE_MODE,
+        crackedAt: null,
+        plaintext: null,
+      })
+      .returning({ id: hashItems.id })
+    crossItemId = row!.id
+
+    await db.insert(projectCrackedHashes).values({
+      projectId: seed.projectAId,
+      hashcatMode: RESOLVE_MODE,
+      hashValue: VALUE,
+      plaintext: 'cross-list-secret',
+      crackedAt: new Date(),
+      originalCrackedAt: DMID,
+      // Row-local R17 match reference — never reaches the results payload.
+      sourceHashListId: seed.listA2Id,
+    })
+  })
+
+  it("includes a hash cracked only in a sibling list of the same project ('resolved')", async () => {
+    expect(await runFilter(seed.projectAId, {})).toContain(crossItemId)
+  })
+
+  it('matches the cross-list plaintext through the q filter', async () => {
+    expect(await runFilter(seed.projectAId, { q: 'cross-list-secret' })).toEqual([crossItemId])
+  })
+
+  it('filters the cross-list row on the cracked-set provenance timestamp', async () => {
+    // DMID is the cracked-set `originalCrackedAt`; the item's own `crackedAt`
+    // is NULL, so a date window can only match via the resolved expression.
+    expect(
+      await runFilter(seed.projectAId, {
+        startDate: D1.toISOString(),
+        endDate: D2.toISOString(),
+      })
+    ).toContain(crossItemId)
+    expect(
+      await runFilter(seed.projectAId, {
+        startDate: D3.toISOString(),
+      })
+    ).not.toContain(crossItemId)
+  })
+
+  it("the legacy export path ('own-row') still omits it — U4/R15 gap tracked to U14", async () => {
+    expect(await runFilter(seed.projectAId, {}, 'own-row')).not.toContain(crossItemId)
   })
 })

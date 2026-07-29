@@ -161,10 +161,45 @@ if (isIsolated) {
           onConflictDoUpdate: mock(() => Promise.resolve()),
         })),
       }))
+      // U2 (feasibility F5): the hash_items upsert moved from a top-level
+      // `db.insert` into `db.transaction(tx => tx.insert(...))` (alongside the
+      // cracked-set upsert). updateTaskProgress ALSO runs a LATER transaction
+      // for the hot-row UPDATE + telemetry insert. The crack-write transaction
+      // always runs FIRST, so route only the first transaction's `tx.insert`
+      // through the capturable `mockInsert` (the hash_items + cracked-set
+      // upserts the crack-persist assertions observe); later transactions'
+      // inserts (telemetry) stay no-op and uncounted, preserving the pre-U2
+      // semantics where only the crack write hit mockInsert. Distinguishing by
+      // call order avoids importing schema table objects into this file — bun's
+      // `mock.module` + `export *` barrel interaction breaks named imports of
+      // newly-added shared symbols under the test runner.
+      let txCallCount = 0
+      const noopInsert = () => ({
+        values: () => ({
+          onConflictDoUpdate: () => Promise.resolve(),
+          returning: () => Promise.resolve([]),
+        }),
+      })
+      mockTransaction.mockReset().mockImplementation((cb: (tx: unknown) => unknown) => {
+        txCallCount += 1
+        const isCrackWriteTxn = txCallCount === 1
+        return cb({
+          insert: isCrackWriteTxn ? mockInsert : noopInsert,
+          update: () => ({ set: mockUpdateSet }),
+          execute: () => Promise.resolve([]),
+        })
+      })
       mockEmitCrackResult.mockReset()
     })
 
-    const ownedRow = (status: string, hashListId: number | null = 1) => ({
+    // hashcatMode defaults to null so the ownedRow crack tests exercise only the
+    // hash_items upsert (the cracked-set upsert no-ops on a null mode, KTD3).
+    // The mode-bearing cracked-set path is covered by tests/db/cracked-set-write.
+    const ownedRow = (
+      status: string,
+      hashListId: number | null = 1,
+      hashcatMode: number | null = null
+    ) => ({
       taskId: 1,
       attackId: 1,
       campaignId: 1,
@@ -172,6 +207,7 @@ if (isIsolated) {
       startedAt: new Date(),
       projectId: 1,
       hashListId,
+      hashcatMode,
     })
 
     test('returns { stopped: true } and skips the write when the task is paused (no results)', async () => {
@@ -279,6 +315,28 @@ if (isIsolated) {
       // Assert: insert called once (with both rows; DB handles dedup via upsert)
       expect(mockInsert).toHaveBeenCalledTimes(1)
       expect('error' in result).toBe(false)
+    })
+
+    test('U2: a crack with a resolved mode upserts both hash_items and the cracked-set (two inserts in one txn)', async () => {
+      // ownedRow carries a resolved hashcatMode, so the transaction runs the
+      // hash_items upsert AND the cracked-set upsert (KTD3 guard passes).
+      mockLimit.mockResolvedValueOnce([ownedRow('running', 1, 1000)])
+      mockUpdateWhere.mockReturnValueOnce({
+        returning: mock(() => Promise.resolve([{ id: 1, status: 'running' }])),
+      })
+
+      const result = await updateTaskProgress(1, 100, {
+        status: 'running',
+        results: [{ hashValue: 'abc123', plaintext: 'password' }],
+      })
+
+      // hash_items upsert + cracked-set upsert both routed through mockInsert,
+      // both inside the single crack-write transaction (atomicity, F5). (A
+      // second transaction runs later for the hot-row UPDATE + telemetry, so
+      // the exact db.transaction count is not pinned here.)
+      expect(mockInsert).toHaveBeenCalledTimes(2)
+      expect(mockTransaction).toHaveBeenCalled()
+      expect('task' in result).toBe(true)
     })
 
     test('campaign with no hash list returns error, no insert', async () => {

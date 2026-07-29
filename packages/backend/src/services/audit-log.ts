@@ -166,6 +166,10 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     // Split sub-campaign parent link (#202): a structural relationship worth
     // auditing, like `hashListId`. NULL for normal/top-level campaigns.
     'parentCampaignId',
+    // Super-target link (issue #101 U6): a super PARENT campaign carries this
+    // instead of `hashListId` (num_nonnulls(hashListId, superHashListId)=1).
+    // A structural relationship worth auditing like the other two target links.
+    'superHashListId',
     // createdAt / updatedAt excluded
   ]),
 

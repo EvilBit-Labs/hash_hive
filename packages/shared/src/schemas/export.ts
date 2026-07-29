@@ -7,7 +7,7 @@ import { z } from 'zod'
  * These three axes are orthogonal for CSV but constrained for potfile:
  *   - variant: what data to include (cracked-pairs | plaintext-only | uncracked)
  *   - format: the output encoding (csv | hashcat-potfile | john-potfile)
- *   - scope: the boundary of rows to include (hash-list | campaign | project)
+ *   - scope: the boundary of rows to include (hash-list | campaign | project | super)
  *
  * The `superRefine` below enforces the constraint: potfile formats require
  * cracked-pairs because a valid potfile line must contain both the hash
@@ -24,7 +24,9 @@ export const exportFormatSchema = z
   .enum(['csv', 'hashcat-potfile', 'john-potfile'])
   .openapi('ExportFormat')
 
-export const exportScopeSchema = z.enum(['hash-list', 'campaign', 'project']).openapi('ExportScope')
+export const exportScopeSchema = z
+  .enum(['hash-list', 'campaign', 'project', 'super'])
+  .openapi('ExportScope')
 
 /**
  * Returns true when the combination of format and variant is invalid for

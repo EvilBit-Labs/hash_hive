@@ -1,4 +1,5 @@
 import {
+  Boxes,
   ClipboardList,
   Cpu,
   Crosshair,
@@ -59,6 +60,12 @@ const navItems: readonly NavItem[] = [
     label: 'Resources',
     href: '/resources',
     icon: <Package className={ICON_CLASS} aria-hidden="true" />,
+  },
+  {
+    label: 'Super Hash Lists',
+    href: '/super-hash-lists',
+    icon: <Boxes className={ICON_CLASS} aria-hidden="true" />,
+    permission: Permission.RESOURCE_VIEW,
   },
   {
     label: 'Results',

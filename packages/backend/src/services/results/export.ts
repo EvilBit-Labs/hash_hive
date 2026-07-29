@@ -17,9 +17,17 @@
 
 import type { ExportFormat, ExportVariant } from '@hashhive/shared'
 
-import { attacks, campaigns, hashItems, hashLists, hashTypes } from '@hashhive/shared'
+import {
+  attacks,
+  campaigns,
+  hashItems,
+  hashLists,
+  hashTypes,
+  projectCrackedHashes,
+} from '@hashhive/shared'
 import {
   and,
+  asc,
   count,
   desc,
   eq,
@@ -196,8 +204,13 @@ export function encodeUncrackedRow(row: UncrackedBatchRow): string {
 type HashListScopeParams = { scope: 'hash-list'; projectId: number; hashListId: number }
 type CampaignScopeParams = { scope: 'campaign'; projectId: number; campaignId: number }
 type ProjectScopeParams = { scope: 'project'; projectId: number }
+type SuperScopeParams = { scope: 'super'; projectId: number; superHashListId: number }
 
-export type ExportScopeParams = HashListScopeParams | CampaignScopeParams | ProjectScopeParams
+export type ExportScopeParams =
+  | HashListScopeParams
+  | CampaignScopeParams
+  | ProjectScopeParams
+  | SuperScopeParams
 
 /** Optional search and date-range filters applied to export queries. */
 export type ExportFilters = {
@@ -543,6 +556,323 @@ async function* streamUncrackedRows(fetchBatch: UncrackedBatchFetcher): AsyncGen
   }
 }
 
+// ─── Super-scope export (U14): deduplicated union + U4 crack resolution ─────────
+
+/**
+ * Keyset cursor for a super export.
+ *
+ * The dedup + pagination key is the composite `(coalesce(detected_hashcat_mode,
+ * -1), hash_value)` — NOT `(crackedAt, id)` like the other scopes. A super
+ * exports the DEDUPLICATED UNION of its leaves, so each `(mode, value)` must
+ * appear once GLOBALLY across pages. `DISTINCT ON (coalesce(mode,-1), value)`
+ * collapses cross-leaf duplicates within a page, and paginating on the SAME
+ * composite the DISTINCT ON dedups on makes it global: a per-batch DISTINCT ON
+ * with a `crackedAt` keyset would let a duplicate reappear on a later page.
+ *
+ * `detected_hashcat_mode` is nullable, so `coalesce(mode, -1)` is the sort/keyset
+ * integer key: -1 is a safe sentinel below every real hashcat mode, and a no-mode
+ * item (mode NULL → -1) never cross-list dedups against a real-mode item.
+ */
+type SuperCursor = { readonly coalescedMode: number; readonly hashValue: string }
+
+type SuperCrackedRow = CrackedBatchRow & { readonly coalescedMode: number }
+type SuperUncrackedRow = UncrackedBatchRow & { readonly coalescedMode: number }
+
+type SuperCrackedFetcher = (cursor: SuperCursor | null) => Promise<readonly SuperCrackedRow[]>
+type SuperUncrackedFetcher = (cursor: SuperCursor | null) => Promise<readonly SuperUncrackedRow[]>
+
+/**
+ * The `coalesce(detected_hashcat_mode, -1)` expression, reused verbatim in the
+ * DISTINCT ON list, the ORDER BY, and the row-value keyset so Postgres treats
+ * them as the same expression (DISTINCT ON requires its expressions to be the
+ * leftmost ORDER BY terms).
+ */
+const SUPER_COALESCED_MODE_SQL = sql`coalesce(${hashItems.detectedHashcatMode}, -1)`
+
+function superKeysetPredicate(cursor: SuperCursor): SQL {
+  // Row-value comparison over `(coalesce(mode,-1), value)` — advances by the
+  // exact composite the DISTINCT ON dedups on, so each pair is emitted once
+  // across the whole paginated stream. Scalars only (int + text) — never a JS
+  // array or Date in a bind position (postgres-js gotchas).
+  return sql`(${SUPER_COALESCED_MODE_SQL}, ${hashItems.hashValue}) > (${cursor.coalescedMode}, ${cursor.hashValue})`
+}
+
+/**
+ * Build the optional q/date filter predicates for the cracked super union.
+ * `q` matches the hash value OR the RESOLVED plaintext (own row or cracked-set
+ * fill); the date range is applied to the RESOLVED crack timestamp.
+ *
+ * `sql.param(date, hashItems.crackedAt)` is load-bearing on the date bounds:
+ * `resolvedCrackedAt` is a raw SQL expression (a `COALESCE(...)` over the
+ * cracked-set join), not a real column, so it gives Drizzle no column to
+ * borrow an encoder from — a bare `Date` reaches postgres-js unserialized and
+ * throws `ERR_INVALID_ARG_TYPE`. Naming `hashItems.crackedAt` supplies the
+ * same timestamptz encoder (mirrors `routes/dashboard/results.ts`'s
+ * `buildResultFilters`, which hits this exact expression).
+ */
+function superCrackedFilterConds(
+  filters: ExportFilters | undefined,
+  resolvedPlaintext: SQL<string | null>,
+  resolvedCrackedAt: SQL<Date | null>
+): SQL[] {
+  const escapedQ = filters?.q != null ? escapeLikeForExport(filters.q) : null
+  return [
+    ...(escapedQ != null
+      ? [
+          sql`(${hashItems.hashValue} ILIKE ${`%${escapedQ}%`} ESCAPE '\\' OR ${resolvedPlaintext} ILIKE ${`%${escapedQ}%`} ESCAPE '\\')`,
+        ]
+      : []),
+    ...(filters?.startDate != null
+      ? [
+          sql`${resolvedCrackedAt} >= ${sql.param(new Date(filters.startDate), hashItems.crackedAt)}`,
+        ]
+      : []),
+    ...(filters?.endDate != null
+      ? [sql`${resolvedCrackedAt} <= ${sql.param(new Date(filters.endDate), hashItems.crackedAt)}`]
+      : []),
+  ]
+}
+
+/**
+ * Load the U4 SQL resolvers + node-resolution seam lazily.
+ *
+ * These modules import the shared `db` client at module scope; importing them
+ * statically would break this file's "no module-scope db import, so it loads in
+ * unit-test phases without a live DB" invariant (see the header). The super
+ * fetchers are only ever built at runtime with a real `db`, so a dynamic import
+ * here is safe and keeps the invariant intact.
+ */
+async function loadSuperResolvers() {
+  const { resolveNodeToLeaves } = await import('../hash-items/node-resolution/index.js')
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED, RESOLVED_CRACKED_AT, RESOLVED_PLAINTEXT } =
+    await import('../hash-items/crack-resolution.js')
+  return {
+    resolveNodeToLeaves,
+    crackedSetJoinOn,
+    RESOLVED_IS_CRACKED,
+    RESOLVED_CRACKED_AT,
+    RESOLVED_PLAINTEXT,
+  }
+}
+
+async function createSuperCrackedFetcher(
+  db: Db,
+  params: SuperScopeParams,
+  leaves: number[],
+  batchSize: number,
+  filters?: ExportFilters
+): Promise<SuperCrackedFetcher> {
+  // `leaves` is resolved once by `createSuperExport` and threaded in (an empty
+  // set is the IDOR guard — a cross-project/nonexistent super — so no query runs).
+  if (leaves.length === 0) return async () => []
+
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED, RESOLVED_CRACKED_AT, RESOLVED_PLAINTEXT } =
+    await loadSuperResolvers()
+
+  const filterConds = superCrackedFilterConds(filters, RESOLVED_PLAINTEXT, RESOLVED_CRACKED_AT)
+  const coalescedMode = sql<number>`${SUPER_COALESCED_MODE_SQL}`.mapWith(Number)
+
+  return async (cursor) => {
+    const conditions: SQL[] = [
+      inArray(hashItems.hashListId, leaves),
+      RESOLVED_IS_CRACKED,
+      ...filterConds,
+      ...(cursor != null ? [superKeysetPredicate(cursor)] : []),
+    ]
+    return db
+      .selectDistinctOn([SUPER_COALESCED_MODE_SQL, hashItems.hashValue], {
+        id: hashItems.id,
+        hashValue: hashItems.hashValue,
+        // U4: own row wins, cracked-set only fills — resolved plaintext/time.
+        plaintext: RESOLVED_PLAINTEXT,
+        crackedAt: RESOLVED_CRACKED_AT,
+        username: hashItems.username,
+        source: hashItems.source,
+        hashListName: hashLists.name,
+        campaignName: campaigns.name,
+        attackMode: attacks.mode,
+        // Resolved per-item mode (a mixed super spans hash types), NOT
+        // hashTypes.hashcatMode — used for potfile emittability.
+        hashcatMode: hashItems.detectedHashcatMode,
+        coalescedMode,
+      })
+      .from(hashItems)
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(params.projectId))
+      .leftJoin(campaigns, eq(hashItems.campaignId, campaigns.id))
+      .leftJoin(attacks, eq(hashItems.attackId, attacks.id))
+      .where(and(...conditions))
+      .orderBy(sql`${SUPER_COALESCED_MODE_SQL} asc`, asc(hashItems.hashValue), asc(hashItems.id))
+      .limit(batchSize)
+  }
+}
+
+async function createSuperUncrackedFetcher(
+  db: Db,
+  params: SuperScopeParams,
+  leaves: number[],
+  batchSize: number,
+  filters?: ExportFilters
+): Promise<SuperUncrackedFetcher> {
+  if (leaves.length === 0) return async () => []
+
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED } = await loadSuperResolvers()
+
+  // A value cracked ANYWHERE in the project resolves cracked (U4) and is thus
+  // excluded from the uncracked union. Date filters are omitted — crackedAt is
+  // NULL for every uncracked row, so a crackedAt range would exclude them all.
+  const escapedQ = filters?.q != null ? escapeLikeForExport(filters.q) : null
+  const filterConds =
+    escapedQ != null ? [sql`${hashItems.hashValue} ILIKE ${`%${escapedQ}%`} ESCAPE '\\'`] : []
+  const coalescedMode = sql<number>`${SUPER_COALESCED_MODE_SQL}`.mapWith(Number)
+
+  return async (cursor) => {
+    const conditions: SQL[] = [
+      inArray(hashItems.hashListId, leaves),
+      not(RESOLVED_IS_CRACKED),
+      ...filterConds,
+      ...(cursor != null ? [superKeysetPredicate(cursor)] : []),
+    ]
+    return db
+      .selectDistinctOn([SUPER_COALESCED_MODE_SQL, hashItems.hashValue], {
+        id: hashItems.id,
+        hashValue: hashItems.hashValue,
+        coalescedMode,
+      })
+      .from(hashItems)
+      .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(params.projectId))
+      .where(and(...conditions))
+      .orderBy(sql`${SUPER_COALESCED_MODE_SQL} asc`, asc(hashItems.hashValue), asc(hashItems.id))
+      .limit(batchSize)
+  }
+}
+
+/**
+ * Skip counter for potfile super exports: how many rows of the DEDUPED cracked
+ * union cannot be emitted (missing hash type, unsupported john mode, or null
+ * plaintext). Counted over the same DISTINCT ON union the stream emits, so the
+ * pre-stream `skippedCount` header matches what `encodeCrackedRow` drops.
+ */
+async function countSuperSkipped(
+  db: Db,
+  params: SuperScopeParams,
+  leaves: number[],
+  format: ExportFormat,
+  filters?: ExportFilters
+): Promise<number> {
+  if (format === 'csv' || leaves.length === 0) return 0
+
+  const { crackedSetJoinOn, RESOLVED_IS_CRACKED, RESOLVED_CRACKED_AT, RESOLVED_PLAINTEXT } =
+    await loadSuperResolvers()
+
+  const filterConds = superCrackedFilterConds(filters, RESOLVED_PLAINTEXT, RESOLVED_CRACKED_AT)
+
+  const deduped = db
+    .selectDistinctOn([SUPER_COALESCED_MODE_SQL, hashItems.hashValue], {
+      mode: hashItems.detectedHashcatMode,
+      plaintext: RESOLVED_PLAINTEXT,
+    })
+    .from(hashItems)
+    .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+    .leftJoin(projectCrackedHashes, crackedSetJoinOn(params.projectId))
+    .where(and(inArray(hashItems.hashListId, leaves), RESOLVED_IS_CRACKED, ...filterConds))
+    .orderBy(sql`${SUPER_COALESCED_MODE_SQL} asc`, asc(hashItems.hashValue), asc(hashItems.id))
+    .as('deduped')
+
+  const skipPredicate =
+    format === 'hashcat-potfile'
+      ? or(isNull(deduped.mode), isNull(deduped.plaintext))
+      : or(
+          isNull(deduped.mode),
+          not(inArray(deduped.mode, [...JOHN_MAPPED_MODES])),
+          isNull(deduped.plaintext)
+        )
+
+  const [row] = await db.select({ n: count() }).from(deduped).where(skipPredicate)
+  return row?.n ?? 0
+}
+
+async function* streamSuperCrackedRows(
+  fetchBatch: SuperCrackedFetcher,
+  variant: ExportVariant,
+  format: ExportFormat
+): AsyncGenerator<string> {
+  let cursor: SuperCursor | null = null
+  for (;;) {
+    const batch = await fetchBatch(cursor)
+    if (batch.length === 0) return
+    for (const row of batch) {
+      const line = encodeCrackedRow(row, variant, format)
+      if (line != null) yield line
+    }
+    const last = batch[batch.length - 1]!
+    cursor = { coalescedMode: last.coalescedMode, hashValue: last.hashValue }
+  }
+}
+
+async function* streamSuperUncrackedRows(
+  fetchBatch: SuperUncrackedFetcher
+): AsyncGenerator<string> {
+  let cursor: SuperCursor | null = null
+  for (;;) {
+    const batch = await fetchBatch(cursor)
+    if (batch.length === 0) return
+    for (const row of batch) {
+      yield encodeUncrackedRow(row)
+    }
+    const last = batch[batch.length - 1]!
+    cursor = { coalescedMode: last.coalescedMode, hashValue: last.hashValue }
+  }
+}
+
+/**
+ * Assemble the super export (deduplicated union with U4-resolved crack state).
+ * Branched out of `createExport` so the `(crackedAt, id)`-keyset default
+ * fetchers never see a super scope. Test overrides (`fetchCrackedBatch` etc.)
+ * are keyed to the default `CrackedCursor` and deliberately do NOT apply here —
+ * the super path is exercised via a real DB in `super-export.db.test.ts`.
+ */
+async function createSuperExport(
+  db: Db,
+  params: SuperScopeParams,
+  variant: ExportVariant,
+  format: ExportFormat,
+  filters: ExportFilters | undefined,
+  batchSize: number
+): Promise<ExportResult> {
+  // Resolve the super's leaf union ONCE here and thread it into the skip-counter
+  // and the fetcher, rather than each of them re-resolving it from the DB (an
+  // empty set is the IDOR guard, handled by each callee).
+  const { resolveNodeToLeaves } = await loadSuperResolvers()
+  const leaves = await resolveNodeToLeaves({
+    kind: 'super',
+    superHashListId: params.superHashListId,
+    projectId: params.projectId,
+  })
+
+  const needsSkipCount = variant !== 'uncracked' && format !== 'csv'
+  const skippedCount = needsSkipCount
+    ? await countSuperSkipped(db, params, leaves, format, filters)
+    : 0
+
+  if (variant === 'uncracked') {
+    const fetchBatch = await createSuperUncrackedFetcher(db, params, leaves, batchSize, filters)
+    async function* uncrackedStream(): AsyncGenerator<string> {
+      yield EXPORT_CSV_HEADERS.uncracked
+      yield* streamSuperUncrackedRows(fetchBatch)
+    }
+    return { skippedCount, rows: uncrackedStream() }
+  }
+
+  const fetchBatch = await createSuperCrackedFetcher(db, params, leaves, batchSize, filters)
+  async function* crackedStream(): AsyncGenerator<string> {
+    if (format === 'csv') yield EXPORT_CSV_HEADERS[variant]
+    yield* streamSuperCrackedRows(fetchBatch, variant, format)
+  }
+  return { skippedCount, rows: crackedStream() }
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────────
 
 /** Result of `createExport`. */
@@ -578,6 +908,13 @@ export async function createExport(
 ): Promise<ExportResult> {
   const batchSize = overrides.batchSize ?? DEFAULT_BATCH_SIZE
   const { variant, format, filters } = params
+
+  // Super scope (U14): deduplicated union with U4-resolved crack state. Handled
+  // by a dedicated path whose dedup + keyset are over `(mode, value)`, not the
+  // `(crackedAt, id)` keyset the other scopes use.
+  if (params.scope === 'super') {
+    return createSuperExport(db, params, variant, format, filters, batchSize)
+  }
 
   // Skip-counting only applies to potfile formats — CSV emits every row regardless
   // of hash type. Uncracked rows can never produce a potfile (schema rejects it).

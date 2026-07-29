@@ -81,16 +81,19 @@ import type {
 } from '@hashhive/shared'
 
 import { campaigns, hashItems, hashLists } from '@hashhive/shared'
-import { and, asc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import type { AuditActor } from './audit-log.js'
 import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campaigns.js'
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../db/unique-violation.js'
 import { createCampaign, createCampaignWithAttacks } from './campaigns.js'
 import { MOVE_BATCH_SIZE, moveHashItemsToList } from './hash-items/move-items.js'
+import { resolveNodeToLeaves } from './hash-items/node-resolution/index.js'
 import { planSplit } from './hash-items/split-analysis.js'
+import { getSuperById } from './super-hash-lists.js'
 
 // Dynamic-import seam so tests can stub the queue access without a live
 // Redis, mirroring `services/resources/line-count-trigger.ts`'s `_deps`
@@ -159,6 +162,29 @@ async function enqueueSplitJob(hashListId: number, projectId: number): Promise<b
 
 // Drizzle transaction handle — the callback argument type of `db.transaction`.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/** Postgres `campaigns.name` column cap (`varchar(255)`). */
+const CAMPAIGN_NAME_MAX_LENGTH = 255
+
+/**
+ * Builds a sub-campaign's name as `<baseName> - mode <mode>`, truncating
+ * `baseName` so the full name never exceeds `campaigns.name`'s
+ * `varchar(255)` cap (bug fix, Major). `baseName` is itself validated up to
+ * 255 chars at the route boundary, so appending the mode suffix
+ * unconditionally could push the concatenation past the column limit and
+ * abort the confirm/fan-out loop mid-way with a Postgres 22001
+ * (string_data_right_truncation) error, leaving some sub-campaigns created
+ * and others missing. Shared by `confirmSplitCampaign` and
+ * `createSuperCampaign` — both build one sub-campaign name per resolved
+ * group/leaf from the same caller-supplied base name.
+ */
+function buildSubCampaignName(baseName: string, mode: number): string {
+  const modeSuffix = ` - mode ${mode}`
+  const maxBaseLength = CAMPAIGN_NAME_MAX_LENGTH - modeSuffix.length
+  const truncatedBase =
+    baseName.length > maxBaseLength ? baseName.slice(0, maxBaseLength) : baseName
+  return `${truncatedBase}${modeSuffix}`
+}
 
 // ─── Review groups ────────────────────────────────────────────────────────
 //
@@ -865,7 +891,7 @@ export async function confirmSplitCampaign(input: {
     const subCampaign = await createCampaign(
       {
         projectId: input.projectId,
-        name: `${input.name} — mode ${group.mode}`,
+        name: buildSubCampaignName(input.name, group.mode),
         hashListId: group.id,
         priority: input.priority,
         createdBy: input.createdBy,
@@ -891,4 +917,292 @@ export async function confirmSplitCampaign(input: {
   }
 
   return { kind: 'confirmed', parentCampaign, subCampaigns }
+}
+
+// ─── Super fan-out (issue #101 — U10) ───────────────────────────────────────
+//
+// Targeting a SuperHashlist is the auto-confirm sibling of the #202
+// split/review flow above: there is no interactive review step. It resolves
+// the super to its typed LEAF lists via the shared node-resolution layer
+// (KTD6a — NO per-mode union is materialized), then creates a parent campaign
+// carrying `superHashListId` plus one single-mode sub-campaign per typed leaf.
+// Cross-member `(mode, value)` duplicates are NOT pre-merged — they collapse at
+// RUN TIME via Layer one's project-wide zap dedup (U3): the first crack in any
+// leaf makes the value a project-wide zap so the sibling leaf's task skips it.
+// Every sub-campaign targets one physical leaf `hashListId` with a latched
+// single mode, so tasks and zaps are unchanged for agents (agent hot path
+// untouched).
+
+/** Minimum members a super needs before it can be targeted (R2, deferred from
+ * U7's create-time to campaign-target time per the plan Open Question). */
+const SUPER_MIN_MEMBERS = 2
+
+export type CreateSuperCampaignResult =
+  | {
+      kind: 'created'
+      parentCampaign: NonNullable<Awaited<ReturnType<typeof createCampaign>>>
+      subCampaigns: ResolvedSubCampaign[]
+    }
+  // The super does not exist in this project (project-scoped lookup miss).
+  | { kind: 'super_not_found' }
+  // The super is archived — refuse to target it for a new campaign (U7 set the
+  // `archivedAt`; this is the guard the plan places in U10).
+  | { kind: 'super_archived' }
+  // R2 enforced at target time: a super with fewer than 2 members cannot be
+  // targeted. Carries the current count for the caller's error message.
+  | { kind: 'super_too_few_members'; memberCount: number }
+  // The super's members resolved to no TYPED leaves (no leaf carries a
+  // resolvable homogeneous hashcat mode) — there is nothing to fan out to.
+  | { kind: 'no_typed_leaves' }
+
+/**
+ * A super's leaf paired with the single hashcat mode its sub-campaign latches.
+ * The mode is read from the leaf hash list's OWN homogeneous `type_analysis`
+ * (a "typed leaf" is homogeneous with one detected mode) — not re-derived from
+ * a cross-leaf union, which would be the rejected "one sub-campaign per mode"
+ * shape (KTD6a insists on one per leaf).
+ */
+interface TypedLeaf {
+  hashListId: number
+  mode: number
+}
+
+/**
+ * Reads each resolved leaf's latched single mode from its homogeneous
+ * `type_analysis`, preserving `leafIds` order and dropping any leaf that has no
+ * resolvable mode (not a typed leaf). Mirrors how #202's confident groups take
+ * their mode from `type_analysis.detectedModes[0].hashcatMode`.
+ */
+async function resolveTypedLeaves(leafIds: number[]): Promise<TypedLeaf[]> {
+  if (leafIds.length === 0) return []
+  const rows = await db
+    .select({ id: hashLists.id, typeAnalysis: hashLists.typeAnalysis })
+    .from(hashLists)
+    .where(inArray(hashLists.id, leafIds))
+
+  const modeByLeafId = new Map<number, number>()
+  for (const row of rows) {
+    const typeAnalysis = row.typeAnalysis
+    if (typeAnalysis?.verdict === 'homogeneous') {
+      const mode = typeAnalysis.detectedModes[0]?.hashcatMode
+      if (mode !== undefined) {
+        modeByLeafId.set(row.id, mode)
+      }
+    }
+  }
+
+  const typedLeaves: TypedLeaf[] = []
+  for (const id of leafIds) {
+    const mode = modeByLeafId.get(id)
+    if (mode !== undefined) {
+      typedLeaves.push({ hashListId: id, mode })
+    }
+  }
+  return typedLeaves
+}
+
+/**
+ * Auto-confirm fan-out of a campaign targeting a SuperHashlist (issue #101 U10,
+ * R1/R11/R10). Resolves the super to its typed leaf lists via the shared
+ * node-resolution layer, creates a parent campaign carrying `superHashListId`
+ * (KTD6), and one single-mode sub-campaign per typed leaf. See the section
+ * comment above for why no union is materialized.
+ *
+ * Own idempotency lookup keyed on `superHashListId` + `parentCampaignId IS
+ * NULL` (KTD7) — the super analog of `confirmSplitCampaign`'s key on
+ * `campaigns.hashListId = parentHashListId`. Re-running after a partial failure
+ * reuses the existing parent campaign and backfills only the sub-campaigns a
+ * prior run did not create (keyed by the leaf `hashListId` each targets), so no
+ * duplicate sub-campaign is ever created. Like `confirmSplitCampaign`, the
+ * parent + sub-campaign creates run as sequential transactions (each via the
+ * already-transactional `createCampaign`), not one big transaction — see the
+ * module doc comment for that trade-off.
+ */
+
+/**
+ * Re-reads the un-parented parent campaign for `superHashListId` after this
+ * call's own insert lost a concurrent race to
+ * `campaigns_super_hash_list_id_parent_once_idx` (bug fix, Major -- see the
+ * comment at the `createCampaign` call site in `createSuperCampaign`). A
+ * miss here means the insert failed with a unique violation that was NOT
+ * caused by that index -- an unexplained state this function refuses to
+ * paper over -- so it throws loudly instead of returning an empty result.
+ */
+async function reReadRaceWinnerParentCampaign(
+  superHashListId: number,
+  projectId: number
+): Promise<typeof campaigns.$inferSelect | undefined> {
+  const [raceWinner] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.superHashListId, superHashListId),
+        eq(campaigns.projectId, projectId),
+        isNull(campaigns.parentCampaignId)
+      )
+    )
+    .limit(1)
+  if (!raceWinner) {
+    throw new Error(
+      'createSuperCampaign: unique violation on parent insert but no existing row found on re-read'
+    )
+  }
+  return raceWinner
+}
+
+export async function createSuperCampaign(input: {
+  projectId: number
+  name: string
+  description?: string | undefined
+  superHashListId: number
+  priority?: number | undefined
+  createdBy?: number | undefined
+  actor?: AuditActor | undefined
+}): Promise<CreateSuperCampaignResult> {
+  const superRow = await getSuperById(input.superHashListId, input.projectId)
+  if (!superRow) {
+    return { kind: 'super_not_found' }
+  }
+  if (superRow.archivedAt) {
+    return { kind: 'super_archived' }
+  }
+  if (superRow.memberIds.length < SUPER_MIN_MEMBERS) {
+    return { kind: 'super_too_few_members', memberCount: superRow.memberIds.length }
+  }
+
+  // KTD6a: resolve to typed LEAF lists (members expanded one more level so a
+  // #202-parent member → its physical children). No per-mode union is built.
+  const leafIds = await resolveNodeToLeaves({
+    kind: 'super',
+    superHashListId: input.superHashListId,
+    projectId: input.projectId,
+  })
+  const typedLeaves = await resolveTypedLeaves(leafIds)
+  if (typedLeaves.length === 0) {
+    return { kind: 'no_typed_leaves' }
+  }
+
+  // Idempotency (KTD7): the parent campaign this call would create is the one
+  // targeting `superHashListId` with no `parentCampaignId` of its own.
+  const [existingParentCampaign] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.superHashListId, input.superHashListId),
+        eq(campaigns.projectId, input.projectId),
+        isNull(campaigns.parentCampaignId)
+      )
+    )
+    .limit(1)
+
+  // Concurrency backstop (bug fix, Major): the `existingParentCampaign` read
+  // above and this insert are separate statements with no lock, so two
+  // concurrent `createSuperCampaign` calls for the same super can both miss
+  // the read and both attempt to insert a parent campaign. The partial
+  // unique index `campaigns_super_hash_list_id_parent_once_idx` (migration
+  // 0045) is the actual arbiter: the loser's insert throws a Postgres 23505
+  // unique_violation instead of silently creating a duplicate parent (plus a
+  // duplicate sub-campaign fan-out behind it). Catch that specific failure
+  // and recover by re-reading the winning row -- idempotent, same contract
+  // as the `existingParentCampaign` branch above -- rather than propagating
+  // a 500 for what is actually a benign race.
+  let parentCampaign = existingParentCampaign
+  if (!parentCampaign) {
+    try {
+      parentCampaign =
+        (await createCampaign(
+          {
+            projectId: input.projectId,
+            name: input.name,
+            description: input.description,
+            superHashListId: input.superHashListId,
+            priority: input.priority,
+            createdBy: input.createdBy,
+          },
+          input.actor
+        )) ?? undefined
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        throw err
+      }
+      logger.info(
+        { superHashListId: input.superHashListId, projectId: input.projectId },
+        'createSuperCampaign: parent insert lost a concurrent race, re-reading the winning row'
+      )
+      parentCampaign = await reReadRaceWinnerParentCampaign(input.superHashListId, input.projectId)
+    }
+  }
+  if (!parentCampaign) {
+    throw new Error('createSuperCampaign: parent campaign insert returned no row')
+  }
+
+  // Existing sub-campaigns keyed by the leaf `hashListId` each targets — the
+  // stable identity a retry cross-references against (mirrors
+  // `confirmSplitCampaign`'s backfill). Bug fix (Major, part of the same
+  // concurrency backstop above): this used to be gated on the pre-race
+  // `existingParentCampaign` flag, which stays falsy for BOTH sides of a
+  // concurrent race — the loser recovers `parentCampaign` via the
+  // unique-violation catch above with `existingParentCampaign` still unset,
+  // so gating this query on that stale flag would skip it entirely and let
+  // the loser re-insert every sub-campaign the winner already created
+  // (duplicate sub-campaign fan-out — the other half of this bug). Always
+  // querying by the now-RESOLVED `parentCampaign.id` costs one extra SELECT
+  // on the guaranteed-fresh-parent path but is correct on every path.
+  const existingSubCampaignRows = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.parentCampaignId, parentCampaign.id),
+        eq(campaigns.projectId, input.projectId)
+      )
+    )
+  const existingByHashListId = new Map(existingSubCampaignRows.map((sub) => [sub.hashListId, sub]))
+
+  const subCampaigns: ResolvedSubCampaign[] = []
+  for (const leaf of typedLeaves) {
+    const existingSub = existingByHashListId.get(leaf.hashListId)
+    if (existingSub) {
+      if (existingSub.hashcatMode === null) {
+        throw new Error(
+          `createSuperCampaign: existing sub-campaign ${existingSub.id} has no hashcatMode`
+        )
+      }
+      subCampaigns.push({
+        id: existingSub.id,
+        hashListId: leaf.hashListId,
+        mode: existingSub.hashcatMode,
+        parentCampaignId: parentCampaign.id,
+      })
+      continue
+    }
+
+    const subCampaign = await createCampaign(
+      {
+        projectId: input.projectId,
+        name: buildSubCampaignName(input.name, leaf.mode),
+        hashListId: leaf.hashListId,
+        priority: input.priority,
+        createdBy: input.createdBy,
+        hashcatMode: leaf.mode,
+        parentCampaignId: parentCampaign.id,
+      },
+      input.actor
+    )
+    if (!subCampaign) {
+      throw new Error(
+        `createSuperCampaign: sub-campaign insert for hash list ${leaf.hashListId} returned no row`
+      )
+    }
+    subCampaigns.push({
+      id: subCampaign.id,
+      hashListId: leaf.hashListId,
+      mode: leaf.mode,
+      parentCampaignId: parentCampaign.id,
+    })
+  }
+
+  return { kind: 'created', parentCampaign, subCampaigns }
 }
