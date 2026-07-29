@@ -19,12 +19,11 @@
  * NOTE: Do NOT call client.end(). Do NOT self-skip.
  */
 
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-
 import { campaigns, hashItems, hashLists, projectCrackedHashes, projects } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { and, eq, sql } from 'drizzle-orm'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { db } from '../../src/db/index.js'
 
@@ -38,7 +37,10 @@ let campaignId = 0
 let seq = 0
 
 const MIGRATION_PATH = fileURLToPath(
-  new URL('../../../shared/src/db/migrations/0044_super_cracked_set_backfill_quarantine.sql', import.meta.url)
+  new URL(
+    '../../../shared/src/db/migrations/0044_super_cracked_set_backfill_quarantine.sql',
+    import.meta.url
+  )
 )
 
 async function runMigration(): Promise<void> {
@@ -86,7 +88,10 @@ async function insertItem(
 }
 
 async function itemPlaintext(id: number): Promise<string | null> {
-  const [row] = await db.select({ p: hashItems.plaintext }).from(hashItems).where(eq(hashItems.id, id))
+  const [row] = await db
+    .select({ p: hashItems.plaintext })
+    .from(hashItems)
+    .where(eq(hashItems.id, id))
   return row?.p ?? null
 }
 
@@ -106,7 +111,10 @@ async function crackedSetRow(mode: number, hashValue: string) {
 
 beforeAll(async () => {
   await db.delete(projects).where(eq(projects.slug, SLUG))
-  const [p] = await db.insert(projects).values({ name: SLUG, slug: SLUG }).returning({ id: projects.id })
+  const [p] = await db
+    .insert(projects)
+    .values({ name: SLUG, slug: SLUG })
+    .returning({ id: projects.id })
   projId = p!.id
   seq += 1
   const [l] = await db
@@ -130,7 +138,12 @@ describe('migration 0044 — cracked-set backfill + safe repair', () => {
     // Scenario 1 — contradiction: an authoritative agent crack of (MODE_A, V)
     // = "correct", plus a no-attribution fill of the SAME (MODE_A, V) = "wrong".
     const V = 'a'.repeat(32)
-    const legitV = await insertItem(V, { mode: MODE_A, plaintext: 'correct', crackedAt: new Date('2026-01-01'), attributed: true })
+    const legitV = await insertItem(V, {
+      mode: MODE_A,
+      plaintext: 'correct',
+      crackedAt: new Date('2026-01-01'),
+      attributed: true,
+    })
     // fill lives in a second list so the (hashListId, hashValue) unique index is
     // not violated by two MODE_A/V rows.
     seq += 1
@@ -141,16 +154,32 @@ describe('migration 0044 — cracked-set backfill + safe repair', () => {
     const listId2 = l2!.id
     const [fillV] = await db
       .insert(hashItems)
-      .values({ hashListId: listId2, hashValue: V, detectedHashcatMode: MODE_A, plaintext: 'wrong', crackedAt: new Date('2026-02-01'), agentId: null })
+      .values({
+        hashListId: listId2,
+        hashValue: V,
+        detectedHashcatMode: MODE_A,
+        plaintext: 'wrong',
+        crackedAt: new Date('2026-02-01'),
+        agentId: null,
+      })
       .returning({ id: hashItems.id })
 
     // Scenario 2 — unbacked fill: (MODE_B, W) filled with no attributed backing.
     const W = 'b'.repeat(32)
-    const unbacked = await insertItem(W, { mode: MODE_B, plaintext: 'maybe-wrong', crackedAt: new Date('2026-02-01') })
+    const unbacked = await insertItem(W, {
+      mode: MODE_B,
+      plaintext: 'maybe-wrong',
+      crackedAt: new Date('2026-02-01'),
+    })
 
     // Scenario 3 — legitimate precracked import: source='import', no attribution.
     const X = 'c'.repeat(32)
-    const importItem = await insertItem(X, { mode: MODE_A, plaintext: 'imported-pw', crackedAt: new Date('2026-02-01'), source: 'import' })
+    const importItem = await insertItem(X, {
+      mode: MODE_A,
+      plaintext: 'imported-pw',
+      crackedAt: new Date('2026-02-01'),
+      source: 'import',
+    })
 
     await runMigration()
 
