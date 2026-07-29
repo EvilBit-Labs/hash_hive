@@ -510,8 +510,8 @@ if (!IS_ISOLATED) {
     it('list rows carry NO memberIds — the service list query never reads the join table', async () => {
       const res = await app.request(BASE, { headers: headers() })
       const body = (await res.json()) as { superHashLists: Array<Record<string, unknown>> }
-      expect(Object.keys(body.superHashLists[0]!).sort()).toEqual(
-        ['archivedAt', 'createdAt', 'id', 'name', 'projectId', 'updatedAt'].sort()
+      expect(Object.keys(body.superHashLists[0]!).toSorted()).toEqual(
+        ['archivedAt', 'createdAt', 'id', 'name', 'projectId', 'updatedAt'].toSorted()
       )
       expect(body.superHashLists[0]).not.toHaveProperty('memberIds')
     })
@@ -562,8 +562,8 @@ if (!IS_ISOLATED) {
     it('leaks no field the service never produced (negative shape)', async () => {
       const res = await app.request(`${BASE}/7`, { headers: headers() })
       const body = (await res.json()) as { superHashList: Record<string, unknown> }
-      expect(Object.keys(body.superHashList).sort()).toEqual(
-        ['archivedAt', 'createdAt', 'id', 'memberIds', 'name', 'projectId', 'updatedAt'].sort()
+      expect(Object.keys(body.superHashList).toSorted()).toEqual(
+        ['archivedAt', 'createdAt', 'id', 'memberIds', 'name', 'projectId', 'updatedAt'].toSorted()
       )
       // A super owns no hash items (R10) — no count/aggregate may appear here.
       for (const forbidden of ['hashCount', 'crackedCount', 'hashTypeId', 'members', 'items']) {

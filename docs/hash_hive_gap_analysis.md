@@ -327,9 +327,9 @@ This is the core data flow that makes a distributed cracking platform useful: ag
 
 #### What hash_hive Needs *(completed)*
 
-1. **SuperHashlist model** — Virtual hash list unioning multiple lists of the same type ✅
-2. **Deduplication engine** — Merge duplicate hashes across lists ✅
-3. **Result propagation** — Crack in super list → mark in all source lists ✅
+1. **SuperHashlist model** - Virtual hash list unioning multiple lists, mixed hash types allowed (crack-once dedup is project-wide, not gated by shared type) ✅
+2. **Deduplication engine** - Project-wide `(hash type, value)` crack-once, resolved read-time via the project cracked-set (no physical propagation to source lists) ✅
+3. **Result propagation** - A crack anywhere in the project resolves as cracked everywhere the same `(hash type, value)` appears, computed at read time; source-list rows are never physically updated/marked ✅
 4. **Campaign integration** — Run campaigns against a SuperHashlist ✅
 
 **Depends on:** P0-6 (Hash Item Storage)

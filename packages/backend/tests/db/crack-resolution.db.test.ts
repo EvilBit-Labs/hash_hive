@@ -293,8 +293,13 @@ describe('match reference (R17) — recorded row-local, never serialized', () =>
       'crossList',
       'plaintext',
     ])
+    // The id-substring check is deliberately omitted here: a serial id like
+    // `listBId` can be a substring of the ISO timestamp embedded in
+    // `JSON.stringify(state)` (e.g. `2026` inside `2026-...`), so it flakes.
+    // The structural key assertion above already proves `sourceHashListId`
+    // never appears as a field on the resolved state; these string checks
+    // stay scoped to identity strings that cannot collide with a timestamp.
     const serialized = JSON.stringify(state)
-    expect(serialized).not.toContain(String(listBId))
     expect(serialized).not.toContain('listb-operator')
     expect(serialized.toLowerCase()).not.toContain('crack-res-list-b')
   })

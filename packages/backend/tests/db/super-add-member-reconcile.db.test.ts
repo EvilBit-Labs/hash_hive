@@ -194,7 +194,10 @@ describe('addMember reconciliation — AE3: added member marks siblings cracked'
     await insertItem(listB, H, { mode: MODE_A, crackedAt: historical, plaintext: 'oldpw' })
 
     const superId = await createSuperWithMember('mono-super', listA)
-    const nowFloor = new Date('2025-01-01T00:00:00.000Z')
+    // Capture the wall clock immediately before the call so `nowFloor` is a
+    // real floor for "stamped NOW" - a hardcoded past literal would make this
+    // assertion pass even if the backfill stamped a stale timestamp.
+    const nowFloor = new Date()
     await addMember(superId, listB, projId)
 
     const [row] = await crackedSetRows(MODE_A, H)

@@ -42,10 +42,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
--- `CREATE OR REPLACE TRIGGER` is valid on PG14+ (this repo runs pg16), but
--- the conventional idempotent DROP+CREATE form is more portable across
--- Postgres versions and tooling that parses migration SQL statically.
-DROP TRIGGER IF EXISTS super_member_project_check_trg ON super_hash_list_members;--> statement-breakpoint
 CREATE TRIGGER super_member_project_check_trg
   BEFORE INSERT OR UPDATE OF super_hash_list_id, member_hash_list_id ON super_hash_list_members
   FOR EACH ROW EXECUTE FUNCTION super_member_project_check();

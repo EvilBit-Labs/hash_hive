@@ -100,9 +100,38 @@ export function computeSuperCriticalPathEta(subEtas: readonly CampaignEta[]): Ca
   // Nothing resolved to a number yet — every active sub is still estimating.
   if (maxSeconds === null) return { state: 'estimating' }
 
+  // `campaignEtaSchema.lower_bound.pendingAttacks` is documented (index.ts) as
+  // "unresolved attacks within a campaign" for the single-campaign case. Here
+  // it is DELIBERATELY reused to count unresolved SUB-CAMPAIGNS instead - a
+  // super parent has no attacks of its own, so there is no other honest count
+  // to report, and adding a super-specific field would fork the schema/UI for
+  // one caller. Callers rendering a super's eta must read `pendingAttacks` as
+  // "N sub-campaigns still estimating/lower_bound", not "N attacks".
   return unresolvedSubs > 0
     ? { state: 'lower_bound', seconds: jsonSafeBigint(maxSeconds), pendingAttacks: unresolvedSubs }
     : { state: 'ready', seconds: jsonSafeBigint(maxSeconds) }
+}
+
+/**
+ * Derive `SuperCampaignProgress.done` so it never contradicts `eta`. A super
+ * with zero sub-campaigns has nothing left to run, and
+ * `computeSuperCriticalPathEta([])` reports it `complete` - `done` must agree
+ * with that, or a client sees `eta.state === 'complete'` alongside
+ * `done: false` for the same payload. For a non-empty sub-campaign set,
+ * `done` still requires every sub to have reached `completed` status
+ * (matching `eta`'s own "every sub complete -> complete" rule).
+ *
+ * Pure - no I/O - so the zero-sub-campaign case is unit testable without
+ * seeding a live fleet.
+ */
+export function deriveSuperDone(
+  subCampaignCount: number,
+  completedSubCampaignCount: number,
+  eta: CampaignEta
+): boolean {
+  return subCampaignCount === 0
+    ? eta.state === 'complete'
+    : completedSubCampaignCount === subCampaignCount
 }
 
 /**
@@ -202,7 +231,6 @@ export async function getSuperCampaignProgress(input: {
   const completedSubCampaignCount = subCampaignRows.filter(
     (row) => row.status === 'completed'
   ).length
-  const done = subCampaignCount > 0 && completedSubCampaignCount === subCampaignCount
 
   // (a) Deduped cracked-count / results over the leaf union (via the U4 resolver)
   // and (b) critical-path MAX ETA over sub-campaigns — issued together.
@@ -218,6 +246,7 @@ export async function getSuperCampaignProgress(input: {
     (row): CampaignEta => etaByCampaign.get(row.id) ?? { state: 'estimating' }
   )
   const eta = computeSuperCriticalPathEta(subEtas)
+  const done = deriveSuperDone(subCampaignCount, completedSubCampaignCount, eta)
 
   return { subCampaignCount, completedSubCampaignCount, done, hashProgress, eta }
 }

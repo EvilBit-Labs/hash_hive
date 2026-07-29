@@ -1,7 +1,7 @@
 /**
  * Real-DB tests for U14 — exporting a SuperHashlist yields its DEDUPLICATED
  * UNION with crack state resolved through the project cracked-set (U4).
- * (SuperHashlists, R1 / R15, issue #102 / #102-related U14.)
+ * (SuperHashlists, R1 / R15, issue #101 / #101-related U14.)
  *
  * These prove the SQL-level behavior the export service's unit tests (which
  * inject fetchers) cannot exercise:

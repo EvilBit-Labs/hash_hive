@@ -87,7 +87,7 @@ const superPageSchema = z
   .object({
     items: z.array(superSchema),
     total: z.number().int().nonnegative(),
-    limit: z.number().int().nonnegative(),
+    limit: z.number().int().min(1),
     offset: z.number().int().nonnegative(),
   })
   .openapi('ControlSuperHashListPage')

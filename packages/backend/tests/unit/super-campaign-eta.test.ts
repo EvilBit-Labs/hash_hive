@@ -12,7 +12,10 @@ import type { CampaignEta } from '@hashhive/shared'
 
 import { describe, expect, it } from 'bun:test'
 
-import { computeSuperCriticalPathEta } from '../../src/services/super-campaign-progress.js'
+import {
+  computeSuperCriticalPathEta,
+  deriveSuperDone,
+} from '../../src/services/super-campaign-progress.js'
 
 const ready = (seconds: number): CampaignEta => ({ state: 'ready', seconds })
 const lowerBound = (seconds: number, pendingAttacks = 1): CampaignEta => ({
@@ -103,5 +106,27 @@ describe('computeSuperCriticalPathEta — estimating / lower_bound propagate unc
     expect(computeSuperCriticalPathEta([estimating, lowerBound(500), paused])).toEqual({
       state: 'paused',
     })
+  })
+})
+
+describe('deriveSuperDone - agrees with eta, never contradicts it', () => {
+  it('zero sub-campaigns -> done, matching computeSuperCriticalPathEta([]) === complete', () => {
+    const eta = computeSuperCriticalPathEta([])
+    expect(deriveSuperDone(0, 0, eta)).toBe(true)
+  })
+
+  it('non-empty subs, all completed -> done', () => {
+    expect(deriveSuperDone(2, 2, complete)).toBe(true)
+  })
+
+  it('non-empty subs, some still running -> not done even if eta happens to read complete', () => {
+    // Defends the "every sub complete" requirement independently of eta: a
+    // caller passing a stale/mismatched eta must not flip `done` true just
+    // because eta.state is complete.
+    expect(deriveSuperDone(2, 1, complete)).toBe(false)
+  })
+
+  it('non-empty subs, none completed -> not done', () => {
+    expect(deriveSuperDone(2, 0, ready(60))).toBe(false)
   })
 })

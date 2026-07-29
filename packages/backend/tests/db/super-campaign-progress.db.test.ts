@@ -313,7 +313,7 @@ describe('getSuperCampaignProgress — axis (b): sub-campaign tallies scoped by 
     expect(progress.eta.state).toBe('complete')
   })
 
-  it('no sub-campaigns yet → zero tallies, not done, eta complete (nothing to run)', async () => {
+  it('no sub-campaigns yet → zero tallies, done (nothing to run), eta complete', async () => {
     const leaf = await createList('nosubs-a', homogeneous(NTLM_MODE))
     await insertItem(leaf, '1'.repeat(32), NTLM_MODE)
     const leaf2 = await createList('nosubs-b', homogeneous(NTLM_MODE))
@@ -329,7 +329,9 @@ describe('getSuperCampaignProgress — axis (b): sub-campaign tallies scoped by 
 
     expect(progress.subCampaignCount).toBe(0)
     expect(progress.completedSubCampaignCount).toBe(0)
-    expect(progress.done).toBe(false)
+    // `done` must agree with `eta` (deriveSuperDone): a super with zero
+    // sub-campaigns has nothing left to run, same as computeSuperCriticalPathEta([]).
+    expect(progress.done).toBe(true)
     expect(progress.eta).toEqual({ state: 'complete' })
   })
 })

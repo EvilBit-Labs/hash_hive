@@ -402,10 +402,12 @@ export async function createCampaign(
     //
     // `campaigns.hashListId` is nullable since #101 U6 (a super-targeting
     // parent campaign carries `superHashListId` instead — exactly one of the
-    // two is set, per `campaigns_exactly_one_target_chk`). This path always
-    // supplies a `hashListId`, so the null branch is unreachable today; the
-    // guard is what keeps it type-honest for the super fan-out (U10), which
-    // latches the resolved leaf lists on its sub-campaigns instead.
+    // two is set, per `campaigns_exactly_one_target_chk`). The null branch IS
+    // reached on every super-campaign creation: `createSuperCampaign`
+    // (campaign-split.ts) calls this with only `superHashListId` set, so the
+    // parent row's `hashListId` is null and this guard skips it - the super
+    // fan-out (U10) latches the resolved leaf lists on its sub-campaigns
+    // instead.
     if (campaign.hashListId !== null) {
       await latchResourcePermanent(tx, hashLists, campaign.hashListId)
     }

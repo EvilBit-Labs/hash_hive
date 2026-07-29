@@ -17,11 +17,12 @@
  *     `UNIQUE(member_hash_list_id)`; we pre-check and also map its
  *     `unique_violation` (SQLSTATE 23505) to a domain error.
  *
- * The U12 add-member reconciliation hook and the U13 remove-member
- * drain→harvest→detach implementation land in THEIR units. Here `addMember`
- * is a plain insert and `removeMember` is a plain membership-row delete
- * (see the TODO(U13) note). Members remain independently targetable by their
- * own campaigns (R3) — nothing here touches a member's own campaign paths.
+ * `addMember` runs the U12 retroactive cracked-set backfill in the same
+ * transaction as the membership insert; `removeMember` runs the U13
+ * harvest-then-detach (copy the member's now-orphaned plaintext into the
+ * super's other members before dropping the membership row). Members remain
+ * independently targetable by their own campaigns (R3) - nothing here
+ * touches a member's own campaign paths.
  *
  * Patterns mirrored from `services/resources.ts` (`getHashListById`,
  * `listHashListsPaginated`, `isForeignKeyViolation`) and
@@ -356,9 +357,9 @@ export async function archiveSuper(
  * already in a super — including a duplicate add of the same member) rather
  * than surfacing a raw constraint violation.
  *
- * The U12 add-member retroactive reconciliation (backfilling already-cracked
- * `(mode, value)` rows into the project cracked-set) is layered on in U12;
- * here this is a plain membership insert.
+ * The membership insert and the U12 retroactive reconciliation (backfilling
+ * already-cracked `(mode, value)` rows into the project cracked-set) run in
+ * the same transaction - see the backfill call below.
  */
 export async function addMember(
   superId: number,

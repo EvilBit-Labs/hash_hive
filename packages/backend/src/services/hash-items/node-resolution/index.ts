@@ -6,13 +6,13 @@
  * A "node" is anything a campaign can fan out over:
  *   - a #202 split PARENT hash list — its typed leaves are its
  *     `parent_hash_list_id` children (one level), and
- *   - (U10, not yet) a SUPER hash list — its leaves are its members, each
+ *   - a SUPER hash list (issue #101, U10) - its leaves are its members, each
  *     resolved one FURTHER level so a member that is itself a #202 split
  *     parent expands to its physical per-mode children.
  *
  * This unit (U5) implements the #202-parent case and the shared grouping
- * primitives, and leaves a typed extension point for the super case that
- * U10 fills once the `super_hash_lists` tables exist (they do not yet).
+ * primitives; U10 adds the SUPER case (`kind: 'super'`) on top of the same
+ * `resolveNodeToLeaves` entry point below.
  *
  * Barrel-plus-subdir layout (`docs/solutions/conventions/barrel-plus-subdir-service-split.md`):
  *   - This barrel owns the DB-touching resolution (`resolveNodeToLeaves`)

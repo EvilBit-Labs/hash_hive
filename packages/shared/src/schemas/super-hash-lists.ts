@@ -30,7 +30,7 @@ export const superHashListWireSchema = z
   .object({
     id: z.number().int().positive(),
     projectId: z.number().int().positive(),
-    name: z.string(),
+    name: z.string().min(1).max(SUPER_NAME_MAX_LEN),
     archivedAt: z.string().datetime().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -39,8 +39,10 @@ export const superHashListWireSchema = z
 
 /**
  * Detail wire shape — the entity plus its member hash-list ids (the union's
- * membership, R2/R4). Returned by `GET /{id}` and the create/rename mutations
- * so a client can render membership without a second round-trip.
+ * membership, R2/R4). Returned by `GET /{id}`, `POST /` (create), and the
+ * membership mutations (`POST /{id}/members`, `DELETE /{id}/members/{listId}`)
+ * so a client can render membership without a second round-trip. Rename and
+ * archive do NOT return this shape - see `superHashListResponseSchema` below.
  */
 export const superHashListDetailWireSchema = superHashListWireSchema
   .extend({

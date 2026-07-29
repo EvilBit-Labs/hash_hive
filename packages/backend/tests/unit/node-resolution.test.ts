@@ -12,10 +12,14 @@
  *     the already-node-agnostic `planSplit`, so its degenerate signal is
  *     asserted to match what `planSplit` returns.
  *
- * The synthetic-super resolution case is deliberately NOT tested here: the
- * `super_hash_lists` tables do not exist until U6, and `NodeDescriptor` only
- * carries the `split-parent` variant today. U10 adds the `super` variant and
- * its resolution + tests.
+ * The `kind: 'super'` resolution case is deliberately NOT unit-tested here:
+ * it always reads live membership from `super_hash_list_members`, so there is
+ * no DB-free seam to stub the way `fetchSplitParentLeaves` stubs the
+ * split-parent case. Its coverage lives in the DB lane instead - see
+ * `tests/db/super-campaign-fanout.db.test.ts`,
+ * `tests/db/super-campaign-progress.db.test.ts`, and
+ * `tests/db/super-remove-member-harvest.db.test.ts`, which all exercise
+ * `resolveNodeToLeaves({ kind: 'super', ... })` against a real project.
  *
  * Design: no `IS_ISOLATED` gate needed — the only shared mutable state is the
  * `_nodeResolutionDeps` seam, restored in `afterEach`.
