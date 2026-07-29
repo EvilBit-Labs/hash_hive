@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "campaigns_super_hash_list_id_parent_once_idx" ON "campaigns" USING btree ("super_hash_list_id") WHERE "campaigns"."super_hash_list_id" IS NOT NULL AND "campaigns"."parent_campaign_id" IS NULL;

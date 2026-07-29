@@ -291,6 +291,48 @@ describe('U2 cracked-set write path — updateTaskProgress', () => {
     expect(csRow!.originalCrackedAt!.toISOString()).toBe(csRow!.crackedAt!.toISOString())
   })
 
+  it('bug fix (Major): a single report with a DUPLICATE (mode, value) result succeeds and writes exactly one cracked-set row', async () => {
+    // Before the fix, the bulk hash_items upsert AND the (former) per-row
+    // cracked-set loop would each try to affect the same ON CONFLICT target
+    // row twice in one statement/transaction -- Postgres rejects that,
+    // rolling back the WHOLE report (including any other, non-duplicate
+    // result it carried). A report with a duplicate result -- e.g. a
+    // retried/duplicated agent report -- must succeed, deduped, not 500.
+    const { taskId, agentId, hashListId } = await setupCrackTask(1000)
+    const hashValue = 'cs-dup-report-hash-v1'
+
+    const res = await updateTaskProgress(taskId, agentId, {
+      status: 'running',
+      results: [
+        { hashValue, plaintext: 'first-occurrence' },
+        { hashValue, plaintext: 'last-occurrence' },
+      ],
+    })
+    expect('error' in res).toBe(false)
+
+    // hash_items: one row, last occurrence wins.
+    const items = await db
+      .select({ plaintext: hashItems.plaintext })
+      .from(hashItems)
+      .where(and(eq(hashItems.hashListId, hashListId), eq(hashItems.hashValue, hashValue)))
+    expect(items).toHaveLength(1)
+    expect(items[0]!.plaintext).toBe('last-occurrence')
+
+    // cracked-set: exactly one row, also last occurrence.
+    const csRows = await db
+      .select({ plaintext: projectCrackedHashes.plaintext })
+      .from(projectCrackedHashes)
+      .where(
+        and(
+          eq(projectCrackedHashes.projectId, projectId),
+          eq(projectCrackedHashes.hashcatMode, 1000),
+          eq(projectCrackedHashes.hashValue, hashValue)
+        )
+      )
+    expect(csRows).toHaveLength(1)
+    expect(csRows[0]!.plaintext).toBe('last-occurrence')
+  })
+
   it('KTD3: a crack with no resolved hashcat mode is persisted to hash_items but NOT to the cracked-set', async () => {
     const { taskId, agentId, hashListId } = await setupCrackTask(0, /* includeMode */ false)
     const hashValue = 'cs-nomode-hash-v1'

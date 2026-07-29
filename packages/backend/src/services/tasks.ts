@@ -16,7 +16,7 @@ import {
 } from './campaigns.js'
 import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
-import { upsertCrackedSet } from './hash-items/cracked-set.js'
+import { upsertCrackedSetBatch } from './hash-items/cracked-set.js'
 import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
 import { MAX_RETRIES } from './tasks/retry.js'
 import { appendTaskTelemetry } from './telemetry.js'
@@ -686,6 +686,23 @@ export async function assignNextTask(
 
 // ─── Task Progress & Results ────────────────────────────────────────
 
+/**
+ * Dedupes a progress report's crack results by `hashValue`, last occurrence
+ * wins. Both `hash_items`' upsert conflict target (hashListId, hashValue)
+ * and the cracked-set's (projectId, hashcatMode, hashValue) hold every
+ * column but `hashValue` constant within one report, so a duplicate
+ * `hashValue` in the same report would otherwise make a single bulk
+ * `ON CONFLICT DO UPDATE` affect the same row twice — a Postgres error that
+ * rolls back the whole transaction, not just the duplicate.
+ */
+function dedupeResultsByHashValue<T extends { hashValue: string }>(results: readonly T[]): T[] {
+  const byHashValue = new Map<string, T>()
+  for (const result of results) {
+    byHashValue.set(result.hashValue, result)
+  }
+  return [...byHashValue.values()]
+}
+
 export async function updateTaskProgress(
   taskId: number,
   agentId: number,
@@ -761,7 +778,18 @@ export async function updateTaskProgress(
     // Capture non-null locals so the transaction closure sees narrowed types.
     const hashListId = taskRow.hashListId
     const { campaignId, attackId, hashcatMode } = taskRow
-    const results = data.results
+    // Bug fix (Major): dedupe by hashValue before either upsert below. Both
+    // the hash_items conflict target (hashListId, hashValue) and the
+    // cracked-set conflict target (projectId, hashcatMode, hashValue) hold
+    // hashListId/projectId/hashcatMode constant within one progress report,
+    // so hashValue alone identifies a conflict-target collision. A report
+    // carrying a duplicate (mode, value) result — e.g. a retried/duplicated
+    // agent report — would otherwise make the bulk upsert affect the same
+    // conflict-target row twice in one statement, which Postgres rejects,
+    // rolling back the WHOLE report (including every other, non-duplicate
+    // result in it). Last occurrence wins, mirroring the same last-write
+    // dedup the import worker already applies to its own pairs.
+    const results = dedupeResultsByHashValue(data.results)
     try {
       // U2 (feasibility F5): the per-list `hash_items` upsert and the
       // project-wide cracked-set upsert must land atomically — a crack must
@@ -805,9 +833,12 @@ export async function updateTaskProgress(
 
         // KTD3: only maintain the cracked-set when the campaign's mode resolved.
         // Results with no mode stay list-local and never cross-list dedup.
+        // Efficiency fix: one batched multi-row upsert (mirrors the batched
+        // hash_items insert above) instead of one round trip per result.
         if (hashcatMode != null) {
-          for (const r of results) {
-            await upsertCrackedSet(tx, {
+          await upsertCrackedSetBatch(
+            tx,
+            results.map((r) => ({
               projectId: taskRow.projectId,
               hashcatMode,
               hashValue: r.hashValue,
@@ -815,8 +846,8 @@ export async function updateTaskProgress(
               sourceHashListId: hashListId,
               taskId,
               agentId,
-            })
-          }
+            }))
+          )
         }
       })
     } catch (err) {

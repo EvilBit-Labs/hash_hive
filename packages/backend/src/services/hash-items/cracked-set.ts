@@ -89,6 +89,66 @@ export async function upsertCrackedSet(tx: Tx, input: UpsertCrackedSetInput): Pr
 }
 
 /**
+ * Multi-row form of `upsertCrackedSet` (bug fix, Major + efficiency):
+ * callers that previously looped one `upsertCrackedSet` call per result
+ * (one round trip per row) now build the input array and hand it here for a
+ * single batched `INSERT ... ON CONFLICT DO UPDATE`. Semantics are
+ * otherwise identical to the single-row form: `crackedAt`/`originalCrackedAt`
+ * are stamped once per row at insert time, only `plaintext` refreshes on
+ * conflict (KTD2), and an entry with a null/undefined `hashcatMode` is
+ * dropped (KTD3) rather than sent to Postgres.
+ *
+ * Precondition: `inputs` must not contain two entries with the same
+ * `(projectId, hashcatMode, hashValue)` — Postgres rejects an
+ * `ON CONFLICT DO UPDATE` that would affect the same row twice in one
+ * statement. Every current caller already deduplicates its results by
+ * `hashValue` before building this array (the conflict key's other two
+ * columns are constant within one call), so this is a documented
+ * precondition rather than a re-check here — see `dedupeResultsByHashValue`
+ * (services/tasks.ts) and the pre-deduplicated `dedupedPairs` batching in
+ * `queue/workers/hash-import-worker.ts`.
+ *
+ * No-ops for an empty array or when every entry's `hashcatMode` is null.
+ */
+export async function upsertCrackedSetBatch(
+  tx: Tx,
+  inputs: readonly UpsertCrackedSetInput[]
+): Promise<void> {
+  const now = new Date()
+  const rows = inputs
+    .filter((input): input is UpsertCrackedSetInput & { hashcatMode: number } => {
+      return input.hashcatMode != null
+    })
+    .map((input) => ({
+      projectId: input.projectId,
+      hashcatMode: input.hashcatMode,
+      hashValue: input.hashValue,
+      plaintext: input.plaintext,
+      crackedAt: now,
+      originalCrackedAt: now,
+      sourceHashListId: input.sourceHashListId ?? null,
+      taskId: input.taskId ?? null,
+      agentId: input.agentId ?? null,
+    }))
+
+  if (rows.length === 0) return
+
+  await tx
+    .insert(projectCrackedHashes)
+    .values(rows)
+    .onConflictDoUpdate({
+      target: [
+        projectCrackedHashes.projectId,
+        projectCrackedHashes.hashcatMode,
+        projectCrackedHashes.hashValue,
+      ],
+      set: {
+        plaintext: sql`EXCLUDED.plaintext`,
+      },
+    })
+}
+
+/**
  * U12 — Retroactive backfill of a hash list's already-cracked hashes into the
  * project cracked-set, run when the list is added as a super member (R9, AE3).
  *

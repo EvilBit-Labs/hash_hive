@@ -88,6 +88,7 @@ import type { CreateCampaignWithAttacksResult, InlineAttackInput } from './campa
 
 import { logger } from '../config/logger.js'
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../db/unique-violation.js'
 import { createCampaign, createCampaignWithAttacks } from './campaigns.js'
 import { MOVE_BATCH_SIZE, moveHashItemsToList } from './hash-items/move-items.js'
 import { resolveNodeToLeaves } from './hash-items/node-resolution/index.js'
@@ -161,6 +162,29 @@ async function enqueueSplitJob(hashListId: number, projectId: number): Promise<b
 
 // Drizzle transaction handle — the callback argument type of `db.transaction`.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/** Postgres `campaigns.name` column cap (`varchar(255)`). */
+const CAMPAIGN_NAME_MAX_LENGTH = 255
+
+/**
+ * Builds a sub-campaign's name as `<baseName> - mode <mode>`, truncating
+ * `baseName` so the full name never exceeds `campaigns.name`'s
+ * `varchar(255)` cap (bug fix, Major). `baseName` is itself validated up to
+ * 255 chars at the route boundary, so appending the mode suffix
+ * unconditionally could push the concatenation past the column limit and
+ * abort the confirm/fan-out loop mid-way with a Postgres 22001
+ * (string_data_right_truncation) error, leaving some sub-campaigns created
+ * and others missing. Shared by `confirmSplitCampaign` and
+ * `createSuperCampaign` — both build one sub-campaign name per resolved
+ * group/leaf from the same caller-supplied base name.
+ */
+function buildSubCampaignName(baseName: string, mode: number): string {
+  const modeSuffix = ` - mode ${mode}`
+  const maxBaseLength = CAMPAIGN_NAME_MAX_LENGTH - modeSuffix.length
+  const truncatedBase =
+    baseName.length > maxBaseLength ? baseName.slice(0, maxBaseLength) : baseName
+  return `${truncatedBase}${modeSuffix}`
+}
 
 // ─── Review groups ────────────────────────────────────────────────────────
 //
@@ -867,7 +891,7 @@ export async function confirmSplitCampaign(input: {
     const subCampaign = await createCampaign(
       {
         projectId: input.projectId,
-        name: `${input.name} — mode ${group.mode}`,
+        name: buildSubCampaignName(input.name, group.mode),
         hashListId: group.id,
         priority: input.priority,
         createdBy: input.createdBy,
@@ -994,6 +1018,39 @@ async function resolveTypedLeaves(leafIds: number[]): Promise<TypedLeaf[]> {
  * already-transactional `createCampaign`), not one big transaction — see the
  * module doc comment for that trade-off.
  */
+
+/**
+ * Re-reads the un-parented parent campaign for `superHashListId` after this
+ * call's own insert lost a concurrent race to
+ * `campaigns_super_hash_list_id_parent_once_idx` (bug fix, Major -- see the
+ * comment at the `createCampaign` call site in `createSuperCampaign`). A
+ * miss here means the insert failed with a unique violation that was NOT
+ * caused by that index -- an unexplained state this function refuses to
+ * paper over -- so it throws loudly instead of returning an empty result.
+ */
+async function reReadRaceWinnerParentCampaign(
+  superHashListId: number,
+  projectId: number
+): Promise<typeof campaigns.$inferSelect | undefined> {
+  const [raceWinner] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.superHashListId, superHashListId),
+        eq(campaigns.projectId, projectId),
+        isNull(campaigns.parentCampaignId)
+      )
+    )
+    .limit(1)
+  if (!raceWinner) {
+    throw new Error(
+      'createSuperCampaign: unique violation on parent insert but no existing row found on re-read'
+    )
+  }
+  return raceWinner
+}
+
 export async function createSuperCampaign(input: {
   projectId: number
   name: string
@@ -1040,37 +1097,68 @@ export async function createSuperCampaign(input: {
     )
     .limit(1)
 
-  const parentCampaign =
-    existingParentCampaign ??
-    (await createCampaign(
-      {
-        projectId: input.projectId,
-        name: input.name,
-        description: input.description,
-        superHashListId: input.superHashListId,
-        priority: input.priority,
-        createdBy: input.createdBy,
-      },
-      input.actor
-    ))
+  // Concurrency backstop (bug fix, Major): the `existingParentCampaign` read
+  // above and this insert are separate statements with no lock, so two
+  // concurrent `createSuperCampaign` calls for the same super can both miss
+  // the read and both attempt to insert a parent campaign. The partial
+  // unique index `campaigns_super_hash_list_id_parent_once_idx` (migration
+  // 0045) is the actual arbiter: the loser's insert throws a Postgres 23505
+  // unique_violation instead of silently creating a duplicate parent (plus a
+  // duplicate sub-campaign fan-out behind it). Catch that specific failure
+  // and recover by re-reading the winning row -- idempotent, same contract
+  // as the `existingParentCampaign` branch above -- rather than propagating
+  // a 500 for what is actually a benign race.
+  let parentCampaign = existingParentCampaign
+  if (!parentCampaign) {
+    try {
+      parentCampaign =
+        (await createCampaign(
+          {
+            projectId: input.projectId,
+            name: input.name,
+            description: input.description,
+            superHashListId: input.superHashListId,
+            priority: input.priority,
+            createdBy: input.createdBy,
+          },
+          input.actor
+        )) ?? undefined
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        throw err
+      }
+      logger.info(
+        { superHashListId: input.superHashListId, projectId: input.projectId },
+        'createSuperCampaign: parent insert lost a concurrent race, re-reading the winning row'
+      )
+      parentCampaign = await reReadRaceWinnerParentCampaign(input.superHashListId, input.projectId)
+    }
+  }
   if (!parentCampaign) {
     throw new Error('createSuperCampaign: parent campaign insert returned no row')
   }
 
   // Existing sub-campaigns keyed by the leaf `hashListId` each targets — the
   // stable identity a retry cross-references against (mirrors
-  // `confirmSplitCampaign`'s backfill).
-  const existingSubCampaignRows = existingParentCampaign
-    ? await db
-        .select()
-        .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.parentCampaignId, parentCampaign.id),
-            eq(campaigns.projectId, input.projectId)
-          )
-        )
-    : []
+  // `confirmSplitCampaign`'s backfill). Bug fix (Major, part of the same
+  // concurrency backstop above): this used to be gated on the pre-race
+  // `existingParentCampaign` flag, which stays falsy for BOTH sides of a
+  // concurrent race — the loser recovers `parentCampaign` via the
+  // unique-violation catch above with `existingParentCampaign` still unset,
+  // so gating this query on that stale flag would skip it entirely and let
+  // the loser re-insert every sub-campaign the winner already created
+  // (duplicate sub-campaign fan-out — the other half of this bug). Always
+  // querying by the now-RESOLVED `parentCampaign.id` costs one extra SELECT
+  // on the guaranteed-fresh-parent path but is correct on every path.
+  const existingSubCampaignRows = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.parentCampaignId, parentCampaign.id),
+        eq(campaigns.projectId, input.projectId)
+      )
+    )
   const existingByHashListId = new Map(existingSubCampaignRows.map((sub) => [sub.hashListId, sub]))
 
   const subCampaigns: ResolvedSubCampaign[] = []
@@ -1094,7 +1182,7 @@ export async function createSuperCampaign(input: {
     const subCampaign = await createCampaign(
       {
         projectId: input.projectId,
-        name: `${input.name} — mode ${leaf.mode}`,
+        name: buildSubCampaignName(input.name, leaf.mode),
         hashListId: leaf.hashListId,
         priority: input.priority,
         createdBy: input.createdBy,

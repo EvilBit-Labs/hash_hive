@@ -757,6 +757,34 @@ if (!IS_ISOLATED) {
       expect(body.superProgress).toBeUndefined()
     })
 
+    it('documents superProgress on GET /{id} in the served openapi.json (contract fix, Minor)', async () => {
+      // The route handler has always returned `superProgress` for a super
+      // PARENT campaign (see the two tests above), but the response schema
+      // omitted the field, so the served spec did not document it -- a
+      // client generating types off the spec would never know the field
+      // exists. Assert the property is present on the documented 200
+      // response schema for GET /{id}.
+      const res = await app.request('/api/v1/dashboard/openapi.json', { headers: makeHeaders() })
+      expect(res.status).toBe(200)
+      const spec = (await res.json()) as {
+        paths: Record<
+          string,
+          {
+            get?: {
+              responses?: Record<
+                string,
+                { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> }
+              >
+            }
+          }
+        >
+      }
+      const schema =
+        spec.paths['/campaigns/{id}']?.get?.responses?.['200']?.content?.['application/json']
+          ?.schema
+      expect(schema?.properties?.['superProgress']).toBeDefined()
+    })
+
     it('returns 400 on non-integer id', async () => {
       const res = await app.request(`${DASH_CAMPAIGNS}/abc`, { headers: makeHeaders() })
       expect(res.status).toBe(400)

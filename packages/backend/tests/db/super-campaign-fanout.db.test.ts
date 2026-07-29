@@ -438,3 +438,103 @@ describe('createSuperCampaign — idempotency (keyed on superHashListId + parent
     expect(subs).toHaveLength(2)
   })
 })
+
+describe('createSuperCampaign — concurrency backstop (partial unique index, bug fix Major)', () => {
+  it('two truly concurrent calls for the same super never create a second parent row, and both return the same parent id', async () => {
+    const ntlm = await createHashList('race-ntlm', homogeneous(NTLM_MODE))
+    const sha = await createHashList('race-sha', homogeneous(SHA512_CRYPT_MODE))
+    await insertHashValues(ntlm, ['5'.repeat(32)])
+    await insertHashValues(sha, ['$6$r$' + 'F'.repeat(86)])
+    const superId = await createSuper('race-super', [ntlm, sha])
+
+    // Fire both requests at once (no await between them) so they race the
+    // existence check + insert exactly like two concurrent HTTP requests
+    // would. Before the fix, both would miss the pre-insert SELECT and both
+    // would successfully INSERT a parent campaign row — the partial unique
+    // index on campaigns(super_hash_list_id) WHERE ... parent_campaign_id
+    // IS NULL (migration 0045) now makes the loser's insert throw a 23505,
+    // which createSuperCampaign catches and recovers from by re-reading the
+    // winner's row instead of propagating a 500.
+    const [first, second] = await Promise.all([
+      createSuperCampaign({
+        projectId: projId,
+        name: 'race-campaign',
+        superHashListId: superId,
+      }),
+      createSuperCampaign({
+        projectId: projId,
+        name: 'race-campaign',
+        superHashListId: superId,
+      }),
+    ])
+
+    expect(first.kind).toBe('created')
+    expect(second.kind).toBe('created')
+    if (first.kind !== 'created' || second.kind !== 'created') {
+      throw new Error('expected both concurrent calls to succeed')
+    }
+
+    // Same parent campaign id on both sides — neither request ever saw a 500.
+    expect(second.parentCampaign.id).toBe(first.parentCampaign.id)
+
+    // DB-level: exactly one un-parented parent campaign for this super,
+    // never two.
+    const parents = await db
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.superHashListId, superId), isNull(campaigns.parentCampaignId)))
+    expect(parents).toHaveLength(1)
+
+    // Both leaves are represented under the single parent — the fan-out
+    // itself is not lost or short-circuited by the race recovery.
+    //
+    // NOT asserted: an exact sub-campaign count. This test's scope is the
+    // PARENT-level race this fix closes (the partial unique index + catch
+    // above). A narrower, harder-to-close race remains one level down: after
+    // both sides resolve the SAME parent, they each read "existing
+    // sub-campaigns for this parent" and can, under adversarial timing, both
+    // find none yet and both insert a sub-campaign for the same leaf before
+    // either commits. `confirmSplitCampaign`'s module doc comment already
+    // documents this identical class of race for its own sub-campaign loop
+    // as an accepted residual for v1 (no DB-level arbiter for
+    // (parent_campaign_id, hash_list_id) exists yet); the same trade-off
+    // applies here and is out of this fix's scope.
+    const subs = await subCampaignRows(first.parentCampaign.id)
+    const targetedLeaves = new Set(subs.map((s) => s.hashListId))
+    expect(targetedLeaves).toEqual(new Set([ntlm, sha]))
+  })
+})
+
+describe('createSuperCampaign — sub-campaign name truncation (bug fix Major)', () => {
+  it('truncates a 255-char base name so the sub-campaign name never exceeds campaigns.name (varchar(255))', async () => {
+    const ntlm = await createHashList('trunc-ntlm', homogeneous(NTLM_MODE))
+    const sha = await createHashList('trunc-sha', homogeneous(SHA512_CRYPT_MODE))
+    await insertHashValues(ntlm, ['6'.repeat(32)])
+    await insertHashValues(sha, ['$6$t$' + 'G'.repeat(86)])
+    const superId = await createSuper('trunc-super', [ntlm, sha])
+
+    // Base name already at the campaigns.name cap — appending " - mode <n>"
+    // unconditionally would push the sub-campaign name past varchar(255) and
+    // abort the fan-out loop mid-way with a Postgres 22001 error.
+    const maxLengthName = 'x'.repeat(255)
+
+    const result = await createSuperCampaign({
+      projectId: projId,
+      name: maxLengthName,
+      superHashListId: superId,
+    })
+
+    expect(result.kind).toBe('created')
+    if (result.kind !== 'created') throw new Error('expected created')
+    expect(result.subCampaigns).toHaveLength(2)
+
+    const subs = await subCampaignRows(result.parentCampaign.id)
+    expect(subs).toHaveLength(2)
+    for (const sub of subs) {
+      expect(sub.name.length).toBeLessThanOrEqual(255)
+      // ASCII hyphen, never an em dash (bug fix — punctuation).
+      expect(sub.name).toContain(` - mode ${sub.hashcatMode}`)
+      expect(sub.name).not.toContain('—')
+    }
+  })
+})

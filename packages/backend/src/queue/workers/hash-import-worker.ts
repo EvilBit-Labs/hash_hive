@@ -30,7 +30,7 @@
 import type { ImportSummary } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
-import { auditLogs, hashItems } from '@hashhive/shared'
+import { auditLogs, hashItems, hashLists, hashTypes } from '@hashhive/shared'
 import { type ConnectionOptions, UnrecoverableError, Worker } from 'bullmq'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 
@@ -43,7 +43,7 @@ import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
 import { deleteFile, downloadFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { recordAuditEvent } from '../../services/audit-log.js'
-import { upsertCrackedSet } from '../../services/hash-items/cracked-set.js'
+import { upsertCrackedSetBatch } from '../../services/hash-items/cracked-set.js'
 import { propagateCrack } from '../../services/hash-items/propagation.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -167,18 +167,24 @@ async function upsertTargetListBatches(
         })
 
       // RF1 / KTD3: record every imported crack in the project cracked-set so it
-      // zaps project-wide immediately. upsertCrackedSet no-ops when hashcatMode
-      // is null, so a mode-less import stays list-local (never cross-list dedups).
+      // zaps project-wide immediately. One batched multi-row upsert instead of
+      // one round trip per row (efficiency fix — mirrors the batched hash_items
+      // insert above). upsertCrackedSetBatch no-ops when hashcatMode is null, so
+      // a mode-less import stays list-local (never cross-list dedups). Safe to
+      // batch without an extra per-batch dedup: `batch` is a slice of
+      // `dedupedPairs`, which `processImportPairs` already deduplicated by
+      // hashValue across the WHOLE import before any batching happened.
       if (hashcatMode != null) {
-        for (const p of batch) {
-          await upsertCrackedSet(tx, {
+        await upsertCrackedSetBatch(
+          tx,
+          batch.map((p) => ({
             projectId,
             hashcatMode,
             hashValue: p.hashValue,
             plaintext: p.plaintext,
             sourceHashListId: hashListId,
-          })
-        }
+          }))
+        )
       }
     })
   }
@@ -313,7 +319,12 @@ async function propagateImportedCracks(
  * @param hashcatMode       The target list's resolved hashcat mode, or `null`
  *                          when it has no hash type set. Stamps
  *                          `detected_hashcat_mode`, drives cracked-set
- *                          population (RF1), and mode-scopes propagation (KTD3).
+ *                          population (RF1), and mode-scopes propagation
+ *                          (KTD3). `runHashImportJob` passes the CURRENT
+ *                          value (re-resolved at process time via
+ *                          `resolveCurrentHashcatMode`, bug fix Medium) —
+ *                          real-DB tests calling this function directly
+ *                          pass their own explicit value instead.
  */
 export async function processImportPairs(
   pairs: readonly ParsedImportPair[],
@@ -364,6 +375,46 @@ export async function processImportPairs(
   }
 }
 
+// ─── Mode resolution ──────────────────────────────────────────────────────────
+
+/**
+ * Re-resolves the target list's CURRENT hashcat mode at process time (bug
+ * fix, Medium). `stageAndEnqueueImport` (import-intake.ts) used to resolve
+ * this once at staging time and thread it through the job payload, but that
+ * is a SNAPSHOT: if an operator calls `setHashListType` on the list between
+ * staging and this worker running the job, the snapshot goes stale and
+ * every downstream write (`detected_hashcat_mode`, cracked-set population,
+ * propagation's mode scope) would key off the WRONG mode with no signal to
+ * anyone. Re-reading `hashTypeId` -> `hashcatMode` here — the same
+ * resolution `stageAndEnqueueImport` performs, just re-run at process time —
+ * makes this worker the single source of truth for its own writes.
+ *
+ * Returns `null` (mode-less, list-local import — KTD3) when the list has no
+ * hash type set, OR when the list itself no longer exists (deleted between
+ * staging and processing); both mirror `stageAndEnqueueImport`'s own
+ * null-mode contract.
+ *
+ * A direct local `INNER JOIN` rather than a call into
+ * `services/resources.ts` (which has `getHashListById`/`getHashTypeById`,
+ * the same resolution `stageAndEnqueueImport` uses) -- that module pulls in
+ * a large, unrelated dependency graph (compression, blob lifecycle, resource
+ * triggers) this lean worker has no other reason to import. One query
+ * instead of two round trips; the `INNER JOIN` naturally yields no row for
+ * either null case above.
+ */
+async function resolveCurrentHashcatMode(
+  hashListId: number,
+  projectId: number
+): Promise<number | null> {
+  const [row] = await db
+    .select({ hashcatMode: hashTypes.hashcatMode })
+    .from(hashLists)
+    .innerJoin(hashTypes, eq(hashLists.hashTypeId, hashTypes.id))
+    .where(and(eq(hashLists.id, hashListId), eq(hashLists.projectId, projectId)))
+    .limit(1)
+  return row?.hashcatMode ?? null
+}
+
 // ─── Worker job body ─────────────────────────────────────────────────────────
 
 /**
@@ -385,9 +436,14 @@ export async function runHashImportJob(
   data: HashImportPropagationJob,
   jobId: string | undefined
 ): Promise<ImportSummary> {
-  const { stagingKey, hashListId, projectId, actor, skippedFromParse, hashcatMode } = data
+  const { stagingKey, hashListId, projectId, actor, skippedFromParse } = data
 
   logger.info({ jobId, hashListId, stagingKey }, 'hash-import-worker: starting')
+
+  // Bug fix (Medium): re-resolve the target list's CURRENT hashcat mode here
+  // rather than trusting a value staged into the job payload — see
+  // `resolveCurrentHashcatMode`'s doc comment.
+  const hashcatMode = await resolveCurrentHashcatMode(hashListId, projectId)
 
   // Download staged pairs — cleartext lives only in the object store (KTD3).
   const download = await downloadFile(stagingKey)

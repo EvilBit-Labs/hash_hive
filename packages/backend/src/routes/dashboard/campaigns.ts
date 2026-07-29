@@ -11,6 +11,7 @@ import {
   splitReviewGroupsSchema,
   splitStatusResponseSchema,
   superCampaignFanoutResponseSchema,
+  superCampaignProgressSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -130,6 +131,13 @@ const campaignDetailResponseSchema = z.object({
     .passthrough(),
   activeAgents: z.array(z.unknown()),
   eta: campaignEtaSchema,
+  // Contract fix (Minor — issue #101 U11): the handler below has always
+  // returned `superProgress` for a super PARENT campaign (see the
+  // `superProgress != null` branch), but this schema omitted the field, so
+  // the served openapi.json spec did not document it. `.nullable()` covers
+  // the branch where the handler omits the key entirely for an ordinary /
+  // #202-split campaign (`.optional()`) as well as an explicit `null`.
+  superProgress: superCampaignProgressSchema.nullable().optional(),
 })
 
 const deleteCampaignResponseSchema = z.object({

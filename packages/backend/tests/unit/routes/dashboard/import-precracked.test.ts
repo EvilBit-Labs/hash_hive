@@ -302,9 +302,13 @@ if (!IS_ISOLATED) {
       expect(payload.hashListId).toBe(42)
       expect(payload.projectId).toBe(1)
       expect(payload.skippedFromParse).toBe(2)
-      // RF1: the resolved mode must ride in the job so the worker can populate
-      // the cracked-set and mode-scope propagation (default hash type → mode 0).
-      expect(payload.hashcatMode).toBe(0)
+      // Bug fix (Medium): the job payload no longer carries a staged
+      // hashcatMode snapshot -- runHashImportJob re-resolves the list's
+      // CURRENT mode from its hashTypeId at process time instead (see
+      // resolveCurrentHashcatMode in hash-import-worker.ts), so a
+      // setHashListType call between staging and processing can never make
+      // the worker stamp a stale mode.
+      expect('hashcatMode' in payload).toBe(false)
       expect(typeof payload.stagingKey).toBe('string')
       expect('actor' in payload).toBe(true)
       expect(typeof opts.jobId).toBe('string')

@@ -952,6 +952,21 @@ export const campaigns = pgTable(
       sql`num_nonnulls(${table.hashListId}, ${table.superHashListId}) = 1`
     ),
     index('campaigns_super_hash_list_id_idx').on(table.superHashListId),
+    // Concurrency backstop for `createSuperCampaign` (issue #101 U10 fix,
+    // Major): the service pre-checks for an existing un-parented parent
+    // campaign for a super, but that read + the later insert are separate
+    // statements with no lock, so two concurrent requests targeting the same
+    // super can both miss the check and both insert a parent campaign. This
+    // partial unique index makes the DB the arbiter -- the loser's insert
+    // throws a 23505 unique_violation, which `createSuperCampaign` catches
+    // and converts into a re-read of the winning row instead of creating a
+    // duplicate parent. Scoped to `parent_campaign_id IS NULL` because that
+    // is the identity a super-fan-out PARENT campaign is keyed on (KTD7) --
+    // it does not constrain a normal campaign's `super_hash_list_id`, which
+    // is always NULL anyway per `campaigns_exactly_one_target_chk`.
+    uniqueIndex('campaigns_super_hash_list_id_parent_once_idx')
+      .on(table.superHashListId)
+      .where(sql`${table.superHashListId} IS NOT NULL AND ${table.parentCampaignId} IS NULL`),
   ]
 )
 
