@@ -601,6 +601,14 @@ function superKeysetPredicate(cursor: SuperCursor): SQL {
  * Build the optional q/date filter predicates for the cracked super union.
  * `q` matches the hash value OR the RESOLVED plaintext (own row or cracked-set
  * fill); the date range is applied to the RESOLVED crack timestamp.
+ *
+ * `sql.param(date, hashItems.crackedAt)` is load-bearing on the date bounds:
+ * `resolvedCrackedAt` is a raw SQL expression (a `COALESCE(...)` over the
+ * cracked-set join), not a real column, so it gives Drizzle no column to
+ * borrow an encoder from — a bare `Date` reaches postgres-js unserialized and
+ * throws `ERR_INVALID_ARG_TYPE`. Naming `hashItems.crackedAt` supplies the
+ * same timestamptz encoder (mirrors `routes/dashboard/results.ts`'s
+ * `buildResultFilters`, which hits this exact expression).
  */
 function superCrackedFilterConds(
   filters: ExportFilters | undefined,
@@ -615,10 +623,12 @@ function superCrackedFilterConds(
         ]
       : []),
     ...(filters?.startDate != null
-      ? [sql`${resolvedCrackedAt} >= ${new Date(filters.startDate)}`]
+      ? [
+          sql`${resolvedCrackedAt} >= ${sql.param(new Date(filters.startDate), hashItems.crackedAt)}`,
+        ]
       : []),
     ...(filters?.endDate != null
-      ? [sql`${resolvedCrackedAt} <= ${new Date(filters.endDate)}`]
+      ? [sql`${resolvedCrackedAt} <= ${sql.param(new Date(filters.endDate), hashItems.crackedAt)}`]
       : []),
   ]
 }

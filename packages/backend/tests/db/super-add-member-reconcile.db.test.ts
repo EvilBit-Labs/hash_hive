@@ -67,6 +67,29 @@ async function createList(name: string): Promise<number> {
   return row!.id
 }
 
+/**
+ * Create a #202 split PARENT hash list plus one CHILD (`parentHashListId`
+ * pointing at the parent). Mirrors what campaign-split leaves behind: the
+ * parent is an empty shell (no `hash_items` of its own) and its cracked items
+ * live on the child.
+ */
+async function createSplitParentWithChild(
+  name: string
+): Promise<{ parentId: number; childId: number }> {
+  const parentId = await createList(`${name}-parent`)
+  seq += 1
+  const [child] = await db
+    .insert(hashLists)
+    .values({
+      projectId: projId,
+      name: `${name}-child-${seq}`,
+      status: 'ready',
+      parentHashListId: parentId,
+    })
+    .returning({ id: hashLists.id })
+  return { parentId, childId: child!.id }
+}
+
 /** Insert one hash item, cracked or not, carrying an explicit resolved mode. */
 async function insertItem(
   hashListId: number,
@@ -195,13 +218,13 @@ describe('addMember reconciliation — idempotency', () => {
     })
 
     // First backfill (in its own transaction, as addMember runs it).
-    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, listB))
+    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, [listB]))
     const [first] = await crackedSetRows(MODE_A, H)
     expect(first).toBeDefined()
     const firstCrackedAt = first!.crackedAt.getTime()
 
     // Second backfill — must be a no-op.
-    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, listB))
+    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, [listB]))
     const rows = await crackedSetRows(MODE_A, H)
     expect(rows).toHaveLength(1)
     expect(rows[0]!.crackedAt.getTime()).toBe(firstCrackedAt)
@@ -216,7 +239,7 @@ describe('addMember reconciliation — mode discrimination + exclusions', () => 
     // B cracked H under MODE_B...
     await insertItem(listB, H, { mode: MODE_B, crackedAt: new Date(), plaintext: 'bpw' })
 
-    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, listB))
+    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, [listB]))
 
     // ...so an uncracked MODE_A duplicate must NOT resolve — key is (mode, value).
     const resolved = await resolveCrackState(
@@ -240,7 +263,7 @@ describe('addMember reconciliation — mode discrimination + exclusions', () => 
     await insertItem(listB, uncracked, { mode: MODE_A })
     await insertItem(listB, noMode, { mode: null, crackedAt: new Date(), plaintext: 'x' })
 
-    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, listB))
+    await db.transaction((tx) => backfillCrackedSetFromMember(tx, projId, [listB]))
 
     expect(await crackedSetRows(MODE_A, uncracked)).toHaveLength(0)
     // A modeless crack has no (mode, value) key at all — nothing to look up.
@@ -251,5 +274,53 @@ describe('addMember reconciliation — mode discrimination + exclusions', () => 
         and(eq(projectCrackedHashes.projectId, projId), eq(projectCrackedHashes.hashValue, noMode))
       )
     expect(anyNoMode).toHaveLength(0)
+  })
+})
+
+describe('addMember reconciliation — #202 split-parent member (HIGH fix)', () => {
+  it("a sibling's uncracked duplicate resolves cracked after the added member is a split PARENT whose CHILD holds the crack", async () => {
+    const H = 'g'.repeat(32)
+    const listA = await createList('splitfix-a')
+    // A holds an uncracked duplicate of H.
+    const aItemId = await insertItem(listA, H, { mode: MODE_A })
+
+    // The added member is a #202 split PARENT — an empty shell with no
+    // hash_items of its own. Its CHILD carries the historical crack.
+    const { parentId, childId } = await createSplitParentWithChild('splitfix')
+    await insertItem(childId, H, {
+      mode: MODE_A,
+      crackedAt: new Date('2026-01-05T00:00:00.000Z'),
+      plaintext: 'splitsecret',
+    })
+
+    const superId = await createSuperWithMember('splitfix-super', listA)
+
+    // Before the add: A's H is not yet resolvable.
+    const before = await resolveCrackState(
+      [{ hashValue: H, detectedHashcatMode: MODE_A, crackedAt: null }],
+      projId
+    )
+    expect(before[0]?.cracked).toBe(false)
+
+    // Add the split-parent member — the backfill must resolve to the CHILD's
+    // hash_items (the parent itself has none) or the reconciliation silently
+    // no-ops.
+    await addMember(superId, parentId, projId)
+
+    const after = await resolveCrackState(
+      [{ hashValue: H, detectedHashcatMode: MODE_A, crackedAt: null }],
+      projId
+    )
+    expect(after[0]?.cracked).toBe(true)
+    expect(after[0]?.plaintext).toBe('splitsecret')
+
+    // A cracked-set row exists for (project, mode, value).
+    const rows = await crackedSetRows(MODE_A, H)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.plaintext).toBe('splitsecret')
+
+    // A's own row was never mutated — dedup is read-time only.
+    const [aRow] = await db.select().from(hashItems).where(eq(hashItems.id, aItemId))
+    expect(aRow?.crackedAt).toBeNull()
   })
 })

@@ -101,7 +101,8 @@ async function recordCrack(
 /** Drain a super export into its lines (CSV: lines[0] is the header). */
 async function exportLines(
   variant: 'cracked-pairs' | 'plaintext-only' | 'uncracked',
-  format: 'csv' | 'hashcat-potfile' = 'csv'
+  format: 'csv' | 'hashcat-potfile' = 'csv',
+  filters?: { startDate?: string; endDate?: string }
 ): Promise<string[]> {
   const { rows } = await createExport(db, {
     scope: 'super',
@@ -109,6 +110,7 @@ async function exportLines(
     superHashListId: superId,
     variant,
     format,
+    ...(filters ? { filters } : {}),
   })
   const lines: string[] = []
   for await (const line of rows) lines.push(line)
@@ -238,5 +240,61 @@ describe('super export — uncracked (deduplicated union, cracked-anywhere exclu
 
     expect(new Set(data)).toEqual(new Set(['bothuncracked', 'onlyauncr']))
     expect(data).toHaveLength(2)
+  })
+})
+
+describe('super export — date-range filter on the resolved crack timestamp (CRITICAL fix)', () => {
+  it('a startDate/endDate filter narrows the deduped rows and does NOT throw ERR_INVALID_ARG_TYPE', async () => {
+    // Two OWN-ROW-cracked values (no cracked-set counterpart, so their
+    // resolved timestamp is unambiguously their own `crackedAt` — unlike
+    // 'dupval'/'sibval' above, which partly resolve through the cracked-set's
+    // shared `recordCrack()` timestamp).
+    await insertItem(listAId, 'dateearly', MODE_X, {
+      crackedAt: new Date('2026-01-15T00:00:00.000Z'),
+      plaintext: 'earlyplain',
+    })
+    await insertItem(listAId, 'datelate', MODE_X, {
+      crackedAt: new Date('2026-04-01T00:00:00.000Z'),
+      plaintext: 'lateplain',
+    })
+
+    // A range spanning only January must include 'dateearly' and exclude
+    // 'datelate' — proving the filter is applied against the RESOLVED crack
+    // timestamp without the bare-Date-vs-raw-SQL-expression crash the fix
+    // addresses (this query previously threw `ERR_INVALID_ARG_TYPE`).
+    const lines = await exportLines('cracked-pairs', 'csv', {
+      startDate: '2026-01-01T00:00:00.000Z',
+      endDate: '2026-01-31T00:00:00.000Z',
+    })
+    expect(lines[0]).toBe(
+      'hash_value,plaintext,username,source,campaign,attack,hash_list,cracked_at'
+    )
+    const hashValues = lines.slice(1).map((l) => l.split(',')[0])
+    expect(hashValues).toContain('dateearly')
+    expect(hashValues).not.toContain('datelate')
+  })
+
+  it('a range covering every crack returns the full deduped set (upper + lower bound both apply)', async () => {
+    const lines = await exportLines('cracked-pairs', 'csv', {
+      startDate: '2025-01-01T00:00:00.000Z',
+      endDate: '2027-01-01T00:00:00.000Z',
+    })
+    const hashValues = lines.slice(1).map((l) => l.split(',')[0])
+    // Same rows as the unfiltered case (plus this describe block's own
+    // `dateearly`/`datelate` fixtures, both within range): dupval, sibval,
+    // 'collide' twice (once per distinct hashcat mode, AE1), dateearly, datelate.
+    expect(hashValues.filter((v) => v === 'dupval')).toHaveLength(1)
+    expect(hashValues.filter((v) => v === 'sibval')).toHaveLength(1)
+    expect(hashValues.filter((v) => v === 'collide')).toHaveLength(2)
+    expect(hashValues).toContain('dateearly')
+    expect(hashValues).toContain('datelate')
+  })
+
+  it('a range excluding every crack returns an empty deduped set', async () => {
+    const lines = await exportLines('cracked-pairs', 'csv', {
+      startDate: '1999-01-01T00:00:00.000Z',
+      endDate: '1999-01-02T00:00:00.000Z',
+    })
+    expect(lines.slice(1)).toHaveLength(0)
   })
 })

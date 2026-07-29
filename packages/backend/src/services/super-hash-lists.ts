@@ -384,7 +384,14 @@ export async function addMember(
       await tx
         .insert(superHashListMembers)
         .values({ superHashListId: superId, memberHashListId: hashListId })
-      await backfillCrackedSetFromMember(tx, projectId, hashListId)
+      // Resolve to the member's PHYSICAL leaves before backfilling: a #202
+      // split-parent member has no `hash_items` of its own (moved to its
+      // children at split time), so backfilling against the bare
+      // `hashListId` would silently match zero rows and skip the
+      // reconciliation. A homogeneous member resolves to `[hashListId]`
+      // unchanged.
+      const leafHashListIds = await resolveListToPhysicalLeaves(hashListId, projectId)
+      await backfillCrackedSetFromMember(tx, projectId, leafHashListIds)
     })
   } catch (err) {
     if (
@@ -455,6 +462,29 @@ export async function removeMember(
     .where(and(eq(superHashLists.id, superId), eq(superHashLists.projectId, projectId)))
     .limit(1)
   if (!superRow) return null
+
+  // Membership guard (CRITICAL — cross-tenant plaintext exfiltration): confirm
+  // `hashListId` is actually a CURRENT member of this super before resolving
+  // it to physical leaves. Without this check, `resolveListToPhysicalLeaves`
+  // returns `[hashListId]` unvalidated for any homogeneous list on the
+  // installation — including one belonging to a different project — and the
+  // harvest below would copy that list's cracked plaintext onto this
+  // project's uncracked rows. Membership can only exist for a list that
+  // already passed the 0042 tenant trigger at add time, so this single check
+  // closes the hole and doubles as the non-member-listId correctness guard
+  // (a non-member id now 404s instead of running a no-op harvest + dispatch
+  // stop and returning 200).
+  const [membership] = await db
+    .select({ memberHashListId: superHashListMembers.memberHashListId })
+    .from(superHashListMembers)
+    .where(
+      and(
+        eq(superHashListMembers.superHashListId, superId),
+        eq(superHashListMembers.memberHashListId, hashListId)
+      )
+    )
+    .limit(1)
+  if (!membership) return null
 
   // Resolve the leaves BEFORE detaching (the super resolver still counts the
   // leaving member): source = the removed member's leaves; destination = every

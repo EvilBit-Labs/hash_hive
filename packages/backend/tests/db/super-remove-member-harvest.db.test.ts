@@ -52,15 +52,21 @@ import { upsertCrackedSet } from '../../src/services/hash-items/cracked-set.js'
 import { _removeMemberDeps, addMember, removeMember } from '../../src/services/super-hash-lists.js'
 
 const SLUG = 'super-remove-member-harvest-proj'
+// A second, unrelated project — used only by the CRITICAL cross-tenant fix
+// test to prove a listId from a different project cannot be passed as the
+// member-to-remove.
+const OTHER_SLUG = 'super-remove-member-harvest-other-proj'
 
 const MODE_A = 9_913_000
 const MODE_B = 9_913_001
 
 let projId = 0
+let otherProjId = 0
 let seq = 0
 
 async function cleanup(): Promise<void> {
   await db.delete(projects).where(eq(projects.slug, SLUG))
+  await db.delete(projects).where(eq(projects.slug, OTHER_SLUG))
 }
 
 async function createList(name: string): Promise<number> {
@@ -68,6 +74,16 @@ async function createList(name: string): Promise<number> {
   const [row] = await db
     .insert(hashLists)
     .values({ projectId: projId, name: `${name}-${seq}`, status: 'ready' })
+    .returning({ id: hashLists.id })
+  return row!.id
+}
+
+/** Create a hash list in the OTHER (unrelated) project. */
+async function createListInOtherProject(name: string): Promise<number> {
+  seq += 1
+  const [row] = await db
+    .insert(hashLists)
+    .values({ projectId: otherProjId, name: `${name}-${seq}`, status: 'ready' })
     .returning({ id: hashLists.id })
   return row!.id
 }
@@ -183,6 +199,12 @@ beforeAll(async () => {
     .values({ name: 'super-remove-member-harvest test project', slug: SLUG })
     .returning({ id: projects.id })
   projId = p!.id
+
+  const [otherP] = await db
+    .insert(projects)
+    .values({ name: 'super-remove-member-harvest OTHER test project', slug: OTHER_SLUG })
+    .returning({ id: projects.id })
+  otherProjId = otherP!.id
 })
 
 afterAll(async () => {
@@ -397,5 +419,73 @@ describe('removeMember — harvest atomicity (RF7): a mid-transaction failure ro
     const bRow = await itemRow(bItem)
     expect(bRow?.crackedAt).toBeNull()
     expect(bRow?.plaintext).toBeNull()
+  })
+})
+
+describe('removeMember — membership guard (CRITICAL fix): hashListId must be a current member', () => {
+  it('a listId from a DIFFERENT project returns null and performs NO harvest or campaign cancellation', async () => {
+    const H = 'g'.repeat(32)
+    const listA = await createList('guard-cross-a')
+    const listB = await createList('guard-cross-b')
+    // A list in an UNRELATED project, already cracked — the attempted attack
+    // surface: passing this id as `hashListId` must never harvest its
+    // plaintext into this project.
+    const foreignList = await createListInOtherProject('guard-cross-foreign')
+    await insertItem(foreignList, H, {
+      mode: MODE_A,
+      crackedAt: new Date(),
+      plaintext: 'foreignsecret',
+    })
+    // B holds an uncracked duplicate — the value the exploit would try to
+    // materialize cracked via the foreign list's harvest.
+    const bItem = await insertItem(listB, H, { mode: MODE_A })
+
+    const superId = await createSuper('guard-cross-super', [listA, listB])
+    const parentId = await createSuperParentCampaign(superId)
+    const subForA = await createLeafCampaign(listA, {
+      parentCampaignId: parentId,
+      status: 'running',
+    })
+
+    const result = await removeMember(superId, foreignList, projId)
+
+    expect(result).toBeNull()
+    // No harvest: B's duplicate stays uncracked.
+    expect((await itemRow(bItem))?.crackedAt).toBeNull()
+    // No membership change: A and B remain members.
+    expect(await memberRow(superId, listA)).toBeDefined()
+    expect(await memberRow(superId, listB)).toBeDefined()
+    // No dispatch-stop: A's running sub-campaign is untouched.
+    expect(await campaignStatus(subForA)).toBe('running')
+  })
+
+  it('a same-project listId that was never added to the super returns null and performs no harvest/dispatch-stop', async () => {
+    const H = 'h'.repeat(32)
+    const listA = await createList('guard-nonmember-a')
+    const listB = await createList('guard-nonmember-b')
+    // A same-project list that exists but was NEVER added as a member of
+    // this super.
+    const nonMemberList = await createList('guard-nonmember-outside')
+    await insertItem(nonMemberList, H, {
+      mode: MODE_A,
+      crackedAt: new Date(),
+      plaintext: 'nonmembersecret',
+    })
+    const bItem = await insertItem(listB, H, { mode: MODE_A })
+
+    const superId = await createSuper('guard-nonmember-super', [listA, listB])
+    const parentId = await createSuperParentCampaign(superId)
+    const subForA = await createLeafCampaign(listA, {
+      parentCampaignId: parentId,
+      status: 'running',
+    })
+
+    const result = await removeMember(superId, nonMemberList, projId)
+
+    expect(result).toBeNull()
+    expect((await itemRow(bItem))?.crackedAt).toBeNull()
+    expect(await memberRow(superId, listA)).toBeDefined()
+    expect(await memberRow(superId, listB)).toBeDefined()
+    expect(await campaignStatus(subForA)).toBe('running')
   })
 })

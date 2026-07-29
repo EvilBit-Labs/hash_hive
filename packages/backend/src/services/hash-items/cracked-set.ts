@@ -20,7 +20,7 @@
  * in that case so the caller can pass results uniformly.
  */
 import { hashItems, projectCrackedHashes } from '@hashhive/shared'
-import { sql } from 'drizzle-orm'
+import { inArray, sql } from 'drizzle-orm'
 
 import type { db } from '../../db/index.js'
 
@@ -92,7 +92,16 @@ export async function upsertCrackedSet(tx: Tx, input: UpsertCrackedSetInput): Pr
  * U12 — Retroactive backfill of a hash list's already-cracked hashes into the
  * project cracked-set, run when the list is added as a super member (R9, AE3).
  *
- * Every `(mode, value)` the list already cracked in its OWN `hash_items`
+ * `leafHashListIds` is the member's PHYSICAL leaf set — for a homogeneous
+ * member that is `[hashListId]` (the caller resolves it via
+ * `resolveListToPhysicalLeaves`), but for a #202 split-parent member it is the
+ * parent's per-type CHILDREN: a split parent's own `hash_items` are moved to
+ * its children at split time (the parent is an empty shell), so backfilling
+ * against the bare parent id would match zero rows and silently skip the
+ * reconciliation. Querying the leaf set instead makes the backfill correct for
+ * both member shapes.
+ *
+ * Every `(mode, value)` already cracked across those leaves' OWN `hash_items`
  * (`crackedAt IS NOT NULL`, with a resolved mode and plaintext) that is not yet
  * in the set is inserted, so an uncracked duplicate of that value in a sibling
  * member immediately resolves cracked at read time (U4) with no re-attack. A
@@ -110,14 +119,21 @@ export async function upsertCrackedSet(tx: Tx, input: UpsertCrackedSetInput): Pr
  *
  * KTD3: rows with no resolved `detectedHashcatMode` are excluded — they never
  * cross-list dedup. Because `hash_items` is UNIQUE on `(hashListId, hashValue)`,
- * a single member yields at most one row per `(mode, value)`, so no in-statement
- * conflict handling beyond `DO NOTHING` is needed.
+ * each leaf yields at most one row per `(mode, value)`, but two SIBLING leaves
+ * (e.g. two children of the same split parent) could each hold the value —
+ * `ON CONFLICT DO NOTHING` absorbs that without extra handling.
+ *
+ * A no-op for an empty `leafHashListIds` (defense-in-depth; callers should
+ * never pass one, since `resolveListToPhysicalLeaves` always returns at least
+ * `[hashListId]`).
  */
 export async function backfillCrackedSetFromMember(
   tx: Tx,
   projectId: number,
-  hashListId: number
+  leafHashListIds: number[]
 ): Promise<void> {
+  if (leafHashListIds.length === 0) return
+
   // App-controlled stamp (KTD2 — not a DB-side now()). Bound as an ISO string
   // with an explicit cast: in a SELECT constant position postgres-js has no
   // column type to infer from, so a raw `Date` param fails to serialize —
@@ -136,7 +152,7 @@ export async function backfillCrackedSetFromMember(
       ${hashItems.crackedAt},
       ${hashItems.hashListId}
     FROM ${hashItems}
-    WHERE ${hashItems.hashListId} = ${hashListId}
+    WHERE ${inArray(hashItems.hashListId, leafHashListIds)}
       AND ${hashItems.crackedAt} IS NOT NULL
       AND ${hashItems.detectedHashcatMode} IS NOT NULL
       AND ${hashItems.plaintext} IS NOT NULL
