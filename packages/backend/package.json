@@ -34,7 +34,7 @@
     "drizzle-orm": "0.45.2",
     "hono": "^4.12.22",
     "ioredis": "5.11.1",
-    "ldapts": "^8.1.8",
+    "ldapts": "^9.0.0",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",
     "unique-names-generator": "^4.7.1",
