@@ -99,6 +99,14 @@ export interface HashImportPropagationJob {
   actor: AuditActor
   /** Parse-time skip count from U6 — passed through for the final summary. */
   skippedFromParse: number
+  /**
+   * Resolved hashcat mode of the target hash list (from its hash type), or
+   * `null` when the list has no hash type set. Threaded so the worker can stamp
+   * `detected_hashcat_mode` on cracked rows, populate the project cracked-set
+   * (KTD3), and mode-scope cross-list propagation. A `null` mode means the
+   * import stays list-local and never cross-list dedups.
+   */
+  hashcatMode: number | null
 }
 
 // ─── Job Data Discriminated Union ────────────────────────────────────

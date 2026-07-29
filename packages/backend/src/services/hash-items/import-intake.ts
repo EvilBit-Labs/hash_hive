@@ -107,7 +107,16 @@ export async function stageAndEnqueueImport(
 
     const enqueued = await qm.enqueue(
       QUEUE_NAMES.HASH_IMPORT_PROPAGATION,
-      { stagingKey, hashListId, projectId, actor, skippedFromParse: parseResult.skipped },
+      {
+        stagingKey,
+        hashListId,
+        projectId,
+        actor,
+        skippedFromParse: parseResult.skipped,
+        // Thread the resolved mode (already looked up above for potfile parsing)
+        // so the worker can populate the cracked-set and mode-scope propagation.
+        hashcatMode,
+      },
       { jobId: buildHashImportJobId(hashListId, stagingKey) }
     )
 

@@ -182,7 +182,8 @@ describe('processImportPairs — provenance write', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-prov-v1'
+        'staging-key-prov-v1',
+        0
       )
 
       // Summary counts: 1 matched (pre-existing uncracked), 1 cracked
@@ -257,7 +258,8 @@ describe('processImportPairs — setWhere guard (KTD2)', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-guard-v1'
+        'staging-key-guard-v1',
+        0
       )
 
       // matchedInList = 1 (row exists), crackedInList = 0 (row was already cracked)
@@ -308,18 +310,20 @@ describe('processImportPairs — project-scoped propagation (R11 / KTD3 / securi
       .returning({ id: hashLists.id })
 
     // Insert uncracked in target list, uncracked in a same-project sibling list,
-    // and uncracked in an OTHER-project list.
+    // and uncracked in an OTHER-project list. Sibling/other seeded at the same
+    // resolved mode (0) as the import so the mode guard admits them — the only
+    // reason the other-project row stays uncracked is project scope.
     const [rowTarget] = await db
       .insert(hashItems)
-      .values({ hashListId: targetListId, hashValue })
+      .values({ hashListId: targetListId, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
     const [rowSibling] = await db
       .insert(hashItems)
-      .values({ hashListId: siblingList!.id, hashValue })
+      .values({ hashListId: siblingList!.id, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
     const [rowOther] = await db
       .insert(hashItems)
-      .values({ hashListId: otherListId, hashValue })
+      .values({ hashListId: otherListId, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
 
     try {
@@ -329,7 +333,8 @@ describe('processImportPairs — project-scoped propagation (R11 / KTD3 / securi
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-cross-v1'
+        'staging-key-cross-v1',
+        0
       )
 
       // Target row: full provenance (source='import')
@@ -386,13 +391,14 @@ describe('processImportPairs — project-scoped propagation (R11 / KTD3 / securi
 })
 
 describe('processImportPairs — zap integration (scenario 4)', () => {
-  it('an import cracks hash_items but is NOT a zap; the value zaps once it is in the project cracked-set (U3)', async () => {
-    // U3 widened getZapsForTask to resolve from the maintained per-project
-    // cracked-set (project_cracked_hashes) at project+mode scope, NOT from
-    // cracked hash_items rows. The import path (processImportPairs Phase 3 ->
-    // propagateCrack) fills hash_items only — it does not (yet) populate the
-    // cracked-set — so an import alone no longer surfaces as a zap. The zap
-    // appears once the crack is recorded in the cracked-set.
+  it('an import with a resolved mode populates the cracked-set, so the value zaps immediately (RF1)', async () => {
+    // RF1: the import worker now upserts each crack into the per-project
+    // cracked-set (project_cracked_hashes) in the SAME transaction as the
+    // hash_items write. getZapsForTask (U3) resolves from that cracked-set at
+    // project+mode scope, so an import with a resolvable mode surfaces as a zap
+    // WITHOUT any separate backfill — the previous behavior (import fills
+    // hash_items only, never zaps until a manual cracked-set write) is the bug
+    // this residual closes.
     const hashValue = 'hash-import-zap-integ-v1'
     const plaintext = 'zapImportPass'
 
@@ -415,33 +421,18 @@ describe('processImportPairs — zap integration (scenario 4)', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-zap-v1'
+        'staging-key-zap-v1',
+        // Resolved mode 0 — matches the campaign/task mode getZapsForTask scans.
+        0
       )
 
-      // After import: hash_items is cracked, but the widened zap scan reads the
-      // cracked-set — which the import path does not populate — so it must NOT
-      // surface as a zap yet.
+      // After import: the crack is in the cracked-set at (project, mode 0), so
+      // the widened zap scan now surfaces it — no manual cracked-set write needed.
       const afterImport = await getZapsForTask(targetTaskId, targetAgentId, targetProjId)
       if ('error' in afterImport) {
         throw new Error(`getZapsForTask error after import: ${afterImport.error}`)
       }
-      expect(afterImport.zaps).not.toContain(hashValue)
-
-      // Record the crack in the cracked-set at (project, mode 0) — the source
-      // the widened scan reads. Now the value must surface as a zap.
-      await db.insert(projectCrackedHashes).values({
-        projectId: targetProjId,
-        hashcatMode: 0,
-        hashValue,
-        plaintext,
-        crackedAt: new Date(),
-        originalCrackedAt: new Date(),
-      })
-      const afterCrackedSet = await getZapsForTask(targetTaskId, targetAgentId, targetProjId)
-      if ('error' in afterCrackedSet) {
-        throw new Error(`getZapsForTask error after cracked-set: ${afterCrackedSet.error}`)
-      }
-      expect(afterCrackedSet.zaps).toContain(hashValue)
+      expect(afterImport.zaps).toContain(hashValue)
     } finally {
       await db.delete(hashItems).where(eq(hashItems.id, item!.id))
       await db
@@ -452,6 +443,85 @@ describe('processImportPairs — zap integration (scenario 4)', () => {
             eq(projectCrackedHashes.hashValue, hashValue)
           )
         )
+      await db
+        .delete(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
+    }
+  })
+})
+
+describe('processImportPairs — cracked-set population (RF1)', () => {
+  it('records an imported crack in project_cracked_hashes when the mode is resolvable, and skips it when the mode is null (KTD3)', async () => {
+    const resolvableHash = 'hash-import-crackedset-mode-v1'
+    const modelessHash = 'hash-import-crackedset-null-v1'
+    const plaintext = 'crackedSetPass'
+
+    try {
+      // (a) Import with a resolved mode → a cracked-set row must appear.
+      await processImportPairs(
+        [{ hashValue: resolvableHash, plaintext }],
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0,
+        'staging-key-crackedset-mode',
+        1000 // resolvable mode (NTLM)
+      )
+
+      const modeRows = await db
+        .select({
+          plaintext: projectCrackedHashes.plaintext,
+          sourceHashListId: projectCrackedHashes.sourceHashListId,
+        })
+        .from(projectCrackedHashes)
+        .where(
+          and(
+            eq(projectCrackedHashes.projectId, targetProjId),
+            eq(projectCrackedHashes.hashcatMode, 1000),
+            eq(projectCrackedHashes.hashValue, resolvableHash)
+          )
+        )
+      expect(modeRows).toHaveLength(1)
+      expect(modeRows[0]!.plaintext).toBe(plaintext)
+      // Provenance: the crack is attributed to the target list (R17).
+      expect(modeRows[0]!.sourceHashListId).toBe(targetListId)
+
+      // (b) Import with a null mode → no cracked-set row (mode-less never dedups).
+      await processImportPairs(
+        [{ hashValue: modelessHash, plaintext }],
+        targetListId,
+        targetProjId,
+        SYSTEM_ACTOR,
+        0,
+        'staging-key-crackedset-null',
+        null // no resolvable mode
+      )
+
+      const nullModeRows = await db
+        .select({ id: projectCrackedHashes.id })
+        .from(projectCrackedHashes)
+        .where(
+          and(
+            eq(projectCrackedHashes.projectId, targetProjId),
+            eq(projectCrackedHashes.hashValue, modelessHash)
+          )
+        )
+      expect(nullModeRows).toHaveLength(0)
+    } finally {
+      await db
+        .delete(projectCrackedHashes)
+        .where(
+          and(
+            eq(projectCrackedHashes.projectId, targetProjId),
+            eq(projectCrackedHashes.hashValue, resolvableHash)
+          )
+        )
+      await db
+        .delete(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, resolvableHash)))
+      await db
+        .delete(hashItems)
+        .where(and(eq(hashItems.hashListId, targetListId), eq(hashItems.hashValue, modelessHash)))
       await db
         .delete(auditLogs)
         .where(and(eq(auditLogs.entityType, 'hash_list'), eq(auditLogs.entityId, targetListId)))
@@ -478,7 +548,8 @@ describe('processImportPairs — audit event (scenario 5)', () => {
         targetProjId,
         actor,
         3, // pretend 3 lines were skipped during parsing
-        stagingKey
+        stagingKey,
+        0
       )
 
       // Fetch all audit rows for this hash list (scoped by entityId, not projectId,
@@ -533,7 +604,8 @@ describe('processImportPairs — audit dedup on retry (item I)', () => {
         targetProjId,
         actor,
         0,
-        stagingKey
+        stagingKey,
+        0
       )
       // Second call with the same stagingKey — simulates a BullMQ retry.
       // The dedup check must detect the existing row and skip the insert.
@@ -543,7 +615,8 @@ describe('processImportPairs — audit dedup on retry (item I)', () => {
         targetProjId,
         actor,
         0,
-        stagingKey
+        stagingKey,
+        0
       )
 
       const auditRows = await db
@@ -603,7 +676,8 @@ describe('processImportPairs — username COALESCE preservation', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-coalesce-1a'
+        'staging-key-coalesce-1a',
+        0
       )
 
       const [after] = await db
@@ -637,7 +711,8 @@ describe('processImportPairs — username COALESCE preservation', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-coalesce-1b'
+        'staging-key-coalesce-1b',
+        0
       )
 
       const [after] = await db
@@ -672,7 +747,8 @@ describe('processImportPairs — new row insert', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-newrow-v2'
+        'staging-key-newrow-v2',
+        0
       )
 
       expect(result.matchedInList).toBe(0)
@@ -724,7 +800,8 @@ describe('processImportPairs — duplicate hashValue deduplication', () => {
         targetProjId,
         SYSTEM_ACTOR,
         0,
-        'staging-key-dedup-v3'
+        'staging-key-dedup-v3',
+        0
       )
 
       // New row (not pre-existing) → both summary counts are 0

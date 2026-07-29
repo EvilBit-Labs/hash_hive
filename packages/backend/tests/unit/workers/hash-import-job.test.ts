@@ -52,9 +52,16 @@ if (!IS_ISOLATED) {
   // Fake Drizzle chains so processImportPairs can run without a live DB.
   // upsertTargetListBatches needs:
   //   - db.select({matched,willCrack}).from(...).where(...)  → [{matched:0,willCrack:0}]
-  //   - db.insert(...).values(...).onConflictDoUpdate(...)   → []
-  // propagateImportedCracks needs:
+  //   - db.transaction(cb) → cb(tx) where tx.insert(...).values(...).onConflictDoUpdate(...) → []
+  // propagateImportedCracks needs (only when hashcatMode != null; fixture uses null):
   //   - db.selectDistinct({hashValue}).from(...).where(...)  → []
+  const txStub = {
+    insert: () => ({
+      values: () => ({
+        onConflictDoUpdate: () => Promise.resolve([]),
+      }),
+    }),
+  }
   mock.module('../../../src/db/index.js', () => ({
     db: {
       select: () => ({
@@ -73,6 +80,9 @@ if (!IS_ISOLATED) {
           where: () => Promise.resolve([]),
         }),
       }),
+      // upsertTargetListBatches now wraps the hash_items upsert (+ cracked-set
+      // population) in a single transaction — mirror updateTaskProgress.
+      transaction: (cb: (tx: typeof txStub) => Promise<unknown>) => cb(txStub),
       insert: () => ({
         values: () => ({
           onConflictDoUpdate: () => Promise.resolve([]),
@@ -112,6 +122,9 @@ if (!IS_ISOLATED) {
     projectId: 1,
     actor: SYSTEM_ACTOR,
     skippedFromParse: 0,
+    // Null mode keeps this unit test list-local: no cracked-set upsert and no
+    // propagation, so the fake db needs only the transaction + insert chain.
+    hashcatMode: null,
   })
 
   beforeEach(() => {

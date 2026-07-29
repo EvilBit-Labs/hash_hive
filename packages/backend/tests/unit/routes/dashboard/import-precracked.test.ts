@@ -302,6 +302,9 @@ if (!IS_ISOLATED) {
       expect(payload.hashListId).toBe(42)
       expect(payload.projectId).toBe(1)
       expect(payload.skippedFromParse).toBe(2)
+      // RF1: the resolved mode must ride in the job so the worker can populate
+      // the cracked-set and mode-scope propagation (default hash type → mode 0).
+      expect(payload.hashcatMode).toBe(0)
       expect(typeof payload.stagingKey).toBe('string')
       expect('actor' in payload).toBe(true)
       expect(typeof opts.jobId).toBe('string')

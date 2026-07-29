@@ -1,23 +1,27 @@
 /**
  * Real-DB tests for U2: propagateCrack — match-by-value propagation primitive.
  *
- * propagateCrack(hashValue, plaintext, projectId) fills plaintext + crackedAt
- * onto every uncracked hash item sharing that hash value WITHIN THE OWNING
- * PROJECT (SuperHashlists KTD3 / security F2 — the prior cross-project behavior
- * leaked one tenant's plaintext into another and is now closed). It does NOT
- * touch username/source/attribution FKs (campaignId/attackId/taskId/agentId) on
+ * propagateCrack(hashValue, plaintext, projectId, hashcatMode) fills plaintext +
+ * crackedAt onto every uncracked hash item sharing that (hashcatMode, hashValue)
+ * key WITHIN THE OWNING PROJECT (SuperHashlists KTD3 / security F2 — the prior
+ * cross-project behavior leaked one tenant's plaintext into another and is now
+ * closed; the prior mode-blind behavior mis-filled a same-value row of a
+ * DIFFERENT mode and is now closed too). It does NOT touch
+ * username/source/attribution FKs (campaignId/attackId/taskId/agentId) on
  * propagated rows — only uncracked rows are updated, and already-cracked rows
  * are left unchanged (KTD2).
  *
  * Test scenarios:
- * 1. Same hash in two lists of project A + one list of project B, all uncracked:
- *    only the project-A rows get plaintext + crackedAt (project scope); the
- *    project-B row stays uncracked; attribution FKs remain NULL.
+ * 1. Same hash in two lists of project A + one list of project B, all uncracked
+ *    at the same mode: only the project-A rows get plaintext + crackedAt (project
+ *    scope); the project-B row stays uncracked; attribution FKs remain NULL.
  * 2. Already-cracked row left unchanged — both plaintext and crackedAt are
  *    identical to the original seed values (proves KTD2 guard blocks overwrite).
  * 3. No matching rows: returns { updated: 0 }, no error.
  * 4. Integration: hash in a campaign's hash list, once propagated, appears in
  *    getZapsForTask output for that campaign's task.
+ * 5. Mode guard (KTD3): a same-value row of a DIFFERENT resolved mode (and a
+ *    mode-less row) is NOT filled — only the matching-mode row is.
  *
  * Runs under `just test-db` (preload: tests/preload-db.ts). Uses the shared
  * drizzle client from `../../src/db/index.js`.
@@ -182,21 +186,22 @@ describe('propagateCrack — project-scoped propagation', () => {
     const plaintext = 'password123'
 
     // Two rows in project A (across two of its lists) + one row in project B.
+    // All seeded at the SAME resolved mode (0) so the mode guard admits them.
     const [rowA] = await db
       .insert(hashItems)
-      .values({ hashListId: listAId, hashValue })
+      .values({ hashListId: listAId, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
     const [rowA2] = await db
       .insert(hashItems)
-      .values({ hashListId: listA2Id, hashValue })
+      .values({ hashListId: listA2Id, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
     const [rowB] = await db
       .insert(hashItems)
-      .values({ hashListId: listBId, hashValue })
+      .values({ hashListId: listBId, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
 
     try {
-      const result = await propagateCrack(hashValue, plaintext, projAId)
+      const result = await propagateCrack(hashValue, plaintext, projAId, 0)
       // Only project A's two rows — project B is a different tenant.
       expect(result.updated).toBe(2)
 
@@ -255,17 +260,18 @@ describe('propagateCrack — project-scoped propagation', () => {
         hashValue,
         plaintext: originalPlaintext,
         crackedAt: originalCrackedAt,
+        detectedHashcatMode: 0,
       })
       .returning({ id: hashItems.id })
 
     // Seed one uncracked row in a SECOND list of the SAME project (project A).
     const [uncracked] = await db
       .insert(hashItems)
-      .values({ hashListId: listA2Id, hashValue })
+      .values({ hashListId: listA2Id, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
 
     try {
-      const result = await propagateCrack(hashValue, 'new-password', projAId)
+      const result = await propagateCrack(hashValue, 'new-password', projAId, 0)
       // Only the uncracked row should have been updated.
       expect(result.updated).toBe(1)
 
@@ -294,8 +300,72 @@ describe('propagateCrack — project-scoped propagation', () => {
   })
 
   it('returns { updated: 0 } when no rows match the hash value', async () => {
-    const result = await propagateCrack('hash-prop-no-matches-v1-xxxxxxxx', 'anything', projAId)
+    const result = await propagateCrack('hash-prop-no-matches-v1-xxxxxxxx', 'anything', projAId, 0)
     expect(result).toStrictEqual({ updated: 0 })
+  })
+
+  it('fills ONLY the row whose detectedHashcatMode matches the crack; a same-value different-mode row and a mode-less row are left untouched (KTD3)', async () => {
+    const hashValue = 'hash-prop-mode-guard-v1'
+    const plaintext = 'mode-guarded-pw'
+
+    // A third project-A list so all three same-value rows live in DISTINCT lists
+    // (hash_items is UNIQUE on (hashListId, hashValue)).
+    const [lA3] = await db
+      .insert(hashLists)
+      .values({ projectId: projAId, name: 'list-a3-mode-guard', status: 'ready' })
+      .returning({ id: hashLists.id })
+
+    // Three same-value uncracked rows in the SAME project, differing only by
+    // resolved mode: mode 0 (should fill), mode 1000 (NTLM — must NOT fill),
+    // and NULL mode (unresolved — must NOT fill).
+    const [rowMode0] = await db
+      .insert(hashItems)
+      .values({ hashListId: listAId, hashValue, detectedHashcatMode: 0 })
+      .returning({ id: hashItems.id })
+    const [rowMode1000] = await db
+      .insert(hashItems)
+      .values({ hashListId: listA2Id, hashValue, detectedHashcatMode: 1000 })
+      .returning({ id: hashItems.id })
+    const [rowModeNull] = await db
+      .insert(hashItems)
+      .values({ hashListId: lA3!.id, hashValue, detectedHashcatMode: null })
+      .returning({ id: hashItems.id })
+
+    try {
+      // Propagate a mode-0 crack: only the mode-0 row is a valid cross-list dedup
+      // target. The mode-1000 row is an unrelated crack of the same string; the
+      // NULL-mode row can't be proven to be the same crack.
+      const result = await propagateCrack(hashValue, plaintext, projAId, 0)
+      expect(result.updated).toBe(1)
+
+      const [after0] = await db
+        .select({ plaintext: hashItems.plaintext, crackedAt: hashItems.crackedAt })
+        .from(hashItems)
+        .where(eq(hashItems.id, rowMode0!.id))
+      expect(after0!.plaintext).toBe(plaintext)
+      expect(after0!.crackedAt).toBeInstanceOf(Date)
+
+      // Different-mode row: untouched (would be a cross-mode mis-fill).
+      const [after1000] = await db
+        .select({ plaintext: hashItems.plaintext, crackedAt: hashItems.crackedAt })
+        .from(hashItems)
+        .where(eq(hashItems.id, rowMode1000!.id))
+      expect(after1000!.plaintext).toBeNull()
+      expect(after1000!.crackedAt).toBeNull()
+
+      // Mode-less row: untouched (never cross-list dedups).
+      const [afterNull] = await db
+        .select({ plaintext: hashItems.plaintext, crackedAt: hashItems.crackedAt })
+        .from(hashItems)
+        .where(eq(hashItems.id, rowModeNull!.id))
+      expect(afterNull!.plaintext).toBeNull()
+      expect(afterNull!.crackedAt).toBeNull()
+    } finally {
+      await db.delete(hashItems).where(eq(hashItems.id, rowMode0!.id))
+      await db.delete(hashItems).where(eq(hashItems.id, rowMode1000!.id))
+      await db.delete(hashItems).where(eq(hashItems.id, rowModeNull!.id))
+      await db.delete(hashLists).where(eq(hashLists.id, lA3!.id))
+    }
   })
 })
 
@@ -309,10 +379,11 @@ describe('propagateCrack — zap integration', () => {
     // crack is recorded in the cracked-set (the U2 write path's artifact).
     const hashValue = 'hash-prop-zap-integ-v1'
 
-    // Insert the hash UNCRACKED into the campaign's hash list.
+    // Insert the hash UNCRACKED into the campaign's hash list at the campaign's
+    // resolved mode (0) so the mode guard admits it.
     const [item] = await db
       .insert(hashItems)
-      .values({ hashListId: zapListId, hashValue })
+      .values({ hashListId: zapListId, hashValue, detectedHashcatMode: 0 })
       .returning({ id: hashItems.id })
 
     try {
@@ -325,7 +396,7 @@ describe('propagateCrack — zap integration', () => {
 
       // Propagate the crack into hash_items — this is list-local display state,
       // not a cracked-set entry, so it must NOT surface as a zap under U3.
-      const { updated } = await propagateCrack(hashValue, 'zap-plaintext', zapProjId)
+      const { updated } = await propagateCrack(hashValue, 'zap-plaintext', zapProjId, 0)
       expect(updated).toBe(1)
       const afterPropagate = await getZapsForTask(zapTaskId, zapAgentId, zapProjId)
       if ('error' in afterPropagate) {
