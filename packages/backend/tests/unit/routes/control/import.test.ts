@@ -163,6 +163,12 @@ if (!IS_ISOLATED) {
   mock.module('../../../../src/services/resources.js', () => ({
     getHashListById: mockGetHashListById,
     getHashTypeById: mockGetHashTypeById,
+    // `mock.module` is process-global and leaks across files in a shared bun
+    // run. Other suites' routers (e.g. the search route via `hashes.ts`) link
+    // `escapeLike` from resources.ts, so this mock must re-export it too or that
+    // linkage fails when this mock is the active one — mirrors the same
+    // re-export in `dashboard/import-precracked.test.ts`.
+    escapeLike: (value: string) => value,
   }))
 
   mock.module('../../../../src/services/hash-items/import-parse.js', () => ({
