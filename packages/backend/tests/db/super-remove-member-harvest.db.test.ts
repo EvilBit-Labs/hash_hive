@@ -49,11 +49,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../../src/db/index.js'
 import { resolveCrackState } from '../../src/services/hash-items/crack-resolution.js'
 import { upsertCrackedSet } from '../../src/services/hash-items/cracked-set.js'
-import {
-  _removeMemberDeps,
-  addMember,
-  removeMember,
-} from '../../src/services/super-hash-lists.js'
+import { _removeMemberDeps, addMember, removeMember } from '../../src/services/super-hash-lists.js'
 
 const SLUG = 'super-remove-member-harvest-proj'
 
@@ -173,7 +169,10 @@ async function createLeafCampaign(
 }
 
 async function campaignStatus(id: number): Promise<string | undefined> {
-  const [row] = await db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, id))
+  const [row] = await db
+    .select({ status: campaigns.status })
+    .from(campaigns)
+    .where(eq(campaigns.id, id))
   return row?.status
 }
 
@@ -330,8 +329,14 @@ describe('removeMember — dispatch-stop (RF6): cancel the departing member’s 
     // One super PARENT campaign fanned out over the super; its sub-campaigns
     // target the physical leaves.
     const parentId = await createSuperParentCampaign(superId)
-    const subForA = await createLeafCampaign(listA, { parentCampaignId: parentId, status: 'running' })
-    const subForB = await createLeafCampaign(listB, { parentCampaignId: parentId, status: 'running' })
+    const subForA = await createLeafCampaign(listA, {
+      parentCampaignId: parentId,
+      status: 'running',
+    })
+    const subForB = await createLeafCampaign(listB, {
+      parentCampaignId: parentId,
+      status: 'running',
+    })
     // A already-terminal sub-campaign for A must be left untouched.
     const doneSubForA = await createLeafCampaign(listA, {
       parentCampaignId: parentId,

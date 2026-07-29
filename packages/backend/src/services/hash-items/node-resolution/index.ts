@@ -207,9 +207,7 @@ export async function resolveListToPhysicalLeaves(
     .select({ id: hashLists.id })
     .from(hashLists)
     .where(and(eq(hashLists.parentHashListId, hashListId), eq(hashLists.projectId, projectId)))
-  return children.length > 0
-    ? children.map((c) => c.id).sort((a, b) => a - b)
-    : [hashListId]
+  return children.length > 0 ? children.map((c) => c.id).sort((a, b) => a - b) : [hashListId]
 }
 
 /**
