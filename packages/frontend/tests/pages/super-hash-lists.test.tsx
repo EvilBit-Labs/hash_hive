@@ -102,4 +102,70 @@ describe('SuperHashListsPage', () => {
     expect(screen.queryByText('New Super Hash List')).toBeNull()
     expect(screen.queryByLabelText('Archive Read Only Super')).toBeNull()
   })
+
+  it('shows a Load more control and total, and fetches the next page on click', async () => {
+    const rowA = superRow({ id: 1, name: 'Union A' })
+    const rowB = superRow({ id: 2, name: 'Union B' })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = ((init?.method as string) ?? 'GET').toUpperCase()
+      if (url.includes('/dashboard/super-hash-lists') && method === 'GET') {
+        const isSecondPage = url.includes('offset=1')
+        const body = isSecondPage
+          ? { superHashLists: [rowB], total: 2, limit: 1, offset: 1 }
+          : { superHashLists: [rowA], total: 2, limit: 1, offset: 0 }
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+      return originalFetch(input, init)
+    }) as typeof fetch
+
+    try {
+      setRoleWithProject(['admin'])
+      renderWithProviders(<SuperHashListsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Union A')).toBeDefined()
+      })
+      expect(screen.getByText('Showing 1 of 2')).toBeDefined()
+      expect(screen.queryByText('Union B')).toBeNull()
+
+      fireEvent.click(screen.getByText('Load more'))
+
+      await waitFor(() => {
+        expect(screen.getByText('Union B')).toBeDefined()
+      })
+      expect(screen.getByText('Showing 2 of 2')).toBeDefined()
+      // Load more disappears once every super has loaded.
+      expect(screen.queryByText('Load more')).toBeNull()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('toggling "Show archived" refetches with showArchived=true', async () => {
+    fetchMock = mockFetch({
+      '/dashboard/super-hash-lists': {
+        GET: { status: 200, body: listBody([superRow({ id: 4, name: 'Active Super' })]) },
+      },
+    })
+    setRoleWithProject(['admin'])
+    renderWithProviders(<SuperHashListsPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Super')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByLabelText('Show archived'))
+
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls as Array<[string, ...unknown[]]>
+      expect(calls.some(([url]) => String(url).includes('showArchived=true'))).toBe(true)
+    })
+  })
 })

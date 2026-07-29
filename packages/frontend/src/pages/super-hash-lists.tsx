@@ -4,6 +4,7 @@ import { Link } from 'react-router'
 import { PermissionGuard } from '../components/features/permission-guard'
 import { StatusBadge } from '../components/features/status-badge'
 import { Button } from '../components/ui/button'
+import { Checkbox } from '../components/ui/checkbox'
 import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import {
   Dialog,
@@ -36,7 +37,16 @@ import { useUiStore } from '../stores/ui'
 export function SuperHashListsPage() {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const [showArchived, setShowArchived] = useState(false)
-  const { data, isLoading, isError, error } = useSuperHashLists({ showArchived })
+  const {
+    superHashLists: supers,
+    total,
+    isLoading,
+    isError,
+    error,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useSuperHashLists({ showArchived })
   const [createOpen, setCreateOpen] = useState(false)
   const [archiveTarget, setArchiveTarget] = useState<{ id: number; name: string } | null>(null)
   const archive = useArchiveSuperHashList()
@@ -64,19 +74,19 @@ export function SuperHashListsPage() {
     )
   }
 
-  const supers = data?.superHashLists ?? []
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <PageHeader>Super Hash Lists</PageHeader>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+          <label
+            htmlFor="show-archived-supers"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          >
+            <Checkbox
+              id="show-archived-supers"
               checked={showArchived}
-              onChange={(e) => setShowArchived(e.target.checked)}
-              className="accent-primary"
+              onCheckedChange={(checked) => setShowArchived(checked === true)}
             />
             Show archived
           </label>
@@ -160,6 +170,24 @@ export function SuperHashListsPage() {
             ))}
           </TableBody>
         </Table>
+      )}
+
+      {!isLoading && !isError && supers.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>
+            Showing {supers.length} of {total}
+          </span>
+          {hasNextPage && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void fetchNextPage()}
+              disabled={isFetchingNextPage}
+            >
+              {isFetchingNextPage ? 'Loading...' : 'Load more'}
+            </Button>
+          )}
+        </div>
       )}
 
       {createOpen && <CreateSuperDialog onClose={() => setCreateOpen(false)} />}

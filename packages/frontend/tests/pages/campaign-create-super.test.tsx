@@ -125,4 +125,139 @@ describe('CampaignCreatePage — super target', () => {
     expect(body.hashListId).toBeUndefined()
     expect(body.name).toBe('Domain sweep')
   })
+
+  it('shows a loading state for supers, not the empty message, while the query is in flight', async () => {
+    // Gate the /super-hash-lists response so it stays pending until we
+    // release it — everything else resolves via the normal route mocks.
+    let releaseSupers: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releaseSupers = resolve
+    })
+    const passthroughFetch = globalThis.fetch
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = ((init?.method as string) ?? 'GET').toUpperCase()
+      if (url.includes('/dashboard/super-hash-lists') && method === 'GET') {
+        return gate.then(() => passthroughFetch(input, init))
+      }
+      return passthroughFetch(input, init)
+    }) as typeof fetch
+
+    renderWithProviders(<CampaignCreatePage />)
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('Super Hash List'))
+
+    // Still pending — loading text shown, empty message NOT shown.
+    expect(screen.getByText('Loading super hash lists...')).toBeDefined()
+    expect(screen.queryByText(/No super hash lists in this project yet/)).toBeNull()
+
+    releaseSupers()
+    await screen.findByRole('radio', { name: /Union A/ })
+  })
+
+  it('shows an error state on supers query failure, not the empty message', async () => {
+    fetchMock = mockFetch({
+      ...routes(),
+      '/dashboard/super-hash-lists': { status: 500, body: { error: { message: 'boom' } } },
+    })
+
+    renderWithProviders(<CampaignCreatePage />)
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('Super Hash List'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load super hash lists.')).toBeDefined()
+    })
+    expect(screen.queryByText(/No super hash lists in this project yet/)).toBeNull()
+
+    // Retry re-issues the request.
+    const callsBefore = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes('/dashboard/super-hash-lists')
+    ).length
+    fireEvent.click(screen.getByText('Retry'))
+    await waitFor(() => {
+      const callsAfter = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes('/dashboard/super-hash-lists')
+      ).length
+      expect(callsAfter).toBeGreaterThan(callsBefore)
+    })
+  })
+
+  it('shows the empty message only once the supers query succeeds with none', async () => {
+    fetchMock = mockFetch({
+      ...routes(),
+      '/dashboard/super-hash-lists': {
+        status: 200,
+        body: { superHashLists: [], total: 0, limit: 50, offset: 0 },
+      },
+    })
+
+    renderWithProviders(<CampaignCreatePage />)
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('Super Hash List'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/No super hash lists in this project yet/)).toBeDefined()
+    })
+    expect(screen.queryByText('Loading super hash lists...')).toBeNull()
+    expect(screen.queryByText('Failed to load super hash lists.')).toBeNull()
+  })
+
+  it('shows a Load more control and fetches the next page when supers span more than one page', async () => {
+    const rowA = {
+      id: 5,
+      projectId: 1,
+      name: 'Union A',
+      archivedAt: null,
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedAt: '2026-07-01T00:00:00Z',
+    }
+    const rowB = { ...rowA, id: 6, name: 'Union B' }
+    const passthroughFetch = globalThis.fetch
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = ((init?.method as string) ?? 'GET').toUpperCase()
+      if (url.includes('/dashboard/super-hash-lists') && method === 'GET') {
+        const isSecondPage = url.includes('offset=1')
+        const body = isSecondPage
+          ? { superHashLists: [rowB], total: 2, limit: 1, offset: 1 }
+          : { superHashLists: [rowA], total: 2, limit: 1, offset: 0 }
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+      return passthroughFetch(input, init)
+    }) as typeof fetch
+
+    renderWithProviders(<CampaignCreatePage />)
+    await waitFor(() => {
+      expect(screen.getByText('Create Campaign')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('Super Hash List'))
+
+    await screen.findByRole('radio', { name: /Union A/ })
+    expect(screen.queryByRole('radio', { name: /Union B/ })).toBeNull()
+    expect(screen.getByText('Load more')).toBeDefined()
+
+    fireEvent.click(screen.getByText('Load more'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /Union B/ })).toBeDefined()
+    })
+    // Both pages stay selectable — the first page's option is not dropped.
+    expect(screen.getByRole('radio', { name: /Union A/ })).toBeDefined()
+  })
 })

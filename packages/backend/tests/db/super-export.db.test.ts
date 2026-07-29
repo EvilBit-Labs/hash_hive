@@ -34,7 +34,7 @@ import {
   superHashLists,
 } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 import { db } from '../../src/db/index.js'
 import { createExport } from '../../src/services/results/export.js'
@@ -296,5 +296,92 @@ describe('super export — date-range filter on the resolved crack timestamp (CR
       endDate: '1999-01-02T00:00:00.000Z',
     })
     expect(lines.slice(1)).toHaveLength(0)
+  })
+})
+
+describe('super export — keyset index proof', () => {
+  it('EXPLAIN: a first-page multi-leaf scan filters by hash_list_id, not a Seq Scan (no keyset bound yet)', async () => {
+    // Seed a batch across BOTH members so the planner reasons about a real
+    // multi-leaf union, not a single-list scan.
+    for (let i = 0; i < 30; i++) {
+      await insertItem(listAId, `explain-a-${String(i).padStart(5, '0')}`, MODE_X)
+      await insertItem(listBId, `explain-b-${String(i).padStart(5, '0')}`, MODE_X)
+    }
+    // `enable_seqscan = off` (transaction-local) makes this deterministic —
+    // on a small table the planner would otherwise prefer a Seq Scan on
+    // row-count cost alone.
+    //
+    // The FIRST page of a super export has no keyset cursor yet — just
+    // `hash_list_id IN (leaves)` — and `hash_list_id` leads BOTH
+    // `hash_items_hash_list_id_idx` and the composite
+    // `hash_items_super_export_keyset_idx`. With more than one leaf, the
+    // composite index's trailing `(mode, value)` columns can't produce a
+    // single globally-sorted stream across leaves (it sorts within each
+    // hash_list_id group, not across groups), so an explicit Sort is
+    // unavoidable either way and the planner correctly reaches for the
+    // narrower single-column index to satisfy the `hash_list_id IN (...)`
+    // filter. This still proves the query is an Index Cond seek, never a
+    // full Seq Scan.
+    const planText = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`)
+      const plan = await tx.execute(sql`
+        EXPLAIN
+        SELECT id, hash_value
+        FROM hash_items
+        WHERE hash_list_id IN (${listAId}, ${listBId})
+        ORDER BY coalesce(detected_hashcat_mode, -1) ASC, hash_value ASC, id ASC
+        LIMIT 100
+      `)
+      return (plan as unknown as Array<Record<string, string>>)
+        .map((r) => Object.values(r).join(' '))
+        .join('\n')
+    })
+    expect(planText).toContain('Index Cond')
+    expect(planText).not.toContain('Seq Scan')
+  })
+
+  it('EXPLAIN: a subsequent (keyset-cursored) page is an Index Cond seek on hash_items_super_export_keyset_idx', async () => {
+    // Same multi-leaf seed as the first-page case above; this test asserts
+    // against the SAME rows (each `it` in a bun:test file shares the
+    // module's beforeAll/afterAll fixtures, and the prior test's insert
+    // already landed, but re-seed defensively so this test is order-independent).
+    for (let i = 30; i < 60; i++) {
+      await insertItem(listAId, `explain-a-${String(i).padStart(5, '0')}`, MODE_X)
+      await insertItem(listBId, `explain-b-${String(i).padStart(5, '0')}`, MODE_X)
+    }
+    const cursorHashValue = 'explain-a-00010'
+    // ANALYZE so the planner has real selectivity stats for this freshly
+    // seeded batch — without it, stale/default stats can make the row-value
+    // keyset Index Cond look no cheaper than the single-column
+    // `hash_list_id` index + a residual Filter, masking the property this
+    // test exists to prove (matches how a live table accumulates stats via
+    // autovacuum long before it holds export-scale data).
+    await db.execute(sql`ANALYZE hash_items`)
+    // A page-2+ fetch adds the row-value keyset predicate
+    // `(coalesce(mode,-1), hash_value) > (cursor.coalescedMode, cursor.hashValue)`
+    // (`superKeysetPredicate` in services/results/export.ts). That predicate's
+    // columns match the composite index's trailing columns exactly, so —
+    // unlike the cursor-less first page — the planner CAN use
+    // `hash_items_super_export_keyset_idx` to satisfy both the
+    // `hash_list_id IN (leaves)` filter and the keyset bound as a single
+    // Index Cond, which is what makes the export's paginated walk cheap
+    // instead of re-sorting the whole filtered set on every page.
+    const planText = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`)
+      const plan = await tx.execute(sql`
+        EXPLAIN
+        SELECT id, hash_value
+        FROM hash_items
+        WHERE hash_list_id IN (${listAId}, ${listBId})
+          AND (coalesce(detected_hashcat_mode, -1), hash_value) > (${MODE_X}, ${cursorHashValue})
+        ORDER BY coalesce(detected_hashcat_mode, -1) ASC, hash_value ASC, id ASC
+        LIMIT 100
+      `)
+      return (plan as unknown as Array<Record<string, string>>)
+        .map((r) => Object.values(r).join(' '))
+        .join('\n')
+    })
+    expect(planText).toContain('hash_items_super_export_keyset_idx')
+    expect(planText).not.toContain('Seq Scan')
   })
 })

@@ -5,6 +5,7 @@ import { Link } from 'react-router'
 
 import { cn } from '../../../lib/utils'
 import { Button } from '../../ui/button'
+import { ErrorBanner } from '../../ui/error-banner'
 import { Input } from '../../ui/input'
 
 interface SuperOption {
@@ -14,6 +15,18 @@ interface SuperOption {
 
 interface SuperCampaignTargetStepProps {
   supers: readonly SuperOption[]
+  /** True while the first page of supers is in flight. */
+  isLoading: boolean
+  /** True when the supers query failed — takes precedence over the empty state. */
+  isError: boolean
+  /** Re-runs the supers query after a load error. */
+  onRetry: () => void
+  /** True when a further page of supers exists beyond what `supers` holds. */
+  hasMore: boolean
+  /** True while an additional page is being fetched. */
+  isLoadingMore: boolean
+  /** Fetches the next page of supers. */
+  onLoadMore: () => void
   submitting: boolean
   onCancel: () => void
   onSubmit: (data: {
@@ -35,6 +48,12 @@ interface SuperCampaignTargetStepProps {
  */
 export function SuperCampaignTargetStep({
   supers,
+  isLoading,
+  isError,
+  onRetry,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   submitting,
   onCancel,
   onSubmit,
@@ -114,7 +133,18 @@ export function SuperCampaignTargetStep({
 
       <div>
         <p className="text-xs font-medium text-muted-foreground">Super Hash List</p>
-        {supers.length === 0 ? (
+        {isLoading ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">Loading super hash lists...</p>
+        ) : isError ? (
+          <div className="mt-1.5 flex flex-col gap-2">
+            <ErrorBanner message="Failed to load super hash lists." />
+            <div>
+              <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            </div>
+          </div>
+        ) : supers.length === 0 ? (
           <p className="mt-1.5 text-xs text-muted-foreground">
             No super hash lists in this project yet.{' '}
             <Link to="/super-hash-lists" className="text-primary hover:underline">
@@ -123,38 +153,56 @@ export function SuperCampaignTargetStep({
             to target it here.
           </p>
         ) : (
-          <div role="radiogroup" aria-label="Super hash list" className="mt-1.5 space-y-1.5">
-            {supers.map((sup) => {
-              const selected = sup.id === selectedSuperId
-              return (
-                <label
-                  key={sup.id}
-                  className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm transition-colors',
-                    selected
-                      ? 'border-primary bg-primary/10 text-foreground'
-                      : 'border-surface-1 text-muted-foreground hover:bg-surface-0/60 hover:text-foreground'
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="super-target"
-                    className="accent-primary"
-                    checked={selected}
-                    onChange={() => setSelectedSuperId(sup.id)}
-                  />
-                  <span>{sup.name}</span>
-                </label>
-              )
-            })}
-          </div>
+          <>
+            <div role="radiogroup" aria-label="Super hash list" className="mt-1.5 space-y-1.5">
+              {supers.map((sup) => {
+                const selected = sup.id === selectedSuperId
+                return (
+                  <label
+                    key={sup.id}
+                    className={cn(
+                      'flex w-full cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm transition-colors',
+                      selected
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-surface-1 text-muted-foreground hover:bg-surface-0/60 hover:text-foreground'
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="super-target"
+                      className="accent-primary"
+                      checked={selected}
+                      onChange={() => setSelectedSuperId(sup.id)}
+                    />
+                    <span>{sup.name}</span>
+                  </label>
+                )
+              })}
+            </div>
+            {hasMore && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-1.5"
+                onClick={onLoadMore}
+                disabled={isLoadingMore}
+              >
+                {isLoadingMore ? 'Loading...' : 'Load more'}
+              </Button>
+            )}
+          </>
         )}
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       <div className="flex gap-2">
-        <Button type="button" onClick={handleSubmit} disabled={submitting || supers.length === 0}>
+        <Button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting || isLoading || isError || supers.length === 0}
+        >
           {submitting ? 'Creating...' : 'Create Super Campaign'}
         </Button>
         <Button type="button" variant="secondary" onClick={onCancel}>

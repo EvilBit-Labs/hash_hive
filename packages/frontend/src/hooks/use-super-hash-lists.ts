@@ -8,7 +8,7 @@ import type {
   SuperHashListResponse,
 } from '@hashhive/shared'
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/ui'
@@ -37,20 +37,48 @@ interface SuperHashListsQueryOptions {
   enabled?: boolean
 }
 
-/** Project-scoped list of super hash lists. */
+/**
+ * Project-scoped list of super hash lists, paginated with `useInfiniteQuery`
+ * (issue #101 M2: the server's default page is 50 rows, so a super past that
+ * point was previously unreachable as a campaign target). Callers get the
+ * flattened `superHashLists` array across every page fetched so far, plus
+ * `total` and the usual TanStack Query flags (`isLoading`, `isError`,
+ * `hasNextPage`, `fetchNextPage`, `isFetchingNextPage`, ...) so a "Load more"
+ * control can page through the rest.
+ */
 export function useSuperHashLists(options?: SuperHashListsQueryOptions) {
   const selectedProjectId = useUiStore((s) => s.selectedProjectId)
   const showArchived = options?.showArchived ?? false
   const enabledOverride = options?.enabled ?? true
 
-  return useQuery<SuperHashListListResponse>({
+  const query = useInfiniteQuery({
     queryKey: ['super-hash-lists', selectedProjectId, { showArchived }],
-    queryFn: () => {
-      const qs = showArchived ? '?showArchived=true' : ''
-      return api.get<SuperHashListListResponse>(`${BASE}${qs}`)
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ offset: String(pageParam) })
+      if (showArchived) params.set('showArchived', 'true')
+      return api.get<SuperHashListListResponse>(`${BASE}?${params.toString()}`)
+    },
+    initialPageParam: 0,
+    // Defensive against a malformed/short-circuited page body (untrusted
+    // external data per AGENTS.md) — an unexpected shape stops pagination
+    // instead of throwing mid-render.
+    getNextPageParam: (lastPage) => {
+      const items = lastPage.superHashLists ?? []
+      const offset = lastPage.offset ?? 0
+      const total = lastPage.total ?? 0
+      const loaded = offset + items.length
+      return loaded < total ? loaded : undefined
     },
     enabled: !!selectedProjectId && enabledOverride,
   })
+
+  const pages = query.data?.pages ?? []
+
+  return {
+    ...query,
+    superHashLists: pages.flatMap((page) => page.superHashLists ?? []),
+    total: pages.at(-1)?.total ?? 0,
+  }
 }
 
 /** Single super hash list with its member hash-list ids. */

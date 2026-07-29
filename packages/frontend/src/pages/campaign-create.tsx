@@ -707,7 +707,13 @@ export function CampaignCreatePage() {
           <SuperCampaignResultPanel result={superResult} />
         ) : (
           <SuperCampaignTargetStep
-            supers={superHashListsQuery.data?.superHashLists ?? []}
+            supers={superHashListsQuery.superHashLists}
+            isLoading={superHashListsQuery.isLoading}
+            isError={superHashListsQuery.isError}
+            onRetry={() => void superHashListsQuery.refetch()}
+            hasMore={superHashListsQuery.hasNextPage ?? false}
+            isLoadingMore={superHashListsQuery.isFetchingNextPage}
+            onLoadMore={() => void superHashListsQuery.fetchNextPage()}
             submitting={submitting}
             onCancel={handleCancel}
             onSubmit={(d) => void handleSuperSubmit(d)}
