@@ -67,7 +67,10 @@ interface Campaign {
   status: string
   projectId: number
   priority: number
-  hashListId: number
+  // Nullable since #101 U6: a super-targeting PARENT campaign carries
+  // `superHashListId` and leaves `hashListId` null (exactly one is set).
+  hashListId: number | null
+  superHashListId?: number | null
   description: string | null
   progress?: CampaignProgressShape | null
   createdAt: string

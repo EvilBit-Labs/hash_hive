@@ -99,6 +99,14 @@ export interface HashImportPropagationJob {
   actor: AuditActor
   /** Parse-time skip count from U6 — passed through for the final summary. */
   skippedFromParse: number
+  // No `hashcatMode` field (bug fix, Medium): a mode snapshotted here at
+  // staging time would go stale if `setHashListType` changes the list's
+  // hash type before the worker processes this job — every downstream write
+  // (`detected_hashcat_mode`, the cracked-set population, and propagation's
+  // mode scope) would then key off the WRONG mode with no signal to the
+  // caller. `runHashImportJob` re-resolves the target list's CURRENT mode
+  // from its `hashTypeId` at process time instead (single source of truth —
+  // see `resolveCurrentHashcatMode` in `queue/workers/hash-import-worker.ts`).
 }
 
 // ─── Job Data Discriminated Union ────────────────────────────────────

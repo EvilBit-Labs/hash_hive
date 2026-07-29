@@ -52,9 +52,21 @@ if (!IS_ISOLATED) {
   // Fake Drizzle chains so processImportPairs can run without a live DB.
   // upsertTargetListBatches needs:
   //   - db.select({matched,willCrack}).from(...).where(...)  → [{matched:0,willCrack:0}]
-  //   - db.insert(...).values(...).onConflictDoUpdate(...)   → []
-  // propagateImportedCracks needs:
+  //   - db.transaction(cb) → cb(tx) where tx.insert(...).values(...).onConflictDoUpdate(...) → []
+  // propagateImportedCracks needs (only when hashcatMode != null; fixture uses null):
   //   - db.selectDistinct({hashValue}).from(...).where(...)  → []
+  // resolveCurrentHashcatMode (runHashImportJob, bug fix Medium) needs:
+  //   - db.select({hashcatMode}).from(hashLists).innerJoin(hashTypes,...).where(...).limit(1) → []
+  //     (no row → resolves to null, keeping this fixture's list-local, no-mode
+  //     scenario intact — the .from() chain must expose BOTH .where() for the
+  //     pre-count query above AND .innerJoin() for this resolver.)
+  const txStub = {
+    insert: () => ({
+      values: () => ({
+        onConflictDoUpdate: () => Promise.resolve([]),
+      }),
+    }),
+  }
   mock.module('../../../src/db/index.js', () => ({
     db: {
       select: () => ({
@@ -66,6 +78,11 @@ if (!IS_ISOLATED) {
             const p = Promise.resolve([{ matched: 0, willCrack: 0 }])
             return Object.assign(p, { limit: () => Promise.resolve([]) })
           },
+          innerJoin: () => ({
+            where: () => ({
+              limit: () => Promise.resolve([]),
+            }),
+          }),
         }),
       }),
       selectDistinct: () => ({
@@ -73,6 +90,9 @@ if (!IS_ISOLATED) {
           where: () => Promise.resolve([]),
         }),
       }),
+      // upsertTargetListBatches now wraps the hash_items upsert (+ cracked-set
+      // population) in a single transaction — mirror updateTaskProgress.
+      transaction: (cb: (tx: typeof txStub) => Promise<unknown>) => cb(txStub),
       insert: () => ({
         values: () => ({
           onConflictDoUpdate: () => Promise.resolve([]),
@@ -112,6 +132,12 @@ if (!IS_ISOLATED) {
     projectId: 1,
     actor: SYSTEM_ACTOR,
     skippedFromParse: 0,
+    // No `hashcatMode` field on the job payload anymore (bug fix, Medium) —
+    // `runHashImportJob` now re-resolves it at process time via
+    // `resolveCurrentHashcatMode`, which resolves to null here because the
+    // fake db's select chain returns no hash-list row for id 1. Null mode
+    // keeps this unit test list-local: no cracked-set upsert and no
+    // propagation, so the fake db needs only the transaction + insert chain.
   })
 
   beforeEach(() => {

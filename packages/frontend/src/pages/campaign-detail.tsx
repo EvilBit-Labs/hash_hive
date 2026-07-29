@@ -1,7 +1,7 @@
 import type { CampaignAttackRow, HashListSummary } from '@hashhive/shared'
 
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { CampaignAgentsSection } from '../components/features/campaign-agents-section'
 import { CampaignTaskStats } from '../components/features/campaign-task-stats'
@@ -104,7 +104,10 @@ function safeTab(raw: string | null): CampaignDetailTab {
 }
 
 interface CampaignResultsPanelProps {
-  readonly campaignHashListId: number
+  // Nullable since #101: a super PARENT campaign has no single hash list
+  // (`hashListId` is null). A null id simply matches no summary row, so the
+  // stats card renders just the cracked count — never "Hash list #null".
+  readonly campaignHashListId: number | null
   readonly hashLists: readonly HashListSummary[] | undefined
   readonly resultsTotal: number
   readonly rows: Parameters<typeof ResultsTable>[0]['rows']
@@ -384,6 +387,15 @@ export function CampaignDetailPage() {
             <PageHeader>{campaign.name}</PageHeader>
             <StatusBadge status={campaign.status} />
             <PriorityBadge priority={campaign.priority} />
+            {campaign.superHashListId != null && (
+              <Link
+                to={`/super-hash-lists/${campaign.superHashListId}`}
+                className="inline-flex items-center gap-1.5 rounded border border-ctp-mauve/20 bg-ctp-mauve/15 px-2 py-0.5 text-[11px] font-medium text-ctp-mauve hover:bg-ctp-mauve/25"
+                title="This campaign targets a super hash list"
+              >
+                SUPER · #{campaign.superHashListId}
+              </Link>
+            )}
           </div>
           <PermissionGuard permission={Permission.CAMPAIGN_EDIT}>
             <div className="flex flex-wrap gap-2">

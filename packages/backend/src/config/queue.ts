@@ -27,7 +27,7 @@ export const QUEUE_NAMES = {
   // when a user submits a pre-cracked import file via the dashboard (U8).
   // Reads staged pairs from the object store (KTD3), upserts the target
   // hash list with provenance (KTD2), audits the write (KTD9), then
-  // propagates each plaintext system-wide via propagateCrack (U2/KTD4).
+  // propagates each plaintext within the owning project via propagateCrack (U2/KTD4).
   // Deduped per import via a deterministic jobId built from hashListId +
   // staging key; QueueManager auto-pairs with removeOnComplete/removeOnFail.
   HASH_IMPORT_PROPAGATION: 'jobs-hash-import-propagation',

@@ -38,7 +38,10 @@ interface CampaignRow {
   name: string
   status: string
   priority: number
-  hashListId: number
+  // Nullable since #101 U6: a super PARENT campaign carries `superHashListId`
+  // and leaves `hashListId` null. Exactly one of the two is set.
+  hashListId: number | null
+  superHashListId?: number | null
   progress?: {
     percentage?: number
     overallProgress?: number
@@ -328,7 +331,18 @@ export function CampaignsPage() {
                       {campaign.eta ? formatCampaignEta(campaign.eta) : '--'}
                     </Td>
                     <Td className="font-mono text-xs text-muted-foreground">
-                      #{campaign.hashListId}
+                      {campaign.superHashListId != null ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="rounded bg-ctp-mauve/15 px-1.5 py-0.5 text-[10px] font-medium text-ctp-mauve not-italic">
+                            SUPER
+                          </span>
+                          <span>#{campaign.superHashListId}</span>
+                        </span>
+                      ) : campaign.hashListId != null ? (
+                        `#${campaign.hashListId}`
+                      ) : (
+                        <span className="text-overlay1">--</span>
+                      )}
                     </Td>
                     <Td className="text-xs text-muted-foreground">
                       {new Date(campaign.createdAt).toLocaleDateString()}
@@ -354,7 +368,13 @@ export function CampaignsPage() {
         title="Start campaign?"
         message={
           confirm.campaign
-            ? `"${confirm.campaign.name}" - Hash list #${confirm.campaign.hashListId}, priority ${confirm.campaign.priority}.`
+            ? `"${confirm.campaign.name}" - ${
+                confirm.campaign.superHashListId != null
+                  ? `Super hash list #${confirm.campaign.superHashListId}`
+                  : confirm.campaign.hashListId != null
+                    ? `Hash list #${confirm.campaign.hashListId}`
+                    : 'No target'
+              }, priority ${confirm.campaign.priority}.`
             : ''
         }
         confirmLabel="Confirm Start"

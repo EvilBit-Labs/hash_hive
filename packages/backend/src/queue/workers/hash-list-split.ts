@@ -76,13 +76,23 @@ import { hashItems, hashLists } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
 import { and, asc, count, eq, gt, inArray } from 'drizzle-orm'
 
-import type { SplitDegenerateReason, SplitGroup } from '../../services/hash-items/split-analysis.js'
+import type { SplitGroup } from '../../services/hash-items/split-analysis.js'
 import type { HashListSplitJob } from '../types.js'
 
 import { logger } from '../../config/logger.js'
 import { QUEUE_NAMES } from '../../config/queue.js'
 import { db } from '../../db/index.js'
 import { moveHashItemsToList } from '../../services/hash-items/move-items.js'
+// Pure "group items by resolved mode" primitives — shared with the super
+// fan-out (U10) via the node-resolution layer (plan U5 / KTD7). Imported
+// from `_internals.js` directly (not the barrel) so the worker doesn't pull
+// the barrel's DB-touching `resolveNodeToLeaves`, keeping this the same
+// db-free grouping surface these helpers had when they were private here.
+import {
+  compareSplitGroups,
+  degenerateOutcomeFor,
+  mergeChunkGroups,
+} from '../../services/hash-items/node-resolution/_internals.js'
 import { planSplit } from '../../services/hash-items/split-analysis.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -252,42 +262,12 @@ async function summarizeExistingChildren(
 }
 
 // ─── Chunked classification (phase 1 — outside any lock) ──────────────────
-
-/** Stable merge key for a `SplitGroup` — mirrors `split-analysis.ts`'s
- * private `groupKey`, which is not exported (that module has no DB
- * dependency and stays that way); duplicated here rather than widening its
- * exported surface for one caller. */
-function splitGroupKey(group: SplitGroup): string {
-  if (group.kind === 'confident') return `confident:${group.mode}`
-  if (group.kind === 'ambiguous') return `ambiguous:${group.candidateModes.join(',')}`
-  return 'unidentified'
-}
-
-/**
- * Merges one chunk's `planSplit` groups into the running accumulator,
- * MUTATING `merged` in place. This is a deliberate exception to the
- * project's immutable-update convention: `merged` is a function-local
- * accumulator (never shared, never read by a caller mid-loop), and
- * rebuilding a new `itemIds` array on every chunk (`[...existing, ...new]`)
- * would make merging O(total items already accumulated) per chunk instead
- * of O(chunk size) — quadratic in the number of chunks, which would defeat
- * the whole point of this fix (perf/memory). Safe to concat without a
- * cross-chunk hashValue re-dedup: see the file header doc comment.
- */
-function mergeChunkGroups(
-  merged: Map<string, SplitGroup>,
-  chunkGroups: readonly SplitGroup[]
-): void {
-  for (const group of chunkGroups) {
-    const key = splitGroupKey(group)
-    const existing = merged.get(key)
-    if (!existing) {
-      merged.set(key, { ...group, itemIds: [...group.itemIds] })
-      continue
-    }
-    existing.itemIds.push(...group.itemIds)
-  }
-}
+//
+// `mergeChunkGroups`, `degenerateOutcomeFor`, and `compareSplitGroups` now
+// live in the shared node-resolution layer (`node-resolution/_internals.ts`,
+// plan U5 / KTD7) — they used to be private duplicates here. The chunked
+// paging + `FOR UPDATE` idempotency below is worker-specific and stays here;
+// only the pure grouping primitives moved.
 
 interface ClassificationResult {
   totalCount: number
@@ -332,61 +312,6 @@ async function classifyParentItems(parentHashListId: number): Promise<Classifica
   }
 
   return { totalCount, groups, crackedById }
-}
-
-/**
- * Mirrors `planSplit`'s degenerate-outcome rule, computed over the FULL
- * (merged, cross-chunk) partition rather than any single chunk.
- *
- * Bug fix (CodeRabbit, Major correctness): a sole group used to be treated
- * as `single-group` regardless of its `kind`. A list that is entirely
- * AMBIGUOUS (e.g. every item is a 32-hex string — NTLM/MD5/LM/MD4 all
- * collide) or entirely UNIDENTIFIED also collapses to exactly one group, but
- * that group is NOT confidently resolved to a mode — collapsing it to
- * "nothing to split" let `createCampaignOrSplit`'s `skipSplit` fallback
- * create a plain single-mode campaign under a wrong/no mode instead of
- * routing the list through the split/review flow. Only a sole CONFIDENT
- * group (every item genuinely shares one hashcat mode) is a legitimate
- * degenerate single-group fallback; a sole ambiguous/unidentified group
- * falls through to `null` here so the normal split path below creates a
- * one-child sub-list the review flow can present for assignment.
- */
-function degenerateOutcomeFor(classification: ClassificationResult): SplitDegenerateReason {
-  if (classification.totalCount === 0) return 'empty'
-  if (classification.groups.size === 1) {
-    const [soleGroup] = classification.groups.values()
-    if (soleGroup?.kind === 'confident') return 'single-group'
-  }
-  return null
-}
-
-/** Deterministic sub-list creation order: confident, then ambiguous, then
- * unidentified — mirrors `split-analysis.ts`'s private `compareGroups`,
- * duplicated here for the same reason as `splitGroupKey` above. */
-const SPLIT_GROUP_KIND_ORDER: Record<SplitGroup['kind'], number> = {
-  confident: 0,
-  ambiguous: 1,
-  unidentified: 2,
-}
-
-function compareSplitGroups(a: SplitGroup, b: SplitGroup): number {
-  const kindDiff = SPLIT_GROUP_KIND_ORDER[a.kind] - SPLIT_GROUP_KIND_ORDER[b.kind]
-  if (kindDiff !== 0) return kindDiff
-
-  if (a.kind === 'confident' && b.kind === 'confident') {
-    return a.mode - b.mode
-  }
-
-  if (a.kind === 'ambiguous' && b.kind === 'ambiguous') {
-    const maxLen = Math.max(a.candidateModes.length, b.candidateModes.length)
-    for (let i = 0; i < maxLen; i++) {
-      const diff = (a.candidateModes[i] ?? 0) - (b.candidateModes[i] ?? 0)
-      if (diff !== 0) return diff
-    }
-    return 0
-  }
-
-  return 0
 }
 
 /**

@@ -579,6 +579,16 @@ export const hashItems = pgTable(
     index('hash_items_campaign_id_idx').on(table.campaignId),
     index('hash_items_hash_list_cracked_idx').on(table.hashListId, table.crackedAt),
     index('hash_items_hash_value_idx').on(table.hashValue),
+    // Super-export dedup/keyset (issue #101 U14): the deduplicated-union export
+    // orders + paginates on `(coalesce(detected_hashcat_mode, -1), hash_value)`
+    // within `hash_list_id IN (leaves)`. This expression index lets the planner
+    // index-scan straight to the keyset cursor instead of sorting the full
+    // filtered set on every page.
+    index('hash_items_super_export_keyset_idx').on(
+      table.hashListId,
+      sql`coalesce(${table.detectedHashcatMode}, -1)`,
+      table.hashValue
+    ),
     // `source` is a fixed vocabulary: 'upload' (parser), 'import' (import worker),
     // or NULL (propagated rows). Pin it at the DB so a future code path can't
     // write an unknown value.
@@ -586,6 +596,129 @@ export const hashItems = pgTable(
       'hash_items_source_chk',
       sql`${table.source} IS NULL OR ${table.source} IN ('upload', 'import')`
     ),
+  ]
+)
+
+// Maintained per-project cracked-set (SuperHashlists Layer one, KTD1). One row
+// per distinct cracked `(projectId, hashcatMode, hashValue)`. This is the single
+// source for project-wide crack-once: the widened agent zap lookup (KTD4,
+// services/tasks/zaps.ts) and read-time crack-state resolution (KTD8,
+// services/hash-items/crack-resolution.ts) both resolve against it. The
+// dedup key is `(mode, value)` — NOT value alone — because a 32-hex string can
+// be raw-MD5 or NTLM with unrelated plaintexts (AE1).
+export const projectCrackedHashes = pgTable(
+  'project_cracked_hashes',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    hashcatMode: integer('hashcat_mode').notNull(),
+    hashValue: varchar('hash_value', { length: 1024 }).notNull(),
+    plaintext: text('plaintext'),
+    // INSERT-MONOTONIC keyset column (KTD2). The widened zap keyset orders on
+    // this; the exactly-once cursor contract requires that no row is ever
+    // inserted BEHIND an active cursor's position. So this is ALWAYS stamped
+    // `new Date()` at insert time — for live cracks AND for backfilled/reconciled
+    // rows (U12) — never the historical crack time and never a DB-side
+    // now()/defaultNow()/trigger. On conflict, `plaintext` updates in place and
+    // this column is NOT moved. See composite-keyset-cursor-pagination-index-scan.md.
+    // DO NOT switch this to defaultNow() — it silently breaks zap exactly-once.
+    crackedAt: timestamp('cracked_at', { withTimezone: true }).notNull(),
+    // True first-crack provenance for display/audit. The keyset NEVER reads this,
+    // so it may carry a historical time (e.g. a backfilled row's original crack).
+    originalCrackedAt: timestamp('original_cracked_at', { withTimezone: true }),
+    // Row-local match reference (R17): the list whose crack first populated this
+    // `(mode, value)`. NEVER serialized to any sub-admin read endpoint — plaintext
+    // and crack state only cross the boundary, never the source list's identity.
+    sourceHashListId: integer('source_hash_list_id').references(() => hashLists.id, {
+      onDelete: 'set null',
+    }),
+    taskId: integer('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    agentId: integer('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Dedup key: at most one cracked row per (project, mode, value). The write
+    // path (U2) upserts on this; the constraint is what makes crack-once hold.
+    uniqueIndex('project_cracked_hashes_project_mode_value_idx').on(
+      table.projectId,
+      table.hashcatMode,
+      table.hashValue
+    ),
+    // Keyset index serving the widened zap scan (KTD4): the zap query filters
+    // `projectId = ? AND hashcatMode = ?` then walks `(crackedAt, id)` ASC. The
+    // leading (projectId, hashcatMode) equality columns + trailing (crackedAt, id)
+    // sort columns let the planner satisfy both the range bound and ORDER BY from
+    // one index seek (Index Cond, not Seq Scan) — the redundant `gte(crackedAt)`
+    // bound in zaps.ts relies on this index existing.
+    index('project_cracked_hashes_keyset_idx').on(
+      table.projectId,
+      table.hashcatMode,
+      table.crackedAt,
+      table.id
+    ),
+  ]
+)
+
+// ─── SuperHashlists (#101) ──────────────────────────────────────────
+
+/**
+ * A SuperHashlist is a named union over several member hash lists (KTD5).
+ * It deliberately owns NO hash items (R10) — there are no `fileRef`,
+ * `statistics`, `hashTypeId` or item columns here, and nothing ever inserts
+ * a `hash_items` row against a super. Membership is a read-time union
+ * resolved through `super_hash_list_members`; a hash is never duplicated
+ * into a materialized union list.
+ *
+ * Modeled as a dedicated entity rather than reusing `hashLists.parentHashListId`
+ * because that self-FK already carries the #202 split parent→child link and a
+ * super member may itself be a #202 split parent.
+ */
+export const superHashLists = pgTable(
+  'super_hash_lists',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    // Lifecycle parity with hash lists (ADR-0019): set when the super is
+    // archived (hidden from active views), cleared on restore. NULL = active.
+    // A super carries no upload/processing status, so unlike `hash_lists`
+    // there is no archive-consistency CHECK to couple this to.
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('super_hash_lists_project_id_idx').on(table.projectId)]
+)
+
+/**
+ * Membership join between a super and the hash lists it unions.
+ *
+ * `UNIQUE(member_hash_list_id)` enforces R3: a hash list belongs to at most
+ * one super (while remaining independently targetable on its own). A
+ * hand-written `super_member_project_check` trigger (migration 0042) enforces
+ * R5 — a member must live in the super's project — because a CHECK constraint
+ * cannot contain the required subquery.
+ */
+export const superHashListMembers = pgTable(
+  'super_hash_list_members',
+  {
+    id: serial('id').primaryKey(),
+    superHashListId: integer('super_hash_list_id')
+      .notNull()
+      .references(() => superHashLists.id, { onDelete: 'cascade' }),
+    memberHashListId: integer('member_hash_list_id')
+      .notNull()
+      .references(() => hashLists.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('super_hash_list_members_super_hash_list_id_idx').on(table.superHashListId),
+    // R3: at most one super per hash list.
+    uniqueIndex('super_hash_list_members_member_hash_list_id_idx').on(table.memberHashListId),
   ]
 )
 
@@ -741,9 +874,20 @@ export const campaigns = pgTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
-    hashListId: integer('hash_list_id')
-      .notNull()
-      .references(() => hashLists.id, { onDelete: 'restrict' }),
+    // Exactly one of `hashListId` / `superHashListId` is set — enforced by
+    // `campaigns_exactly_one_target_chk` below (KTD6). Nullable at the column
+    // level only so a super-targeting campaign can leave this empty; every
+    // leaf-cracking campaign (including every super sub-campaign) still
+    // carries it, so tasks and zaps always resolve to one physical list and
+    // the agent hot path is unchanged.
+    hashListId: integer('hash_list_id').references(() => hashLists.id, { onDelete: 'restrict' }),
+    // Set only on the PARENT campaign of a super fan-out (KTD6). Its
+    // sub-campaigns carry `hashListId` pointing at typed leaf lists.
+    // `onDelete: 'restrict'` mirrors `hashListId`: a super referenced by a
+    // campaign cannot be deleted out from under it.
+    superHashListId: integer('super_hash_list_id').references(() => superHashLists.id, {
+      onDelete: 'restrict',
+    }),
     status: varchar('status', { length: 20 }).notNull().default('draft'),
     // Latches true the first time a campaign leaves `draft` (see
     // services/campaigns.ts transitionCampaign) and is never cleared. Governs
@@ -799,6 +943,30 @@ export const campaigns = pgTable(
     // index exists purely to make `(id, hashcat_mode)` satisfy that
     // requirement.
     uniqueIndex('campaigns_id_hashcat_mode_idx').on(table.id, table.hashcatMode),
+    // KTD6: a campaign targets EXACTLY ONE node — either a single hash list or
+    // a SuperHashlist, never both and never neither. Replaces the former
+    // `hash_list_id NOT NULL`. Validates clean on existing rows (every legacy
+    // campaign has a non-null hash_list_id and a null super_hash_list_id).
+    check(
+      'campaigns_exactly_one_target_chk',
+      sql`num_nonnulls(${table.hashListId}, ${table.superHashListId}) = 1`
+    ),
+    index('campaigns_super_hash_list_id_idx').on(table.superHashListId),
+    // Concurrency backstop for `createSuperCampaign` (issue #101 U10 fix,
+    // Major): the service pre-checks for an existing un-parented parent
+    // campaign for a super, but that read + the later insert are separate
+    // statements with no lock, so two concurrent requests targeting the same
+    // super can both miss the check and both insert a parent campaign. This
+    // partial unique index makes the DB the arbiter -- the loser's insert
+    // throws a 23505 unique_violation, which `createSuperCampaign` catches
+    // and converts into a re-read of the winning row instead of creating a
+    // duplicate parent. Scoped to `parent_campaign_id IS NULL` because that
+    // is the identity a super-fan-out PARENT campaign is keyed on (KTD7) --
+    // it does not constrain a normal campaign's `super_hash_list_id`, which
+    // is always NULL anyway per `campaigns_exactly_one_target_chk`.
+    uniqueIndex('campaigns_super_hash_list_id_parent_once_idx')
+      .on(table.superHashListId)
+      .where(sql`${table.superHashListId} IS NOT NULL AND ${table.parentCampaignId} IS NULL`),
   ]
 )
 
