@@ -579,6 +579,16 @@ export const hashItems = pgTable(
     index('hash_items_campaign_id_idx').on(table.campaignId),
     index('hash_items_hash_list_cracked_idx').on(table.hashListId, table.crackedAt),
     index('hash_items_hash_value_idx').on(table.hashValue),
+    // Super-export dedup/keyset (issue #101 U14): the deduplicated-union export
+    // orders + paginates on `(coalesce(detected_hashcat_mode, -1), hash_value)`
+    // within `hash_list_id IN (leaves)`. This expression index lets the planner
+    // index-scan straight to the keyset cursor instead of sorting the full
+    // filtered set on every page.
+    index('hash_items_super_export_keyset_idx').on(
+      table.hashListId,
+      sql`coalesce(${table.detectedHashcatMode}, -1)`,
+      table.hashValue
+    ),
     // `source` is a fixed vocabulary: 'upload' (parser), 'import' (import worker),
     // or NULL (propagated rows). Pin it at the DB so a future code path can't
     // write an unknown value.

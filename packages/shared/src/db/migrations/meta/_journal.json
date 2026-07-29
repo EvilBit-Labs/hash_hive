@@ -302,6 +302,20 @@
       "when": 1785123771087,
       "tag": "0042_messy_leper_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785284818324,
+      "tag": "0043_rapid_bushwacker",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785284850585,
+      "tag": "0044_super_cracked_set_backfill_quarantine",
+      "breakpoints": true
     }
   ]
 }
