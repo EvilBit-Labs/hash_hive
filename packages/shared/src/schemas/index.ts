@@ -193,6 +193,19 @@ export const createCampaignRequestSchema = insertCampaignSchema
   })
   .extend({
     /**
+     * Issue #101 RF11: target a SuperHashlist instead of a single hash list.
+     * Exactly one of `hashListId` / `superHashListId` must be set — the wire
+     * mirror of the DB `campaigns_exactly_one_target_chk` (KTD6) and the
+     * dashboard `POST /campaigns` route's own refine. Targeting a super
+     * (#101 U10) fans out one typed single-mode sub-campaign per resolved leaf
+     * list; targeting a plain hash list runs the #202 single/split path.
+     * `hashListId` is picked from `insertCampaignSchema` (nullable now that a
+     * super parent carries a null `hashListId`), so it is made explicitly
+     * optional here alongside `superHashListId`.
+     */
+    hashListId: z.number().int().positive().optional(),
+    superHashListId: z.number().int().positive().optional(),
+    /**
      * Optional inline attacks. When supplied, the campaign and its
      * attacks are created in a single transaction with pre-commit
      * DAG validation. Omit (or pass `[]`) to fall back to the legacy
@@ -207,6 +220,9 @@ export const createCampaignRequestSchema = insertCampaignSchema
      * with this set to skip re-triggering the split analysis.
      */
     skipSplit: z.boolean().optional(),
+  })
+  .refine((d) => (d.hashListId !== undefined) !== (d.superHashListId !== undefined), {
+    message: 'Exactly one of hashListId or superHashListId must be set',
   })
   .openapi('CreateCampaignRequest')
 

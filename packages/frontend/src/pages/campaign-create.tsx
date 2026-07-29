@@ -1,4 +1,4 @@
-import type { SplitReviewGroups } from '@hashhive/shared'
+import type { SplitReviewGroups, SuperCampaignFanoutResponse } from '@hashhive/shared'
 import type { Edge, Node as FlowNode, OnConnect } from 'reactflow'
 
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -14,6 +14,8 @@ import {
   BasicInfoStep,
   basicInfoSchema,
   SplitReviewStep,
+  SuperCampaignResultPanel,
+  SuperCampaignTargetStep,
   TemplatePickerOverlay,
 } from '../components/features/campaign-wizard'
 import { ResourceUploadModal } from '../components/features/resource-upload-modal'
@@ -23,6 +25,7 @@ import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import { EmptyState } from '../components/ui/empty-state'
 import { ErrorBanner } from '../components/ui/error-banner'
 import { PageHeader } from '../components/ui/page-header'
+import { SegmentedControl } from '../components/ui/segmented-control'
 import { Select } from '../components/ui/select'
 import { useAttackTemplates, useInstantiateAttackTemplate } from '../hooks/use-attack-templates'
 import { useConfirmSplitCampaign, useCreateCampaign, useSplitStatus } from '../hooks/use-campaigns'
@@ -34,6 +37,7 @@ import {
   useRulelists,
   useWordlists,
 } from '../hooks/use-resources'
+import { useCreateSuperCampaign, useSuperHashLists } from '../hooks/use-super-hash-lists'
 import { ApiError, api } from '../lib/api'
 import { ATTACK_MODES, attackModeLabel } from '../lib/attack-modes'
 import {
@@ -123,6 +127,34 @@ export function CampaignCreatePage() {
   const wordlistsQuery = useWordlists()
   const rulelistsQuery = useRulelists()
   const masklistsQuery = useMasklists()
+
+  // Super-target flow (issue #101 U15/RF11). `targetType` toggles Step 0
+  // between the single-hash-list wizard and the super-target step; `superResult`
+  // holds the fan-out response so we can render the resulting sub-campaigns.
+  const [targetType, setTargetType] = useState<'hash-list' | 'super'>('hash-list')
+  const [superResult, setSuperResult] = useState<SuperCampaignFanoutResponse | null>(null)
+  const superHashListsQuery = useSuperHashLists()
+  const createSuperCampaign = useCreateSuperCampaign()
+
+  const handleSuperSubmit = async (data: {
+    name: string
+    superHashListId: number
+    description?: string
+    priority: number
+  }) => {
+    setError(null)
+    setSubmitting(true)
+    try {
+      const result = await createSuperCampaign.mutateAsync(data)
+      setSuperResult(result)
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else if (err instanceof Error) setError(err.message)
+      else setError('Unexpected error creating the super campaign. Check console for details.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const dagValidation = useMemo(() => validateDAG(wizard.attacks), [wizard.attacks])
 
@@ -602,6 +634,7 @@ export function CampaignCreatePage() {
     setSplitReview(null)
     setSplitAssignments({})
     setSplitPendingHashListId(null)
+    setSuperResult(null)
     setCancelOpen(false)
     void navigate('/campaigns')
   }
@@ -632,27 +665,56 @@ export function CampaignCreatePage() {
     <div className="space-y-6">
       <PageHeader>Create Campaign</PageHeader>
 
-      <div className="flex gap-1.5">
-        {STEPS.map((label, i) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => {
-              if (i < wizard.step) wizard.setStep(i)
-            }}
-            className={cn(
-              'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-              stepIndicatorStyle(i, wizard.step)
-            )}
-          >
-            {i + 1}. {label}
-          </button>
-        ))}
-      </div>
+      {wizard.step === 0 && !splitReview && splitPendingHashListId == null && !superResult && (
+        <SegmentedControl
+          aria-label="Campaign target type"
+          value={targetType}
+          onChange={(v) => {
+            setTargetType(v as 'hash-list' | 'super')
+            setError(null)
+          }}
+          options={[
+            { value: 'hash-list', label: 'Single Hash List' },
+            { value: 'super', label: 'Super Hash List' },
+          ]}
+        />
+      )}
+
+      {targetType === 'hash-list' && (
+        <div className="flex gap-1.5">
+          {STEPS.map((label, i) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => {
+                if (i < wizard.step) wizard.setStep(i)
+              }}
+              className={cn(
+                'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                stepIndicatorStyle(i, wizard.step)
+              )}
+            >
+              {i + 1}. {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && <ErrorBanner message={error} />}
 
-      {wizard.step === 0 && (
+      {targetType === 'super' &&
+        (superResult ? (
+          <SuperCampaignResultPanel result={superResult} />
+        ) : (
+          <SuperCampaignTargetStep
+            supers={superHashListsQuery.data?.superHashLists ?? []}
+            submitting={submitting}
+            onCancel={handleCancel}
+            onSubmit={(d) => void handleSuperSubmit(d)}
+          />
+        ))}
+
+      {targetType === 'hash-list' && wizard.step === 0 && (
         <BasicInfoStep
           form={basicInfoForm}
           hashLists={hashLists}
