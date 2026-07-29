@@ -35,10 +35,12 @@
  */
 
 import {
+  campaigns,
   hashItems,
   hashLists,
   projectCrackedHashes,
   projects,
+  superHashListMembers,
   superHashLists,
 } from '@hashhive/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
@@ -47,7 +49,11 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../../src/db/index.js'
 import { resolveCrackState } from '../../src/services/hash-items/crack-resolution.js'
 import { upsertCrackedSet } from '../../src/services/hash-items/cracked-set.js'
-import { addMember, removeMember } from '../../src/services/super-hash-lists.js'
+import {
+  _removeMemberDeps,
+  addMember,
+  removeMember,
+} from '../../src/services/super-hash-lists.js'
 
 const SLUG = 'super-remove-member-harvest-proj'
 
@@ -122,6 +128,53 @@ async function crackedSetRows(mode: number, hashValue: string) {
         eq(projectCrackedHashes.hashValue, hashValue)
       )
     )
+}
+
+async function memberRow(superId: number, memberHashListId: number) {
+  const [row] = await db
+    .select()
+    .from(superHashListMembers)
+    .where(
+      and(
+        eq(superHashListMembers.superHashListId, superId),
+        eq(superHashListMembers.memberHashListId, memberHashListId)
+      )
+    )
+  return row
+}
+
+/** Insert a super PARENT campaign (targets the super, owns no leaf). */
+async function createSuperParentCampaign(superId: number): Promise<number> {
+  seq += 1
+  const [row] = await db
+    .insert(campaigns)
+    .values({ projectId: projId, name: `parent-${seq}`, superHashListId: superId, status: 'draft' })
+    .returning({ id: campaigns.id })
+  return row!.id
+}
+
+/** Insert a leaf-targeting campaign; `parentCampaignId` null = independent. */
+async function createLeafCampaign(
+  hashListId: number,
+  opts: { parentCampaignId?: number | null; status?: string } = {}
+): Promise<number> {
+  seq += 1
+  const [row] = await db
+    .insert(campaigns)
+    .values({
+      projectId: projId,
+      name: `leaf-${seq}`,
+      hashListId,
+      parentCampaignId: opts.parentCampaignId ?? null,
+      status: opts.status ?? 'running',
+    })
+    .returning({ id: campaigns.id })
+  return row!.id
+}
+
+async function campaignStatus(id: number): Promise<string | undefined> {
+  const [row] = await db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, id))
+  return row?.status
 }
 
 beforeAll(async () => {
@@ -265,5 +318,79 @@ describe('removeMember — project-wide crack-once survives removal', () => {
 
     // The cracked-set entry is NOT pruned — project-wide crack-once persists.
     expect(await crackedSetRows(MODE_A, H)).toHaveLength(1)
+  })
+})
+
+describe('removeMember — dispatch-stop (RF6): cancel the departing member’s super sub-campaigns', () => {
+  it('cancels this super’s non-terminal sub-campaigns for the removed leaf, but never the member’s own campaign or a sibling leaf’s sub-campaign', async () => {
+    const listA = await createList('rf6-a')
+    const listB = await createList('rf6-b')
+    const superId = await createSuper('rf6-super', [listA, listB])
+
+    // One super PARENT campaign fanned out over the super; its sub-campaigns
+    // target the physical leaves.
+    const parentId = await createSuperParentCampaign(superId)
+    const subForA = await createLeafCampaign(listA, { parentCampaignId: parentId, status: 'running' })
+    const subForB = await createLeafCampaign(listB, { parentCampaignId: parentId, status: 'running' })
+    // A already-terminal sub-campaign for A must be left untouched.
+    const doneSubForA = await createLeafCampaign(listA, {
+      parentCampaignId: parentId,
+      status: 'completed',
+    })
+    // A's OWN independently-created campaign (parentCampaignId NULL) — R3: it
+    // stays independently targetable and must NOT be cancelled.
+    const ownA = await createLeafCampaign(listA, { parentCampaignId: null, status: 'running' })
+
+    await removeMember(superId, listA, projId)
+
+    // A's non-terminal super sub-campaign is cancelled (no new chunks dispatch).
+    expect(await campaignStatus(subForA)).toBe('cancelled')
+    // B is still a member — its sub-campaign is untouched.
+    expect(await campaignStatus(subForB)).toBe('running')
+    // Terminal sub-campaign is not re-transitioned.
+    expect(await campaignStatus(doneSubForA)).toBe('completed')
+    // R3: A's own campaign survives — the list remains independently targetable.
+    expect(await campaignStatus(ownA)).toBe('running')
+    // The super PARENT campaign itself is not a leaf-cracking sub-campaign; untouched.
+    expect(await campaignStatus(parentId)).toBe('draft')
+  })
+})
+
+describe('removeMember — harvest atomicity (RF7): a mid-transaction failure rolls back everything', () => {
+  it('a forced throw after the harvest UPDATE but before detach leaves the member attached AND the sibling uncracked', async () => {
+    const H = 'f'.repeat(32)
+    const listA = await createList('rf7-a')
+    const listB = await createList('rf7-b')
+    // A cracked H; B holds an uncracked duplicate (same mode) — the harvest
+    // WOULD materialize B cracked, but the forced failure must undo it.
+    await insertItem(listA, H, { mode: MODE_A, crackedAt: new Date(), plaintext: 'rf7secret' })
+    const bItem = await insertItem(listB, H, { mode: MODE_A })
+
+    const superId = await createSuper('rf7-super', [listA, listB])
+
+    const original = _removeMemberDeps.afterHarvest
+    _removeMemberDeps.afterHarvest = async () => {
+      throw new Error('forced mid-transaction failure (RF7)')
+    }
+    // Assert via manual catch rather than `expect().rejects.toThrow`: the latter
+    // hangs under bun:test on this rejection even though removeMember rejects
+    // promptly (the transaction rolls back and re-throws), so a try/catch is the
+    // reliable form here.
+    let caught: unknown
+    try {
+      await removeMember(superId, listA, projId)
+    } catch (err) {
+      caught = err
+    } finally {
+      _removeMemberDeps.afterHarvest = original
+    }
+    expect((caught as Error | undefined)?.message).toContain('forced mid-transaction')
+
+    // Detach rolled back: the membership row is STILL present.
+    expect(await memberRow(superId, listA)).toBeDefined()
+    // Harvest rolled back: B's duplicate is STILL uncracked (no partial apply).
+    const bRow = await itemRow(bItem)
+    expect(bRow?.crackedAt).toBeNull()
+    expect(bRow?.plaintext).toBeNull()
   })
 })

@@ -188,6 +188,31 @@ async function defaultFetchSuperMemberLeaves(
 }
 
 /**
+ * Expand ONE hash list to its physical leaf `hash_list.id`s: a #202 split
+ * PARENT resolves to its per-type children (one level, ids asc); a homogeneous
+ * list IS its own leaf and resolves to `[hashListId]`. Project-scoped — the
+ * `project_id = $2` predicate is the IDOR guard, so a list id from another
+ * project (or a nonexistent id) resolves to `[hashListId]` (no children found).
+ *
+ * This is the single-list counterpart to `defaultFetchSuperMemberLeaves`'s
+ * per-member expansion (which batches many members in one query). It is the
+ * shared primitive `removeMember`'s member-leaf resolution delegates to, so the
+ * "children-if-split-parent-else-itself" rule lives in exactly one place.
+ */
+export async function resolveListToPhysicalLeaves(
+  hashListId: number,
+  projectId: number
+): Promise<number[]> {
+  const children = await db
+    .select({ id: hashLists.id })
+    .from(hashLists)
+    .where(and(eq(hashLists.parentHashListId, hashListId), eq(hashLists.projectId, projectId)))
+  return children.length > 0
+    ? children.map((c) => c.id).sort((a, b) => a - b)
+    : [hashListId]
+}
+
+/**
  * Resolves a node to its typed leaf hash-list ids — the set a caller reads
  * `hash_items` from and groups (via `groupItemsByMode`) to fan out one typed
  * sub-campaign per leaf.

@@ -28,12 +28,22 @@
  * `services/resources-archive.ts` (archive as an `archivedAt` stamp).
  */
 
-import { hashItems, hashLists, superHashListMembers, superHashLists } from '@hashhive/shared'
+import {
+  campaigns,
+  hashItems,
+  hashLists,
+  superHashListMembers,
+  superHashLists,
+} from '@hashhive/shared'
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { db } from '../db/index.js'
 import { backfillCrackedSetFromMember } from './hash-items/cracked-set.js'
-import { resolveNodeToLeaves } from './hash-items/node-resolution/index.js'
+import {
+  resolveListToPhysicalLeaves,
+  resolveNodeToLeaves,
+} from './hash-items/node-resolution/index.js'
+import { isForeignKeyViolation } from './resources.js'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -97,12 +107,13 @@ function isUniqueViolation(err: unknown): boolean {
 
 /**
  * SQLSTATE 23514 check_violation — raised by the `super_member_project_check`
- * trigger for a cross-project member (R5). SQLSTATE 23503 foreign_key_violation
- * — a member/super id that does not exist.
+ * trigger for a cross-project member (R5). Foreign-key violation (23503) — a
+ * member/super id that does not exist — is delegated to the shared
+ * `isForeignKeyViolation` (services/resources.ts) rather than re-detecting the
+ * SQLSTATE here; the 23514 check-constraint case it does not cover stays local.
  */
 function isCheckOrFkViolation(err: unknown): boolean {
-  const code = pgErrorCode(err)
-  return code === '23514' || code === '23503'
+  return pgErrorCode(err) === '23514' || isForeignKeyViolation(err)
 }
 
 // ─── Membership helpers ─────────────────────────────────────────────
@@ -389,23 +400,14 @@ export async function addMember(
 }
 
 /**
- * Resolve a single super member to its physical typed-leaf hash-list ids
- * (U13 harvest). Mirrors the super resolver's per-member expansion: a member
- * that is a #202 split PARENT contributes its physical children; a homogeneous
- * member IS its own leaf. Project-scoped (IDOR guard).
+ * Injectable seam for `removeMember` (mirrors `_nodeResolutionDeps` /
+ * `_campaignSplitDeps`). `afterHarvest` fires INSIDE the removeMember
+ * transaction AFTER the harvest UPDATE and BEFORE the membership detach. It is
+ * a no-op in production; a test overrides it to throw so the harvest+detach
+ * atomicity (whole-transaction rollback) can be asserted deterministically.
  */
-async function resolveMemberLeaves(
-  runner: DbRunner,
-  memberHashListId: number,
-  projectId: number
-): Promise<number[]> {
-  const children = await runner
-    .select({ id: hashLists.id })
-    .from(hashLists)
-    .where(
-      and(eq(hashLists.parentHashListId, memberHashListId), eq(hashLists.projectId, projectId))
-    )
-  return children.length > 0 ? children.map((c) => c.id) : [memberHashListId]
+export const _removeMemberDeps = {
+  afterHarvest: async (): Promise<void> => {},
 }
 
 /**
@@ -416,15 +418,17 @@ async function resolveMemberLeaves(
  * Ordering (KTD9 / adversarial F4) — correctness rests on the project-wide
  * cracked-set, NOT on any drain:
  *
- *   0. Dispatch-stop (deliberately deferred). A poll-based agent model cannot
- *      recall an already-dispatched chunk, and it does not need to: every crack
- *      an in-flight chunk submits is written to the project cracked-set (U2)
- *      regardless of membership and is never pruned on removal, so a remaining
- *      member still resolves the `(mode, value)` cracked via the U4 read-time
- *      resolver whether or not a harvest ran. Actively pausing the super's
- *      sub-campaign dispatch for the leaving leaf is a best-effort optimization
- *      that would touch campaign lifecycle (and risk R3 — the list stays
- *      independently targetable); it is intentionally NOT done here.
+ *   0. Dispatch-stop (best-effort drain). A poll-based agent model cannot recall
+ *      an already-dispatched chunk, and correctness never rests on this step —
+ *      every crack an in-flight chunk submits is written to the project
+ *      cracked-set (U2) regardless of membership and is never pruned on removal,
+ *      so a remaining member still resolves the `(mode, value)` cracked via the
+ *      U4 read-time resolver whether or not this drain ran (KTD9). What the drain
+ *      DOES do is stop NEW chunks dispatching for the departing member under this
+ *      super: it cancels THIS super's non-terminal sub-campaigns that target only
+ *      the removed member's leaves. Strictly scoped so R3 holds — a member's own
+ *      independently-created campaign (`parentCampaignId IS NULL`) is never
+ *      touched, so the list stays independently targetable.
  *   1. Harvest (the sole write-back). Under a `FOR UPDATE` lock covering the
  *      SOURCE snapshot rows — the removed member's cracked `hash_items`, not
  *      just the destinations — so a concurrent re-crack cannot make the harvest
@@ -457,12 +461,49 @@ export async function removeMember(
   // OTHER current member's leaves.
   const [allLeaves, sourceLeaves] = await Promise.all([
     resolveNodeToLeaves({ kind: 'super', superHashListId: superId, projectId }),
-    resolveMemberLeaves(db, hashListId, projectId),
+    resolveListToPhysicalLeaves(hashListId, projectId),
   ])
   const sourceSet = new Set(sourceLeaves)
   const destLeaves = allLeaves.filter((id) => !sourceSet.has(id))
 
   await db.transaction(async (tx) => {
+    // (0) Dispatch-stop — cancel THIS super's non-terminal sub-campaigns that
+    // target ONLY the departing member's leaves so no new chunk dispatches for
+    // it under this super. Scoped strictly: a sub-campaign qualifies only when
+    // (a) its `parentCampaignId` points at one of this super's PARENT campaigns
+    // (a campaign whose `superHashListId = superId`) AND (b) its target
+    // `hashListId` is one of the removed member's leaves AND (c) it is still
+    // non-terminal. A member's own campaign has `parentCampaignId IS NULL` and
+    // thus never matches the parent-id filter (R3 — stays independently
+    // targetable). Correctness still rests on the cracked-set (KTD9): a crack
+    // from an already-dispatched chunk landing after this cancel still marks
+    // siblings via the U4 resolver.
+    if (sourceLeaves.length > 0) {
+      const superParents = await tx
+        .select({ id: campaigns.id })
+        .from(campaigns)
+        .where(eq(campaigns.superHashListId, superId))
+      const parentIds = superParents.map((c) => c.id)
+      if (parentIds.length > 0) {
+        const cancelledAt = new Date()
+        await tx
+          .update(campaigns)
+          .set({
+            status: 'cancelled',
+            completedAt: cancelledAt,
+            isPermanent: true,
+            updatedAt: cancelledAt,
+          })
+          .where(
+            and(
+              inArray(campaigns.parentCampaignId, parentIds),
+              inArray(campaigns.hashListId, sourceLeaves),
+              inArray(campaigns.status, ['draft', 'running', 'paused'])
+            )
+          )
+      }
+    }
+
     // (1) Harvest — skipped only when there is genuinely nothing to move
     // (no source leaves, or no remaining members to harvest into).
     if (sourceLeaves.length > 0 && destLeaves.length > 0) {
@@ -513,6 +554,12 @@ export async function removeMember(
           AND dest.hash_value = src.hash_value
       `)
     }
+
+    // Test-only failure seam (no-op in production): lets a test force a
+    // deterministic throw AFTER the harvest UPDATE but BEFORE the detach, so
+    // the whole-transaction rollback (harvest undone + member still attached)
+    // is provable.
+    await _removeMemberDeps.afterHarvest()
 
     // (2) Detach the membership row.
     await tx
