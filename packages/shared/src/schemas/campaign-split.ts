@@ -100,6 +100,24 @@ export const confirmSplitCampaignResponseSchema = z
   .strict()
   .openapi('ConfirmSplitCampaignResponse')
 
+/**
+ * Response for a SuperHashlist campaign fan-out (issue #101 — U10). Targeting
+ * a super auto-confirms (no interactive review step, unlike the #202 split
+ * flow above): the parent campaign carries `superHashListId` and one
+ * single-mode sub-campaign is created per typed LEAF list the super resolves
+ * to (KTD6a). Cross-member `(mode, value)` duplicates collapse at run time via
+ * the project-wide zap dedup, so each leaf sub-campaign still targets one
+ * physical `hashListId` — the agent wire is unchanged.
+ */
+export const superCampaignFanoutResponseSchema = z
+  .object({
+    parentCampaignId: z.number().int().positive(),
+    superHashListId: z.number().int().positive(),
+    subCampaigns: z.array(resolvedSubCampaignSchema),
+  })
+  .strict()
+  .openapi('SuperCampaignFanoutResponse')
+
 // ─── Async split status polling (issue #202 SU7) ────────────────────────
 
 export const splitPendingResponseSchema = z

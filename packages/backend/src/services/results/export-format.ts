@@ -69,7 +69,8 @@ export function buildExportScopeParams(
   scope: ExportScope,
   projectId: number,
   hashListId: number | undefined,
-  campaignId: number | undefined
+  campaignId: number | undefined,
+  superHashListId?: number
 ): ExportScopeParams | null {
   if (scope === 'hash-list') {
     if (hashListId == null) return null
@@ -78,6 +79,10 @@ export function buildExportScopeParams(
   if (scope === 'campaign') {
     if (campaignId == null) return null
     return { scope: 'campaign', projectId, campaignId }
+  }
+  if (scope === 'super') {
+    if (superHashListId == null) return null
+    return { scope: 'super', projectId, superHashListId }
   }
   return { scope: 'project', projectId }
 }

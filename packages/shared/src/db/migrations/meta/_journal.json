@@ -288,6 +288,41 @@
       "when": 1784247060971,
       "tag": "0040_natural_molly_hayes",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785116992129,
+      "tag": "0041_woozy_marvel_zombies",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1785123771087,
+      "tag": "0042_messy_leper_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785284818324,
+      "tag": "0043_rapid_bushwacker",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785284850585,
+      "tag": "0044_super_cracked_set_backfill_quarantine",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1785293468462,
+      "tag": "0045_familiar_quicksilver",
+      "breakpoints": true
     }
   ]
 }

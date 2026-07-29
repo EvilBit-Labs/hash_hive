@@ -4,11 +4,23 @@ import {
   hashLists,
   hashTypes,
   maskLists,
+  projectCrackedHashes,
   type ResourceCompressionEncoding,
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, inArray, isNotNull, isNull, max, type SQL, sql } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  max,
+  type SQL,
+  sql,
+} from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -27,6 +39,13 @@ import {
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_AT,
+  RESOLVED_CRACKED_VALUE,
+  RESOLVED_IS_CRACKED,
+  RESOLVED_PLAINTEXT,
+} from './hash-items/crack-resolution.js'
 import { resolveHashListScope } from './hash-items/list-scope.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import {
@@ -762,10 +781,18 @@ export async function getHashItems(
   }
   const conditions: SQL[] = [inArray(hashItems.hashListId, scopeIds)]
 
+  // U4/R15: crack state is read through the project cracked-set, not the item's
+  // own row alone — a value cracked in a sibling list of the same project is
+  // cracked here too. The status filter and the projected `crackedAt`/`plaintext`
+  // must agree, so both go through the resolver's SQL helpers over the LEFT JOIN
+  // added below. `NOT (...)` is the exact complement of `RESOLVED_IS_CRACKED`
+  // (both operands of the OR are NULL-free predicates), so cracked ⊎ uncracked
+  // still partitions the page — `total` for the two filters sums to the
+  // unfiltered `total`.
   if (opts.status === 'cracked') {
-    conditions.push(isNotNull(hashItems.crackedAt))
+    conditions.push(RESOLVED_IS_CRACKED)
   } else if (opts.status === 'uncracked') {
-    conditions.push(sql`${hashItems.crackedAt} IS NULL`)
+    conditions.push(sql`not ${RESOLVED_IS_CRACKED}`)
   }
 
   if (opts.search) {
@@ -787,15 +814,34 @@ export async function getHashItems(
   // `getHashListStats`'s `crackedCount` — a display-only stat with no
   // paired `items` array a client pages through — but not for this
   // items-list pagination total, which always counts physical rows.
+  // The cracked-set join is 1:1 at most (UNIQUE `(projectId, mode, value)`), so
+  // adding it cannot multiply rows — `items` and `count()` keep the same
+  // cardinality they had before U4. The projection overrides `crackedAt` and
+  // `plaintext` with their resolved values while every other `hash_items` column
+  // passes through unchanged; the item's OWN row always wins (`coalesce`), so a
+  // list that cracked the hash itself is unaffected. R17: the cracked-set's
+  // `sourceHashListId` is deliberately NOT projected — the page carries the
+  // plaintext, never which sibling list produced it.
+  const resolvedItemColumns = {
+    ...getTableColumns(hashItems),
+    crackedAt: RESOLVED_CRACKED_AT,
+    plaintext: RESOLVED_PLAINTEXT,
+  }
+
   const [items, countResult] = await Promise.all([
     db
-      .select()
+      .select(resolvedItemColumns)
       .from(hashItems)
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(whereClause)
       .limit(limit)
       .offset(offset)
       .orderBy(hashItems.id),
-    db.select({ count: count() }).from(hashItems).where(whereClause),
+    db
+      .select({ count: count() })
+      .from(hashItems)
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
+      .where(whereClause),
   ])
 
   return { items, total: Number(countResult[0]?.count ?? 0), limit, offset }
@@ -828,6 +874,10 @@ export function escapeLike(value: string): string {
  * (`hash_items_hash_list_id_hash_value_idx`), so this is a no-op there.
  * `totalCount` intentionally stays a raw row count (not deduped) — it
  * counts crackable rows, not distinct targets.
+ *
+ * U4/R15: `crackedCount` resolves through the project cracked-set
+ * (`hash-items/crack-resolution.ts`), so a value cracked only in a sibling
+ * hash list of the same project counts as cracked here too.
  */
 export async function getHashListStats(
   hashListId: number,
@@ -846,12 +896,18 @@ export async function getHashListStats(
     // this is behavior-preserving, not a change.
     return { totalCount: 0, crackedCount: 0, crackRate: 0 }
   }
+  // U4/R15: `cracked` resolves through the project cracked-set, so a value this
+  // list has not cracked itself but a sibling list of the same project has still
+  // counts as a cracked target here. `RESOLVED_CRACKED_VALUE` yields the
+  // hashValue when resolved-cracked and NULL otherwise, so `count(distinct …)`
+  // keeps the pre-existing dedup-on-hashValue semantic in one expression.
   const [stats] = await db
     .select({
       total: count(),
-      cracked: sql<number>`count(distinct ${hashItems.hashValue}) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+      cracked: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`,
     })
     .from(hashItems)
+    .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
     .where(inArray(hashItems.hashListId, scopeIds))
 
   const totalCount = Number(stats?.total ?? 0)
@@ -895,6 +951,16 @@ export async function getHashListStats(
  * `getHashListStats.crackedCount` is: a hashValue shared by two sibling
  * sub-lists must not inflate the validator with a duplicate — a no-op for
  * a leaf scope, where hashValue is already unique within the list.
+ *
+ * U4/R15 EXCLUSION — deliberately NOT routed through `resolveCrackState`.
+ * This validator serves the AGENT hash-list download endpoint
+ * (`getAgentDownloadUrl` → the agent's cached uncracked set), and U4's
+ * mandate stops at the non-agent surfaces. Agents already receive
+ * project-wide crack-once through the widened zap scan (U3,
+ * `tasks/zaps.ts`), which reads the same cracked-set directly, so a
+ * cross-list crack reaches the agent by zap even while this etag stays
+ * stable. Widening the etag is an agent-surface change and belongs with
+ * the agent-side work, not here.
  */
 export async function computeHashListEtag(hashListId: number, projectId: number): Promise<string> {
   const scopeIds = await resolveHashListScope(hashListId, projectId)

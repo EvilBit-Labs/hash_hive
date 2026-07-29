@@ -18,7 +18,12 @@
  * project scope is server-managed via the BetterAuth session — a
  * client-supplied `x-project-id` header is ignored.
  */
-import { hashItems, hashListListResponseSchema, hashLists } from '@hashhive/shared'
+import {
+  hashItems,
+  hashListListResponseSchema,
+  hashLists,
+  projectCrackedHashes,
+} from '@hashhive/shared'
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
 import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
@@ -33,6 +38,10 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_VALUE,
+} from '../../services/hash-items/crack-resolution.js'
 import { getScopedProjectId as getScopedProjectIdShared } from './scoped-user.js'
 
 const hashListsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
@@ -53,7 +62,7 @@ const listHashListsRoute = createRoute({
   tags: ['Hash Lists'],
   summary: 'Project-scoped hash lists with aggregate hash and cracked counts',
   description:
-    'Returns every hash list belonging to the operator selected project with a total count and a cracked count (computed via FILTER on cracked_at IS NOT NULL — matches the canonical cracked semantic used by the hash-list parser, dashboard stats, and results endpoints). Sorted by name ASC. No pagination — projects rarely host more than ~50 hash lists; scale concerns are deferred per plan #165 U2.',
+    'Returns every hash list belonging to the operator selected project with a total count and a cracked count. The cracked count resolves through the per-project cracked-set, so a distinct hash value counts as cracked once it has been cracked anywhere in the project under the same hashcat mode — matching the canonical cracked semantic used by dashboard stats, hash-list stats, and the results endpoints. Sorted by name ASC. No pagination — projects rarely host more than ~50 hash lists; scale concerns are deferred per plan #165 U2.',
   security: [{ SessionCookie: [] }],
   responses: {
     200: {
@@ -94,6 +103,14 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
   // parent's aggregate — a no-op for a leaf, where hashValue is already
   // unique within the list. `hashCount` intentionally stays a raw row
   // count (not deduped), same rationale as `getHashListStats.totalCount`.
+  //
+  // U4/R15 generalizes that dedup instinct from "siblings under one parent"
+  // to the whole project: `RESOLVED_CRACKED_VALUE` reads crack state through
+  // the per-project cracked-set via the LEFT JOIN below, so a value cracked
+  // only in an unrelated list of the same project counts as cracked for this
+  // list too. The join is 1:1 at most (UNIQUE `(projectId, mode, value)`), so
+  // `hashCount` is unchanged by its presence. R17: only the crack *state*
+  // crosses — the cracked-set's `sourceHashListId` is never projected.
   const childHashLists = alias(hashLists, 'child_hash_lists')
 
   const rows = await db
@@ -102,7 +119,7 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
       name: hashLists.name,
       hashTypeId: hashLists.hashTypeId,
       hashCount: sql<number>`count(${hashItems.id})`,
-      crackedCount: sql<number>`count(distinct case when ${hashItems.crackedAt} is not null then ${hashItems.hashValue} end)`,
+      crackedCount: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`,
     })
     .from(hashLists)
     .leftJoin(
@@ -116,6 +133,7 @@ hashListsRoutes.openapi(listHashListsRoute, async (c) => {
       hashItems,
       or(eq(hashItems.hashListId, hashLists.id), eq(hashItems.hashListId, childHashLists.id))
     )
+    .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
     // #202 code review P1: a split sub-list (`parent_hash_list_id IS NOT
     // NULL`) is an internal implementation detail — the operator interacts
     // with the split PARENT (whose aggregate already folds in every

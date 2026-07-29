@@ -165,6 +165,18 @@ import type {
   splitReviewGroupsSchema,
   splitReviewUnidentifiedGroupSchema,
   splitStatusResponseSchema,
+  superCampaignFanoutResponseSchema,
+  // Super-targeted campaign progress/ETA rollup (issue #101 / U11)
+  superCampaignProgressSchema,
+  // SuperHashlist management (issue #101 / U7)
+  addSuperMemberRequestSchema,
+  createSuperRequestSchema,
+  renameSuperRequestSchema,
+  superHashListDetailResponseSchema,
+  superHashListDetailWireSchema,
+  superHashListListResponseSchema,
+  superHashListResponseSchema,
+  superHashListWireSchema,
   // Enrollment tokens (#233 / #114)
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
@@ -295,6 +307,7 @@ export type AttackStatus = z.infer<typeof attackStatusSchema>
 export type CampaignAttackRow = z.infer<typeof campaignAttackRowSchema>
 export type CampaignEta = z.infer<typeof campaignEtaSchema>
 export type CampaignDetailPayload = z.infer<typeof campaignDetailPayloadSchema>
+export type SuperCampaignProgress = z.infer<typeof superCampaignProgressSchema>
 export { CAMPAIGN_PRIORITY, priorityBucket } from '../schemas/index.js'
 
 // ─── Cracker Binaries ───────────────────────────────────────────────
@@ -414,6 +427,17 @@ export type ResolvedSubCampaign = z.infer<typeof resolvedSubCampaignSchema>
 export type ConfirmSplitCampaignResponse = z.infer<typeof confirmSplitCampaignResponseSchema>
 export type SplitPendingResponse = z.infer<typeof splitPendingResponseSchema>
 export type SplitStatusResponse = z.infer<typeof splitStatusResponseSchema>
+export type SuperCampaignFanoutResponse = z.infer<typeof superCampaignFanoutResponseSchema>
+
+// ─── SuperHashlist Management (issue #101 / U7) ─────────────────────
+export type SuperHashListWire = z.infer<typeof superHashListWireSchema>
+export type SuperHashListDetailWire = z.infer<typeof superHashListDetailWireSchema>
+export type CreateSuperRequest = z.infer<typeof createSuperRequestSchema>
+export type RenameSuperRequest = z.infer<typeof renameSuperRequestSchema>
+export type AddSuperMemberRequest = z.infer<typeof addSuperMemberRequestSchema>
+export type SuperHashListListResponse = z.infer<typeof superHashListListResponseSchema>
+export type SuperHashListResponse = z.infer<typeof superHashListResponseSchema>
+export type SuperHashListDetailResponse = z.infer<typeof superHashListDetailResponseSchema>
 export type HashTypeWire = z.infer<typeof hashTypeWireSchema>
 export type ResourceWire = z.infer<typeof resourceWireSchema>
 export type HashListDetailWire = z.infer<typeof hashListDetailWireSchema>

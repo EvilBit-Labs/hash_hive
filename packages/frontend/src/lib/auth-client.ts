@@ -2,9 +2,26 @@ import type { LdapSignInBody, LdapSignInErrorCode, LdapSignInSuccess } from '@ha
 
 import { createAuthClient } from 'better-auth/react'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- BetterAuth's inferred type requires internal references that aren't portable
+/**
+ * Resolve the auth base URL from the page origin, tolerating an absent or
+ * opaque origin.
+ *
+ * `window.location.origin` is `"null"` for opaque origins (sandboxed iframes,
+ * `file://`, `data:`) and the happy-dom test DOM on Linux surfaces it as `null`
+ * too. BetterAuth validates the base URL eagerly and THROWS a `BetterAuthError`
+ * on a non-`http(s)` value — and because this client is constructed at module
+ * load, that throw takes down every module transitively importing this file
+ * (the whole app, and every component test). A real http(s) page always has a
+ * usable origin, so the localhost fallback only ever applies in those degenerate
+ * environments, where auth calls are mocked anyway.
+ */
+function resolveAuthBaseUrl(): string {
+  const origin = typeof window !== 'undefined' ? window.location?.origin : undefined
+  return origin && origin !== 'null' ? origin : 'http://localhost'
+}
+
 export const authClient: ReturnType<typeof createAuthClient> = createAuthClient({
-  baseURL: window.location.origin,
+  baseURL: resolveAuthBaseUrl(),
 })
 
 /**

@@ -334,6 +334,46 @@ describe('confirmSplitCampaign — KTD6 same-mode merge', () => {
   })
 })
 
+describe('confirmSplitCampaign — sub-campaign name truncation (bug fix Major)', () => {
+  it('truncates a 255-char base name so the sub-campaign name never exceeds campaigns.name (varchar(255))', async () => {
+    const parentId = await createHashList('split-confirm-trunc-parent')
+
+    const childId = await createHashList(
+      'split-confirm-trunc-child',
+      mixedTypeAnalysis({
+        verdict: 'needs-review',
+        detectedModes: [{ hashcatMode: NTLM_MODE, count: 1 }],
+        scannedCount: 1,
+      }),
+      parentId
+    )
+    await insertHashValues(childId, ['trunc-confirm-1'])
+
+    // Base name already at the campaigns.name cap — appending " - mode <n>"
+    // unconditionally would push the sub-campaign name past varchar(255) and
+    // fail with a Postgres 22001 error.
+    const maxLengthName = 'y'.repeat(255)
+
+    const confirmResult = await confirmSplitCampaign({
+      projectId: projId,
+      parentHashListId: parentId,
+      name: maxLengthName,
+      assignments: [{ subListId: childId, mode: NTLM_MODE }],
+    })
+
+    expect(confirmResult.kind).toBe('confirmed')
+    if (confirmResult.kind !== 'confirmed') throw new Error('expected confirmed')
+    expect(confirmResult.subCampaigns).toHaveLength(1)
+
+    const [subCampaignRow] = await campaignsOn(childId)
+    expect(subCampaignRow).toBeDefined()
+    expect(subCampaignRow!.name.length).toBeLessThanOrEqual(255)
+    // ASCII hyphen, never an em dash (bug fix — punctuation).
+    expect(subCampaignRow!.name).toContain(` - mode ${NTLM_MODE}`)
+    expect(subCampaignRow!.name).not.toContain('—')
+  })
+})
+
 describe('createCampaignOrSplit — already-split parent (children exist)', () => {
   it('returns split_review directly, with no enqueue, when the parent already has children', async () => {
     const parentId = await createHashList('split-confirm-already-split-parent', mixedTypeAnalysis())

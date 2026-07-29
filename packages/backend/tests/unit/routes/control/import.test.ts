@@ -163,6 +163,12 @@ if (!IS_ISOLATED) {
   mock.module('../../../../src/services/resources.js', () => ({
     getHashListById: mockGetHashListById,
     getHashTypeById: mockGetHashTypeById,
+    // `mock.module` is process-global and leaks across files in a shared bun
+    // run. Other suites' routers (e.g. the search route via `hashes.ts`) link
+    // `escapeLike` from resources.ts, so this mock must re-export it too or that
+    // linkage fails when this mock is the active one — mirrors the same
+    // re-export in `dashboard/import-precracked.test.ts`.
+    escapeLike: (value: string) => value,
   }))
 
   mock.module('../../../../src/services/hash-items/import-parse.js', () => ({
@@ -299,6 +305,13 @@ if (!IS_ISOLATED) {
       expect(payload.hashListId).toBe(42)
       expect(payload.projectId).toBe(1)
       expect(payload.skippedFromParse).toBe(3)
+      // Bug fix (Medium): the job payload no longer carries a staged
+      // hashcatMode snapshot -- runHashImportJob re-resolves the list's
+      // CURRENT mode from its hashTypeId at process time instead (see
+      // resolveCurrentHashcatMode in hash-import-worker.ts), so a
+      // setHashListType call between staging and processing can never make
+      // the worker stamp a stale mode.
+      expect('hashcatMode' in payload).toBe(false)
       expect(typeof payload.stagingKey).toBe('string')
       expect('actor' in payload).toBe(true)
       expect(typeof opts.jobId).toBe('string')

@@ -16,6 +16,7 @@ import {
 } from './campaigns.js'
 import { pickChunkSize, pickParcelSize } from './chunk-sizing.js'
 import { emitCrackResult, emitTaskUpdate } from './events.js'
+import { upsertCrackedSetBatch } from './hash-items/cracked-set.js'
 import { jsonSafeBigint, readWorkRangeField } from './tasks/_internals.js'
 import { MAX_RETRIES } from './tasks/retry.js'
 import { appendTaskTelemetry } from './telemetry.js'
@@ -685,6 +686,23 @@ export async function assignNextTask(
 
 // ─── Task Progress & Results ────────────────────────────────────────
 
+/**
+ * Dedupes a progress report's crack results by `hashValue`, last occurrence
+ * wins. Both `hash_items`' upsert conflict target (hashListId, hashValue)
+ * and the cracked-set's (projectId, hashcatMode, hashValue) hold every
+ * column but `hashValue` constant within one report, so a duplicate
+ * `hashValue` in the same report would otherwise make a single bulk
+ * `ON CONFLICT DO UPDATE` affect the same row twice — a Postgres error that
+ * rolls back the whole transaction, not just the duplicate.
+ */
+function dedupeResultsByHashValue<T extends { hashValue: string }>(results: readonly T[]): T[] {
+  const byHashValue = new Map<string, T>()
+  for (const result of results) {
+    byHashValue.set(result.hashValue, result)
+  }
+  return [...byHashValue.values()]
+}
+
 export async function updateTaskProgress(
   taskId: number,
   agentId: number,
@@ -757,32 +775,81 @@ export async function updateTaskProgress(
   }
 
   if (data.results && data.results.length > 0 && taskRow.hashListId) {
+    // Capture non-null locals so the transaction closure sees narrowed types.
+    const hashListId = taskRow.hashListId
+    const { campaignId, attackId, hashcatMode } = taskRow
+    // Bug fix (Major): dedupe by hashValue before either upsert below. Both
+    // the hash_items conflict target (hashListId, hashValue) and the
+    // cracked-set conflict target (projectId, hashcatMode, hashValue) hold
+    // hashListId/projectId/hashcatMode constant within one progress report,
+    // so hashValue alone identifies a conflict-target collision. A report
+    // carrying a duplicate (mode, value) result — e.g. a retried/duplicated
+    // agent report — would otherwise make the bulk upsert affect the same
+    // conflict-target row twice in one statement, which Postgres rejects,
+    // rolling back the WHOLE report (including every other, non-duplicate
+    // result in it). Last occurrence wins, mirroring the same last-write
+    // dedup the import worker already applies to its own pairs.
+    const results = dedupeResultsByHashValue(data.results)
     try {
-      await db
-        .insert(hashItems)
-        .values(
-          data.results.map((r) => ({
-            hashListId: taskRow.hashListId,
-            hashValue: r.hashValue,
-            plaintext: r.plaintext,
-            crackedAt: new Date(),
-            campaignId: taskRow.campaignId,
-            attackId: taskRow.attackId,
-            taskId,
-            agentId,
-          }))
-        )
-        .onConflictDoUpdate({
-          target: [hashItems.hashListId, hashItems.hashValue],
-          set: {
-            plaintext: sql`EXCLUDED.plaintext`,
-            crackedAt: sql`EXCLUDED.cracked_at`,
-            campaignId: sql`EXCLUDED.campaign_id`,
-            attackId: sql`EXCLUDED.attack_id`,
-            taskId: sql`EXCLUDED.task_id`,
-            agentId: sql`EXCLUDED.agent_id`,
-          },
-        })
+      // U2 (feasibility F5): the per-list `hash_items` upsert and the
+      // project-wide cracked-set upsert must land atomically — a crack must
+      // never be visible in one but not the other. Both run in a single
+      // transaction, still ABOVE the paused-task guard so a dying/paused agent
+      // never drops a plaintext (persist-first, KTD9 discipline).
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(hashItems)
+          .values(
+            results.map((r) => ({
+              hashListId,
+              hashValue: r.hashValue,
+              plaintext: r.plaintext,
+              crackedAt: new Date(),
+              // KTD3: stamp the campaign's resolved hashcat mode onto the crack
+              // so write/read/zap all read ONE authoritative mode column. Null
+              // when the campaign has no resolved mode (leaves it untouched via
+              // COALESCE on conflict below).
+              detectedHashcatMode: hashcatMode,
+              campaignId,
+              attackId,
+              taskId,
+              agentId,
+            }))
+          )
+          .onConflictDoUpdate({
+            target: [hashItems.hashListId, hashItems.hashValue],
+            set: {
+              plaintext: sql`EXCLUDED.plaintext`,
+              crackedAt: sql`EXCLUDED.cracked_at`,
+              // Preserve any previously-stamped mode when this crack carries
+              // none, but adopt the resolved mode when it does (KTD3).
+              detectedHashcatMode: sql`COALESCE(EXCLUDED.detected_hashcat_mode, ${hashItems.detectedHashcatMode})`,
+              campaignId: sql`EXCLUDED.campaign_id`,
+              attackId: sql`EXCLUDED.attack_id`,
+              taskId: sql`EXCLUDED.task_id`,
+              agentId: sql`EXCLUDED.agent_id`,
+            },
+          })
+
+        // KTD3: only maintain the cracked-set when the campaign's mode resolved.
+        // Results with no mode stay list-local and never cross-list dedup.
+        // Efficiency fix: one batched multi-row upsert (mirrors the batched
+        // hash_items insert above) instead of one round trip per result.
+        if (hashcatMode != null) {
+          await upsertCrackedSetBatch(
+            tx,
+            results.map((r) => ({
+              projectId: taskRow.projectId,
+              hashcatMode,
+              hashValue: r.hashValue,
+              plaintext: r.plaintext,
+              sourceHashListId: hashListId,
+              taskId,
+              agentId,
+            }))
+          )
+        }
+      })
     } catch (err) {
       logger.error(
         {

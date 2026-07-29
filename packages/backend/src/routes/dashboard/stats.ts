@@ -5,13 +5,14 @@ import {
   dashboardStatsSchema,
   hashItems,
   hashLists,
+  projectCrackedHashes,
   TASK_DB_TO_BUCKET,
   type TaskBucket,
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm'
+import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -23,6 +24,10 @@ import {
   sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_VALUE,
+} from '../../services/hash-items/crack-resolution.js'
 
 const statsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
@@ -159,13 +164,22 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
     // cracked target, not once per row. No-op for a project with no
     // duplicate hashValues across its lists — the overwhelmingly common
     // case.
+    //
+    // U4/R15 (crack-yield metric): the cracked predicate resolves through the
+    // per-project cracked-set rather than `hash_items.cracked_at` alone, so a
+    // value cracked in one list counts for the project even where the sibling
+    // rows holding it were never written back. `RESOLVED_CRACKED_VALUE` is NULL
+    // for unresolved rows, so `count(distinct …)` replaces the old
+    // `WHERE cracked_at IS NOT NULL` filter without changing the dedup
+    // semantic. The LEFT JOIN is 1:1 at most (UNIQUE `(projectId, mode, value)`).
     db
       .select({
-        count: sql<number>`count(distinct ${hashItems.hashValue})`,
+        count: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`,
       })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-      .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
+      .where(eq(hashLists.projectId, projectId)),
   ])
 
   // Bucket task DB statuses into the operator-facing buckets defined by

@@ -107,7 +107,19 @@ export async function stageAndEnqueueImport(
 
     const enqueued = await qm.enqueue(
       QUEUE_NAMES.HASH_IMPORT_PROPAGATION,
-      { stagingKey, hashListId, projectId, actor, skippedFromParse: parseResult.skipped },
+      {
+        stagingKey,
+        hashListId,
+        projectId,
+        actor,
+        skippedFromParse: parseResult.skipped,
+        // `hashcatMode` (resolved above, for potfile parsing only) is
+        // deliberately NOT threaded into the job payload (bug fix, Medium):
+        // the worker re-resolves the list's CURRENT mode from its
+        // hashTypeId at process time instead of trusting a mode snapshotted
+        // here at staging time, which could go stale if `setHashListType`
+        // runs before the worker processes this job.
+      },
       { jobId: buildHashImportJobId(hashListId, stagingKey) }
     )
 

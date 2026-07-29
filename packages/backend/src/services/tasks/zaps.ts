@@ -3,14 +3,20 @@
  *
  * Pulled from `services/tasks.ts` to bring the parent service under the
  * per-file size budget. Owns the single endpoint agents call to fetch
- * hashes that have already been cracked by any campaign sharing the
- * same hash list, so they can skip work they would otherwise duplicate.
+ * hashes that have already been cracked anywhere in the task's project at
+ * the same hashcat mode, so they can skip work they would otherwise
+ * duplicate. Resolution is against the maintained per-project cracked-set
+ * (`project_cracked_hashes`, SuperHashlists Layer one) at project+mode
+ * scope — NOT the task's single hash list — so a value cracked in ANY list
+ * in the project (a sibling list, another campaign, a super member) zaps
+ * every same-mode task in that project (KTD4 / R8 / R16).
  *
  * Re-exported from `services/tasks.ts` so the agent route
  * (`routes/agent/index.ts -> getZapsForTask`) sees no change in its
- * import path.
+ * import path. The agent wire contract (`{ zaps, nextCursor }`) and the
+ * exactly-once composite cursor are preserved by this widening.
  */
-import { campaigns, hashItems, tasks } from '@hashhive/shared'
+import { campaigns, projectCrackedHashes, tasks } from '@hashhive/shared'
 import { and, eq, gt, gte, isNotNull, or, type SQL } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
@@ -30,10 +36,19 @@ import { encodeZapCursor, type ZapCursor } from './zap-cursor.js'
 export const MAX_ZAPS_LIMIT = 10_000
 
 /**
- * Returns "zaps" — hashes already cracked by any campaign sharing this
- * task's hash list — so the calling agent can skip them. Project-scoped
- * via the campaigns join so a leaked task id from another project
- * resolves to "task not found", not a cross-project read.
+ * Returns "zaps" — hashes already cracked anywhere in this task's project
+ * at the same hashcat mode — so the calling agent can skip them. Resolution
+ * reads the maintained per-project cracked-set (`project_cracked_hashes`)
+ * scoped by `projectId = ? AND hashcatMode = ?`, so a value first cracked in
+ * one list zaps every same-mode task across the project's other lists (R8 /
+ * R16 / AE2). Project scope is enforced by the `campaigns.projectId` join, so
+ * a leaked task id from another project resolves to "task not found", not a
+ * cross-project read.
+ *
+ * The task's hashcat mode is the campaign's latched `hashcatMode` (read via
+ * the `tasks ⋈ campaigns` JOIN). A campaign with no attacks yet has a null
+ * mode — nothing has entered the cracked-set for it, so there is nothing to
+ * zap and the endpoint returns an empty page.
  *
  * Pagination is an opaque composite cursor over `(crackedAt, id)`. The
  * agent passes back the prior response's `nextCursor` as `opts.cursor`
@@ -63,11 +78,14 @@ export async function getZapsForTask(
   const requestedLimit = opts.limit ?? MAX_ZAPS_LIMIT
   const fetchLimit = Math.min(Math.max(requestedLimit, 1), MAX_ZAPS_LIMIT)
 
-  // Single JOIN: tasks -> campaigns to get hashListId + verify ownership + project scope
+  // Single JOIN: tasks -> campaigns to get the campaign's latched hashcat
+  // mode + verify ownership + project scope. The dedup key is (mode, value)
+  // (KTD3), so the mode is what scopes the cracked-set scan below alongside
+  // the `projectId` param.
   const [taskRow] = await db
     .select({
       taskId: tasks.id,
-      hashListId: campaigns.hashListId,
+      hashcatMode: campaigns.hashcatMode,
     })
     .from(tasks)
     .innerJoin(campaigns, eq(tasks.campaignId, campaigns.id))
@@ -80,26 +98,32 @@ export async function getZapsForTask(
     return { error: 'Task not found or not assigned to this agent' }
   }
 
-  if (!taskRow.hashListId) {
+  // A campaign with no attacks yet has a null latched mode. No mode means
+  // nothing this campaign cracks could have entered the cracked-set (the
+  // write path (U2) keys on the resolved mode, KTD3), so there is nothing to
+  // zap — return an empty page rather than scanning every mode in the project.
+  if (taskRow.hashcatMode === null) {
     return { zaps: [], nextCursor: null }
   }
 
-  // A task's campaign always targets a leaf hash list: a split sub-campaign
-  // cracks a per-type sub-list (itself a leaf), and a split PARENT campaign is
-  // attackless so never has tasks (#202 SU3/SU4). So there is no parent to
-  // expand here — filter directly on the task's own hashListId. This keeps the
-  // agent's hot polling path free of an extra hash_lists round trip per zap
-  // fetch. Ownership is already enforced by the campaigns.projectId join above.
-  // (If a future campaign type ever targets a parent directly, route this
-  // through resolveHashListScope like the dashboard read paths.)
-
-  // Build conditions for cracked hash items. Typed to allow the
-  // `or(...)` (which is `SQL | undefined`) without a non-null assertion —
-  // `and(...conditions)` filters undefined itself, matching the pattern
-  // in `services/results/export.ts`.
+  // Resolve zaps from the maintained per-project cracked-set at project+mode
+  // scope (KTD4). This replaces the old single-`hashListId` `hash_items` scan:
+  // a value cracked in ANY list in this project (sibling list, other campaign,
+  // super member) is a project-wide zap for every same-mode task (R8 / R16 /
+  // AE2). Ownership + project scope are already enforced by the
+  // `campaigns.projectId` join above.
+  //
+  // Typed to allow the `or(...)` (which is `SQL | undefined`) without a
+  // non-null assertion — `and(...conditions)` filters undefined itself,
+  // matching the pattern in `services/results/export.ts`.
+  //
+  // `crackedAt` is NOT NULL on `project_cracked_hashes` (the keyset column),
+  // so the `isNotNull` guard is belt-and-suspenders — kept to mirror the
+  // filter shape the endpoint has always run.
   const conditions: Array<SQL | undefined> = [
-    eq(hashItems.hashListId, taskRow.hashListId),
-    isNotNull(hashItems.crackedAt),
+    eq(projectCrackedHashes.projectId, projectId),
+    eq(projectCrackedHashes.hashcatMode, taskRow.hashcatMode),
+    isNotNull(projectCrackedHashes.crackedAt),
   ]
 
   // Composite-cursor resume predicate. Drizzle's operator set is
@@ -116,7 +140,8 @@ export async function getZapsForTask(
   // OR alone is not pushed into the index and forces a row-by-row Filter
   // that rescans the whole cracked-row range each page, so per-page cost
   // grows as the agent walks deeper. The `gte` restores the index range
-  // bound (`Index Cond`) on `hash_items_hash_list_cracked_idx`, leaving
+  // bound (`Index Cond`) on `project_cracked_hashes_keyset_idx` (the keyset
+  // index `(projectId, hashcatMode, crackedAt, id)` created in U1), leaving
   // the OR as a cheap tie-break Filter. Same result set, seek instead of
   // scan.
   //
@@ -125,10 +150,13 @@ export async function getZapsForTask(
   // this hot path to a full-range rescan; every correctness test stays green.
   if (opts.cursor) {
     conditions.push(
-      gte(hashItems.crackedAt, opts.cursor.crackedAt),
+      gte(projectCrackedHashes.crackedAt, opts.cursor.crackedAt),
       or(
-        gt(hashItems.crackedAt, opts.cursor.crackedAt),
-        and(eq(hashItems.crackedAt, opts.cursor.crackedAt), gt(hashItems.id, opts.cursor.id))
+        gt(projectCrackedHashes.crackedAt, opts.cursor.crackedAt),
+        and(
+          eq(projectCrackedHashes.crackedAt, opts.cursor.crackedAt),
+          gt(projectCrackedHashes.id, opts.cursor.id)
+        )
       )
     )
   }
@@ -139,13 +167,13 @@ export async function getZapsForTask(
   // for the composite cursor above.
   const rows = await db
     .select({
-      hashValue: hashItems.hashValue,
-      id: hashItems.id,
-      crackedAt: hashItems.crackedAt,
+      hashValue: projectCrackedHashes.hashValue,
+      id: projectCrackedHashes.id,
+      crackedAt: projectCrackedHashes.crackedAt,
     })
-    .from(hashItems)
+    .from(projectCrackedHashes)
     .where(and(...conditions))
-    .orderBy(hashItems.crackedAt, hashItems.id)
+    .orderBy(projectCrackedHashes.crackedAt, projectCrackedHashes.id)
     .limit(fetchLimit + 1)
 
   const hasMore = rows.length > fetchLimit
@@ -164,8 +192,9 @@ export async function getZapsForTask(
     if (!lastRow) {
       throw new Error('zap pagination invariant violated: hasMore=true with an empty page')
     }
-    // `crackedAt` is non-null on every row (the `isNotNull` filter above
-    // guarantees it), so the assertion mirrors `results/export.ts`.
+    // `crackedAt` is non-null on every row (NOT NULL on the cracked-set table,
+    // plus the `isNotNull` filter above), so the assertion mirrors
+    // `results/export.ts`.
     nextCursor = encodeZapCursor({ crackedAt: lastRow.crackedAt!, id: lastRow.id })
   }
 
