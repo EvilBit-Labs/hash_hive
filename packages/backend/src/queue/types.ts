@@ -67,6 +67,19 @@ export interface ResourceCompressionJob {
 }
 
 /**
+ * Payload for the mixed hash-list split analysis job (issue #202 SU2).
+ *
+ * `projectId` is carried for parity with the other resource-scoped job
+ * payloads (log context, future event scoping) even though
+ * `runSplitAnalysis` re-reads it from the parent row itself — never trust
+ * a stale caller-supplied projectId for the actual DB write.
+ */
+export interface HashListSplitJob {
+  hashListId: number
+  projectId: number
+}
+
+/**
  * Payload for the hash import propagation job (U7).
  *
  * CRITICAL (KTD3): recovered plaintexts must NEVER appear in this payload.
@@ -86,6 +99,14 @@ export interface HashImportPropagationJob {
   actor: AuditActor
   /** Parse-time skip count from U6 — passed through for the final summary. */
   skippedFromParse: number
+  // No `hashcatMode` field (bug fix, Medium): a mode snapshotted here at
+  // staging time would go stale if `setHashListType` changes the list's
+  // hash type before the worker processes this job — every downstream write
+  // (`detected_hashcat_mode`, the cracked-set population, and propagation's
+  // mode scope) would then key off the WRONG mode with no signal to the
+  // caller. `runHashImportJob` re-resolves the target list's CURRENT mode
+  // from its `hashTypeId` at process time instead (single source of truth —
+  // see `resolveCurrentHashcatMode` in `queue/workers/hash-import-worker.ts`).
 }
 
 // ─── Job Data Discriminated Union ────────────────────────────────────
@@ -107,4 +128,5 @@ export type QueueJobMap = {
   [QUEUE_NAMES.HASH_IMPORT_PROPAGATION]: HashImportPropagationJob
   [QUEUE_NAMES.BLOB_RECLAMATION]: BlobReclamationJob
   [QUEUE_NAMES.RESOURCE_COMPRESSION]: ResourceCompressionJob
+  [QUEUE_NAMES.HASH_LIST_SPLIT]: HashListSplitJob
 }

@@ -68,8 +68,10 @@ The rename touches every corner of the contract atomically. (As of 2026-06-01 th
 export const HEALTH_VERSION = '2.0.0'
 ```
 
+> **Historical note (route-as-spec migration, ADR-0013):** the `packages/openapi/` directory and its hand-maintained `*-api.yaml` files no longer exist. The changelog snippet below reflects PR #171's pre-migration state — today the equivalent changelog lives in the TS JSDoc above the version constant (see the `HEALTH_VERSION` block above) and, when surfaced on the wire, in the route's `createRoute(...)` `description`.
+
 ```yaml
-# packages/openapi/control-api.yaml
+# packages/openapi/control-api.yaml (retired — see historical note above)
 info:
   description: |
     ## Changelog
@@ -169,4 +171,4 @@ Audit your "everything has the old name" intuition. Some literals — opaque cre
 - [`shared-zod-openapi-wire-contract-mirror-2026-05-25.md`](shared-zod-openapi-wire-contract-mirror-2026-05-25.md) — the triple-sync pattern this rename followed (Zod schema + OpenAPI spec + route handler + contract test).
 - **PR #153** — first half of the swap; preserved `minio` as wire identifier defensively.
 - **PR #171** — second half; dropped the placeholder, bumped `HEALTH_VERSION` to 2.0.0.
-- **AGENTS.md** — "Wire shapes live in `@hashhive/shared`" and "Keep the OpenAPI spec in sync with shared types."
+- **AGENTS.md** — "Wire shapes live in `@hashhive/shared` as `z.infer` from Zod schemas" and "All three surfaces are route-as-spec via `@hono/zod-openapi` ... there is no separate YAML to keep in sync, and there is no `packages/openapi/` directory."

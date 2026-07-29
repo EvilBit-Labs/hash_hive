@@ -133,6 +133,21 @@ export interface HashCandidate {
 }
 
 /**
+ * Structured/prefixed formats ($-crypt, `*`-MySQL, `md5`-Postgres, `::`-NetNTLM)
+ * are near-certain (0.95) vs. raw hex's length-shared ambiguity (0.7). Shared by
+ * both `guessHashType` and `guessTopHashType` so their confidence rule — and the
+ * agreement invariant between them — can't drift apart on a one-sided edit.
+ */
+function isStructuredHashFormat(trimmed: string): boolean {
+  return (
+    trimmed.includes('$') ||
+    trimmed.startsWith('*') ||
+    trimmed.startsWith('md5') ||
+    trimmed.includes('::')
+  )
+}
+
+/**
  * Analyzes a hash string and returns ranked candidate types.
  * Confidence scoring:
  *   - Structured/prefixed formats get high confidence (0.95) since they're unambiguous
@@ -156,11 +171,7 @@ export function guessHashType(hashValue: string): HashCandidate[] {
       seenModes.add(pattern.hashcatMode)
 
       // Structured formats are near-certain; raw hex shares lengths
-      const isStructured =
-        trimmed.includes('$') ||
-        trimmed.startsWith('*') ||
-        trimmed.startsWith('md5') ||
-        trimmed.includes('::')
+      const isStructured = isStructuredHashFormat(trimmed)
       const baseConfidence = isStructured ? 0.95 : 0.7
 
       // Decay confidence for later matches of same-length raw hex
@@ -180,6 +191,44 @@ export function guessHashType(hashValue: string): HashCandidate[] {
   candidates.sort((a, b) => b.confidence - a.confidence)
 
   return candidates
+}
+
+export interface TopHashGuess {
+  hashcatMode: number
+  confidence: number
+}
+
+/**
+ * Fast per-entry classifier for the ingest hot path (streaming parser). Unlike
+ * `guessHashType`, it does not build or sort a candidate array — it returns the
+ * first matching pattern in the popularity-ordered `HASH_PATTERNS`. Structured
+ * formats ($-prefixed, `*`, `md5`-prefixed, `::`) score 0.95; raw-hex matches
+ * score 0.7. Returns `null` for empty or unrecognized input.
+ *
+ * By construction this agrees with `guessHashType(x)[0]?.hashcatMode`: in
+ * `guessHashType`, structured matches (0.95) always outrank raw-hex (0.7) after
+ * the sort, and structured patterns are ordered first in `HASH_PATTERNS`; within
+ * raw-hex the stable sort preserves array order. So the first match here equals
+ * that function's top-confidence pick, without the allocation and sort cost.
+ */
+export function guessTopHashType(hashValue: string): TopHashGuess | null {
+  const trimmed = hashValue.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const isStructured = isStructuredHashFormat(trimmed)
+
+  for (const pattern of HASH_PATTERNS) {
+    if (pattern.regex.test(trimmed)) {
+      return {
+        hashcatMode: pattern.hashcatMode,
+        confidence: isStructured ? 0.95 : 0.7,
+      }
+    }
+  }
+
+  return null
 }
 
 /**

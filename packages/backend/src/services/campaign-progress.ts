@@ -130,7 +130,7 @@ export async function updateCampaignProgress(campaignId: number): Promise<void> 
   } | null = null
 
   if (campaign?.hashListId) {
-    const stats = await getHashListStats(campaign.hashListId)
+    const stats = await getHashListStats(campaign.hashListId, campaign.projectId)
 
     if (stats.totalCount > 0) {
       // hashProgress is a separate wire shape embedded in campaigns.progress —

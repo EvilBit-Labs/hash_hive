@@ -41,6 +41,7 @@ import { controlProjectRoutes } from './projects.js'
 import { controlResourceRoutes } from './resources.js'
 import { controlSearchRoutes } from './search.js'
 import { controlStatsRoutes } from './stats.js'
+import { controlSuperHashListRoutes } from './super-hash-lists.js'
 import { controlTaskRoutes } from './tasks.js'
 import { controlUserRoutes } from './users.js'
 
@@ -102,6 +103,7 @@ controlRoutes.route('/health', controlHealthRoutes)
 controlRoutes.route('/projects', controlProjectRoutes)
 controlRoutes.route('/users', controlUserRoutes)
 controlRoutes.route('/hashlists', controlHashListRoutes)
+controlRoutes.route('/super-hash-lists', controlSuperHashListRoutes)
 controlRoutes.route('/stats', controlStatsRoutes)
 controlRoutes.route('/resources', controlResourceRoutes)
 controlRoutes.route('/campaigns', controlCampaignRoutes)

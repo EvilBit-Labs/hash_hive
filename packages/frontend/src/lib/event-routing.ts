@@ -83,6 +83,11 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
   // progress column would only refresh on campaign lifecycle
   // transitions, missing per-task progress.
   task_update: ['tasks', 'campaigns', 'dashboard-stats'],
+  // `super-hash-lists` / `super-hash-list-detail` (issue #101 U8) ride the
+  // existing resource + crack events rather than a new event type, per
+  // `docs/solutions/conventions/dashboard-read-endpoint-contract.md`. A super
+  // is a read-time union over member hash lists, so anything that changes a
+  // member's rows or crack state also changes what the super's views show.
   crack_result: [
     'dashboard-stats',
     'results',
@@ -90,6 +95,8 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
     'hash-list-items',
     'hash-lists',
     'hash-list-summaries',
+    'super-hash-lists',
+    'super-hash-list-detail',
   ],
   resource_update: [
     'hash-lists',
@@ -98,6 +105,8 @@ const projectInvalidationKeys: Readonly<Record<string, readonly string[]>> = {
     'rulelists',
     'masklists',
     'audit-logs',
+    'super-hash-lists',
+    'super-hash-list-detail',
   ],
 }
 

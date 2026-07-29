@@ -40,6 +40,12 @@ const ResourcesPage = lazy(() =>
 const HashListDetailPage = lazy(() =>
   import('./pages/hash-list-detail').then((m) => ({ default: m.HashListDetailPage }))
 )
+const SuperHashListsPage = lazy(() =>
+  import('./pages/super-hash-lists').then((m) => ({ default: m.SuperHashListsPage }))
+)
+const SuperHashListDetailPage = lazy(() =>
+  import('./pages/super-hash-list-detail').then((m) => ({ default: m.SuperHashListDetailPage }))
+)
 const ResultsPage = lazy(() => import('./pages/results').then((m) => ({ default: m.ResultsPage })))
 const HashSearchPage = lazy(() =>
   import('./pages/hash-search').then((m) => ({ default: m.HashSearchPage }))
@@ -102,6 +108,8 @@ function App() {
                   <Route path="/agents/:id" element={<AgentDetailPage />} />
                   <Route path="/resources" element={<ResourcesPage />} />
                   <Route path="/resources/hash-lists/:id" element={<HashListDetailPage />} />
+                  <Route path="/super-hash-lists" element={<SuperHashListsPage />} />
+                  <Route path="/super-hash-lists/:id" element={<SuperHashListDetailPage />} />
                   <Route path="/results" element={<ResultsPage />} />
                   <Route path="/hash-search" element={<HashSearchPage />} />
                   <Route path="/audit-logs" element={<AuditLogsPage />} />

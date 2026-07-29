@@ -173,3 +173,10 @@ If a design choice could be guessed from "password-cracking platform" alone, rew
 **Conformance target: WCAG 2.2 AA** (4.5:1 body text, 3:1 large text / UI boundaries). When a Catppuccin accent can't clear the text floor, pair it with weight/size/a non-color cue rather than dropping below AA. AAA is not a goal on this mid-tone palette.
 
 For full context, principles, and locked tokens, read `.impeccable.md`.
+
+<!-- mermaid-ai-skills:start -->
+## Mermaid Diagrams
+
+When the user asks to create, edit, or visualize a diagram, follow the
+instructions in `.github/instructions/mermaid.instructions.md`.
+<!-- mermaid-ai-skills:end -->

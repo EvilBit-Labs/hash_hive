@@ -131,4 +131,90 @@ describeIfIsolated('QueueManager', () => {
     expect(addCalls[0]?.['removeOnComplete']).toBeUndefined()
     expect(addCalls[0]?.['removeOnFail']).toBeUndefined()
   })
+
+  test('enqueue honors a removeOnComplete/removeOnFail override for a deduped jobId (issue #202 SU7)', async () => {
+    // The split-status poll needs to read a terminal job's returnvalue for
+    // a window after it settles (degenerate outcomes leave no other row to
+    // read) — `true` (the default) evicts too early for that. Proves the
+    // override reaches `queue.add()` untouched rather than being silently
+    // coerced back to the `true` default.
+    const qm = new QueueManager()
+    const addCalls: Array<Record<string, unknown>> = []
+    const fakeQueue = {
+      add: (_name: string, _data: unknown, opts: Record<string, unknown>) => {
+        addCalls.push(opts)
+        return Promise.resolve({})
+      },
+    }
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      fakeQueue
+    )
+
+    await qm.enqueue(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      { hashListId: 42, projectId: 7 },
+      {
+        jobId: 'split-42',
+        removeOnComplete: { age: 600 },
+        removeOnFail: { age: 600 },
+      }
+    )
+
+    expect(addCalls[0]?.['jobId']).toBe('split-42')
+    expect(addCalls[0]?.['removeOnComplete']).toEqual({ age: 600 })
+    expect(addCalls[0]?.['removeOnFail']).toEqual({ age: 600 })
+  })
+
+  test('getJobInfo returns null when the queue is not available', async () => {
+    const qm = new QueueManager()
+    const info = await qm.getJobInfo(QUEUE_NAMES.HASH_LIST_SPLIT, 'split-42')
+    expect(info).toBeNull()
+  })
+
+  test('getJobInfo returns null when the job does not exist (never enqueued or already evicted)', async () => {
+    const qm = new QueueManager()
+    const fakeQueue = { getJob: async () => undefined }
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      fakeQueue
+    )
+    const info = await qm.getJobInfo(QUEUE_NAMES.HASH_LIST_SPLIT, 'split-42')
+    expect(info).toBeNull()
+  })
+
+  test('getJobInfo returns state, returnvalue, and failedReason for an existing job', async () => {
+    const qm = new QueueManager()
+    const fakeJob = {
+      getState: async () => 'completed',
+      returnvalue: { outcome: 'degenerate-empty', subLists: [] },
+      failedReason: undefined,
+    }
+    const fakeQueue = { getJob: async () => fakeJob }
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      fakeQueue
+    )
+    const info = await qm.getJobInfo(QUEUE_NAMES.HASH_LIST_SPLIT, 'split-42')
+    expect(info).toEqual({
+      state: 'completed',
+      returnvalue: { outcome: 'degenerate-empty', subLists: [] },
+      failedReason: null,
+    })
+  })
+
+  test('getJobInfo returns null (not throws) when the lookup rejects', async () => {
+    const qm = new QueueManager()
+    const fakeQueue = {
+      getJob: async () => {
+        throw new Error('redis blip')
+      },
+    }
+    ;(qm as unknown as { queues: Map<string, unknown> }).queues.set(
+      QUEUE_NAMES.HASH_LIST_SPLIT,
+      fakeQueue
+    )
+    const info = await qm.getJobInfo(QUEUE_NAMES.HASH_LIST_SPLIT, 'split-42')
+    expect(info).toBeNull()
+  })
 })

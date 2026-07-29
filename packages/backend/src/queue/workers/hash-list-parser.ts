@@ -1,6 +1,7 @@
+import type { HashListTypeAnalysis } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
-import { hashItems, hashLists } from '@hashhive/shared'
+import { hashItems, hashLists, hashTypes } from '@hashhive/shared'
 import { type ConnectionOptions, Worker } from 'bullmq'
 import { and, count, eq, sql } from 'drizzle-orm'
 
@@ -10,6 +11,11 @@ import { logger } from '../../config/logger.js'
 import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
 import { db } from '../../db/index.js'
 import { emitResourceUpdate } from '../../services/events.js'
+import { guessTopHashType } from '../../services/hash-analysis.js'
+import {
+  buildTypeAnalysis,
+  TYPE_DETECTION_SCAN_CAP,
+} from '../../services/hash-items/type-analysis.js'
 import { MAX_LINE_LENGTH, streamLines } from '../../services/resources/line-count.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -123,6 +129,12 @@ export function parseHashLine(line: string, hashListId: number) {
 /**
  * Flush a batch of parsed hash items to the database.
  * Uses onConflictDoNothing for idempotency on (hashListId, hashValue).
+ *
+ * Does NOT return the inserted rows: type detection no longer runs against
+ * Postgres's `RETURNING` output (see `recordHashValueForDetection` below for
+ * why that was a retry-safety bug) — it runs against every parsed line as it
+ * streams in, before insertion even happens. Nothing else consumes this
+ * function's return value, so it stays a fire-and-forget insert.
  */
 type HashItemInsert = NonNullable<ReturnType<typeof parseHashLine>>
 
@@ -132,6 +144,218 @@ async function flushBatch(batch: ReadonlyArray<HashItemInsert>): Promise<void> {
     .insert(hashItems)
     .values([...batch])
     .onConflictDoNothing()
+}
+
+/** Accumulated type-detection state threaded through `recordHashValueForDetection`. */
+interface TypeDetectionState {
+  unidentifiedCount: number
+  scannedCount: number
+  sampled: boolean
+}
+
+/**
+ * Runs `guessTopHashType` against a single PARSED hash value (before
+ * insertion) and folds the result into `typeHistogram` (mutated in place,
+ * matching the existing `Map.set` accumulation style elsewhere in this file)
+ * plus the returned `unidentifiedCount` / `scannedCount` / `sampled` state.
+ *
+ * Dedup is in-memory via `seenHashValues` (mutated in place — a fresh `Set`
+ * per `ingestHashListContent` call, same accumulator rationale as
+ * `typeHistogram`: copying it on every line would be O(n²)), NOT via
+ * Postgres `RETURNING` on the `ON CONFLICT DO NOTHING` insert. That's a
+ * deliberate fix (CodeRabbit, Major — retry-safety regression): BullMQ
+ * re-runs this whole function from scratch on a job retry, re-streaming
+ * every line, but `RETURNING` only reports rows that DIDN'T already exist —
+ * a prior attempt's inserted rows would come back empty on retry, so a
+ * histogram keyed off `RETURNING` silently drops them and can misclassify a
+ * genuinely mixed list as homogeneous (or empty) purely because of *when*
+ * the retry happens to land. Because `seenHashValues` is rebuilt from
+ * scratch on every call — including every retry, which re-streams the whole
+ * file — the histogram is always the FULL deduplicated composition of the
+ * file's hash values, independent of what already made it into the table.
+ *
+ * `TYPE_DETECTION_SCAN_CAP` bounds the number of DISTINCT hash values
+ * scanned (and therefore the size `seenHashValues` can grow to); `sampled`
+ * latches true once the cap is reached. No-ops (returns the input state
+ * unchanged) once already sampled, so callers can skip invoking this for
+ * later lines without extra bookkeeping. A value already in
+ * `seenHashValues` is skipped without touching `scannedCount` or the
+ * histogram — it was already counted once when first seen.
+ */
+function recordHashValueForDetection(
+  hashValue: string,
+  seenHashValues: Set<string>,
+  typeHistogram: Map<number, number>,
+  state: TypeDetectionState
+): TypeDetectionState {
+  if (state.sampled) return state
+  if (seenHashValues.has(hashValue)) return state
+
+  seenHashValues.add(hashValue)
+  const guess = guessTopHashType(hashValue)
+  if (guess === null) {
+    const unidentifiedCount = state.unidentifiedCount + 1
+    const scannedCount = state.scannedCount + 1
+    return { unidentifiedCount, scannedCount, sampled: scannedCount >= TYPE_DETECTION_SCAN_CAP }
+  }
+
+  typeHistogram.set(guess.hashcatMode, (typeHistogram.get(guess.hashcatMode) ?? 0) + 1)
+  const scannedCount = state.scannedCount + 1
+  return {
+    unidentifiedCount: state.unidentifiedCount,
+    scannedCount,
+    sampled: scannedCount >= TYPE_DETECTION_SCAN_CAP,
+  }
+}
+
+/** Result of `ingestHashListContent` — the testable ingest+persist core. */
+export interface IngestHashListContentResult {
+  linesProcessed: number
+  skippedLines: number
+  statistics: { totalCount: number; crackedCount: number; crackRate: number; lastUpdated: string }
+  typeAnalysis: HashListTypeAnalysis
+  flipped: boolean
+}
+
+/**
+ * Parses `lines`, batches inserts into `hash_items`, runs type detection
+ * against every parsed line's hash value (deduplicated in-memory — see
+ * `recordHashValueForDetection`'s doc comment for why this replaced the
+ * earlier RETURNING-based approach), recomputes statistics, and performs the
+ * guarded `processing -> ready` flip carrying the computed `type_analysis`.
+ *
+ * Extracted from the worker processor closure — mirrors
+ * `hash-import-worker.ts`'s `processImportPairs` — so the db test lane
+ * (Postgres only, no live Redis/S3) can drive the REAL persistence path
+ * directly: seed a `processing` hash list, call this with an in-memory line
+ * source, and assert the persisted `type_analysis` + `hash_items` rows
+ * instead of a test-local reimplementation. `createHashListParserWorker`'s
+ * processor below resolves the file reference and declared mode, delegates
+ * here, then logs/emits off the returned result.
+ *
+ * Retry-safety: BullMQ re-runs this ENTIRE function from scratch on a job
+ * retry, re-streaming the whole file. `seenHashValues` (and therefore the
+ * histogram) is rebuilt fresh on every call, so a retry always computes the
+ * FULL deduplicated composition of the file regardless of which rows a
+ * prior attempt already inserted — detection correctness never depends on
+ * `hash_items`' pre-existing contents.
+ *
+ * `onBatchFlush` is an optional progress hook — the live worker wires
+ * `job.updateProgress`; direct (test) callers typically omit it.
+ */
+export async function ingestHashListContent(
+  hashListId: number,
+  lines: AsyncIterable<string> | Iterable<string>,
+  declaredMode: number | null,
+  onBatchFlush?: (linesProcessed: number) => Promise<void> | void
+): Promise<IngestHashListContentResult> {
+  let batch: HashItemInsert[] = []
+  let linesProcessed = 0
+  let skippedLines = 0
+
+  // Type-detection accumulators (issue #202, FU3; retry-safety fix per
+  // CodeRabbit review). Detection runs against every PARSED line's hash
+  // value as it streams in, deduplicated via `seenHashValues` — not against
+  // Postgres's post-insert `RETURNING` output, which would go empty for
+  // already-inserted rows on a job retry. Detection stops once
+  // TYPE_DETECTION_SCAN_CAP distinct hash values have been scanned
+  // (sampled=true), but row insertion is never gated by this cap.
+  const typeHistogram = new Map<number, number>()
+  const seenHashValues = new Set<string>()
+  let detectionState: TypeDetectionState = {
+    unidentifiedCount: 0,
+    scannedCount: 0,
+    sampled: false,
+  }
+
+  for await (const raw of lines) {
+    const line = raw.trim()
+    if (line.length === 0) continue
+    if (line.length > MAX_LINE_LENGTH) {
+      skippedLines++
+      continue
+    }
+
+    const parsed = parseHashLine(line, hashListId)
+    if (parsed === null) {
+      // Empty hashValue after split (e.g. ':plain', '::', '::plain') —
+      // skip rather than insert a blank-hash row.
+      skippedLines++
+      continue
+    }
+    detectionState = recordHashValueForDetection(
+      parsed.hashValue,
+      seenHashValues,
+      typeHistogram,
+      detectionState
+    )
+    batch.push(parsed)
+
+    if (batch.length >= BATCH_SIZE) {
+      await flushBatch(batch)
+      linesProcessed += batch.length
+      batch = []
+      if (onBatchFlush) await onBatchFlush(linesProcessed)
+    }
+  }
+
+  // Flush remaining batch
+  if (batch.length > 0) {
+    await flushBatch(batch)
+    linesProcessed += batch.length
+  }
+
+  const { unidentifiedCount, scannedCount, sampled } = detectionState
+
+  // Recompute statistics from actual data (crash-safe, not accumulated).
+  // Single roundtrip: COUNT(*) + COUNT(*) FILTER (WHERE cracked_at IS NOT NULL).
+  const [statsResult] = await db
+    .select({
+      total: count(),
+      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+    })
+    .from(hashItems)
+    .where(eq(hashItems.hashListId, hashListId))
+
+  const total = Number(statsResult?.total ?? 0)
+  const cracked = Number(statsResult?.cracked ?? 0)
+
+  // Mark hash list as ready with computed statistics.
+  // skippedLines is logged but not persisted in the wire JSONB.
+  const crackRate = total > 0 ? cracked / total : 0
+  const lastUpdated = new Date()
+  const statistics = {
+    totalCount: total,
+    crackedCount: cracked,
+    crackRate,
+    lastUpdated: lastUpdated.toISOString(),
+  }
+  const typeAnalysis = buildTypeAnalysis(
+    typeHistogram,
+    unidentifiedCount,
+    scannedCount,
+    sampled,
+    declaredMode
+  )
+  // Atomic guard: only flip processing -> ready. If another processor
+  // already transitioned the row (concurrent re-run, manual intervention),
+  // the WHERE matches zero rows and the caller skips the event emit —
+  // preventing a duplicate hash_list_ready event from leaking out.
+  // typeAnalysis rides in the same guarded update so a duplicate parse
+  // event can't double-write it either.
+  const flipped = await db
+    .update(hashLists)
+    .set({ status: 'ready', statistics, typeAnalysis, updatedAt: lastUpdated })
+    .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'processing')))
+    .returning({ id: hashLists.id })
+
+  return {
+    linesProcessed,
+    skippedLines,
+    statistics,
+    typeAnalysis,
+    flipped: flipped.length > 0,
+  }
 }
 
 export function createHashListParserWorker(connection: Redis): Worker<HashListParseJob> {
@@ -152,92 +376,49 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         throw new Error(`Hash list ${hashListId} has no file reference`)
       }
 
+      // Resolve the list's declared hashcat mode (if any) once, up front —
+      // used only for the declared-vs-detected mismatch check in
+      // buildTypeAnalysis, never per-line. Queried directly off hashTypes
+      // (rather than via services/resources) so the parser worker's module
+      // graph stays light and doesn't drag the whole resources module — and
+      // its @hashhive/shared imports — into isolated-phase test mocks.
+      const declaredMode =
+        hl.hashTypeId !== null
+          ? ((
+              await db
+                .select({ hashcatMode: hashTypes.hashcatMode })
+                .from(hashTypes)
+                .where(eq(hashTypes.id, hl.hashTypeId))
+                .limit(1)
+            )[0]?.hashcatMode ?? null)
+          : null
+
       // Stream the file line by line via the shared storage walker — never
-      // buffer the whole file in memory. The shared util owns the WebStream +
-      // TextDecoder mechanics (and yields the final no-trailing-newline line);
-      // the parser keeps its trim/cap/parse/batch logic local so over-cap and
-      // unparseable lines still feed skippedLines.
-      let batch: HashItemInsert[] = []
-      let linesProcessed = 0
-      let skippedLines = 0
-
-      for await (const raw of streamLines(fileRef.key, fileRef.bucket)) {
-        const line = raw.trim()
-        if (line.length === 0) continue
-        if (line.length > MAX_LINE_LENGTH) {
-          skippedLines++
-          continue
-        }
-
-        const parsed = parseHashLine(line, hashListId)
-        if (parsed === null) {
-          // Empty hashValue after split (e.g. ':plain', '::', '::plain') —
-          // skip rather than insert a blank-hash row.
-          skippedLines++
-          continue
-        }
-        batch.push(parsed)
-
-        if (batch.length >= BATCH_SIZE) {
-          await flushBatch(batch)
-          linesProcessed += batch.length
-          batch = []
-          await job.updateProgress(linesProcessed)
-        }
-      }
-
-      // Flush remaining batch
-      if (batch.length > 0) {
-        await flushBatch(batch)
-        linesProcessed += batch.length
-      }
-
-      // Recompute statistics from actual data (crash-safe, not accumulated).
-      // Single roundtrip: COUNT(*) + COUNT(*) FILTER (WHERE cracked_at IS NOT NULL).
-      const [statsResult] = await db
-        .select({
-          total: count(),
-          cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
-        })
-        .from(hashItems)
-        .where(eq(hashItems.hashListId, hashListId))
-
-      const total = Number(statsResult?.total ?? 0)
-      const cracked = Number(statsResult?.cracked ?? 0)
-
-      // Mark hash list as ready with computed statistics.
-      // skippedLines is logged but not persisted in the wire JSONB.
-      const crackRate = total > 0 ? cracked / total : 0
-      const lastUpdated = new Date()
-      const statistics = {
-        totalCount: total,
-        crackedCount: cracked,
-        crackRate,
-        lastUpdated: lastUpdated.toISOString(),
-      }
-      // Atomic guard: only flip processing -> ready. If another processor
-      // already transitioned the row (concurrent re-run, manual intervention),
-      // the WHERE matches zero rows and we skip the event emit — preventing a
-      // duplicate hash_list_ready event from leaking out.
-      const flipped = await db
-        .update(hashLists)
-        .set({ status: 'ready', statistics, updatedAt: lastUpdated })
-        .where(and(eq(hashLists.id, hashListId), eq(hashLists.status, 'processing')))
-        .returning({ id: hashLists.id })
+      // buffer the whole file in memory — and delegate parse/batch/insert/
+      // detect/persist to the testable core (see `ingestHashListContent`'s
+      // doc comment for why this split exists).
+      const result = await ingestHashListContent(
+        hashListId,
+        streamLines(fileRef.key, fileRef.bucket),
+        declaredMode,
+        (linesProcessed) => job.updateProgress(linesProcessed)
+      )
 
       logger.info(
         {
           hashListId,
-          linesProcessed,
-          skippedLines,
-          totalCount: total,
-          crackedCount: cracked,
-          flipped: flipped.length > 0,
+          linesProcessed: result.linesProcessed,
+          skippedLines: result.skippedLines,
+          totalCount: result.statistics.totalCount,
+          crackedCount: result.statistics.crackedCount,
+          typeVerdict: result.typeAnalysis.verdict,
+          typeSampled: result.typeAnalysis.sampled,
+          flipped: result.flipped,
         },
         'Hash list parsing complete (streamed)'
       )
 
-      if (flipped.length > 0) {
+      if (result.flipped) {
         // Guard the emit: an EventService crash here happens AFTER the DB
         // commit and AFTER the row is at status=ready. Letting the throw
         // propagate would mark the BullMQ job failed and trigger a retry
@@ -249,7 +430,7 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
           emitResourceUpdate(projectId, {
             action: 'hash_list_ready',
             hashListId,
-            statistics,
+            statistics: result.statistics,
           })
         } catch (emitErr) {
           logger.error(
@@ -259,7 +440,7 @@ export function createHashListParserWorker(connection: Redis): Worker<HashListPa
         }
       }
 
-      return { inserted: linesProcessed, skippedLines }
+      return { inserted: result.linesProcessed, skippedLines: result.skippedLines }
     },
     // Cast needed: our ioredis version may differ from BullMQ's bundled ioredis types
     { connection: connection as unknown as ConnectionOptions }

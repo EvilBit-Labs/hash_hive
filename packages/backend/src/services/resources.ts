@@ -4,11 +4,23 @@ import {
   hashLists,
   hashTypes,
   maskLists,
+  projectCrackedHashes,
   type ResourceCompressionEncoding,
   ruleLists,
   wordLists,
 } from '@hashhive/shared'
-import { and, count, desc, eq, isNotNull, isNull, max, type SQL, sql } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  max,
+  type SQL,
+  sql,
+} from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 
@@ -27,6 +39,14 @@ import {
 import { db } from '../db/index.js'
 import { recomputeKeyspaceForResource } from './attacks/complexity.js'
 import { type AuditActor, recordAuditEvent } from './audit-log.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_AT,
+  RESOLVED_CRACKED_VALUE,
+  RESOLVED_IS_CRACKED,
+  RESOLVED_PLAINTEXT,
+} from './hash-items/crack-resolution.js'
+import { resolveHashListScope } from './hash-items/list-scope.js'
 import { sumMasklistKeyspace } from './keyspace.js'
 import {
   type BlobOwnerTable,
@@ -748,12 +768,31 @@ export async function getHashItems(
   const limit = opts.limit ?? 50
   const offset = opts.offset ?? 0
 
-  const conditions: SQL[] = [eq(hashItems.hashListId, hashListId)]
+  // A leaf list resolves to `[hashListId]` (identical to today's single-id
+  // filter); a split parent resolves to `[hashListId, ...childIds]` since
+  // its own hash_items were moved to its sub-lists (#202 SU4).
+  const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. `hl` above already confirmed ownership, so this is
+    // unreachable in practice — but short-circuit explicitly rather than
+    // relying on Drizzle compiling `inArray(col, [])` to a false predicate.
+    return { items: [], total: 0, limit, offset }
+  }
+  const conditions: SQL[] = [inArray(hashItems.hashListId, scopeIds)]
 
+  // U4/R15: crack state is read through the project cracked-set, not the item's
+  // own row alone — a value cracked in a sibling list of the same project is
+  // cracked here too. The status filter and the projected `crackedAt`/`plaintext`
+  // must agree, so both go through the resolver's SQL helpers over the LEFT JOIN
+  // added below. `NOT (...)` is the exact complement of `RESOLVED_IS_CRACKED`
+  // (both operands of the OR are NULL-free predicates), so cracked ⊎ uncracked
+  // still partitions the page — `total` for the two filters sums to the
+  // unfiltered `total`.
   if (opts.status === 'cracked') {
-    conditions.push(isNotNull(hashItems.crackedAt))
+    conditions.push(RESOLVED_IS_CRACKED)
   } else if (opts.status === 'uncracked') {
-    conditions.push(sql`${hashItems.crackedAt} IS NULL`)
+    conditions.push(sql`not ${RESOLVED_IS_CRACKED}`)
   }
 
   if (opts.search) {
@@ -763,17 +802,45 @@ export async function getHashItems(
 
   const whereClause = and(...conditions)
 
+  // `total` MUST count the same physical rows `items` pages through — a
+  // paginated consumer (`hasNext = offset + limit < total`, "Showing X-Y of
+  // Z" in hash-list-detail.tsx) breaks if `total` is smaller than the rows
+  // it can actually page to. A parent scope's children can each hold a row
+  // for the same hashValue (propagateCrack marks a hashValue as cracked
+  // everywhere it appears, not just in one list — #202 SU4), so deduping by
+  // hashValue here would make `total` undercount `items` for a split-
+  // parent's cracked view (PR review: paginated items and total must share
+  // cardinality). That distinct-hashValue dedup is still correct for
+  // `getHashListStats`'s `crackedCount` — a display-only stat with no
+  // paired `items` array a client pages through — but not for this
+  // items-list pagination total, which always counts physical rows.
+  // The cracked-set join is 1:1 at most (UNIQUE `(projectId, mode, value)`), so
+  // adding it cannot multiply rows — `items` and `count()` keep the same
+  // cardinality they had before U4. The projection overrides `crackedAt` and
+  // `plaintext` with their resolved values while every other `hash_items` column
+  // passes through unchanged; the item's OWN row always wins (`coalesce`), so a
+  // list that cracked the hash itself is unaffected. R17: the cracked-set's
+  // `sourceHashListId` is deliberately NOT projected — the page carries the
+  // plaintext, never which sibling list produced it.
+  const resolvedItemColumns = {
+    ...getTableColumns(hashItems),
+    crackedAt: RESOLVED_CRACKED_AT,
+    plaintext: RESOLVED_PLAINTEXT,
+  }
+
   const [items, countResult] = await Promise.all([
     db
-      .select()
+      .select(resolvedItemColumns)
       .from(hashItems)
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(whereClause)
       .limit(limit)
       .offset(offset)
       .orderBy(hashItems.id),
     db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: count() })
       .from(hashItems)
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(whereClause),
   ])
 
@@ -792,19 +859,56 @@ export function escapeLike(value: string): string {
 /**
  * Computes live cracked/total/remaining counts for a hash list.
  * Uses a single COUNT + FILTER query (fast with composite index).
+ *
+ * `projectId` drives scope resolution (#202 SU4): a split parent's own
+ * `hash_items` are empty (its items live under its sub-lists), so this
+ * expands `hashListId` to `[hashListId, ...childIds]` via
+ * `resolveHashListScope` before counting. A leaf list resolves to
+ * `[hashListId]`, identical to the pre-SU4 single-id filter.
+ *
+ * `crackedCount` is deduped on `hashValue` (`count(distinct ...)` instead
+ * of `count(*) FILTER`) so a hashValue that exists as a separate row under
+ * two sibling sub-lists (propagateCrack marks a hashValue cracked
+ * everywhere it appears, not just once) is counted once in a parent's
+ * aggregate. For a leaf scope hashValue is already unique within the list
+ * (`hash_items_hash_list_id_hash_value_idx`), so this is a no-op there.
+ * `totalCount` intentionally stays a raw row count (not deduped) — it
+ * counts crackable rows, not distinct targets.
+ *
+ * U4/R15: `crackedCount` resolves through the project cracked-set
+ * (`hash-items/crack-resolution.ts`), so a value cracked only in a sibling
+ * hash list of the same project counts as cracked here too.
  */
-export async function getHashListStats(hashListId: number): Promise<{
+export async function getHashListStats(
+  hashListId: number,
+  projectId: number
+): Promise<{
   totalCount: number
   crackedCount: number
   crackRate: number
 }> {
+  const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. Short-circuit explicitly rather than relying on
+    // Drizzle compiling `inArray(col, [])` to a false predicate — an
+    // aggregate query with no rows already returns these zeroed values, so
+    // this is behavior-preserving, not a change.
+    return { totalCount: 0, crackedCount: 0, crackRate: 0 }
+  }
+  // U4/R15: `cracked` resolves through the project cracked-set, so a value this
+  // list has not cracked itself but a sibling list of the same project has still
+  // counts as a cracked target here. `RESOLVED_CRACKED_VALUE` yields the
+  // hashValue when resolved-cracked and NULL otherwise, so `count(distinct …)`
+  // keeps the pre-existing dedup-on-hashValue semantic in one expression.
   const [stats] = await db
     .select({
       total: count(),
-      cracked: sql<number>`count(*) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
+      cracked: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`,
     })
     .from(hashItems)
-    .where(eq(hashItems.hashListId, hashListId))
+    .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
+    .where(inArray(hashItems.hashListId, scopeIds))
 
   const totalCount = Number(stats?.total ?? 0)
   const crackedCount = Number(stats?.cracked ?? 0)
@@ -840,15 +944,41 @@ export async function getHashListStats(hashListId: number): Promise<{
  * `If-None-Match` header (see the route handler) — this is intentionally
  * NOT a full RFC 7232 weak-comparison implementation (no comma-list or `*`
  * support), since the agent always echoes the etag verbatim.
+ *
+ * `projectId` drives scope resolution (#202 SU4) via
+ * `resolveHashListScope`, same rationale as `getHashListStats`. The
+ * `crackedCount` component is deduped on `hashValue` for the same reason
+ * `getHashListStats.crackedCount` is: a hashValue shared by two sibling
+ * sub-lists must not inflate the validator with a duplicate — a no-op for
+ * a leaf scope, where hashValue is already unique within the list.
+ *
+ * U4/R15 EXCLUSION — deliberately NOT routed through `resolveCrackState`.
+ * This validator serves the AGENT hash-list download endpoint
+ * (`getAgentDownloadUrl` → the agent's cached uncracked set), and U4's
+ * mandate stops at the non-agent surfaces. Agents already receive
+ * project-wide crack-once through the widened zap scan (U3,
+ * `tasks/zaps.ts`), which reads the same cracked-set directly, so a
+ * cross-list crack reaches the agent by zap even while this etag stays
+ * stable. Widening the etag is an agent-surface change and belongs with
+ * the agent-side work, not here.
  */
-export async function computeHashListEtag(hashListId: number): Promise<string> {
+export async function computeHashListEtag(hashListId: number, projectId: number): Promise<string> {
+  const scopeIds = await resolveHashListScope(hashListId, projectId)
+  if (scopeIds.length === 0) {
+    // IDOR guard: `resolveHashListScope` returns `[]` for a cross-project or
+    // nonexistent id. Short-circuit explicitly rather than relying on
+    // Drizzle compiling `inArray(col, [])` to a false predicate — matches
+    // the same epoch-0/count-0 shape a real, never-cracked list already
+    // produces below, so this is behavior-preserving, not a change.
+    return `W/"hl-${hashListId}-0-0"`
+  }
   const [row] = await db
     .select({
       lastCrackedAt: max(hashItems.crackedAt),
-      crackedCount: count(hashItems.crackedAt),
+      crackedCount: sql<number>`count(distinct ${hashItems.hashValue}) FILTER (WHERE ${hashItems.crackedAt} IS NOT NULL)`,
     })
     .from(hashItems)
-    .where(eq(hashItems.hashListId, hashListId))
+    .where(inArray(hashItems.hashListId, scopeIds))
 
   const epochMillis = row?.lastCrackedAt ? new Date(row.lastCrackedAt).getTime() : 0
   const crackedCount = Number(row?.crackedCount ?? 0)
@@ -1285,7 +1415,7 @@ export async function getAgentDownloadUrl(
   const encoding = isHashList
     ? null
     : ((resourceRow.compressionEncoding as ResourceCompressionEncoding | undefined) ?? 'none')
-  const etag = isHashList ? await computeHashListEtag(resourceId) : null
+  const etag = isHashList ? await computeHashListEtag(resourceId, projectId) : null
 
   return { url, expiresIn, checksum, size, encoding, etag }
 }

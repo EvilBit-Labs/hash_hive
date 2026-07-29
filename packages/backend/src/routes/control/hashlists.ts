@@ -158,7 +158,7 @@ controlHashListRoutes.openapi(getHashListStatsRoute, async (c) => {
     const { id } = c.req.valid('param')
     const hashList = await getHashListById(id, projectId)
     if (!hashList) return problemResponse(c, 404, 'not_found', 'hash list not found')
-    const stats = await getHashListStats(id)
+    const stats = await getHashListStats(id, projectId)
     return c.json(stats, 200)
   } catch (err) {
     return controlErrorResponse(c, err)

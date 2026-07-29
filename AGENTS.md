@@ -10,12 +10,13 @@ This file provides AI coding assistants with project context. Substantive docume
 - **[Testing](./docs/testing.md)** -- test strategy, bun:test patterns, mock patterns, frontend test utilities
 - **[Known Gotchas](./GOTCHAS.md)** -- hard-won lessons by domain (TypeScript strict mode, Hono, Drizzle, BetterAuth, bun:test, frontend JSX)
 - **[Documented Solutions](./docs/solutions/)** -- searchable knowledge store of past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+- **[Domain Concepts](./CONCEPTS.md)** -- shared domain vocabulary (entities, named processes, status concepts) with project-specific meaning. Relevant when orienting to the codebase or discussing domain concepts.
 - **[Frontend Design Context](./.impeccable.md)** -- users, brand personality, aesthetic direction, anti-references, and the five design principles every UI surface must follow. Read before any frontend visual work.
 
 ## Planning & Status
 
 - **[STRATEGY.md](./STRATEGY.md)** -- target problem, approach, primary persona, the five key metrics, and the four investment tracks. Read before proposing scope changes or new features.
-- **[BACKLOG.md](./BACKLOG.md)** -- authoritative status of remaining work. Phase 1 is the 11 unfinished `spec/tickets/`; Phase 2 is the open GitHub issue backlog (#97-#124, grouped under epics #117-#121). Do NOT infer ticket completion from matching commit titles or file existence -- BACKLOG.md is the source of truth.
+- **GitHub issues are the authoritative status of remaining work.** All work nests under super-epic **[#166 — Phase 1 Foundation](https://github.com/EvilBit-Labs/hash_hive/issues/166)**, which tracks both phases as nested children (data-flow + Phase 2 sub-epics #117-#121). Read the live issue/epic state via `gh issue view <n>` or the GitHub project board -- do NOT infer ticket completion from matching commit titles or file existence. A prior `BACKLOG.md` mirrored this tree in-repo but drifted out of date and was removed; the GitHub issues are now the single source of truth.
 
 ## Project Overview
 
@@ -108,3 +109,14 @@ Security tooling: Dependabot, Renovate, Snyk, CodeQL, Trivy, Grype, Checkov, OSS
 > **Never commit secrets.** Use environment variables, secret managers, or secure vaults for credentials, and secure transport for anything sensitive.
 
 When a change touches authentication, data handling, API endpoints, or dependencies, proactively offer a security review of the affected code.
+
+<!-- dosu:mcp:start v1 -->
+## Dosu
+
+Shared team knowledge lives in [Dosu](https://dosu.dev), via the Dosu MCP server.
+
+- Before a task, and for any codebase or docs questions: pull context with `read_knowledge` before digging through source.
+- After a task: save durable learnings with `write_knowledge`.
+
+Missing these tools? Run `dosu setup --help` — it covers agent-assisted setup.
+<!-- dosu:mcp:end -->

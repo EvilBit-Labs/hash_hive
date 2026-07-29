@@ -177,9 +177,11 @@ async function lookupExistingArchivedReclaimed(
  * attack-write callers (POST /:id/attacks, PATCH /:id/attacks/:attackId)
  * pass `null` to mean "no hash-list dimension to validate here — the
  * parent campaign's hashList was already validated when the campaign
- * itself was created." The campaign table requires hashListId to be
- * non-null at the DB layer, so `transitionCampaign` callers always
- * supply a real id.
+ * itself was created." Since issue #101 U6, `campaigns.hashListId` is
+ * nullable at the DB layer (a super PARENT campaign carries
+ * `superHashListId` instead, `num_nonnulls(hashListId, superHashListId)=1`),
+ * so a null id is now a real persisted state, not only a caller sentinel —
+ * this path already handles it correctly.
  */
 export async function validateCampaignResources(
   campaign: { projectId: number; hashListId: number | null },

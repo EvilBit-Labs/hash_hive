@@ -64,6 +64,10 @@ const controlExportQuerySchema = z
       description: "Required when scope is 'campaign'.",
       example: 1,
     }),
+    superHashListId: z.coerce.number().int().positive().optional().openapi({
+      description: "Required when scope is 'super'.",
+      example: 1,
+    }),
   })
   .superRefine((data, ctx) => {
     if (isPotfileVariantConflict(data.format, data.variant)) {
@@ -85,6 +89,13 @@ const controlExportQuerySchema = z
         code: z.ZodIssueCode.custom,
         message: "'campaignId' is required when scope is 'campaign'",
         path: ['campaignId'],
+      })
+    }
+    if (data.scope === 'super' && !data.superHashListId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'superHashListId' is required when scope is 'super'",
+        path: ['superHashListId'],
       })
     }
   })
@@ -121,11 +132,17 @@ const controlExportRoute = createRoute({
 controlExportRoutes.openapi(controlExportRoute, async (c) => {
   try {
     const { projectId } = await requireProjectMembership(c)
-    const { scope, variant, format, hashListId, campaignId } = c.req.valid('query')
+    const { scope, variant, format, hashListId, campaignId, superHashListId } = c.req.valid('query')
 
     // superRefine on the query schema guarantees the required scope ID is
     // present, so buildExportScopeParams never returns null here.
-    const scopeParams = buildExportScopeParams(scope, projectId, hashListId, campaignId)!
+    const scopeParams = buildExportScopeParams(
+      scope,
+      projectId,
+      hashListId,
+      campaignId,
+      superHashListId
+    )!
     const { skippedCount, rows } = await createExport(db, { ...scopeParams, variant, format })
 
     const timestamp = buildExportTimestamp()

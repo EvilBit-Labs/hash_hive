@@ -83,6 +83,56 @@ export const DASHBOARD_ERROR_CODES = [
   // create/update when the new mode differs from an existing non-terminal
   // sibling attack in the same campaign.
   'ATTACK_MODE_CONFLICT',
+  // ─── Campaign-wizard split + review flow (issue #202 SU3) ─────────
+  // The split classifier found no crackable items at all — there is
+  // nothing to build a campaign or a review flow around.
+  'HASH_LIST_SPLIT_EMPTY',
+  // `confirmSplitCampaign` was called against a hash list that has not
+  // been split yet (no children) — the caller must POST /campaigns
+  // first to trigger the split.
+  'HASH_LIST_NOT_SPLIT',
+  // A split-confirm assignment referenced a sub-list that isn't a child
+  // of the given parent, isn't an ambiguous group awaiting review, or
+  // picked a mode outside that group's candidate modes.
+  'SPLIT_ASSIGNMENT_INVALID',
+  // The async split-analysis job could not be enqueued (queue manager
+  // unavailable, or the enqueue call itself failed) — no campaign was
+  // created and no job is running, so the wizard's status poll would
+  // otherwise sit at `pending` forever with no way to recover (code
+  // review fix; previously this failure was swallowed silently).
+  'SPLIT_ENQUEUE_FAILED',
+  // The caller passed `skipSplit: true` against a hash list that does NOT
+  // actually resolve to a single classification group — either it already
+  // has real split children (2+ groups), or a fresh re-classification of
+  // its items still finds more than one group. `skipSplit` exists only for
+  // the wizard's `single_group` fallback (the async split job re-classified
+  // a "mixed"-flagged list down to exactly one group and created no
+  // children); honoring it on a genuinely mixed list would create a
+  // single-mode campaign that crackers would run under the wrong mode for
+  // part of the list (security fix — CodeRabbit).
+  'SKIP_SPLIT_REJECTED',
+  // ─── SuperHashlist membership (issue #101 / U8, U9) ───────────────
+  // R5: a proposed member hash list does not belong to the super's project
+  // (or does not exist). Mapped from the service's
+  // `SuperMemberProjectMismatchError` so the DB tenant trigger's
+  // `check_violation` never surfaces as a 500.
+  'SUPER_MEMBER_PROJECT_MISMATCH',
+  // R3: a hash list belongs to at most one super. Mapped from the service's
+  // `SuperMemberAlreadyInSuperError` (which also covers a duplicate add of a
+  // member the super already has) so the `UNIQUE(member_hash_list_id)`
+  // violation never surfaces as a 500.
+  'SUPER_MEMBER_ALREADY_IN_SUPER',
+  // ─── SuperHashlist campaign targeting (issue #101 / U10) ──────────
+  // The targeted super is archived — refused as a campaign target (the
+  // super analog of RESOURCE_ARCHIVED for a plain hash list).
+  'SUPER_ARCHIVED',
+  // R2 enforced at campaign-target time: a super must have ≥2 members
+  // before it can be targeted (U7 allows building one up incrementally).
+  'SUPER_TOO_FEW_MEMBERS',
+  // The targeted super's members resolved to no TYPED leaf lists — none
+  // carry a resolvable homogeneous hashcat mode, so there is nothing to
+  // fan a sub-campaign out to.
+  'SUPER_NO_TYPED_LEAVES',
   // ─── API key management ───────────────────────────────────────────
   'API_KEY_ISSUE_FAILED',
   'API_KEY_READ_FAILED',

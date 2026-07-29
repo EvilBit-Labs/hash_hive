@@ -27,7 +27,7 @@ ESM `import` declarations are hoisted to the top of the module regardless of whe
 
 The failure mode is silent: the test still passes — sometimes by coincidence, sometimes because the assertion doesn't actually exercise the path the mock was meant to control — and a real bug in the route can ship under cover of a green test.
 
-**Concrete instance from PR #173:** In `packages/backend/tests/unit/dashboard-api-contract.test.ts`, the 200-success test for `POST /projects/select` called `mock.module('../../src/services/projects.js', ...)` inside the `it()` body to override `getProjectById` and `findProjectMembership`. The route's handler had already been loaded via the top-of-file `import { app }`, so `findProjectMembership` was captured at the original implementation. The inline mock had no effect. CodeRabbit caught this on the second review round; the test had been "passing" but not for the reason its author believed.
+**Concrete instance from PR #173:** In `dashboard-api-contract.test.ts`, the 200-success test for `POST /projects/select` called `mock.module('../../src/services/projects.js', ...)` inside the `it()` body to override `getProjectById` and `findProjectMembership`. The route's handler had already been loaded via the top-of-file `import { app }`, so `findProjectMembership` was captured at the original implementation. The inline mock had no effect. CodeRabbit caught this on the second review round; the test had been "passing" but not for the reason its author believed. (That file was later deleted in PR #188 when the dashboard-api YAML was retired; the `/projects/select` coverage now lives in `packages/backend/tests/unit/routes/projects-select-preference.test.ts`, using the corrected Pattern A below — it mocks once at the top before importing a single route module rather than the whole `app`.)
 
 This is a recurring trap. The same hoisting interaction has surfaced multiple times in this codebase: the isolated-phase pattern in `agent-heartbeat.test.ts`, `tasks.test.ts`, `queue-manager.test.ts`, `control-routes-rbac.test.ts`, and `redis-degradation.test.ts` was developed specifically to work around it (session history). An earlier frontend encounter in `campaign-dag-view.test.tsx` had the same shape (session history). The two patterns below name and codify the existing resolutions so future test authors pick the right one deliberately.
 
@@ -53,7 +53,7 @@ Gate the test body behind an env var (e.g., `WS_AUTH_TEST_ISOLATED=1`). When set
 Use when:
 - The test file sets `process.env` values the route reads at module load (config flags, timeout overrides, feature gates).
 - You mock broad surfaces (auth, DB clients, BetterAuth, Drizzle) and don't want those mocks leaking into other test files sharing the bun-test process.
-- The SUT uses top-level await, which requires the dynamic import refinement noted in `GOTCHAS.md` line 82.
+- The SUT uses top-level await, which requires the dynamic import refinement noted in `GOTCHAS.md`'s Backend Testing (bun:test) section.
 
 ### Decision rule
 

@@ -310,20 +310,27 @@ This is the core data flow that makes a distributed cracking platform useful: ag
 
 ---
 
-### P1-3: SuperHashlists — Cross-Hashlist Deduplication
+### P1-3: SuperHashlists — Cross-Hashlist Deduplication ✅ IMPLEMENTED
 
 **Labels:** `P1: important`, `hash-management`, `gap-analysis`, `enhancement`
+
+**Status:** Implemented in PR #307 (#101)
+
+#### Implementation Reference
+
+- **PR #307** (feat(super): SuperHashlists — cross-hashlist deduplication): Two-layer implementation: project-wide crack-once via `project_cracked_hashes` set + virtual SuperHashlist entity (`super_hash_lists` + `super_hash_list_members`)
+- **Requirements:** `docs/brainstorms/2026-07-26-superhashlists-cross-hashlist-deduplication-requirements.md`
 
 #### CipherSwarm Reference
 
 - **Issue #634** (epic, priority:high): Deduplicate cracking across multiple hashlists of same type
 
-#### What hash_hive Needs
+#### What hash_hive Needs *(completed)*
 
-1. **SuperHashlist model** — Virtual hash list unioning multiple lists of the same type
-2. **Deduplication engine** — Merge duplicate hashes across lists
-3. **Result propagation** — Crack in super list → mark in all source lists
-4. **Campaign integration** — Run campaigns against a SuperHashlist
+1. **SuperHashlist model** - Virtual hash list unioning multiple lists, mixed hash types allowed (crack-once dedup is project-wide, not gated by shared type) ✅
+2. **Deduplication engine** - Project-wide `(hash type, value)` crack-once, resolved read-time via the project cracked-set (no physical propagation to source lists) ✅
+3. **Result propagation** - A crack anywhere in the project resolves as cracked everywhere the same `(hash type, value)` appears, computed at read time; source-list rows are never physically updated/marked ✅
+4. **Campaign integration** — Run campaigns against a SuperHashlist ✅
 
 **Depends on:** P0-6 (Hash Item Storage)
 

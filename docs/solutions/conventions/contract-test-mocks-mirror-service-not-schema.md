@@ -1,6 +1,7 @@
 ---
 module: packages/backend/tests, packages/backend/src/routes
 date: 2026-06-03
+last_updated: 2026-07-14
 problem_type: convention
 component: testing_framework
 severity: high
@@ -23,6 +24,8 @@ tags:
 ---
 
 # Contract-test mocks must mirror the service, not the schema
+
+> **Note (2026-07-14):** the worked example below uses `getZapsForTask`'s PR-#190-era return shape `{ zaps, hasMore }`, preserved as-is because this is a postmortem of that PR. The real signature changed in #182 to `{ zaps: string[], nextCursor: string | null } | { error: string }`. The convention this doc teaches is unchanged — only the example's field names are historical.
 
 ## Context
 

@@ -49,6 +49,9 @@ if (!IS_ISOLATED) {
     hashCount: string
     crackedCount: string
     projectId: number
+    // #202 code review P1: a split sub-list row. Defaults to `null` (a
+    // normal, never-split list) for every existing fixture row below.
+    parentHashListId?: number | null
   }
 
   const state: { rows: FixtureHashListRow[] } = { rows: [] }
@@ -140,16 +143,23 @@ if (!IS_ISOLATED) {
   let whereInvoked = false
 
   function projectRows(scopedToProject: boolean): Array<Record<string, unknown>> {
-    return state.rows
-      .filter((r) => (scopedToProject ? r.projectId === 1 : true))
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        hashTypeId: r.hashTypeId,
-        // Mirror postgres-js: counts come back as STRINGS at runtime.
-        hashCount: r.hashCount,
-        crackedCount: r.crackedCount,
-      }))
+    return (
+      state.rows
+        .filter((r) => (scopedToProject ? r.projectId === 1 : true))
+        // #202 code review P1: the production WHERE always excludes split
+        // sub-lists (`parent_hash_list_id IS NOT NULL`) regardless of the
+        // project-scoping toggle above — mirror that unconditionally so a
+        // fixture row with a non-null `parentHashListId` never leaks through.
+        .filter((r) => (r.parentHashListId ?? null) === null)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          hashTypeId: r.hashTypeId,
+          // Mirror postgres-js: counts come back as STRINGS at runtime.
+          hashCount: r.hashCount,
+          crackedCount: r.crackedCount,
+        }))
+    )
   }
 
   function makeChain() {
@@ -467,6 +477,49 @@ if (!IS_ISOLATED) {
       expect(typeof body.hashLists[0]?.crackedCount).toBe('number')
       expect(body.hashLists[0]?.hashCount).toBe(7)
       expect(body.hashLists[0]?.crackedCount).toBe(3)
+    })
+
+    it('excludes split sub-lists (parent_hash_list_id IS NOT NULL) — only the parent list appears', async () => {
+      state.rows = [
+        {
+          id: 1,
+          name: 'split-parent',
+          hashTypeId: null,
+          hashCount: '15',
+          crackedCount: '5',
+          projectId: 1,
+          parentHashListId: null,
+        },
+        // Two sub-lists of the parent above — internal implementation
+        // detail, must never show up as their own row in the listing.
+        {
+          id: 2,
+          name: 'split-parent — mode 1000',
+          hashTypeId: 1000,
+          hashCount: '10',
+          crackedCount: '4',
+          projectId: 1,
+          parentHashListId: 1,
+        },
+        {
+          id: 3,
+          name: 'split-parent — mode 1800',
+          hashTypeId: 1800,
+          hashCount: '5',
+          crackedCount: '1',
+          projectId: 1,
+          parentHashListId: 1,
+        },
+      ]
+      const res = await app.request(HASH_LISTS, {
+        method: 'GET',
+        headers: makeHeaders(),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { hashLists: Array<{ id: number; name: string }> }
+      expect(body.hashLists.map((r) => r.id)).toEqual([1])
+      expect(body.hashLists.find((r) => r.id === 2)).toBeUndefined()
+      expect(body.hashLists.find((r) => r.id === 3)).toBeUndefined()
     })
 
     it('produces a response that round-trips through hashListListResponseSchema', async () => {

@@ -4,7 +4,14 @@ import {
   type CampaignStatus,
   campaignEtaSchema,
   changeCampaignPriorityRequestSchema,
+  confirmSplitCampaignRequestSchema,
+  confirmSplitCampaignResponseSchema,
   inlineAttackRequestSchema,
+  splitPendingResponseSchema,
+  splitReviewGroupsSchema,
+  splitStatusResponseSchema,
+  superCampaignFanoutResponseSchema,
+  superCampaignProgressSchema,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 
@@ -20,9 +27,13 @@ import {
   dashboardOpenApiHonoOptions,
   sharedDashboardResponse,
 } from '../../openapi/components.js'
+import { getSplitStatus } from '../../services/campaign-split-status.js'
 import {
-  createCampaign,
-  createCampaignWithAttacks,
+  confirmSplitCampaign,
+  createCampaignOrSplit,
+  createSuperCampaign,
+} from '../../services/campaign-split.js'
+import {
   deleteCampaign,
   changeRunningCampaignPriority,
   computeCampaignEtaState,
@@ -36,6 +47,7 @@ import {
   updateCampaign,
   validateCampaignDAG,
 } from '../../services/campaigns.js'
+import { getSuperCampaignProgress } from '../../services/super-campaign-progress.js'
 import { registerCampaignArchiveRoutes } from './campaigns-archive.js'
 import { registerCampaignAttackArchiveRoutes } from './campaigns-attacks-archive.js'
 import { registerCampaignAttackRoutes } from './campaigns-attacks.js'
@@ -119,6 +131,13 @@ const campaignDetailResponseSchema = z.object({
     .passthrough(),
   activeAgents: z.array(z.unknown()),
   eta: campaignEtaSchema,
+  // Contract fix (Minor — issue #101 U11): the handler below has always
+  // returned `superProgress` for a super PARENT campaign (see the
+  // `superProgress != null` branch), but this schema omitted the field, so
+  // the served openapi.json spec did not document it. `.nullable()` covers
+  // the branch where the handler omits the key entirely for an ordinary /
+  // #202-split campaign (`.optional()`) as well as an explicit `null`.
+  superProgress: superCampaignProgressSchema.nullable().optional(),
 })
 
 const deleteCampaignResponseSchema = z.object({
@@ -191,13 +210,27 @@ campaignRoutes.openapi(listCampaignsRoute, async (c) => {
 // dependency field `dependencyIndices` to make the index-vs-id
 // semantic explicit at the wire level (the standalone POST
 // /:id/attacks path uses `dependencies` for real attack IDs).
-const createCampaignSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(2000).optional(),
-  hashListId: z.number().int().positive(),
-  priority: z.number().int().min(1).max(10).optional(),
-  attacks: z.array(inlineAttackRequestSchema).optional(),
-})
+const createCampaignSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    // Exactly one of `hashListId` / `superHashListId` must be set — the wire
+    // mirror of the DB `campaigns_exactly_one_target_chk` (KTD6). Targeting a
+    // super (#101 U10) fans out typed sub-campaigns; targeting a plain hash
+    // list runs the #202 single/split create path.
+    hashListId: z.number().int().positive().optional(),
+    superHashListId: z.number().int().positive().optional(),
+    priority: z.number().int().min(1).max(10).optional(),
+    attacks: z.array(inlineAttackRequestSchema).optional(),
+    // Issue #202 SU7: force the plain single-mode create path even when the
+    // target hash list is mixed/needs-review. Used by the wizard's
+    // `single_group` fallback after the async split job found nothing to
+    // split (see `createCampaignOrSplit` in services/campaign-split.ts).
+    skipSplit: z.boolean().optional(),
+  })
+  .refine((d) => (d.hashListId !== undefined) !== (d.superHashListId !== undefined), {
+    message: 'Exactly one of hashListId or superHashListId must be set',
+  })
 
 const createCampaignRoute = createRoute({
   method: 'post',
@@ -215,14 +248,36 @@ const createCampaignRoute = createRoute({
   },
   responses: {
     201: {
-      description: 'Campaign (and any inline attacks) created.',
-      content: { 'application/json': { schema: createCampaignResponseSchema } },
+      description:
+        'Campaign created. For a plain hash-list target: the campaign and any inline attacks. For a super target (#101 U10): the parent campaign id and one typed sub-campaign per resolved leaf.',
+      content: {
+        'application/json': {
+          schema: z.union([createCampaignResponseSchema, superCampaignFanoutResponseSchema]),
+        },
+      },
+    },
+    // Issue #202 SU3: a PRIOR call already split this parent — no new
+    // campaign is created. The caller must resolve the `ambiguous` groups'
+    // candidate modes and confirm via `POST /campaigns/split/confirm`.
+    200: {
+      description:
+        'The target hash list was already split by a prior call — no campaign was created. Resolve the returned review groups and call POST /campaigns/split/confirm.',
+      content: { 'application/json': { schema: splitReviewGroupsSchema } },
+    },
+    // Issue #202 SU7: the target hash list is mixed and has not been split
+    // yet — the async split job was enqueued instead of running inline.
+    // Poll GET /campaigns/split/status/{hashListId} for the outcome.
+    202: {
+      description:
+        'The target hash list is mixed and split analysis was enqueued. Poll GET /campaigns/split/status/{hashListId} for the outcome.',
+      content: { 'application/json': { schema: splitPendingResponseSchema } },
     },
     401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
     403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
     400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
     409: {
-      description: 'Inline attacks referenced a missing resource.',
+      description:
+        'Inline attacks referenced a missing resource, or `skipSplit: true` was passed against a hash list that does not verifiably resolve to a single hash-type group (SKIP_SPLIT_REJECTED).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     422: {
@@ -230,7 +285,8 @@ const createCampaignRoute = createRoute({
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
     503: {
-      description: 'Transactional create could not run (e.g. DB unavailable).',
+      description:
+        'Transactional create could not run (e.g. DB unavailable), or the target hash list is mixed and the async split-analysis job could not be enqueued (SPLIT_ENQUEUE_FAILED).',
       content: { 'application/json': { schema: z.object({}).passthrough() } },
     },
   },
@@ -242,44 +298,108 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
 
   const actor = { actorType: 'user' as const, actorId: userId }
 
-  // No attacks supplied → legacy single-row insert (backward compatible).
-  if (!data.attacks || data.attacks.length === 0) {
-    const campaign = await createCampaign(
-      {
+  // Super target (#101 U10): auto-confirm fan-out into one typed sub-campaign
+  // per resolved leaf. The `createCampaignSchema` refine guarantees exactly
+  // one of hashListId/superHashListId is set, so this branch owns the super
+  // case and the code below owns the plain hash-list case.
+  if (data.superHashListId !== undefined) {
+    let superResult: Awaited<ReturnType<typeof createSuperCampaign>>
+    try {
+      superResult = await createSuperCampaign({
         name: data.name,
         description: data.description,
-        hashListId: data.hashListId,
+        superHashListId: data.superHashListId,
         priority: data.priority,
         projectId,
         createdBy: userId,
-      },
-      actor
-    )
-    return c.json({ campaign, attacks: [] }, 201)
+        actor,
+      })
+    } catch (err) {
+      logger.error(
+        { err, route: 'POST /campaigns', projectId, userId },
+        'createSuperCampaign threw — surfacing as service unavailable'
+      )
+      return c.json(
+        {
+          error: { code: 'SERVICE_UNAVAILABLE', message: 'Unable to create campaign right now' },
+        },
+        503
+      )
+    }
+
+    switch (superResult.kind) {
+      case 'super_not_found':
+        return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Super hash list not found')
+      case 'super_archived':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_ARCHIVED',
+          'Super hash list is archived and cannot be targeted by a campaign'
+        )
+      case 'super_too_few_members':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_TOO_FEW_MEMBERS',
+          `Super hash list must have at least 2 members before it can be targeted (has ${superResult.memberCount})`
+        )
+      case 'no_typed_leaves':
+        return dashboardError(
+          c,
+          409,
+          'SUPER_NO_TYPED_LEAVES',
+          'Super hash list has no typed member lists to launch sub-campaigns for'
+        )
+      case 'created':
+        return c.json(
+          {
+            parentCampaignId: superResult.parentCampaign.id,
+            superHashListId: data.superHashListId,
+            subCampaigns: superResult.subCampaigns,
+          },
+          201
+        )
+    }
   }
 
-  // Attacks supplied → single-transaction create + resource +
-  // DAG pre-check. Wrap in try/catch so a DB blip during the
-  // pre-check or the transaction surfaces as a typed 503 instead
-  // of bubbling to onError as a generic 500. The discriminated
-  // result handles the *expected* failure modes (dag_invalid,
-  // resource_missing); this catches the *unexpected* throws.
-  let result: Awaited<ReturnType<typeof createCampaignWithAttacks>>
+  // From here on the plain hash-list path — `hashListId` is guaranteed present
+  // by the schema refine (exactly-one-target), but narrow defensively.
+  if (data.hashListId === undefined) {
+    return dashboardError(
+      c,
+      400,
+      'VALIDATION_ERROR',
+      'Exactly one of hashListId or superHashListId must be set'
+    )
+  }
+  const hashListId = data.hashListId
+
+  // Single entry point regardless of whether inline attacks were supplied
+  // (issue #202 SU3) — `createCampaignOrSplit` reads the target hash
+  // list's `type_analysis.verdict` first and either passes through to the
+  // normal single-transaction create (unanalyzed/homogeneous list, or a
+  // mixed-verdict list whose split classifier degenerates to one group)
+  // or short-circuits into the split/review flow. Wrap in try/catch so a
+  // DB blip during the pre-check or the transaction surfaces as a typed
+  // 503 instead of bubbling to onError as a generic 500.
+  let result: Awaited<ReturnType<typeof createCampaignOrSplit>>
   try {
-    result = await createCampaignWithAttacks({
+    result = await createCampaignOrSplit({
       name: data.name,
       description: data.description,
-      hashListId: data.hashListId,
+      hashListId,
       priority: data.priority,
       projectId,
       createdBy: userId,
-      attacks: data.attacks,
+      attacks: data.attacks ?? [],
       actor,
+      skipSplit: data.skipSplit,
     })
   } catch (err) {
     logger.error(
-      { err, route: 'POST /campaigns (with attacks)', projectId, userId },
-      'createCampaignWithAttacks threw — surfacing as service unavailable'
+      { err, route: 'POST /campaigns', projectId, userId },
+      'createCampaignOrSplit threw — surfacing as service unavailable'
     )
     return c.json(
       {
@@ -341,7 +461,191 @@ campaignRoutes.openapi(createCampaignRoute, async (c) => {
     )
   }
 
+  if (result.kind === 'split_enqueue_failed') {
+    logger.warn(
+      { hashListId: result.hashListId, route: 'POST /campaigns', projectId, userId },
+      'split analysis could not be enqueued — surfacing as service unavailable instead of split_pending'
+    )
+    return dashboardError(
+      c,
+      503,
+      'SPLIT_ENQUEUE_FAILED',
+      'Unable to schedule split analysis for this hash list right now. Try again in a moment.'
+    )
+  }
+
+  if (result.kind === 'skip_split_rejected') {
+    logger.warn(
+      { hashListId: result.hashListId, route: 'POST /campaigns', projectId, userId },
+      'skipSplit rejected — hash list does not verifiably resolve to a single group'
+    )
+    return dashboardError(c, 409, 'SKIP_SPLIT_REJECTED', result.reason)
+  }
+
+  if (result.kind === 'split_pending') {
+    return c.json({ splitPending: true as const, hashListId: result.hashListId }, 202)
+  }
+
+  if (result.kind === 'split_review') {
+    return c.json(
+      {
+        parentHashListId: result.parentHashListId,
+        confident: result.confident,
+        ambiguous: result.ambiguous,
+        unidentified: result.unidentified,
+      },
+      200
+    )
+  }
+
   return c.json({ campaign: result.campaign, attacks: result.attacks }, 201)
+})
+
+// ─── Split confirm (issue #202 SU3) ────────────────────────────────
+//
+// A dedicated two-segment path (`/split/confirm`) so it can never collide
+// with the `/{id}` detail route regardless of registration order — Hono
+// matches on path shape, and `split` is never a valid campaign id.
+const confirmSplitCampaignRoute = createRoute({
+  method: 'post',
+  path: '/split/confirm',
+  tags: ['Campaigns'],
+  summary:
+    'Confirm a mixed hash-list split: resolve ambiguous groups, then create the parent + sub-campaigns',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireMembershipRole('admin', 'contributor')] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: confirmSplitCampaignRequestSchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Parent campaign and its resolved sub-campaigns created.',
+      content: { 'application/json': { schema: confirmSplitCampaignResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: {
+      description: "Parent hash list not found or outside the caller's project.",
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    409: {
+      description:
+        'Parent hash list has not been split yet, or an assignment is invalid (unknown sub-list, not ambiguous, or an out-of-candidate mode).',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+    503: {
+      description: 'Transactional confirm could not run (e.g. DB unavailable).',
+      content: { 'application/json': { schema: z.object({}).passthrough() } },
+    },
+  },
+})
+
+campaignRoutes.openapi(confirmSplitCampaignRoute, async (c) => {
+  const data = c.req.valid('json')
+  const { userId, projectId } = c.get('scopedUser')!
+  const actor = { actorType: 'user' as const, actorId: userId }
+
+  // Wrap in try/catch so a DB blip during the merge/create sequence
+  // surfaces as a typed 503 instead of bubbling to onError as a generic
+  // 500 (code review fix — mirrors the create route's handler above).
+  let result: Awaited<ReturnType<typeof confirmSplitCampaign>>
+  try {
+    result = await confirmSplitCampaign({
+      projectId,
+      parentHashListId: data.parentHashListId,
+      name: data.name,
+      description: data.description,
+      priority: data.priority,
+      createdBy: userId,
+      assignments: data.assignments,
+      actor,
+    })
+  } catch (err) {
+    logger.error(
+      { err, route: 'POST /campaigns/split/confirm', projectId, userId },
+      'confirmSplitCampaign threw — surfacing as service unavailable'
+    )
+    return c.json(
+      {
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Unable to confirm the split campaign right now',
+        },
+      },
+      503
+    )
+  }
+
+  switch (result.kind) {
+    case 'not_found':
+      return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+    case 'not_split':
+      return dashboardError(
+        c,
+        409,
+        'HASH_LIST_NOT_SPLIT',
+        'Hash list has not been split yet — POST /campaigns against it first'
+      )
+    case 'invalid_assignment':
+      return dashboardError(c, 409, 'SPLIT_ASSIGNMENT_INVALID', result.reason)
+    case 'confirmed':
+      return c.json(
+        {
+          parentCampaignId: result.parentCampaign.id,
+          parentHashListId: data.parentHashListId,
+          subCampaigns: result.subCampaigns,
+        },
+        201
+      )
+  }
+})
+
+// ─── Split status polling (issue #202 SU7) ─────────────────────────
+//
+// Distinct three-segment path so it can never collide with `/{id}`
+// (one segment) or `/split/confirm` (a different literal second
+// segment) regardless of registration order — same reasoning as the
+// confirm route's comment above.
+const hashListIdParamSchema = z.object({
+  hashListId: z.coerce.number().int().positive(),
+})
+
+const splitStatusRoute = createRoute({
+  method: 'get',
+  path: '/split/status/{hashListId}',
+  tags: ['Campaigns'],
+  summary: 'Poll the async mixed hash-list split analysis job',
+  security: [{ SessionCookie: [] }],
+  middleware: [requireProjectAccess()] as const,
+  request: {
+    params: hashListIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Current split status.',
+      content: { 'application/json': { schema: splitStatusResponseSchema } },
+    },
+    401: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.AuthRequired),
+    403: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.Forbidden),
+    400: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ValidationFailed),
+    404: sharedDashboardResponse(DASHBOARD_RESPONSE_REFS.ResourceNotFound),
+  },
+})
+
+campaignRoutes.openapi(splitStatusRoute, async (c) => {
+  const { hashListId } = c.req.valid('param')
+  const { projectId } = c.get('scopedUser')!
+
+  const result = await getSplitStatus(hashListId, projectId)
+  if (result.kind === 'not_found') {
+    return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
+  }
+  return c.json(result.response, 200)
 })
 
 const getCampaignRoute = createRoute({
@@ -376,12 +680,23 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Campaign not found')
   }
 
-  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds] = await Promise.all([
-    getCampaignAttacksWithRuntime(id),
-    getCampaignTaskStats(id),
-    listActiveAgentsByCampaign(id),
-    getArchivedAttackIds(id),
-  ])
+  // The super-progress rollup (U11) depends only on `campaign`, not on any of
+  // the four reads below, so it rides along in the same parallel batch for a
+  // super parent (and resolves to null for every ordinary / #202-split campaign).
+  const [campaignAttacks, taskStats, activeAgents, archivedAttackIds, superProgress] =
+    await Promise.all([
+      getCampaignAttacksWithRuntime(id),
+      getCampaignTaskStats(id),
+      listActiveAgentsByCampaign(id),
+      getArchivedAttackIds(id),
+      campaign.superHashListId != null
+        ? getSuperCampaignProgress({
+            parentCampaignId: campaign.id,
+            superHashListId: campaign.superHashListId,
+            projectId,
+          })
+        : Promise.resolve(null),
+    ])
 
   // Issue #100 U2: compute the campaign-level ETA from the attack runtimes
   // and active-agent list already fetched above rather than calling
@@ -402,6 +717,26 @@ campaignRoutes.openapi(getCampaignRoute, async (c) => {
     hasActiveAgents: activeAgents.length > 0,
     attacks: campaignAttacks.filter((attack) => !archivedAttackIds.has(attack.id)),
   })
+
+  // Super PARENT campaign (issue #101 U11): it owns no attacks of its own, so
+  // the `eta` computed above is a vacuous `complete` over an empty attack set.
+  // Replace it with the read-time rollup across its sub-campaigns (resolved in
+  // the parallel batch above) — cracked count deduped over the leaf union (via
+  // the U4 resolver) and ETA as the critical-path MAX (never an average).
+  // `superProgress` is null for every ordinary / #202-split campaign.
+  if (superProgress != null) {
+    return c.json(
+      {
+        campaign,
+        attacks: campaignAttacks,
+        taskStats,
+        activeAgents,
+        eta: superProgress.eta,
+        superProgress,
+      },
+      200
+    )
+  }
 
   return c.json(
     {

@@ -8,6 +8,11 @@
  *   R14 — Search across all of a project's hash lists in one call.
  *   R15 — Return both cracked and uncracked rows; crackedAt is null for
  *          uncracked rows.  No crackedAt filter here.
+ *
+ * SuperHashlists U4/R15: crack state is resolved through the per-project
+ * cracked-set (`crack-resolution.ts`), not from `hash_items.crackedAt` alone —
+ * a hash uncracked in its own row whose `(detectedHashcatMode, hashValue)` is
+ * in the project cracked-set reports cracked.
  *   R16 — Strictly project-scoped via a JOIN on hashLists.projectId.
  *          Cross-project rows can never appear.
  *   R17 — Literal % / _ in the query are escaped via escapeLike so they
@@ -25,6 +30,7 @@
 import {
   hashItems,
   hashLists,
+  projectCrackedHashes,
   SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
   SEARCH_MAX_Q_LENGTH,
@@ -34,6 +40,7 @@ import { and, asc, count, eq, or, sql } from 'drizzle-orm'
 import { logger } from '../../config/logger.js'
 import { db } from '../../db/index.js'
 import { escapeLike } from '../resources.js'
+import { crackedSetJoinOn, RESOLVED_CRACKED_AT } from './crack-resolution.js'
 
 // Re-export shared constants so route files keep importing from this service module.
 export { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, SEARCH_MAX_Q_LENGTH }
@@ -97,15 +104,24 @@ export async function searchHashes(
   logger.debug({ projectId, query, limit, offset }, 'searchHashes: querying')
 
   const [rows, countRows] = await Promise.all([
+    // U4/R15: `crackedAt` resolves through the project cracked-set — a value this
+    // list has not cracked itself but a sibling list of the same project has
+    // reports cracked here. The LEFT JOIN is 1:1 at most (UNIQUE
+    // `(projectId, mode, value)`), so it cannot multiply rows and the `total`
+    // below — which is intentionally left unjoined — still matches this page's
+    // cardinality. R17: the join contributes crack state ONLY; the cracked-set's
+    // `sourceHashListId` is never projected, so a searcher never learns which
+    // sibling list produced the plaintext.
     db
       .select({
         hashValue: hashItems.hashValue,
         hashListId: hashLists.id,
         hashListName: hashLists.name,
-        crackedAt: hashItems.crackedAt,
+        crackedAt: RESOLVED_CRACKED_AT,
       })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
       .where(whereClause)
       .orderBy(asc(hashItems.id))
       .limit(limit)

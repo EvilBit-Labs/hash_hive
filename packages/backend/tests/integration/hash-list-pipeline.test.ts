@@ -261,17 +261,31 @@ if (IS_ISOLATED) {
             return Promise.resolve([])
           },
           onConflictDoNothing: () => {
-            // For hash_items batch inserts. Append (dedupe by hashValue per list).
-            if (table === hashItemsRef && Array.isArray(values)) {
+            // `flushBatch` now `await`s `.onConflictDoNothing()` directly
+            // (retry-safety fix — type detection runs against parsed lines,
+            // deduped in-memory, not against Postgres's `RETURNING` output).
+            // Apply the insert-with-dedup side effect here so it fires
+            // whether the caller awaits this object directly (via `.then`)
+            // or chains `.returning()` explicitly — either path must only
+            // apply the insert ONCE, so both delegate to the same closure.
+            const applyInsert = (): Array<{ hashValue: string }> => {
+              if (table !== hashItemsRef || !Array.isArray(values)) return []
+              const insertedRows: Array<{ hashValue: string }> = []
               for (const v of values) {
                 const list = state.hashItemsByList.get(v.hashListId) ?? []
                 if (!list.some((x) => x['hashValue'] === v.hashValue)) {
                   list.push({ ...v, id: list.length + 1 })
+                  insertedRows.push({ hashValue: v.hashValue })
                 }
                 state.hashItemsByList.set(v.hashListId, list)
               }
+              return insertedRows
             }
-            return Promise.resolve()
+            return {
+              returning: () => Promise.resolve(applyInsert()),
+              // oxlint-disable-next-line unicorn/no-thenable -- mock must satisfy a direct `await` (flushBatch no longer chains `.returning()`)
+              then: (resolve: (v: unknown) => unknown) => resolve(applyInsert()),
+            }
           },
         }),
       }),

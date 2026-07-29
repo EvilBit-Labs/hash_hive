@@ -163,6 +163,13 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     // Single-hash-mode-per-campaign DB backstop (issue #100): latched from
     // NULL to the first attack's mode; worth auditing like `attack.mode`.
     'hashcatMode',
+    // Split sub-campaign parent link (#202): a structural relationship worth
+    // auditing, like `hashListId`. NULL for normal/top-level campaigns.
+    'parentCampaignId',
+    // Super-target link (issue #101 U6): a super PARENT campaign carries this
+    // instead of `hashListId` (num_nonnulls(hashListId, superHashListId)=1).
+    // A structural relationship worth auditing like the other two target links.
+    'superHashListId',
     // createdAt / updatedAt excluded
   ]),
 
@@ -193,6 +200,12 @@ export const ENTITY_ALLOWLISTS: Record<AuditEntityType, ReadonlySet<string>> = {
     'hashTypeId',
     'source',
     'statistics',
+    // Per-list hash-type analysis (#202): a derived analysis blob, audited
+    // like `statistics` (both are size-capped jsonb).
+    'typeAnalysis',
+    // Split sub-list parent link (#202): structural relationship, NULL for
+    // normal/top-level lists.
+    'parentHashListId',
     'status',
     'isPermanent',
     'archivedAt',

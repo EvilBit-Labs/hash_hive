@@ -1,6 +1,7 @@
 import {
   createHashListRequestSchema,
   detectHashTypeRequestSchema,
+  hashListDetailWireSchema,
   hashListWireSchema,
   maskLists,
   ruleLists,
@@ -22,6 +23,7 @@ import {
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
 import { guessHashType } from '../../services/hash-analysis.js'
+import { getHashListSplitProgress } from '../../services/hash-items/split-progress.js'
 import {
   createHashList,
   deleteHashList,
@@ -331,7 +333,7 @@ const getHashListRoute = createRoute({
       description: 'Hash list',
       content: {
         'application/json': {
-          schema: z.object({ hashList: z.unknown() }),
+          schema: z.object({ hashList: hashListDetailWireSchema }),
         },
       },
     },
@@ -351,7 +353,7 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
     return dashboardError(c, 404, 'RESOURCE_NOT_FOUND', 'Hash list not found')
   }
 
-  const liveStats = await getHashListStats(hashListId)
+  const liveStats = await getHashListStats(hashListId, projectId)
 
   // Strip legacy keys so a pre-rename row (parsed before U1 shipped) doesn't
   // leak `{total, cracked, remaining, skippedLines}` into the response next
@@ -363,14 +365,39 @@ resourceRoutes.openapi(getHashListRoute, async (c) => {
   const lastUpdated =
     typeof persistedStats['lastUpdated'] === 'string' ? persistedStats['lastUpdated'] : undefined
 
+  // Only a split PARENT hash list (one with children via
+  // `parent_hash_list_id`) gets `needsTypeCount` / `subCampaignProgress` -
+  // `null` for a leaf list, spread away below so a normal list's response
+  // is byte-for-byte unchanged (#202, SU5).
+  const splitProgress = await getHashListSplitProgress(hashListId, projectId)
+
+  // Projected onto `hashListDetailWireSchema` field-by-field rather than
+  // `...hl` spread: the DB row also carries `source`, `fileRef`,
+  // `isPermanent`, `archivedAt`, `parentHashListId`, and `updatedAt`, none
+  // of which the wire schema declares or the detail page
+  // (`hash-list-detail.tsx`) reads. Spreading them back onto a route bound
+  // to the real schema would fail TypeScript's excess-property check on
+  // this object literal.
   return c.json(
     {
       hashList: {
-        ...hl,
+        id: hl.id,
+        name: hl.name,
+        projectId: hl.projectId,
+        hashTypeId: hl.hashTypeId,
+        status: hl.status,
         statistics: {
           ...liveStats,
           ...(lastUpdated ? { lastUpdated } : {}),
         },
+        typeAnalysis: hl.typeAnalysis ?? null,
+        createdAt: hl.createdAt.toISOString(),
+        ...(splitProgress
+          ? {
+              needsTypeCount: splitProgress.needsTypeCount,
+              subCampaignProgress: splitProgress.subCampaignProgress,
+            }
+          : {}),
       },
     },
     200

@@ -300,6 +300,14 @@ export async function listCampaigns(filters: {
   if (!filters.showArchived) {
     conditions.push(isNull(campaigns.archivedAt))
   }
+  // Split sub-campaigns (issue #202 second half) are children created behind
+  // a parent campaign — the operator interacts with the parent, not the
+  // sub-campaigns directly, so they must never appear as standalone rows in
+  // the flat campaign listing (mirrors `isNull(hashLists.parentHashListId)`
+  // in `routes/dashboard/hash-lists.ts` for the hash-list side of the same
+  // feature). Applies to both the data and count queries since they share
+  // this conditions array.
+  conditions.push(isNull(campaigns.parentCampaignId))
   if (conditions.length > 0) {
     query = query.where(and(...conditions))
   }
@@ -338,9 +346,30 @@ export async function createCampaign(
     projectId: number
     name: string
     description?: string | undefined
-    hashListId: number
+    // Exactly one of `hashListId` / `superHashListId` must be supplied
+    // (`campaigns_exactly_one_target_chk`, KTD6). A leaf-cracking campaign —
+    // including every super sub-campaign — passes `hashListId`; the PARENT
+    // campaign of a super fan-out (U10) passes `superHashListId` and leaves
+    // `hashListId` unset. `undefined`/omitted → NULL in the insert.
+    hashListId?: number | undefined
+    superHashListId?: number | null | undefined
     priority?: number | undefined
     createdBy?: number | undefined
+    // Split-confirm sub-campaign fields (issue #202 SU3). Both default to
+    // null/unset, preserving the plain-campaign behavior every existing
+    // caller relies on.
+    //
+    // `hashcatMode`: pre-latches the campaign's single-hash-mode-per-campaign
+    // backstop (issue #100) directly, bypassing the normal
+    // set-from-first-attack path — a split sub-campaign is created with zero
+    // attacks (the user adds them afterward via the standard attack routes),
+    // so there is no `attacks[0].mode` to derive from. Any attack added
+    // later must match this mode (`checkSingleHashModePerCampaign` / the
+    // composite FK enforce it).
+    // `parentCampaignId`: links a split sub-campaign back to its parent
+    // (`campaigns.parentCampaignId`, #202 second half).
+    hashcatMode?: number | null | undefined
+    parentCampaignId?: number | null | undefined
   },
   actor: AuditActor = {
     actorType: 'system',
@@ -354,10 +383,13 @@ export async function createCampaign(
         projectId: data.projectId,
         name: data.name,
         description: data.description ?? null,
-        hashListId: data.hashListId,
+        hashListId: data.hashListId ?? null,
+        superHashListId: data.superHashListId ?? null,
         priority: data.priority ?? 5,
         createdBy: data.createdBy ?? null,
         status: 'draft',
+        hashcatMode: data.hashcatMode ?? null,
+        parentCampaignId: data.parentCampaignId ?? null,
       })
       .returning()
 
@@ -367,7 +399,18 @@ export async function createCampaign(
     // referenced the moment a campaign is created against it, regardless of
     // the campaign's own draft/permanent state. One-way and idempotent — see
     // latchResourcePermanent.
-    await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+    //
+    // `campaigns.hashListId` is nullable since #101 U6 (a super-targeting
+    // parent campaign carries `superHashListId` instead — exactly one of the
+    // two is set, per `campaigns_exactly_one_target_chk`). The null branch IS
+    // reached on every super-campaign creation: `createSuperCampaign`
+    // (campaign-split.ts) calls this with only `superHashListId` set, so the
+    // parent row's `hashListId` is null and this guard skips it - the super
+    // fan-out (U10) latches the resolved leaf lists on its sub-campaigns
+    // instead.
+    if (campaign.hashListId !== null) {
+      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+    }
 
     await recordAuditEvent(
       {
@@ -542,8 +585,11 @@ export async function createCampaignWithAttacks(input: {
         throw new Error('Campaign insert returned no row')
       }
 
-      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign.
-      await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+      // Permanence latch (ADR-0019 / issue #106 U3): see createCampaign,
+      // including why the nullable `hashListId` guard is unreachable here.
+      if (campaign.hashListId !== null) {
+        await latchResourcePermanent(tx, hashLists, campaign.hashListId)
+      }
 
       await recordAuditEvent(
         {

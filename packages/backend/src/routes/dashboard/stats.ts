@@ -5,13 +5,14 @@ import {
   dashboardStatsSchema,
   hashItems,
   hashLists,
+  projectCrackedHashes,
   TASK_DB_TO_BUCKET,
   type TaskBucket,
   type TaskDbStatus,
   tasks,
 } from '@hashhive/shared'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
-import { and, eq, isNotNull, ne, sql } from 'drizzle-orm'
+import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 
 import type { AppEnv } from '../../types.js'
 
@@ -23,6 +24,10 @@ import {
   sharedDashboardResponse,
   dashboardOpenApiHonoOptions,
 } from '../../openapi/components.js'
+import {
+  crackedSetJoinOn,
+  RESOLVED_CRACKED_VALUE,
+} from '../../services/hash-items/crack-resolution.js'
 
 const statsRoutes = new OpenAPIHono<AppEnv>(dashboardOpenApiHonoOptions)
 
@@ -122,7 +127,12 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
         count: sql<number>`count(*)`,
       })
       .from(campaigns)
-      .where(eq(campaigns.projectId, projectId))
+      // Split sub-campaigns (issue #202 second half) are children of a
+      // parent campaign; without this filter a split campaign would count
+      // as 1 parent + N sub-campaigns in the status breakdown instead of
+      // once. Matches `listCampaigns`' flat-list exclusion in
+      // `services/campaigns.ts`.
+      .where(and(eq(campaigns.projectId, projectId), isNull(campaigns.parentCampaignId)))
       .groupBy(campaigns.status),
 
     db
@@ -145,13 +155,31 @@ statsRoutes.openapi(getStatsRoute, async (c) => {
     // non-null `crackedAt` across the project's hash lists"). The
     // `hash_items_hash_list_cracked_idx` composite index on
     // `(hashListId, crackedAt)` is purpose-built for this access path.
+    //
+    // `count(distinct hashValue)` (#202 SU4): `propagateCrack` marks a
+    // hashValue cracked everywhere it appears, across every hash list —
+    // so a hashValue that exists as a separate row under two sibling
+    // split sub-lists (or, pre-existing this feature, two independently
+    // uploaded lists that happen to share a hash) must count as ONE
+    // cracked target, not once per row. No-op for a project with no
+    // duplicate hashValues across its lists — the overwhelmingly common
+    // case.
+    //
+    // U4/R15 (crack-yield metric): the cracked predicate resolves through the
+    // per-project cracked-set rather than `hash_items.cracked_at` alone, so a
+    // value cracked in one list counts for the project even where the sibling
+    // rows holding it were never written back. `RESOLVED_CRACKED_VALUE` is NULL
+    // for unresolved rows, so `count(distinct …)` replaces the old
+    // `WHERE cracked_at IS NOT NULL` filter without changing the dedup
+    // semantic. The LEFT JOIN is 1:1 at most (UNIQUE `(projectId, mode, value)`).
     db
       .select({
-        count: sql<number>`count(*)`,
+        count: sql<number>`count(distinct ${RESOLVED_CRACKED_VALUE})`,
       })
       .from(hashItems)
       .innerJoin(hashLists, eq(hashItems.hashListId, hashLists.id))
-      .where(and(eq(hashLists.projectId, projectId), isNotNull(hashItems.crackedAt))),
+      .leftJoin(projectCrackedHashes, crackedSetJoinOn(projectId))
+      .where(eq(hashLists.projectId, projectId)),
   ])
 
   // Bucket task DB statuses into the operator-facing buckets defined by

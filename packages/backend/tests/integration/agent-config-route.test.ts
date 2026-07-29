@@ -172,7 +172,12 @@ if (!IS_ISOLATED) {
     })),
     getTaskById: mock(async () => null),
     listTasks: mock(async () => ({ tasks: [], total: 0, limit: 50, offset: 0 })),
-    getZapsForTask: mock(async () => ({ zaps: [], hasMore: false })),
+    // Pinned via `mock<ReturnType>` per the contract-test-mocks convention so
+    // a future service wire-shape change (#182 replaced `hasMore` with
+    // `nextCursor`) compile-fails here instead of drifting silently.
+    getZapsForTask: mock<(typeof import('../../src/services/tasks.js'))['getZapsForTask']>(
+      async () => ({ zaps: [], nextCursor: null })
+    ),
     AGENT_TASK_ACTIVE_STATUSES: ['pending', 'assigned', 'running'] as const,
     projectAgentTaskRows: mock(),
     buildCapabilityPredicate: mock(() => ({ sql: 'TRUE' })),

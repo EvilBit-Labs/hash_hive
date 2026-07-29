@@ -56,6 +56,7 @@ import { projectRoutes } from './projects.js'
 import { resourceRoutes } from './resources.js'
 import { resultsRoutes } from './results.js'
 import { statsRoutes } from './stats.js'
+import { superHashListRoutes } from './super-hash-lists.js'
 import { taskRoutes } from './tasks.js'
 
 type UpgradeWebSocket = ReturnType<typeof createBunWebSocket>['upgradeWebSocket']
@@ -103,6 +104,7 @@ export function createDashboardSurface(upgradeWebSocket: UpgradeWebSocket): Open
   surface.route('/results', resultsRoutes)
   surface.route('/audit-logs', auditLogRoutes)
   surface.route('/hash-lists', hashListsRoutes)
+  surface.route('/super-hash-lists', superHashListRoutes)
   surface.route('/events', eventRoutes)
   surface.route('/crackers', crackerRoutes)
   surface.route('/health', healthRoutes)

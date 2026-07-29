@@ -419,8 +419,8 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
       { hashListId: hashList!.id, hashValue: 'bbbb' },
     ])
 
-    const first = await computeHashListEtag(hashList!.id)
-    const second = await computeHashListEtag(hashList!.id)
+    const first = await computeHashListEtag(hashList!.id, projectId)
+    const second = await computeHashListEtag(hashList!.id, projectId)
 
     expect(first).toBe(second)
     expect(first).toBe(`W/"hl-${hashList!.id}-0-0"`)
@@ -438,13 +438,13 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
       .values({ hashListId: hashList!.id, hashValue: 'cccc' })
       .returning()
 
-    const beforeCrack = await computeHashListEtag(hashList!.id)
+    const beforeCrack = await computeHashListEtag(hashList!.id, projectId)
     expect(beforeCrack).toBe(`W/"hl-${hashList!.id}-0-0"`)
 
     const crackedAt = new Date('2026-01-01T00:00:00.000Z')
     await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item!.id))
 
-    const afterCrack = await computeHashListEtag(hashList!.id)
+    const afterCrack = await computeHashListEtag(hashList!.id, projectId)
 
     expect(afterCrack).not.toBe(beforeCrack)
     expect(afterCrack).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-1"`)
@@ -467,14 +467,14 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
 
     const crackedAt = new Date('2026-01-01T00:00:00.000Z')
     await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item1!.id))
-    const afterFirst = await computeHashListEtag(hashList!.id)
+    const afterFirst = await computeHashListEtag(hashList!.id, projectId)
     expect(afterFirst).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-1"`)
 
     // Second crack lands at the EXACT same millisecond as the first --
     // MAX(cracked_at) alone would report an unchanged etag here, letting an
     // agent reuse a cached set that's actually missing the second crack.
     await db.update(hashItems).set({ crackedAt }).where(eq(hashItems.id, item2!.id))
-    const afterSecond = await computeHashListEtag(hashList!.id)
+    const afterSecond = await computeHashListEtag(hashList!.id, projectId)
 
     expect(afterSecond).not.toBe(afterFirst)
     expect(afterSecond).toBe(`W/"hl-${hashList!.id}-${crackedAt.getTime()}-2"`)
@@ -492,7 +492,7 @@ describe('computeHashListEtag (#108 follow-up: hash-list freshness ETag)', () =>
       })
       .returning()
 
-    const expected = await computeHashListEtag(hashList!.id)
+    const expected = await computeHashListEtag(hashList!.id, projectId)
     const result = await getAgentDownloadUrl('hash-lists', hashList!.id, projectId)
 
     expect(result?.etag).toBe(expected)

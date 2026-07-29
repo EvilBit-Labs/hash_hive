@@ -27,7 +27,7 @@ export const QUEUE_NAMES = {
   // when a user submits a pre-cracked import file via the dashboard (U8).
   // Reads staged pairs from the object store (KTD3), upserts the target
   // hash list with provenance (KTD2), audits the write (KTD9), then
-  // propagates each plaintext system-wide via propagateCrack (U2/KTD4).
+  // propagates each plaintext within the owning project via propagateCrack (U2/KTD4).
   // Deduped per import via a deterministic jobId built from hashListId +
   // staging key; QueueManager auto-pairs with removeOnComplete/removeOnFail.
   HASH_IMPORT_PROPAGATION: 'jobs-hash-import-propagation',
@@ -45,6 +45,21 @@ export const QUEUE_NAMES = {
   // this background pass is the only place either can happen for files too
   // large for the direct-upload path's inline compression (U3).
   RESOURCE_COMPRESSION: 'jobs-resource-compression',
+  // Mixed hash-list split analysis (issue #202 SU2/SU7). Partitions a mixed
+  // hash list's hash_items into per-type sub-lists
+  // (hash_lists.parent_hash_list_id) — one per confident hashcat mode, one
+  // per ambiguous candidate-mode signature, one for unidentified entries —
+  // and moves the rows. As of SU7, `services/campaign-split.ts`'s
+  // `createCampaignOrSplit` enqueues a job on this queue (deduped per hash
+  // list via `splitJobId`, jobId `split-<hashListId>`) instead of awaiting
+  // `runSplitAnalysis` inline; `queue/workers/hash-list-split.ts`'s worker
+  // processes it and returns the `SplitResult` as the job's returnvalue.
+  // No dedicated `hash_lists.status` value: "split in progress" is read off
+  // the job's own BullMQ lifecycle via `QueueManager.getJobInfo`
+  // (`services/campaign-split-status.ts`'s `GET /campaigns/split/status`),
+  // and idempotency is guarded by whether the parent already has children
+  // (see runSplitAnalysis) regardless of how it's invoked.
+  HASH_LIST_SPLIT: 'jobs-hash-list-split',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

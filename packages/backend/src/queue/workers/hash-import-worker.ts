@@ -4,7 +4,7 @@
  * Reads staged ParsedImportPair[] from the object store (KTD3: no cleartext
  * in Redis), upserts target-list rows with provenance and a setWhere guard
  * (KTD2), records one audit event at the target hash-list scope (KTD9), then
- * propagates each plaintext system-wide via propagateCrack (U2).
+ * propagates each plaintext within the owning project via propagateCrack (U2).
  *
  * Operation order (CRITICAL — see NOTE in propagation.ts):
  *   1. Upsert all target-list rows — FIRST
@@ -30,7 +30,7 @@
 import type { ImportSummary } from '@hashhive/shared'
 import type Redis from 'ioredis'
 
-import { auditLogs, hashItems } from '@hashhive/shared'
+import { auditLogs, hashItems, hashLists, hashTypes } from '@hashhive/shared'
 import { type ConnectionOptions, UnrecoverableError, Worker } from 'bullmq'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 
@@ -43,6 +43,7 @@ import { DEFAULT_JOB_ATTEMPTS, QUEUE_NAMES } from '../../config/queue.js'
 import { deleteFile, downloadFile } from '../../config/storage.js'
 import { db } from '../../db/index.js'
 import { recordAuditEvent } from '../../services/audit-log.js'
+import { upsertCrackedSetBatch } from '../../services/hash-items/cracked-set.js'
 import { propagateCrack } from '../../services/hash-items/propagation.js'
 import { attachWorkerMetrics } from './metrics.js'
 
@@ -88,10 +89,21 @@ export function buildHashImportJobId(hashListId: number, stagingKey: string): st
  * NOTE: Newly inserted rows (hashValue not already in the list) are NOT
  * counted in matchedInList — they were not pre-existing matches. They are
  * inserted as pre-cracked entries with source='import' and crackedAt set.
+ *
+ * RF1 (cracked-set population): each imported crack also records a
+ * `(projectId, hashcatMode, hashValue)` row in `project_cracked_hashes` via
+ * `upsertCrackedSet`, inside the SAME transaction as the per-list upsert —
+ * mirroring `updateTaskProgress` (services/tasks.ts). Without this, an import
+ * crack would fill `hash_items` but never enter the project cracked-set, so it
+ * would not zap project-wide until a backfill ran. `upsertCrackedSet` no-ops
+ * when `hashcatMode` is null (KTD3) and never moves the keyset `crackedAt` on
+ * conflict (KTD2), so a re-import only refreshes plaintext.
  */
 async function upsertTargetListBatches(
   dedupedPairs: ParsedImportPair[],
   hashListId: number,
+  projectId: number,
+  hashcatMode: number | null,
   crackedAt: Date
 ): Promise<{ totalMatched: number; totalCracked: number }> {
   let totalMatched = 0
@@ -112,36 +124,69 @@ async function upsertTargetListBatches(
     totalMatched += Number(preCount?.matched ?? 0)
     totalCracked += Number(preCount?.willCrack ?? 0)
 
-    await db
-      .insert(hashItems)
-      .values(
-        batch.map((p) => ({
-          hashListId,
-          hashValue: p.hashValue,
-          plaintext: p.plaintext,
-          crackedAt,
-          source: 'import',
-          ...(p.username !== undefined ? { username: p.username } : {}),
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [hashItems.hashListId, hashItems.hashValue],
-        set: {
-          plaintext: sql`EXCLUDED.plaintext`,
-          crackedAt: sql`EXCLUDED.cracked_at`,
-          // Preserve the row's existing source ('upload') on conflict — the
-          // source column records how the ROW entered the list, not how it
-          // was cracked. COALESCE keeps the existing origin when set; only
-          // fills NULL origins (e.g. a bare INSERT without source) from import.
-          source: sql`COALESCE(${hashItems.source}, EXCLUDED.source)`,
-          // COALESCE so an import pair without a username (e.g. a plain
-          // hash:plaintext potfile line) does NOT null out an existing username
-          // on an uncracked row (a `user:hash:` upload leaves username set but
-          // crackedAt NULL, so the setWhere guard would otherwise overwrite it).
-          username: sql`COALESCE(EXCLUDED.username, ${hashItems.username})`,
-        },
-        setWhere: isNull(hashItems.crackedAt),
-      })
+    // RF1 (feasibility F5, mirrors updateTaskProgress): the per-list hash_items
+    // upsert and the project-wide cracked-set upsert must land atomically — a
+    // crack must never be visible in one but not the other.
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(hashItems)
+        .values(
+          batch.map((p) => ({
+            hashListId,
+            hashValue: p.hashValue,
+            plaintext: p.plaintext,
+            crackedAt,
+            // KTD3: stamp the target list's resolved mode so read/zap/propagate
+            // all key off ONE authoritative mode column. Null when the list has
+            // no hash type (leaves the row mode-less — it never cross-list dedups).
+            detectedHashcatMode: hashcatMode,
+            source: 'import',
+            ...(p.username !== undefined ? { username: p.username } : {}),
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [hashItems.hashListId, hashItems.hashValue],
+          set: {
+            plaintext: sql`EXCLUDED.plaintext`,
+            crackedAt: sql`EXCLUDED.cracked_at`,
+            // Preserve a previously-stamped mode when this import carries none,
+            // but adopt the resolved mode when it does (KTD3).
+            detectedHashcatMode: sql`COALESCE(EXCLUDED.detected_hashcat_mode, ${hashItems.detectedHashcatMode})`,
+            // Preserve the row's existing source ('upload') on conflict — the
+            // source column records how the ROW entered the list, not how it
+            // was cracked. COALESCE keeps the existing origin when set; only
+            // fills NULL origins (e.g. a bare INSERT without source) from import.
+            source: sql`COALESCE(${hashItems.source}, EXCLUDED.source)`,
+            // COALESCE so an import pair without a username (e.g. a plain
+            // hash:plaintext potfile line) does NOT null out an existing username
+            // on an uncracked row (a `user:hash:` upload leaves username set but
+            // crackedAt NULL, so the setWhere guard would otherwise overwrite it).
+            username: sql`COALESCE(EXCLUDED.username, ${hashItems.username})`,
+          },
+          setWhere: isNull(hashItems.crackedAt),
+        })
+
+      // RF1 / KTD3: record every imported crack in the project cracked-set so it
+      // zaps project-wide immediately. One batched multi-row upsert instead of
+      // one round trip per row (efficiency fix — mirrors the batched hash_items
+      // insert above). upsertCrackedSetBatch no-ops when hashcatMode is null, so
+      // a mode-less import stays list-local (never cross-list dedups). Safe to
+      // batch without an extra per-batch dedup: `batch` is a slice of
+      // `dedupedPairs`, which `processImportPairs` already deduplicated by
+      // hashValue across the WHOLE import before any batching happened.
+      if (hashcatMode != null) {
+        await upsertCrackedSetBatch(
+          tx,
+          batch.map((p) => ({
+            projectId,
+            hashcatMode,
+            hashValue: p.hashValue,
+            plaintext: p.plaintext,
+            sourceHashListId: hashListId,
+          }))
+        )
+      }
+    })
   }
 
   return { totalMatched, totalCracked }
@@ -212,11 +257,12 @@ async function recordImportAudit(
 }
 
 /**
- * Phase 3: Propagate cracked plaintexts system-wide via propagateCrack.
+ * Phase 3: Propagate cracked plaintexts within the owning project via propagateCrack.
  *
  * Runs AFTER the target-list upsert. The target row's crackedAt is now set,
  * so propagateCrack's own `crackedAt IS NULL` guard will not overwrite it —
- * only rows in OTHER lists (and other projects) will receive the plaintext.
+ * only uncracked rows in OTHER lists OF THE SAME PROJECT receive the plaintext
+ * (project scope closes the pre-existing cross-tenant leak, security F2).
  *
  * Precheck first: after Phase 1 every imported hash's target-list row is
  * cracked, so any hashValue that still has an uncracked row must live in
@@ -226,7 +272,15 @@ async function recordImportAudit(
  * ceil(N / IMPORT_BATCH_SIZE) queries. propagateCrack's own guard still
  * protects correctness if a concurrent crack lands between precheck and call.
  */
-async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promise<void> {
+async function propagateImportedCracks(
+  dedupedPairs: ParsedImportPair[],
+  projectId: number,
+  hashcatMode: number | null
+): Promise<void> {
+  // KTD3: a mode-less import has nothing to cross-list dedup against — every
+  // fill would be against an unrelated row of unknown mode. Skip propagation.
+  if (hashcatMode == null) return
+
   const hashesToPropagate = new Set<string>()
   for (let i = 0; i < dedupedPairs.length; i += IMPORT_BATCH_SIZE) {
     const chunk = dedupedPairs.slice(i, i + IMPORT_BATCH_SIZE).map((p) => p.hashValue)
@@ -239,7 +293,7 @@ async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promis
 
   for (const pair of dedupedPairs) {
     if (!hashesToPropagate.has(pair.hashValue)) continue
-    const { updated } = await propagateCrack(pair.hashValue, pair.plaintext)
+    const { updated } = await propagateCrack(pair.hashValue, pair.plaintext, projectId, hashcatMode)
     if (updated > 0) {
       logger.debug({ updated }, 'hash-import-worker: propagated crack to other lists')
     }
@@ -262,6 +316,15 @@ async function propagateImportedCracks(dedupedPairs: ParsedImportPair[]): Promis
  * @param stagingKey        The S3 staging key for this import batch; used as an
  *                          idempotency token in the audit row so BullMQ retries
  *                          do not write a duplicate audit event (item I).
+ * @param hashcatMode       The target list's resolved hashcat mode, or `null`
+ *                          when it has no hash type set. Stamps
+ *                          `detected_hashcat_mode`, drives cracked-set
+ *                          population (RF1), and mode-scopes propagation
+ *                          (KTD3). `runHashImportJob` passes the CURRENT
+ *                          value (re-resolved at process time via
+ *                          `resolveCurrentHashcatMode`, bug fix Medium) —
+ *                          real-DB tests calling this function directly
+ *                          pass their own explicit value instead.
  */
 export async function processImportPairs(
   pairs: readonly ParsedImportPair[],
@@ -269,7 +332,8 @@ export async function processImportPairs(
   projectId: number,
   actor: AuditActor,
   skippedFromParse: number,
-  stagingKey: string
+  stagingKey: string,
+  hashcatMode: number | null
 ): Promise<ImportSummary> {
   // Deduplicate by hashValue: last occurrence wins within a single import.
   // Prevents "cannot affect the same row twice in a single command" errors
@@ -282,10 +346,12 @@ export async function processImportPairs(
 
   const crackedAt = new Date()
 
-  // Phase 1: upsert target-list rows
+  // Phase 1: upsert target-list rows (+ cracked-set population, RF1)
   const { totalMatched, totalCracked } = await upsertTargetListBatches(
     dedupedPairs,
     hashListId,
+    projectId,
+    hashcatMode,
     crackedAt
   )
 
@@ -299,14 +365,54 @@ export async function processImportPairs(
     stagingKey
   )
 
-  // Phase 3: system-wide propagation
-  await propagateImportedCracks(dedupedPairs)
+  // Phase 3: project-scoped, mode-scoped propagation (security F2 / KTD3)
+  await propagateImportedCracks(dedupedPairs, projectId, hashcatMode)
 
   return {
     matchedInList: totalMatched,
     crackedInList: totalCracked,
     skipped: skippedFromParse,
   }
+}
+
+// ─── Mode resolution ──────────────────────────────────────────────────────────
+
+/**
+ * Re-resolves the target list's CURRENT hashcat mode at process time (bug
+ * fix, Medium). `stageAndEnqueueImport` (import-intake.ts) used to resolve
+ * this once at staging time and thread it through the job payload, but that
+ * is a SNAPSHOT: if an operator calls `setHashListType` on the list between
+ * staging and this worker running the job, the snapshot goes stale and
+ * every downstream write (`detected_hashcat_mode`, cracked-set population,
+ * propagation's mode scope) would key off the WRONG mode with no signal to
+ * anyone. Re-reading `hashTypeId` -> `hashcatMode` here — the same
+ * resolution `stageAndEnqueueImport` performs, just re-run at process time —
+ * makes this worker the single source of truth for its own writes.
+ *
+ * Returns `null` (mode-less, list-local import — KTD3) when the list has no
+ * hash type set, OR when the list itself no longer exists (deleted between
+ * staging and processing); both mirror `stageAndEnqueueImport`'s own
+ * null-mode contract.
+ *
+ * A direct local `INNER JOIN` rather than a call into
+ * `services/resources.ts` (which has `getHashListById`/`getHashTypeById`,
+ * the same resolution `stageAndEnqueueImport` uses) -- that module pulls in
+ * a large, unrelated dependency graph (compression, blob lifecycle, resource
+ * triggers) this lean worker has no other reason to import. One query
+ * instead of two round trips; the `INNER JOIN` naturally yields no row for
+ * either null case above.
+ */
+async function resolveCurrentHashcatMode(
+  hashListId: number,
+  projectId: number
+): Promise<number | null> {
+  const [row] = await db
+    .select({ hashcatMode: hashTypes.hashcatMode })
+    .from(hashLists)
+    .innerJoin(hashTypes, eq(hashLists.hashTypeId, hashTypes.id))
+    .where(and(eq(hashLists.id, hashListId), eq(hashLists.projectId, projectId)))
+    .limit(1)
+  return row?.hashcatMode ?? null
 }
 
 // ─── Worker job body ─────────────────────────────────────────────────────────
@@ -333,6 +439,11 @@ export async function runHashImportJob(
   const { stagingKey, hashListId, projectId, actor, skippedFromParse } = data
 
   logger.info({ jobId, hashListId, stagingKey }, 'hash-import-worker: starting')
+
+  // Bug fix (Medium): re-resolve the target list's CURRENT hashcat mode here
+  // rather than trusting a value staged into the job payload — see
+  // `resolveCurrentHashcatMode`'s doc comment.
+  const hashcatMode = await resolveCurrentHashcatMode(hashListId, projectId)
 
   // Download staged pairs — cleartext lives only in the object store (KTD3).
   const download = await downloadFile(stagingKey)
@@ -366,7 +477,8 @@ export async function runHashImportJob(
     projectId,
     actor,
     skippedFromParse,
-    stagingKey
+    stagingKey,
+    hashcatMode
   )
 
   logger.info({ jobId, hashListId, ...result }, 'hash-import-worker: complete')
